@@ -1,0 +1,190 @@
+2025-08-04 23:04:44,578 - main - INFO - 키움증권 조건식 모니터링 시스템 시작
+2025-08-04 23:04:45,406 - kiwoom_api - ERROR - 키움 API 인증 중 오류: 404 Client Error: Not Found for url: https://openapi.kiwoom.com/oauth2/tokenP
+2025-08-04 23:04:45,408 - main - WARNING - 키움증권 API 인증 실패 - 환경변수 확인 필요
+2025-08-04 23:04:45,520 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:04:45,520 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 1/5
+2025-08-04 23:04:50,631 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:04:50,631 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 2/5
+2025-08-04 23:05:00,794 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:05:00,795 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 3/5
+2025-08-04 23:05:15,929 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:05:15,930 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 4/5
+2025-08-04 23:05:36,068 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:05:36,069 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 5/5
+2025-08-04 23:06:01,214 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:06:01,215 - websocket_manager - ERROR - 키움증권 WebSocket 최대 재연결 시도 횟수 초과
+2025-08-04 23:06:01,215 - main - INFO - WebSocket 연결 시작
+2025-08-04 23:06:01,216 - main - INFO - 모니터링 시스템 종료
+2025-08-04 23:06:01,216 - condition_monitor - INFO - 모든 조건식 모니터링 중지
+2025-08-04 23:07:51,264 - main - INFO - 키움증권 조건식 모니터링 시스템 시작
+2025-08-04 23:07:51,920 - kiwoom_api - ERROR - 키움 API 인증 중 오류: 404 Client Error: Not Found for url: https://openapi.kiwoom.com/oauth2/tokenP
+2025-08-04 23:07:51,921 - main - WARNING - 키움증권 API 인증 실패 - 환경변수 확인 필요
+2025-08-04 23:07:52,076 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:07:52,076 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 1/5
+2025-08-04 23:07:57,227 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:07:57,228 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 2/5
+2025-08-04 23:08:07,444 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:08:07,448 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 3/5
+2025-08-04 23:08:22,605 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:08:22,605 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 4/5
+2025-08-04 23:08:42,706 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:08:42,706 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 5/5
+2025-08-04 23:09:07,824 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:09:07,824 - websocket_manager - ERROR - 키움증권 WebSocket 최대 재연결 시도 횟수 초과
+2025-08-04 23:09:07,825 - main - INFO - WebSocket 연결 시작
+2025-08-04 23:09:07,825 - main - INFO - 모니터링 시스템 종료
+2025-08-04 23:09:07,825 - condition_monitor - INFO - 모든 조건식 모니터링 중지
+2025-08-04 23:09:15,973 - main - INFO - 키움증권 조건식 모니터링 시스템 시작
+2025-08-04 23:09:16,610 - kiwoom_api - ERROR - 키움 API 인증 중 오류: 500 Server Error: Internal Server Error for url: https://mockapi.kiwoom.com/oauth2/tokenP
+2025-08-04 23:09:16,612 - main - WARNING - 키움증권 API 인증 실패 - 환경변수 확인 필요
+2025-08-04 23:09:16,700 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:09:16,701 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 1/5
+2025-08-04 23:09:21,793 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:09:21,793 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 2/5
+2025-08-04 23:09:31,912 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:09:31,912 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 3/5
+2025-08-04 23:09:47,040 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:09:47,040 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 4/5
+2025-08-04 23:10:07,195 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:10:07,195 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 5/5
+2025-08-04 23:10:32,370 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:10:32,371 - websocket_manager - ERROR - 키움증권 WebSocket 최대 재연결 시도 횟수 초과
+2025-08-04 23:10:32,371 - main - INFO - WebSocket 연결 시작
+2025-08-04 23:10:32,372 - main - INFO - 모니터링 시스템 종료
+2025-08-04 23:10:32,372 - condition_monitor - INFO - 모든 조건식 모니터링 중지
+2025-08-04 23:10:42,404 - main - INFO - 키움증권 조건식 모니터링 시스템 시작
+2025-08-04 23:10:43,032 - kiwoom_api - ERROR - 키움 API 인증 중 오류: 415 Client Error: Unsupported Media Type for url: https://mockapi.kiwoom.com/oauth2/token
+2025-08-04 23:10:43,034 - main - WARNING - 키움증권 API 인증 실패 - 환경변수 확인 필요
+2025-08-04 23:10:43,122 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:10:43,122 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 1/5
+2025-08-04 23:10:48,247 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:10:48,248 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 2/5
+2025-08-04 23:10:58,404 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:10:58,405 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 3/5
+2025-08-04 23:11:13,530 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:11:13,530 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 4/5
+2025-08-04 23:11:33,639 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:11:33,639 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 5/5
+2025-08-04 23:11:58,743 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:11:58,743 - websocket_manager - ERROR - 키움증권 WebSocket 최대 재연결 시도 횟수 초과
+2025-08-04 23:11:58,743 - main - INFO - WebSocket 연결 시작
+2025-08-04 23:11:58,744 - main - INFO - 모니터링 시스템 종료
+2025-08-04 23:11:58,744 - condition_monitor - INFO - 모든 조건식 모니터링 중지
+2025-08-04 23:29:40,192 - main - INFO - 키움증권 조건식 모니터링 시스템 시작
+2025-08-04 23:29:40,811 - kiwoom_api - ERROR - 키움 API 인증 실패
+2025-08-04 23:29:40,813 - main - WARNING - 키움증권 API 인증 실패 - 환경변수 확인 필요
+2025-08-04 23:29:40,958 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:29:40,959 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 1/5
+2025-08-04 23:29:46,051 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:29:46,051 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 2/5
+2025-08-04 23:29:56,212 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:29:56,212 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 3/5
+2025-08-04 23:30:11,325 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:30:11,325 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 4/5
+2025-08-04 23:30:31,455 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:30:31,455 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 5/5
+2025-08-04 23:30:56,557 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:30:56,557 - websocket_manager - ERROR - 키움증권 WebSocket 최대 재연결 시도 횟수 초과
+2025-08-04 23:30:56,557 - main - INFO - WebSocket 연결 시작
+2025-08-04 23:30:56,558 - main - INFO - 모니터링 시스템 종료
+2025-08-04 23:30:56,558 - condition_monitor - INFO - 모든 조건식 모니터링 중지
+2025-08-04 23:31:13,036 - main - INFO - 키움증권 조건식 모니터링 시스템 시작
+2025-08-04 23:31:13,659 - kiwoom_api - ERROR - 키움 API 인증 실패
+2025-08-04 23:31:13,661 - main - WARNING - 키움증권 API 인증 실패 - 환경변수 확인 필요
+2025-08-04 23:31:13,753 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:31:13,753 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 1/5
+2025-08-04 23:31:18,902 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:31:18,902 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 2/5
+2025-08-04 23:31:29,057 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:31:29,057 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 3/5
+2025-08-04 23:31:44,190 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:31:44,191 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 4/5
+2025-08-04 23:32:04,305 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:32:04,305 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 5/5
+2025-08-04 23:32:29,448 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:32:29,449 - websocket_manager - ERROR - 키움증권 WebSocket 최대 재연결 시도 횟수 초과
+2025-08-04 23:32:29,449 - main - INFO - WebSocket 연결 시작
+2025-08-04 23:32:29,450 - main - INFO - 모니터링 시스템 종료
+2025-08-04 23:32:29,450 - condition_monitor - INFO - 모든 조건식 모니터링 중지
+2025-08-04 23:35:53,330 - main - INFO - 키움증권 조건식 모니터링 시스템 시작
+2025-08-04 23:35:53,960 - kiwoom_api - ERROR - 키움 API 인증 실패
+2025-08-04 23:35:53,962 - main - WARNING - 키움증권 API 인증 실패 - 환경변수 확인 필요
+2025-08-04 23:35:54,099 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:35:54,100 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 1/5
+2025-08-04 23:35:59,239 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:35:59,239 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 2/5
+2025-08-04 23:36:09,345 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:36:09,345 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 3/5
+2025-08-04 23:36:24,500 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:36:24,501 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 4/5
+2025-08-04 23:36:44,646 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:36:44,646 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 5/5
+2025-08-04 23:37:09,822 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:37:09,822 - websocket_manager - ERROR - 키움증권 WebSocket 최대 재연결 시도 횟수 초과
+2025-08-04 23:37:09,823 - main - INFO - WebSocket 연결 시작
+2025-08-04 23:37:09,824 - main - INFO - 모니터링 시스템 종료
+2025-08-04 23:37:09,824 - condition_monitor - INFO - 모든 조건식 모니터링 중지
+2025-08-04 23:37:19,206 - main - INFO - 키움증권 조건식 모니터링 시스템 시작
+2025-08-04 23:37:19,856 - kiwoom_api - ERROR - 키움 API 인증 실패
+2025-08-04 23:37:19,858 - main - WARNING - 키움증권 API 인증 실패 - 환경변수 확인 필요
+2025-08-04 23:37:20,033 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:37:20,033 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 1/5
+2025-08-04 23:37:25,396 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:37:25,397 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 2/5
+2025-08-04 23:37:35,556 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:37:35,556 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 3/5
+2025-08-04 23:37:50,690 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:37:50,690 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 4/5
+2025-08-04 23:38:10,827 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:38:10,827 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 5/5
+2025-08-04 23:38:35,932 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:38:35,932 - websocket_manager - ERROR - 키움증권 WebSocket 최대 재연결 시도 횟수 초과
+2025-08-04 23:38:35,932 - main - INFO - WebSocket 연결 시작
+2025-08-04 23:38:35,933 - main - INFO - 모니터링 시스템 종료
+2025-08-04 23:38:35,933 - condition_monitor - INFO - 모든 조건식 모니터링 중지
+2025-08-04 23:38:43,879 - main - INFO - 키움증권 조건식 모니터링 시스템 시작
+2025-08-04 23:38:44,556 - kiwoom_api - ERROR - 키움 API 인증 실패
+2025-08-04 23:38:44,558 - main - WARNING - 키움증권 API 인증 실패 - 환경변수 확인 필요
+2025-08-04 23:38:44,653 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:38:44,653 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 1/5
+2025-08-04 23:38:49,740 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:38:49,741 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 2/5
+2025-08-04 23:38:59,892 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:38:59,893 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 3/5
+2025-08-04 23:39:15,018 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:39:15,019 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 4/5
+2025-08-04 23:39:35,123 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:39:35,123 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 5/5
+2025-08-04 23:40:00,238 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:40:00,239 - websocket_manager - ERROR - 키움증권 WebSocket 최대 재연결 시도 횟수 초과
+2025-08-04 23:40:00,239 - main - INFO - WebSocket 연결 시작
+2025-08-04 23:40:00,240 - main - INFO - 모니터링 시스템 종료
+2025-08-04 23:40:00,240 - condition_monitor - INFO - 모든 조건식 모니터링 중지
+2025-08-04 23:40:26,545 - main - INFO - 키움증권 조건식 모니터링 시스템 시작
+2025-08-04 23:40:27,167 - kiwoom_api - ERROR - 키움 API 인증 중 오류: unsupported operand type(s) for +: 'float' and 'str'
+2025-08-04 23:40:27,169 - main - WARNING - 키움증권 API 인증 실패 - 환경변수 확인 필요
+2025-08-04 23:40:27,307 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:40:27,308 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 1/5
+2025-08-04 23:40:32,444 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:40:32,444 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 2/5
+2025-08-04 23:40:42,577 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:40:42,577 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 3/5
+2025-08-04 23:40:57,716 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:40:57,716 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 4/5
+2025-08-04 23:41:17,861 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:41:17,861 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 5/5
+2025-08-04 23:41:42,969 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:41:42,969 - websocket_manager - ERROR - 키움증권 WebSocket 최대 재연결 시도 횟수 초과
+2025-08-04 23:41:42,969 - main - INFO - WebSocket 연결 시작
+2025-08-04 23:42:36,178 - main - INFO - 모니터링 시스템 종료
+2025-08-04 23:42:36,178 - condition_monitor - INFO - 모든 조건식 모니터링 중지
+2025-08-04 23:42:38,645 - main - INFO - 키움증권 조건식 모니터링 시스템 시작
+2025-08-04 23:42:39,271 - kiwoom_api - ERROR - 키움 API 인증 중 오류: unsupported operand type(s) for +: 'float' and 'str'
+2025-08-04 23:42:39,272 - main - WARNING - 키움증권 API 인증 실패 - 환경변수 확인 필요
+2025-08-04 23:42:39,372 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:42:39,372 - websocket_manager - INFO - 키움증권 WebSocket 재연결 시도 1/1
+2025-08-04 23:42:44,472 - websocket_manager - ERROR - 키움증권 WebSocket 연결 실패: server rejected WebSocket connection: HTTP 404
+2025-08-04 23:42:44,473 - websocket_manager - ERROR - 키움증권 WebSocket 최대 재연결 시도 횟수 초과
+2025-08-04 23:42:44,473 - main - INFO - WebSocket 연결 시작
+2025-08-04 23:45:58,265 - main - INFO - 모니터링 시스템 종료
+2025-08-04 23:45:58,265 - condition_monitor - INFO - 모든 조건식 모니터링 중지
