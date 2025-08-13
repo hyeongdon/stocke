@@ -14,24 +14,38 @@ class TokenManager:
         try:
             response = requests.post(
                 f"{Config.KIWOOM_BASE_URL}/oauth2/token",
-                data={
+                json={
                     "grant_type": "client_credentials",
                     "appkey": Config.KIWOOM_APP_KEY,
-                    "appsecret": Config.KIWOOM_APP_SECRET
-                }
+                    "secretkey": Config.KIWOOM_APP_SECRET
+                },
+                headers={
+                    "Content-Type": "application/json"
+                },
+                timeout=10
             )
             
             if response.status_code == 200:
                 token_data = response.json()
-                self.access_token = token_data.get("access_token")
-                expires_in = token_data.get("expires_in", 7200)  # 기본 2시간
-                self.token_expiry = datetime.utcnow() + timedelta(seconds=expires_in)
-                self.refresh_token = token_data.get("refresh_token")
-                return True
-            return False
+                # 키움증권 API 응답에서 오류 확인
+                if token_data.get("return_code") == 0:  # 성공
+                    self.access_token = token_data.get("token")  # 키움증권은 'token' 필드 사용
+                    # expires_dt 형식: "20250809005645" -> datetime으로 변환
+                    expires_dt_str = token_data.get("expires_dt")
+                    if expires_dt_str:
+                        self.token_expiry = datetime.strptime(expires_dt_str, "%Y%m%d%H%M%S")
+                    else:
+                        self.token_expiry = datetime.utcnow() + timedelta(hours=24)  # 기본 24시간
+                    return True
+                else:
+                    print(f"키움증권 API 오류: {token_data.get('return_msg', '알 수 없는 오류')}")
+                    return False
+            else:
+                print(f"키움증권 API 인증 실패 - HTTP {response.status_code}")
+                return False
             
         except Exception as e:
-            print(f"인증 오류: {e}")
+            print(f"키움증권 API 인증 오류: {type(e).__name__}: {e}")
             return False
     
     def is_token_valid(self) -> bool:

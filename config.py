@@ -7,7 +7,7 @@ load_dotenv()
 class Config:
     # 프로젝트 기본 설정
     PROJECT_ROOT = Path(__file__).parent
-    LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+    LOG_LEVEL = os.getenv("LOG_LEVEL", "DEBUG")
     LOG_FILE = os.getenv("LOG_FILE", str(PROJECT_ROOT / "logs" / "app.log"))
     
     # 데이터베이스 설정
@@ -17,7 +17,7 @@ class Config:
     KIWOOM_APP_KEY = os.getenv("KIWOOM_APP_KEY", "")
     KIWOOM_APP_SECRET = os.getenv("KIWOOM_APP_SECRET", "")
     KIWOOM_BASE_URL = os.getenv("KIWOOM_BASE_URL", "https://openapi.kiwoom.com/v1")
-    KIWOOM_WS_URL = os.getenv("KIWOOM_WS_URL", "wss://openapi.kiwoom.com/v1/ws")
+    KIWOOM_WS_URL = os.getenv("KIWOOM_WS_URL", "wss://api.kiwoom.com:10000")
     KIWOOM_WS_RECONNECT_INTERVAL = int(os.getenv("KIWOOM_WS_RECONNECT_INTERVAL", 5))  # 초 단위
     KIWOOM_WS_PING_INTERVAL = int(os.getenv("KIWOOM_WS_PING_INTERVAL", 30))  # 초 단위
     

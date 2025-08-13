@@ -15,15 +15,10 @@ PORT=8000
 
 # 조건식 감시 설정
 CONDITION_CHECK_INTERVAL=1
-MAX_CONDITIONS_PER_USER=10
 
 # 로깅 설정
 LOG_LEVEL=INFO
 LOG_FILE=stock_pipeline.log
-
-# OAuth 2.0 설정
-SECRET_KEY=your-secret-key-here-change-in-production
-ACCESS_TOKEN_EXPIRE_MINUTES=30
 
 # WebSocket 서버 설정
 WEBSOCKET_PING_INTERVAL=20

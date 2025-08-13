@@ -15,7 +15,7 @@ class ConditionMonitor:
         self.is_running = False
         self.processed_signals: Set[str] = set()  # 중복 감지 방지
     
-    async def start_monitoring(self, condition_id: int, condition_name: str, user_id: str) -> bool:
+    async def start_monitoring(self, condition_id: int, condition_name: str) -> bool:
         """조건식 모니터링 시작"""
         try:
             # 조건식 결과 조회

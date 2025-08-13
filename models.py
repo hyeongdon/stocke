@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, ForeignKey, Text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from datetime import datetime
@@ -7,8 +7,14 @@ from pydantic import BaseModel
 
 from config import Config
 
-# SQLAlchemy 설정
-engine = create_engine(Config.DATABASE_URL)
+# SQLAlchemy 설정 (UTF-8 인코딩 지원)
+engine = create_engine(
+    Config.DATABASE_URL,
+    connect_args={
+        "check_same_thread": False
+    },
+    echo=False
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -29,8 +35,8 @@ class Condition(Base):
     __tablename__ = "conditions"
 
     id = Column(Integer, primary_key=True, index=True)
-    condition_name = Column(String, index=True)
-    condition_expression = Column(String)
+    condition_name = Column(Text, index=True)
+    condition_expression = Column(Text)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -41,7 +47,7 @@ class StockSignal(Base):
     id = Column(Integer, primary_key=True, index=True)
     condition_id = Column(Integer, ForeignKey("conditions.id"))
     stock_code = Column(String, index=True)
-    stock_name = Column(String)
+    stock_name = Column(Text)
     signal_type = Column(String)  # "buy" or "sell"
     signal_time = Column(DateTime, default=datetime.utcnow)
 
@@ -74,7 +80,7 @@ class ConditionResponse(ConditionBase):
     updated_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class StockSignalResponse(BaseModel):
     id: int
@@ -85,7 +91,7 @@ class StockSignalResponse(BaseModel):
     signal_time: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class ConditionLogResponse(BaseModel):
     id: int
@@ -95,4 +101,4 @@ class ConditionLogResponse(BaseModel):
     created_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True

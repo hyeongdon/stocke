@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from models import Condition, StockSignal, ConditionLog, User
+from models import Condition, StockSignal, ConditionLog
 from config import Config
 import aiofiles
 import json
@@ -20,15 +20,10 @@ class ExportService:
         # 내보내기 디렉토리 생성
         os.makedirs(self.export_dir, exist_ok=True)
         
-    def export_conditions_to_csv(self, db: Session, user_id: Optional[str] = None) -> str:
+    def export_conditions_to_csv(self, db: Session) -> str:
         """조건식 데이터를 CSV로 내보내기"""
         try:
-            query = db.query(Condition)
-            
-            if user_id:
-                query = query.filter(Condition.user_id == user_id)
-                
-            conditions = query.all()
+            conditions = db.query(Condition).all()
             
             if not conditions:
                 raise ValueError("내보낼 조건식이 없습니다.")
@@ -38,7 +33,6 @@ class ExportService:
             for condition in conditions:
                 data.append({
                     'ID': condition.id,
-                    '사용자ID': condition.user_id,
                     '조건식명': condition.condition_name,
                     '조건식': condition.condition_expression,
                     '활성화': condition.is_active,
@@ -171,54 +165,15 @@ class ExportService:
             logger.error(f"로그 내보내기 실패: {e}")
             raise
             
-    def export_users_to_csv(self, db: Session) -> str:
-        """사용자 데이터를 CSV로 내보내기"""
-        try:
-            users = db.query(User).all()
+
             
-            if not users:
-                raise ValueError("내보낼 사용자가 없습니다.")
-                
-            # DataFrame 생성
-            data = []
-            for user in users:
-                data.append({
-                    'ID': user.id,
-                    '사용자명': user.username,
-                    '이메일': user.email,
-                    '활성화': user.is_active,
-                    '생성일시': user.created_at,
-                    '수정일시': user.updated_at
-                })
-                
-            df = pd.DataFrame(data)
-            
-            # 파일명 생성
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"users_{timestamp}.csv"
-            filepath = os.path.join(self.export_dir, filename)
-            
-            # CSV 저장
-            df.to_csv(filepath, index=False, encoding='utf-8-sig')
-            
-            logger.info(f"사용자 내보내기 완료: {filepath}")
-            return filepath
-            
-        except Exception as e:
-            logger.error(f"사용자 내보내기 실패: {e}")
-            raise
-            
-    def export_summary_report(self, db: Session, user_id: Optional[str] = None) -> str:
+    def export_summary_report(self, db: Session) -> str:
         """요약 리포트 생성"""
         try:
             # 기본 통계 조회
             total_conditions = db.query(Condition).count()
             active_conditions = db.query(Condition).filter(Condition.is_active == True).count()
             total_signals = db.query(StockSignal).count()
-            total_users = db.query(User).count()
-            
-            # 사용자별 조건식 수
-            user_conditions = db.query(Condition.user_id, db.func.count(Condition.id).label('count')).group_by(Condition.user_id).all()
             
             # 신호 타입별 통계
             signal_types = db.query(StockSignal.signal_type, db.func.count(StockSignal.id).label('count')).group_by(StockSignal.signal_type).all()
@@ -234,10 +189,8 @@ class ExportService:
                     '전체조건식수': total_conditions,
                     '활성조건식수': active_conditions,
                     '전체신호수': total_signals,
-                    '전체사용자수': total_users,
                     '최근7일신호수': recent_signals
                 },
-                '사용자별조건식수': [{'사용자ID': uc.user_id, '조건식수': uc.count} for uc in user_conditions],
                 '신호타입별통계': [{'신호타입': st.signal_type, '개수': st.count} for st in signal_types]
             }
             
@@ -297,4 +250,4 @@ class ExportService:
             return False
 
 # 전역 ExportService 인스턴스
-export_service = ExportService() 
+export_service = ExportService()
