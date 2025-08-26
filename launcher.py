@@ -70,9 +70,7 @@ class ServerLauncher:
                 webbrowser.open("http://localhost:8000")
             
             # 별도 스레드에서 브라우저 열기
-            threading.Thread(target=open_browser_delayed, daemon=True).start()
-            
-            messagebox.showinfo("성공", "서버가 시작되었습니다!\n브라우저가 자동으로 열립니다.")
+            threading.Thread(target=open_browser_delayed, daemon=True).start()                                          
             
         except Exception as e:
             messagebox.showerror("오류", f"서버 시작 실패: {str(e)}")

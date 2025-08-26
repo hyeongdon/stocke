@@ -29,5 +29,10 @@ class Config:
     HOST = os.getenv("HOST", "0.0.0.0")
     PORT = int(os.getenv("PORT", 8000))
     
+    # 네이버 뉴스 검색 API 설정
+    NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID", "")
+    NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET", "")
+    NAVER_NEWS_API_URL = "https://openapi.naver.com/v1/search/news.json"
+    
     # 로그 디렉토리 생성
     Path(LOG_FILE).parent.mkdir(parents=True, exist_ok=True)

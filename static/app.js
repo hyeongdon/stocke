@@ -5,6 +5,7 @@ class StockMonitorApp {
         this.currentChart = null;
         this.currentStockCode = null;
         this.currentStockName = null;
+        this.selectedStockForNews = null;
         this.init();
         this.setupDebugLog();
     }
@@ -201,528 +202,400 @@ class StockMonitorApp {
     renderStocks(data) {
         const container = document.getElementById('stocksContent');
         
-        console.log('주식 데이터 렌더링:', data);
-    
-        if (!data.stocks || data.stocks.length === 0) {
+        // 디버깅: 컨테이너 확인
+        console.log('Container found:', container);
+        console.log('Container current content:', container.innerHTML);
+        
+        if (!data || !data.stocks || data.stocks.length === 0) {
             container.innerHTML = `
-                <div class="empty-state">
-                    <i class="fas fa-chart-line"></i>
-                    <p>조건에 해당하는 종목이 없습니다.</p>
+                <div class="text-center text-muted py-5">
+                    <i class="fas fa-chart-line fa-3x mb-3"></i>
+                    <p>해당 조건식에 맞는 종목이 없습니다.</p>
                 </div>
             `;
             return;
         }
     
-        const tableHtml = `
-            <div class="stocks-container">
-                <table class="table table-hover stocks-table">
-                    <thead>
-                        <tr>
-                            <th>종목코드</th>
-                            <th>종목명</th>
-                            <th>현재가</th>
-                            <th>전일대비</th>
-                            <th>등락률</th>
-                            <th>거래량</th>
-                            <th>차트</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${data.stocks.map(stock => {
-                            // 백엔드에서 계산된 등락률 사용
-                            const changeRate = parseFloat(stock.change_rate) || 0;
-                            // prev_close가 이미 전일대비 변동가격이므로 그대로 사용
-                            const priceDiff = parseFloat(stock.prev_close);
-                            
-                            return `
-                                <tr>
-                                    <td><code>${stock.code}</code></td>
-                                    <td><strong>${stock.name}</strong></td>
-                                    <td class="${this.getPriceClass(changeRate)}">
-                                        ${this.formatPrice(stock.price)}
-                                    </td>
-                                    <td class="${this.getPriceClass(changeRate)}">
-                                        ${this.formatPriceDiff(priceDiff)}
-                                    </td>
-                                    <td class="${this.getPriceClass(changeRate)}">
-                                        ${this.formatChangeRate(changeRate)}
-                                    </td>
-                                    <td>${this.formatVolume(stock.volume)}</td>
-                                    <td>
-                                        <button class="btn btn-outline-primary btn-sm chart-btn"
-                                                data-stock-code="${stock.code}" 
-                                                data-stock-name="${stock.name}">
-                                            <i class="fas fa-chart-line"></i>
-                                        </button>
-                                    </td>
-                                </tr>
-                            `;
-                        }).join('')}
-                    </tbody>
-                </table>
+        // 헤더 HTML (Bootstrap Grid 사용)
+        const headerHtml = `
+            <div class="stocks-header mb-2 py-2 bg-light border-bottom fw-bold" style="display: flex; background-color: #f8f9fa !important; border-bottom: 2px solid #dee2e6 !important; font-weight: bold !important; padding: 10px 0 !important; margin-bottom: 10px !important;">
+                <div style="flex: 0 0 25%; padding: 0 15px;">종목명/코드</div>
+                <div style="flex: 0 0 16.67%; padding: 0 15px; text-align: right;">현재가</div>
+                <div style="flex: 0 0 16.67%; padding: 0 15px; text-align: right;">전일대비</div>
+                <div style="flex: 0 0 16.67%; padding: 0 15px; text-align: right;">등락률</div>
+                <div style="flex: 0 0 16.67%; padding: 0 15px; text-align: right;">거래량</div>
+                <div style="flex: 0 0 8.33%; padding: 0 15px; text-align: right;">차트</div>
             </div>
         `;
+        
+        // 디버깅: 헤더 HTML 확인
+        console.log('Header HTML:', headerHtml);
     
-        container.innerHTML = tableHtml;
-        container.classList.add('fade-in');
-        
-        // 차트 버트 이벤트 바인딩
-        this.bindChartEvents();
-    }
-
-    getPriceClass(changeRate) {
-        const rate = parseFloat(changeRate);
-        if (rate > 0) return 'price-up';
-        if (rate < 0) return 'price-down';
-        return 'price-neutral';
-    }
-
-    formatPrice(price) {
-        return new Intl.NumberFormat('ko-KR').format(price);
-    }
-
-    formatChangeRate(rate) {
-        const numRate = parseFloat(rate);
-        const sign = numRate > 0 ? '+' : '';
-        return `${sign}${numRate.toFixed(2)}%`;
-    }
-
-    formatVolume(volume) {
-        return new Intl.NumberFormat('ko-KR').format(volume);
-    }
-
-    calculatePriceDiff(currentPrice, prevClose) {
-        const current = parseFloat(currentPrice) || 0;
-        const prev = parseFloat(prevClose) || 0;
-        return current - prev;
-    }
-
-    calculateChangeRate(currentPrice, prevClose) {
-        const current = parseFloat(currentPrice) || 0;
-        const prev = parseFloat(prevClose) || 0;
-        
-        console.log('등락률 계산:', {
-            currentPrice: currentPrice,
-            prevClose: prevClose,
-            current: current,
-            prev: prev,
-            diff: current - prev,
-            rate: prev === 0 ? 0 : ((current - prev) / prev) * 100
-        });
-        
-        if (prev === 0) return 0;
-        return ((current - prev) / prev) * 100;
-    }
-
-    formatPriceDiff(diff) {
-        const sign = diff > 0 ? '+' : diff < 0 ? '-' : '';
-        return `${sign}${new Intl.NumberFormat('ko-KR').format(Math.abs(diff))}`;
-    }
-
-    async checkMonitoringStatus() {
-        try {
-            const response = await fetch('/monitoring/status');
-            const data = await response.json();
+        const stocksHtml = data.stocks.map(stock => {
+            // 데이터 변환: 백엔드 필드명에 맞게 수정
+            const currentPrice = parseInt(stock.current_price) || 0;  // stock.price → stock.current_price
+            const prevClose = parseInt(stock.prev_close) || 0;
+            const backendChangeRate = parseFloat(stock.change_rate) || 0;
+            const volume = parseInt(stock.volume) || 0;
             
-            this.updateMonitoringStatus(data.is_running);
-        } catch (error) {
-            console.error('모니터링 상태 확인 실패:', error);
-            this.updateMonitoringStatus(null);
-        }
-    }
-
-    updateMonitoringStatus(isRunning) {
-        const statusElement = document.getElementById('monitoringStatus');
-        const toggleButton = document.getElementById('toggleMonitoring');
-        
-        if (isRunning === true) {
-            statusElement.textContent = '실행 중';
-            statusElement.className = 'badge bg-success me-3';
-            toggleButton.textContent = '모니터링 중지';
-            toggleButton.className = 'btn btn-sm btn-danger';
-        } else if (isRunning === false) {
-            statusElement.textContent = '중지됨';
-            statusElement.className = 'badge bg-secondary me-3';
-            toggleButton.textContent = '모니터링 시작';
-            toggleButton.className = 'btn btn-sm btn-success';
-        } else {
-            statusElement.textContent = '상태 불명';
-            statusElement.className = 'badge bg-warning me-3';
-            toggleButton.textContent = '상태 확인';
-            toggleButton.className = 'btn btn-sm btn-warning';
-        }
-        
-        toggleButton.disabled = false;
-    }
-
-    async toggleMonitoring() {
-        try {
-            const statusResponse = await fetch('/monitoring/status');
-            const statusData = await statusResponse.json();
+            // 전일대비 계산 (현재가 - 전일종가)
+            const priceDiff = currentPrice - prevClose;
             
-            const endpoint = statusData.is_running ? '/monitoring/stop' : '/monitoring/start';
-            const response = await fetch(endpoint, { method: 'POST' });
+            // 등락률은 항상 계산된 값 사용 (백엔드 값이 부정확함)
+            const finalChangeRate = this.calculateChangeRate(currentPrice, prevClose);
+            const priceClass = this.getPriceClass(finalChangeRate);
             
-            if (response.ok) {
-                // 상태 다시 확인
-                setTimeout(() => this.checkMonitoringStatus(), 1000);
-            } else {
-                throw new Error('모니터링 상태 변경 실패');
-            }
-        } catch (error) {
-            console.error('모니터링 토글 실패:', error);
-            alert('모니터링 상태를 변경하는데 실패했습니다.');
-        }
-    }
-
-    showLoading(message = '로딩 중...') {
-        const modalElement = document.getElementById('loadingModal');
-        const modalBody = modalElement.querySelector('.modal-body p');
-        if (modalBody) {
-            modalBody.textContent = message;
-        }
-        
-        let modal = bootstrap.Modal.getInstance(modalElement);
-        if (!modal) {
-            modal = new bootstrap.Modal(modalElement);
-        }
-        modal.show();
-    }
-
-    hideLoading() {
-        console.log('hideLoading 호출됨');
-        const modalElement = document.getElementById('loadingModal');
-        
-        // Bootstrap 모달로 시도
-        const modal = bootstrap.Modal.getInstance(modalElement);
-        if (modal) {
-            console.log('Bootstrap 모달로 숨김 시도');
-            modal.hide();
-        }
-        
-        // 강제로 모달 숨김 (대체 방법)
-        setTimeout(() => {
-            console.log('강제 모달 정리 시작');
+            // 디버깅용 로그
+            console.log(`${stock.stock_name}:`);  // stock.name → stock.stock_name
+            console.log(`  현재가: ${currentPrice}, 전일종가: ${prevClose}`);
+            console.log(`  전일대비: ${priceDiff}, 백엔드등락률: ${backendChangeRate}%`);
+            console.log(`  계산된등락률: ${finalChangeRate.toFixed(2)}%`);
+            console.log(`  최종등락률: ${finalChangeRate.toFixed(2)}%, 클래스: ${priceClass}`);
+            console.log('---');
             
-            // 모달 요소 숨김
-            if (modalElement) {
-                modalElement.style.display = 'none';
-                modalElement.classList.remove('show');
-                modalElement.setAttribute('aria-hidden', 'true');
-                modalElement.removeAttribute('aria-modal');
-            }
-            
-            // 백드롭 제거
-            const backdrops = document.querySelectorAll('.modal-backdrop');
-            backdrops.forEach(backdrop => backdrop.remove());
-            
-            // body 스타일 정리
-            document.body.classList.remove('modal-open');
-            document.body.style.removeProperty('overflow');
-            document.body.style.removeProperty('padding-right');
-            
-            console.log('강제 모달 정리 완료');
-        }, 100);
-    }
-
-    showStocksLoading() {
-        const container = document.getElementById('stocksContent');
-        container.innerHTML = `
-            <div class="text-center p-4">
-                <div class="spinner-border text-primary" role="status">
-                    <span class="visually-hidden">로딩 중...</span>
+            return `
+                <div class="stock-item card mb-2" 
+                     data-stock-code="${stock.stock_code}"
+                     data-stock-name="${stock.stock_name}"
+                     onclick="console.log('클릭됨: ${stock.stock_code}'); window.app.selectStockForNews('${stock.stock_code}', '${stock.stock_name}'); return false;">
+                    <div class="card-body p-3">
+                        <div class="row align-items-center">
+                            <div class="col-md-3">
+                                <h6 class="mb-1 fw-bold">${stock.stock_name}</h6>
+                                <small class="text-muted">${stock.stock_code}</small>
+                            </div>
+                            <div class="col-md-2 text-end">
+                                <div class="fw-bold ${priceClass}">
+                                    ${this.formatPrice(currentPrice)}원
+                                </div>
+                            </div>
+                            <div class="col-md-2 text-end">
+                                <div class="${priceClass}">
+                                    ${this.formatPriceDiff(priceDiff)}
+                                </div>
+                            </div>
+                            <div class="col-md-2 text-end">
+                                <div class="${priceClass}">
+                                    ${this.formatChangeRate(finalChangeRate)}%
+                                </div>
+                            </div>
+                            <div class="col-md-2 text-end">
+                                <small class="text-muted">
+                                    ${this.formatVolume(volume)}
+                                </small>
+                            </div>
+                            <div class="col-md-1 text-end">
+                                <button class="btn btn-outline-primary btn-sm" 
+                                    onclick="event.stopPropagation(); window.app.showStockChart('${stock.stock_code}', '${stock.stock_name}')">
+                                    <i class="fas fa-chart-line"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-                <p class="mt-2 mb-0">주식 정보를 불러오는 중...</p>
-            </div>
-        `;
-    }
-
-    showStocksError(message) {
-        const container = document.getElementById('stocksContent');
-        container.innerHTML = `
-            <div class="alert alert-danger" role="alert">
-                <i class="fas fa-exclamation-triangle me-2"></i>
-                ${message}
-            </div>
-        `;
-    }
-
-    showError(message) {
-        const container = document.getElementById('conditionsList');
-        container.innerHTML = `
-            <div class="alert alert-danger" role="alert">
-                <i class="fas fa-exclamation-triangle me-2"></i>
-                ${message}
-            </div>
-        `;
-    }
-
-    updateLastRefreshTime() {
-        const element = document.getElementById('lastUpdated');
-        const now = new Date();
-        element.textContent = `마지막 업데이트: ${now.toLocaleTimeString('ko-KR')}`;
-    }
-
-    startAutoRefresh() {
-        this.refreshInterval = setInterval(() => {
-            if (this.selectedConditionId) {
-                this.loadStocks(this.selectedConditionId);
-            }
-            this.checkMonitoringStatus();
-        }, 30000); // 30초마다 새로고침
-    }
-
-    stopAutoRefresh() {
-        if (this.refreshInterval) {
-            clearInterval(this.refreshInterval);
-            this.refreshInterval = null;
-        }
-    }
-    
-    bindChartEvents() {
-        const chartButtons = document.querySelectorAll('.chart-btn');
-        chartButtons.forEach(button => {
-            button.addEventListener('click', (e) => {
-                e.preventDefault();
-                const stockCode = button.getAttribute('data-stock-code');
-                const stockName = button.getAttribute('data-stock-name');
-                this.showStockChart(stockCode, stockName);
-            });
-        });
-        
-        // 차트 기간 변경 이벤트
-        const periodButtons = document.querySelectorAll('input[name="chartPeriod"]');
-        periodButtons.forEach(button => {
-            button.addEventListener('change', () => {
-                if (this.currentStockCode && button.checked) {
-                    this.loadChartData(this.currentStockCode, button.value);
-                }
-            });
-        });
-    }
-    
-    async showStockChart(stockCode, stockName) {
-        console.log(`차트 표시: ${stockCode} - ${stockName}`);
-        
-        this.currentStockCode = stockCode;
-        this.currentStockName = stockName;
-        
-        // 모달 정보 업데이트
-        document.getElementById('chartStockName').textContent = stockName;
-        document.getElementById('chartStockCode').textContent = stockCode;
-        
-        // 모달 표시
-        const chartModal = new bootstrap.Modal(document.getElementById('chartModal'));
-        chartModal.show();
-        
-        // 기본 1일 차트 로드
-        document.getElementById('period1D').checked = true;
-        await this.loadChartData(stockCode, '1D');
-    }
-    
-    async loadChartData(stockCode, period) {
-        try {
-            console.log(`캔들차트 로딩: ${stockCode}, 기간: ${period}`);
+            `;
+            }).join('');
             
-            // 로딩 표시
-            this.showChartLoading();
+            // 헤더와 종목 목록을 함께 설정
+            const finalHtml = headerHtml + stocksHtml;
+            console.log('Final HTML length:', finalHtml.length);
+            console.log('Final HTML preview:', finalHtml.substring(0, 200));
             
-            // 캔들차트 이미지 API 호출
-            const response = await fetch(`/chart/image/${stockCode}?period=${period}`);
-            const data = await response.json();
+            container.innerHTML = finalHtml;
             
-            if (response.ok) {
-                this.renderCandlestickChart(data.image, stockCode);
-            } else {
-                this.showChartError('캔들차트를 불러올 수 없습니다.');
-            }
-        } catch (error) {
-            console.error('캔들차트 로딩 실패:', error);
-            this.showChartError('캔들차트 로딩 중 오류가 발생했습니다.');
+            // 디버깅: 설정 후 확인
+            console.log('After setting innerHTML:', container.innerHTML.substring(0, 200));
+            console.log('Header element found:', container.querySelector('.stocks-header'));
         }
-    }
 
-    renderCandlestickChart(imageData, stockCode) {
-        const container = document.getElementById('chartContainer');
-        
-        // 기존 차트 제거
-        if (this.currentChart) {
-            this.currentChart.destroy();
-            this.currentChart = null;
-        }
-        
-        // 캔들차트 이미지 표시
-        container.innerHTML = `
-            <div class="chart-image-container">
-                <img src="${imageData}" 
-                     alt="${stockCode} 캔들차트" 
-                     style="max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
-            </div>
-        `;
-        
-        console.log(`캔들차트 렌더링 완료: ${stockCode}`);
-    }
-    
-    renderChart(chartData, period) {
-        const ctx = document.getElementById('chartCanvas');
-        
-        // 기존 차트 제거
-        if (this.currentChart) {
-            this.currentChart.destroy();
-        }
-        
-        // 캔버스 요소가 없으면 생성
-        if (!ctx) {
-            const container = document.getElementById('chartContainer');
-            container.innerHTML = '<canvas id="chartCanvas"></canvas>';
-        }
-        
-        const canvas = document.getElementById('chartCanvas');
-        
-        // 차트 데이터 준비
-        const labels = chartData.map(item => {
-            const date = new Date(item.timestamp);
-            if (period === '1D') {
-                return date.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
-            } else {
-                return date.toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' });
+        // 가격 관련 함수들 (NaN 문제 해결)
+        formatPrice(price) {
+            if (!price || isNaN(parseFloat(price))) {
+                return '0';
             }
-        });
-        
-        const prices = chartData.map(item => item.close);
-        const volumes = chartData.map(item => item.volume);
-        
-        // 차트 생성
-        this.currentChart = new Chart(canvas, {
-            type: 'line',
-            data: {
-                labels: labels,
-                datasets: [{
-                    label: '주가',
-                    data: prices,
-                    borderColor: 'rgb(75, 192, 192)',
-                    backgroundColor: 'rgba(75, 192, 192, 0.1)',
-                    tension: 0.1,
-                    fill: true,
-                    yAxisID: 'y'
-                }, {
-                    label: '거래량',
-                    data: volumes,
-                    type: 'bar',
-                    backgroundColor: 'rgba(255, 99, 132, 0.3)',
-                    borderColor: 'rgba(255, 99, 132, 0.8)',
-                    borderWidth: 1,
-                    yAxisID: 'y1'
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                interaction: {
-                    mode: 'index',
-                    intersect: false,
-                },
-                scales: {
-                    y: {
-                        type: 'linear',
-                        display: true,
-                        position: 'left',
-                        beginAtZero: false,
-                        ticks: {
-                            callback: function(value) {
-                                return value.toLocaleString() + '원';
-                            }
-                        }
-                    },
-                    y1: {
-                        type: 'linear',
-                        display: true,
-                        position: 'right',
-                        beginAtZero: true,
-                        ticks: {
-                            callback: function(value) {
-                                return value.toLocaleString();
-                            }
-                        },
-                        grid: {
-                            drawOnChartArea: false,
-                        },
-                    }
-                },
-                plugins: {
-                    legend: {
-                        display: true,
-                        position: 'top'
-                    },
-                    tooltip: {
-                        callbacks: {
-                            label: function(context) {
-                                if (context.datasetIndex === 0) {
-                                    return '주가: ' + context.parsed.y.toLocaleString() + '원';
-                                } else {
-                                    return '거래량: ' + context.parsed.y.toLocaleString();
-                                }
-                            }
-                        }
-                    }
+            return parseInt(parseFloat(price)).toLocaleString();
+        }
+
+        formatChangeRate(rate) {
+            if (!rate || isNaN(parseFloat(rate))) {
+                return '0.00';
+            }
+            const numRate = parseFloat(rate);
+            const sign = numRate > 0 ? '+' : '';
+            return `${sign}${numRate.toFixed(2)}`;
+        }
+
+        formatPriceDiff(diff) {
+            if (!diff || isNaN(parseFloat(diff))) {
+                return '0';
+            }
+            const numDiff = parseFloat(diff);
+            const sign = numDiff >= 0 ? '+' : '';
+            return `${sign}${parseInt(numDiff).toLocaleString()}`;
+        }
+
+        formatVolume(volume) {
+            if (!volume || isNaN(parseFloat(volume))) {
+                return '0';
+            }
+            return parseInt(parseFloat(volume)).toLocaleString();
+        }
+
+        calculateChangeRate(currentPrice, prevClose) {
+            if (!currentPrice || !prevClose || parseFloat(prevClose) === 0) {
+                return 0;
+            }
+            
+            const current = parseFloat(currentPrice);
+            const prev = parseFloat(prevClose);
+            
+            if (isNaN(current) || isNaN(prev) || prev === 0) {
+                return 0;
+            }
+            
+            return ((current - prev) / prev * 100);
+        }
+
+        calculatePriceDiff(currentPrice, prevClose) {
+            if (!currentPrice || !prevClose) {
+                return 0;
+            }
+            
+            const current = parseFloat(currentPrice);
+            const prev = parseFloat(prevClose);
+            
+            if (isNaN(current) || isNaN(prev)) {
+                return 0;
+            }
+            
+            return current - prev;
+        }
+
+        getPriceClass(changeRate) {
+            const rate = parseFloat(changeRate);
+            if (isNaN(rate)) return 'price-neutral';
+            if (rate > 0) return 'price-up';
+            if (rate < 0) return 'price-down';
+            return 'price-neutral';
+        }
+
+        showLoading(message = '로딩 중...') {
+            const loadingElement = document.getElementById('loadingModal');
+            if (loadingElement) {
+                loadingElement.style.display = 'block';
+                const messageElement = loadingElement.querySelector('.loading-message');
+                if (messageElement) {
+                    messageElement.textContent = message;
                 }
             }
-        });
+        }
         
-        console.log(`차트 렌더링 완료: ${chartData.length}개 데이터 포인트`);
-    }
-    
-    showChartLoading() {
-        const container = document.getElementById('chartContainer');
-        container.innerHTML = `
-            <div class="text-center p-4">
-                <div class="spinner-border text-primary" role="status">
-                    <span class="visually-hidden">차트 로딩 중...</span>
-                </div>
-                <p class="mt-2 mb-0">차트를 불러오는 중...</p>
-            </div>
-        `;
-    }
-    
-    showChartError(message) {
-        const container = document.getElementById('chartContainer');
-        container.innerHTML = `
-            <div class="alert alert-danger text-center" role="alert">
-                <i class="fas fa-exclamation-triangle me-2"></i>
-                ${message}
-            </div>
-        `;
-    }
-}
-
-// 앱 초기화
-document.addEventListener('DOMContentLoaded', () => {
-    new StockMonitorApp();
-});
-
-// 페이지 언로드 시 자동 새로고침 중지
-window.addEventListener('beforeunload', () => {
-    if (window.stockApp) {
-        window.stockApp.stopAutoRefresh();
-    }
-});
-
-// 차트 이미지 로드 함수
-async function loadChartImage(stockCode) {
-    try {
-        const response = await fetch(`/chart/image/${stockCode}`);
-        const data = await response.json();
+        hideLoading() {
+            const loadingElement = document.getElementById('loadingModal');
+            if (loadingElement) {
+                loadingElement.style.display = 'none';
+            }
+        }
         
-        // 차트 이미지 표시
-        const chartContainer = document.getElementById('chart-container');
-        chartContainer.innerHTML = `<img src="${data.image}" alt="${stockCode} 차트" style="max-width: 100%; height: auto;">`;
+        showStocksLoading() {
+            const container = document.getElementById('stocksContent');
+            if (container) {
+                container.innerHTML = `
+                    <div class="text-center py-5">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">로딩 중...</span>
+                        </div>
+                        <p class="mt-3">종목 정보를 불러오는 중...</p>
+                    </div>
+                `;
+            }
+        }
         
-    } catch (error) {
-        console.error('차트 로드 오류:', error);
+        showError(message) {
+            const container = document.getElementById('stocksContent');
+            if (container) {
+                container.innerHTML = `
+                    <div class="alert alert-danger" role="alert">
+                        <i class="fas fa-exclamation-triangle me-2"></i>
+                        ${message}
+                    </div>
+                `;
+            }
+        }
+        
+        showStocksError(message) {
+            this.showError(message);
+        }
+        
+        async checkMonitoringStatus() {
+            try {
+                const response = await fetch('/monitoring/status');
+                const data = await response.json();
+                this.updateMonitoringUI(data.is_monitoring);
+            } catch (error) {
+                console.error('모니터링 상태 확인 실패:', error);
+            }
+        }
+        
+        updateMonitoringUI(isMonitoring) {
+            const button = document.getElementById('toggleMonitoring');
+            if (button) {
+                button.textContent = isMonitoring ? '모니터링 중지' : '모니터링 시작';
+                button.className = isMonitoring ? 'btn btn-danger' : 'btn btn-success';
+            }
+        }
+        
+        async toggleMonitoring() {
+            try {
+                const response = await fetch('/monitoring/toggle', { method: 'POST' });
+                const data = await response.json();
+                this.updateMonitoringUI(data.is_monitoring);
+            } catch (error) {
+                console.error('모니터링 토글 실패:', error);
+            }
+        }
+        
+        startAutoRefresh() {
+            // 30초마다 자동 새로고침
+            this.refreshInterval = setInterval(() => {
+                if (this.selectedConditionId) {
+                    this.loadStocks(this.selectedConditionId);
+                }
+            }, 30000);
+        }
+        
+        stopAutoRefresh() {
+            if (this.refreshInterval) {
+                clearInterval(this.refreshInterval);
+                this.refreshInterval = null;
+            }
+        }
+        
+        updateLastRefreshTime() {
+            const timeElement = document.getElementById('lastRefreshTime');
+            if (timeElement) {
+                timeElement.textContent = new Date().toLocaleTimeString();
+            }
+        }
+        
+        selectStockForNews(stockCode, stockName) {
+            this.selectedStockForNews = { code: stockCode, name: stockName };
+            console.log('뉴스용 종목 선택:', stockCode, stockName);
+            
+            // 뉴스 섹션 표시
+            const newsSection = document.getElementById('newsSection');
+            const newsStockName = document.getElementById('newsStockName');
+            const newsContent = document.getElementById('newsContent');
+            
+            if (newsSection && newsStockName && newsContent) {
+                newsSection.style.display = 'block';
+                newsStockName.textContent = stockName;
+                
+                // 로딩 상태 표시
+                newsContent.innerHTML = `
+                    <div class="text-center py-3">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">로딩 중...</span>
+                        </div>
+                        <p class="mt-2">뉴스를 불러오는 중...</p>
+                    </div>
+                `;
+                
+                // 뉴스 로딩
+                this.loadNews(stockCode, stockName);
+            }
+        }
+        
+        // 새로운 뉴스 로딩 함수 추가
+        async loadNews(stockCode, stockName) {
+            try {
+                const response = await fetch(`/news/${stockCode}?stock_name=${encodeURIComponent(stockName)}`);
+                const newsData = await response.json();
+                
+                const newsContent = document.getElementById('newsContent');
+                
+                if (newsData.error) {
+                    newsContent.innerHTML = `
+                        <div class="alert alert-warning" role="alert">
+                            <i class="fas fa-exclamation-triangle me-2"></i>
+                            ${newsData.error}
+                        </div>
+                    `;
+                    return;
+                }
+                
+                if (!newsData.items || newsData.items.length === 0) {
+                    newsContent.innerHTML = `
+                        <div class="text-center text-muted py-3">
+                            <i class="fas fa-newspaper fa-2x mb-2"></i>
+                            <p>관련 뉴스가 없습니다.</p>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                // 뉴스 목록 렌더링
+                const newsHtml = newsData.items.map(item => `
+                    <div class="news-item border-bottom pb-3 mb-3">
+                        <h6 class="news-title">
+                            <a href="${item.link}" target="_blank" class="text-decoration-none">
+                                ${item.title}
+                            </a>
+                        </h6>
+                        <p class="news-description text-muted mb-2">${item.description}</p>
+                        <small class="text-muted">
+                            <i class="fas fa-calendar me-1"></i>
+                            ${item.pubDate || '날짜 정보 없음'}
+                        </small>
+                    </div>
+                `).join('');
+                
+                newsContent.innerHTML = newsHtml;
+                
+            } catch (error) {
+                console.error('뉴스 로딩 오류:', error);
+                const newsContent = document.getElementById('newsContent');
+                newsContent.innerHTML = `
+                    <div class="alert alert-danger" role="alert">
+                        <i class="fas fa-exclamation-triangle me-2"></i>
+                        뉴스를 불러오는데 실패했습니다: ${error.message}
+                    </div>
+                `;
+            }
+        }
+        
+        showStockChart(stockCode, stockName) {
+            console.log('차트 표시:', stockCode, stockName);
+            showChart(stockCode);
+        }
     }
-}
 
-// 종목 클릭 시 차트 표시
-function showChart(stockCode) {
-    loadChartImage(stockCode);
-}
+    document.addEventListener('DOMContentLoaded', () => {
+        window.app = new StockMonitorApp();
+    });
+
+    window.addEventListener('beforeunload', () => {
+        if (window.app) {
+            window.app.stopAutoRefresh();
+        }
+    });
+
+    // 차트 이미지 로드 함수
+    async function loadChartImage(stockCode) {
+        try {
+            const response = await fetch(`/chart/image/${stockCode}`);
+            const data = await response.json();
+            
+            // 차트 이미지 표시
+            const chartContainer = document.getElementById('chart-container');
+            chartContainer.innerHTML = `<img src="${data.image}" alt="${stockCode} 차트" style="max-width: 100%; height: auto;">`;
+            
+        } catch (error) {
+            console.error('차트 로드 오류:', error);
+        }
+    }
+
+    // 종목 클릭 시 차트 표시
+    function showChart(stockCode) {
+        loadChartImage(stockCode);
+    }

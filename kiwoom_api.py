@@ -317,13 +317,21 @@ class KiwoomAPI:
                 if stock_data:
                     for item in stock_data:
                         if isinstance(item, dict):
-                            # 키움증권 응답 필드 매핑
+                            # 키움증권 응답 필드 매핑 (수정됨)
                             stock_code = item.get('9001', '').replace('A', '')  # 종목코드에서 'A' 제거
                             stock_name = item.get('302', '')
-                            current_price = item.get('10', '0')
-                            prev_close = item.get('11', '0')  # 전일종가
-                            change_rate = item.get('12', '0')
-                            volume = item.get('13', '0')
+                            current_price = item.get('10', '0')  # 현재가
+                            price_diff = item.get('11', '0')     # 전일대비 (기존 prev_close)
+                            change_rate = item.get('12', '0')    # 등락률
+                            volume = item.get('13', '0')        # 거래량
+                            
+                            # 전일종가 계산 (현재가 - 전일대비)
+                            try:
+                                current_price_int = int(current_price)
+                                price_diff_int = int(price_diff)
+                                prev_close = str(current_price_int - price_diff_int)
+                            except (ValueError, TypeError):
+                                prev_close = current_price
                             
                             # 등락률을 현실적인 범위로 조정 (키움 API 데이터가 비현실적일 수 있음)
                             try:
@@ -343,9 +351,9 @@ class KiwoomAPI:
                                 change_rate = str(round(random.uniform(-3.0, 3.0), 2))
                             
                             stock_info = {
-                                'code': stock_code,
-                                'name': stock_name,
-                                'price': current_price,
+                                'stock_code': stock_code,      # 'code' → 'stock_code'
+                                'stock_name': stock_name,      # 'name' → 'stock_name'
+                                'current_price': current_price, # 'price' → 'current_price'
                                 'prev_close': prev_close,
                                 'change_rate': change_rate,
                                 'volume': volume

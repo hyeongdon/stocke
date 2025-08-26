@@ -6,6 +6,9 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 import logging
 from datetime import datetime
+import httpx
+from urllib.parse import quote
+import re
 
 # 차트 생성을 위한 추가 import
 import pandas as pd
@@ -23,13 +26,16 @@ from condition_monitor import condition_monitor
 from kiwoom_api import KiwoomAPI
 from config import Config
 
+# Config 인스턴스 생성 추가
+config = Config()
+
 # 로깅 설정
 import sys
 logging.basicConfig(
-    level=getattr(logging, Config.LOG_LEVEL),
+    level=getattr(logging, config.LOG_LEVEL),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(Config.LOG_FILE, encoding='utf-8'),
+        logging.FileHandler(config.LOG_FILE, encoding='utf-8'),
         logging.StreamHandler(sys.stdout)
     ]
 )
@@ -147,7 +153,7 @@ async def get_conditions():
         
         # 키움 API를 통해 조건식 목록 조회 (WebSocket 방식)
         conditions_data = await kiwoom_api.get_condition_list_websocket()
-        logger.debug(f"키움 API에서 조회된 조건식 개수: {len(conditions_data) if conditions_data else 0}")
+        logger.debug(f"키움 API에서 조건식 개수: {len(conditions_data) if conditions_data else 0}")
         
         if not conditions_data:
             logger.debug("키움 API에서 조건식이 없습니다.")
@@ -503,3 +509,85 @@ async def get_chart_image(stock_code: str, period: str = "1M"):
     except Exception as e:
         logger.error(f"차트 생성 오류: {e}")
         raise HTTPException(status_code=500, detail=f"차트 생성 실패: {str(e)}")
+
+@app.get("/stocks/{stock_code}/news")
+# 기존 /stocks/{stock_code}/news 엔드포인트를 /news/{stock_code}로 변경
+@app.get("/news/{stock_code}")
+async def get_stock_news(stock_code: str, stock_name: str = None):
+    """
+    네이버 뉴스 검색 API를 사용하여 종목 관련 뉴스 조회
+    """
+    try:
+        # API 키 확인
+        if not config.NAVER_CLIENT_ID or not config.NAVER_CLIENT_SECRET:
+            logger.error("네이버 API 키가 설정되지 않았습니다.")
+            return {
+                "items": [],
+                "total": 0,
+                "start": 1,
+                "display": 0,
+                "error": "API 키가 설정되지 않았습니다."
+            }
+        
+        # 검색 쿼리 생성 (종목명 우선, 없으면 종목코드 사용)
+        query = stock_name if stock_name else stock_code
+        
+        # 네이버 뉴스 검색 API 호출
+        headers = {
+            "X-Naver-Client-Id": config.NAVER_CLIENT_ID,
+            "X-Naver-Client-Secret": config.NAVER_CLIENT_SECRET
+        }
+        
+        params = {
+            "query": f"{query} 주식",
+            "display": 10,
+            "start": 1,
+            "sort": "date"
+        }
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                config.NAVER_NEWS_API_URL,
+                headers=headers,
+                params=params,
+                timeout=10.0
+            )
+            
+        if response.status_code != 200:
+            logger.error(f"네이버 API 오류: {response.status_code} - {response.text}")
+            return {
+                "items": [],
+                "total": 0,
+                "start": 1,
+                "display": 0,
+                "error": f"API 오류: {response.status_code}"
+            }
+            
+        news_data = response.json()
+        
+        # HTML 태그 제거 및 데이터 정리
+        if "items" in news_data:
+            for item in news_data["items"]:
+                item["title"] = re.sub(r'<[^>]+>', '', item["title"])
+                item["description"] = re.sub(r'<[^>]+>', '', item["description"])
+                
+                if "pubDate" in item:
+                    try:
+                        from datetime import datetime
+                        pub_date = datetime.strptime(item["pubDate"], "%a, %d %b %Y %H:%M:%S %z")
+                        item["pubDate"] = pub_date.strftime("%Y-%m-%d %H:%M")
+                    except:
+                        pass
+        
+        logger.info(f"종목 {stock_code}({stock_name}) 뉴스 {len(news_data.get('items', []))}건 조회")
+        return news_data
+        
+    except Exception as e:
+        logger.error(f"뉴스 조회 오류: {e}")
+        return {
+            "items": [],
+            "total": 0,
+            "start": 1,
+            "display": 0,
+            "error": str(e)
+        }
