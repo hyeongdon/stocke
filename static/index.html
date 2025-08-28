@@ -75,6 +75,29 @@
             </div>
         </div>
 
+        <!-- 뉴스 섹션을 모니터링 상태 위로 이동 -->
+        <div class="row mt-4" id="newsSection" style="display: none;">
+            <div class="col-12">
+                <div class="card news-card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <div class="d-flex align-items-center">
+                            <i class="fas fa-newspaper text-primary me-2"></i>
+                            <h5 class="mb-0 fw-bold">관련 뉴스</h5>
+                        </div>
+                        <span id="newsStockName" class="badge bg-primary fs-6"></span>
+                    </div>
+                    <div class="card-body">
+                        <div id="newsContent">
+                            <div class="text-center text-muted py-3">
+                                <i class="fas fa-newspaper fa-2x mb-2"></i>
+                                <p class="mb-0">종목을 클릭하여 관련 뉴스를 확인하세요.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- 모니터링 상태 -->
         <div class="row mt-4">
             <div class="col-12">
@@ -86,26 +109,6 @@
                         <div class="d-flex align-items-center">
                             <span id="monitoringStatus" class="badge bg-secondary me-3">확인 중...</span>
                             <span id="lastUpdated" class="text-muted small"></span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- 뉴스 섹션 -->
-        <div class="row mt-4" id="newsSection" style="display: none;">
-            <div class="col-12">
-                <div class="card">
-                    <div class="card-header d-flex justify-content-between align-items-center">
-                        <h5 class="mb-0">관련 뉴스</h5>
-                        <span id="newsStockName" class="badge bg-info"></span>
-                    </div>
-                    <div class="card-body">
-                        <div id="newsContent">
-                            <div class="text-center text-muted py-3">
-                                <i class="fas fa-newspaper fa-2x mb-2"></i>
-                                <p>종목을 클릭하여 관련 뉴스를 확인하세요.</p>
-                            </div>
                         </div>
                     </div>
                 </div>

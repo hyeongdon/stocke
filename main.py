@@ -13,9 +13,16 @@ import re
 # 차트 생성을 위한 추가 import
 import pandas as pd
 import mplfinance as mpf
+import matplotlib.pyplot as plt  # matplotlib.pyplot 추가
+import matplotlib.lines as mlines  # Line2D를 위한 import 추가
 import io
 import base64
 from ta.trend import IchimokuIndicator
+import warnings
+
+# pandas와 ta 라이브러리의 FutureWarning 억제
+warnings.filterwarnings('ignore', category=FutureWarning, module='ta')
+warnings.filterwarnings('ignore', category=FutureWarning, module='pandas')
 
 from models import (
     get_db, Condition, StockSignal, ConditionLog,
@@ -424,12 +431,14 @@ async def get_chart_image(stock_code: str, period: str = "1M"):
             'volume': 'Volume'
         })
         
-        # 4-1. 일목균형표 데이터 생성
-        id_ichimoku = IchimokuIndicator(high=df['High'], low=df['Low'], visual=True, fillna=True)
-        df['span_a'] = id_ichimoku.ichimoku_a()
-        df['span_b'] = id_ichimoku.ichimoku_b()
-        df['base_line'] = id_ichimoku.ichimoku_base_line()
-        df['conv_line'] = id_ichimoku.ichimoku_conversion_line()
+        # 4-1. 일목균형표 데이터 생성 (경고 억제)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            id_ichimoku = IchimokuIndicator(high=df['High'], low=df['Low'], visual=True, fillna=True)
+            df['span_a'] = id_ichimoku.ichimoku_a()
+            df['span_b'] = id_ichimoku.ichimoku_b()
+            df['base_line'] = id_ichimoku.ichimoku_base_line()
+            df['conv_line'] = id_ichimoku.ichimoku_conversion_line()
         
         # 5. 색상 설정
         mc = mpf.make_marketcolors(
@@ -472,17 +481,17 @@ async def get_chart_image(stock_code: str, period: str = "1M"):
             tight_layout=True
         )
         
-        # 8-1. 범례 추가 (더 명확하게)
+        # 8-1. 범례 추가 (수정된 버전)
         if fig and axes and len(axes) > 0:
             try:
-                # 메인 차트에 범례 추가
+                # 메인 차트에 범례 추가 - mlines.Line2D 사용
                 legend_elements = [
-                    plt.Line2D([0], [0], color='orange', lw=2, alpha=0.7, label='선행스팬A'),
-                    plt.Line2D([0], [0], color='purple', lw=2, alpha=0.7, label='선행스팬B'),
-                    plt.Line2D([0], [0], color='green', lw=2, alpha=0.8, label='기준선'),
-                    plt.Line2D([0], [0], color='red', lw=2, alpha=0.8, label='전환선'),
-                    plt.Line2D([0], [0], color='blue', lw=1, label='20일 이평선'),
-                    plt.Line2D([0], [0], color='orange', lw=1, label='60일 이평선')
+                    mlines.Line2D([0], [0], color='orange', lw=2, alpha=0.7, label='선행스팬A'),
+                    mlines.Line2D([0], [0], color='purple', lw=2, alpha=0.7, label='선행스팬B'),
+                    mlines.Line2D([0], [0], color='green', lw=2, alpha=0.8, label='기준선'),
+                    mlines.Line2D([0], [0], color='red', lw=2, alpha=0.8, label='전환선'),
+                    mlines.Line2D([0], [0], color='blue', lw=1, label='20일 이평선'),
+                    mlines.Line2D([0], [0], color='orange', lw=1, label='60일 이평선')
                 ]
                 
                 axes[0].legend(
@@ -503,6 +512,10 @@ async def get_chart_image(stock_code: str, period: str = "1M"):
         # 9. 이미지를 base64로 인코딩
         img_base64 = base64.b64encode(buf.getvalue()).decode('utf-8')
         buf.close()
+        
+        # matplotlib figure 메모리 정리
+        if fig:
+            plt.close(fig)
         
         return {"image": f"data:image/png;base64,{img_base64}"}
         

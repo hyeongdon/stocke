@@ -586,16 +586,29 @@ class StockMonitorApp {
             const response = await fetch(`/chart/image/${stockCode}`);
             const data = await response.json();
             
-            // 차트 이미지 표시
-            const chartContainer = document.getElementById('chart-container');
-            chartContainer.innerHTML = `<img src="${data.image}" alt="${stockCode} 차트" style="max-width: 100%; height: auto;">`;
+            // 차트 이미지 표시 (올바른 ID 사용)
+            const chartContainer = document.getElementById('chartContainer');
+            if (chartContainer) {
+                chartContainer.innerHTML = `<img src="${data.image}" alt="${stockCode} 차트" style="max-width: 100%; height: auto;">`;
+            } else {
+                console.error('chartContainer 요소를 찾을 수 없습니다.');
+            }
             
         } catch (error) {
             console.error('차트 로드 오류:', error);
+            const chartContainer = document.getElementById('chartContainer');
+            if (chartContainer) {
+                chartContainer.innerHTML = '<div class="text-center text-danger p-4"><i class="fas fa-exclamation-triangle"></i><p class="mt-2">차트를 불러올 수 없습니다.</p></div>';
+            }
         }
     }
 
     // 종목 클릭 시 차트 표시
     function showChart(stockCode) {
+        // 차트 모달 표시
+        const chartModal = new bootstrap.Modal(document.getElementById('chartModal'));
+        chartModal.show();
+        
+        // 차트 로드
         loadChartImage(stockCode);
     }
