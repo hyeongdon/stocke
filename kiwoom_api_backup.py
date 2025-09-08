@@ -442,7 +442,7 @@ class KiwoomAPI:
             logger.info(f"차트 데이터 조회 시작: {stock_code}, 기간: {period}")
             
             if not self.token_manager.get_valid_token():
-                logger.error("킀움 API 토큰이 없습니다")
+                logger.error("키움 API 토큰이 없습니다")
                 return []
             
             # 키움 API 호출 설정
@@ -485,7 +485,7 @@ class KiwoomAPI:
                         if data.get('return_code') == 0:
                             return self._parse_kiwoom_chart_data(data, stock_code)
                         else:
-                            logger.error(f"킀움 API 오류: {data.get('return_msg')}")
+                            logger.error(f"키움 API 오류: {data.get('return_msg')}")
                             return []
                     else:
                         logger.error(f"킀움 API 호출 실패: {response.status}")
@@ -618,8 +618,7 @@ class KiwoomAPI:
         return await self.get_stock_chart_data(stock_code, "1D")
 
     async def get_account_balance(self) -> Dict:
-        """계좌 잔고 정보 조회 - 킀움 API kt00004 사용"""
-        """계좌 잔고 정보 조회 - 개선된 에러 처리"""
+        """계좌 잔고 정보 조회 - 키움 API kt00004 사용"""
         if not self.token_manager.get_valid_token():
             logger.error("킀움 API 토큰이 없습니다")
             return {}
@@ -651,113 +650,57 @@ class KiwoomAPI:
             logger.info(f"킀움 API 호출: {url}")
             logger.info(f"계좌번호: {account_number}")
             logger.info(f"앱키 존재: {bool(Config.KIWOOM_APP_KEY)}")
-            
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     url, 
                     headers=headers, 
-                    json=request_data,
-                    timeout=aiohttp.ClientTimeout(total=30)  # 타임아웃 추가
+                    json=request_data
                 ) as response:
                     
-                    # 응답 상세 로깅 추가
-                    response_text = await response.text()
-                    logger.info(f"응답 상태: {response.status}")
-                    logger.info(f"응답 헤더: {dict(response.headers)}")
-                    logger.info(f"응답 내용: {response_text}")
-                    
                     if response.status == 200:
-                        try:
-                            data = json.loads(response_text)
-                            logger.info(f"파싱된 응답 데이터: {data}")
-                            logger.info(f"data.get('return_code'): {data.get('return_code')}")
-                            # 응답 확인
-                            if data.get('return_code') == '0':  # 성공
-                                result = self._parse_account_balance_safe(data)
-                                logger.info(f"파싱 결과: {result}")
-                                return result
-                            else:
-                                error_msg = data.get('msg1', '알 수 없는 오류')
-                                logger.error(f"킀움 API 계좌조회 오류: {error_msg}")
-                                logger.error(f"전체 응답: {data}")
-                                return {}
-                        except json.JSONDecodeError as e:
-                            logger.error(f"JSON 파싱 실패: {e}")
-                            logger.error(f"원본 응답: {response_text}")
+                        data = await response.json()
+                        print(data)
+                        # 응답 확인
+                        if data.get('rt_cd') == '0':  # 성공
+                            return self._parse_account_balance(data)
+                        else:
+                            logger.error(f"킀움 API 계좌조회 오류: {data.get('msg1')}")
                             return {}
                     else:
                         logger.error(f"킀움 API 호출 실패: {response.status}")
-                        logger.error(f"오류 응답: {response_text}")
                         return {}
                         
-        except aiohttp.ClientError as e:
-            logger.error(f"HTTP 클라이언트 오류: {e}")
-            return {}
-        except asyncio.TimeoutError:
-            logger.error("킀움 API 호출 타임아웃")
-            return {}
         except Exception as e:
-            logger.error(f"계좌 정보 조회 중 예상치 못한 오류: {type(e).__name__}: {e}")
-            import traceback
-            logger.error(f"스택 트레이스: {traceback.format_exc()}")
+            logger.error(f"계좌 정보 조회 중 오류: {e}")
             return {}
     
-    def _parse_account_balance_safe(self, api_response: dict) -> dict:
-        """킀움 API 계좌 잔고 응답 파싱 - 안전한 버전"""
+    def _parse_account_balance(self, api_response: dict) -> dict:
+        """킀움 API 계좌 잔고 응답 파싱"""
         try:
-            logger.info(f"응답 파싱 시작: {api_response}")
+            output = api_response.get('output', {})
             
-            # 기존 파싱 로직 먼저 시도
-            try:
-                return self._parse_account_balance(api_response)
-            except Exception as e:
-                logger.warning(f"기존 파싱 실패, 새로운 방식 시도: {e}")
-            
-            # 응답 구조 확인
-            if 'output' in api_response:
-                output = api_response['output']
-                logger.info(f"output 데이터 발견: {output}")
-            elif 'output1' in api_response:
-                output = api_response['output1']
-                logger.info(f"output1 데이터 발견: {output}")
-            else:
-                logger.warning("응답에서 output 또는 output1을 찾을 수 없습니다")
-                logger.info(f"사용 가능한 키: {list(api_response.keys())}")
-                return {}
-            
-            # 안전한 데이터 추출
-            def safe_get(data, key, default='0'):
-                value = data.get(key, default)
-                return str(value) if value is not None else default
-            
-            result = {
-                "acnt_nm": safe_get(output, 'acnt_nm', ''),
-                "brch_nm": safe_get(output, 'brch_nm', ''),
-                "entr": safe_get(output, 'dnca_tot_amt'),
-                "d2_entra": safe_get(output, 'nxdy_excc_amt'),
-                "tot_est_amt": safe_get(output, 'scts_evlu_amt'),
-                "aset_evlt_amt": safe_get(output, 'tot_evlu_amt'),
-                "tot_pur_amt": safe_get(output, 'pchs_amt_smtl_amt'),
-                "prsm_dpst_aset_amt": safe_get(output, 'evlu_amt_smtl_amt'),
-                "tot_grnt_sella": "0",
-                "tdy_lspft_amt": safe_get(output, 'dnca_tot_amt'),
-                "invt_bsamt": safe_get(output, 'pchs_amt_smtl_amt'),
-                "lspft_amt": safe_get(output, 'pchs_amt_smtl_amt'),
-                "tdy_lspft": safe_get(output, 'evlu_pfls_smtl_amt'),
-                "lspft2": safe_get(output, 'evlu_pfls_smtl_amt'),
-                "lspft": safe_get(output, 'evlu_pfls_smtl_amt'),
-                "tdy_lspft_rt": safe_get(output, 'evlu_erng_rt'),
-                "lspft_ratio": safe_get(output, 'evlu_erng_rt'),
-                "lspft_rt": safe_get(output, 'evlu_erng_rt')
+            return {
+                "acnt_nm": output.get('acnt_nm', ''),      # 계좌명
+                "brch_nm": output.get('brch_nm', ''),      # 지점명
+                "entr": output.get('dnca_tot_amt', '0'),   # 예수금
+                "d2_entra": output.get('nxdy_excc_amt', '0'), # D+2추정예수금
+                "tot_est_amt": output.get('scts_evlu_amt', '0'), # 유가잔고평가액
+                "aset_evlt_amt": output.get('tot_evlu_amt', '0'), # 예탁자산평가액
+                "tot_pur_amt": output.get('pchs_amt_smtl_amt', '0'), # 총매입금액
+                "prsm_dpst_aset_amt": output.get('evlu_amt_smtl_amt', '0'), # 추정예탁자산
+                "tot_grnt_sella": "0",  # 매도담보대출금
+                "tdy_lspft_amt": output.get('dnca_tot_amt', '0'), # 당일투자원금
+                "invt_bsamt": output.get('pchs_amt_smtl_amt', '0'), # 당월투자원금
+                "lspft_amt": output.get('pchs_amt_smtl_amt', '0'), # 누적투자원금
+                "tdy_lspft": output.get('evlu_pfls_smtl_amt', '0'), # 당일투자손익
+                "lspft2": output.get('evlu_pfls_smtl_amt', '0'), # 당월투자손익
+                "lspft": output.get('evlu_pfls_smtl_amt', '0'), # 누적투자손익
+                "tdy_lspft_rt": output.get('evlu_erng_rt', '0'), # 당일손익율
+                "lspft_ratio": output.get('evlu_erng_rt', '0'), # 당월손익율
+                "lspft_rt": output.get('evlu_erng_rt', '0') # 누적손익율
             }
-            
-            logger.info(f"파싱 완료: {result}")
-            return result
-            
         except Exception as e:
-            logger.error(f"계좌 잔고 응답 파싱 오류: {type(e).__name__}: {e}")
-            import traceback
-            logger.error(f"스택 트레이스: {traceback.format_exc()}")
+            logger.error(f"계좌 잔고 응답 파싱 오류: {e}")
             return {}
 
 # 전역 인스턴스

@@ -103,7 +103,9 @@ class ConditionMonitor:
     async def stop_all_monitoring(self):
         """모든 조건식 모니터링 중지"""
         self.is_running = False
-        logger.info("모든 조건식 모니터링 중지")
+        # WebSocket 연결 종료 추가
+        await self.kiwoom_api.disconnect()
+        logger.info("모든 조건식 모니터링 중지 및 WebSocket 연결 종료")
     
     def get_monitoring_status(self) -> Dict:
         """모니터링 상태 조회"""

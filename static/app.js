@@ -1,60 +1,13 @@
 class StockMonitorApp {
     constructor() {
-        this.selectedConditionId = null;
-        this.refreshInterval = null;
-        this.currentChart = null;
-        this.currentStockCode = null;
-        this.currentStockName = null;
-        this.selectedStockForNews = null;
         this.init();
-        this.setupDebugLog();
-    }
-    
-    setupDebugLog() {
-        // 화면에 로그를 표시하는 함수
-        this.logToScreen = (message, type = 'info') => {
-            const debugLog = document.getElementById('debugLog');
-            const debugLogContent = document.getElementById('debugLogContent');
-            
-            if (debugLog && debugLogContent) {
-                debugLog.style.display = 'block';
-                
-                const timestamp = new Date().toLocaleTimeString();
-                const logEntry = document.createElement('div');
-                logEntry.className = `text-${type === 'error' ? 'danger' : type === 'warn' ? 'warning' : 'info'}`;
-                logEntry.innerHTML = `<small>[${timestamp}] ${message}</small>`;
-                
-                debugLogContent.appendChild(logEntry);
-                debugLogContent.scrollTop = debugLogContent.scrollHeight;
-                
-                // 최대 50개 로그만 유지
-                while (debugLogContent.children.length > 50) {
-                    debugLogContent.removeChild(debugLogContent.firstChild);
-                }
-            }
-        };
-        
-        // console.log를 오버라이드하여 화면에도 표시
-        const originalConsoleLog = console.log;
-        const originalConsoleError = console.error;
-        
-        console.log = (...args) => {
-            originalConsoleLog.apply(console, args);
-            this.logToScreen(args.join(' '), 'info');
-        };
-        
-        console.error = (...args) => {
-            originalConsoleError.apply(console, args);
-            this.logToScreen(args.join(' '), 'error');
-        };
     }
 
     init() {
         this.bindEvents();
+        this.bindTabEvents();
         this.loadConditions();
         this.checkMonitoringStatus();
-        
-        // 30초마다 자동 새로고침
         this.startAutoRefresh();
     }
 
@@ -72,6 +25,341 @@ class StockMonitorApp {
         document.getElementById('toggleMonitoring').addEventListener('click', () => {
             this.toggleMonitoring();
         });
+    }
+
+    // 탭 이벤트 바인딩 메서드 수정
+    bindTabEvents() {
+        const stockTab = document.getElementById('stocks-tab'); // 수정
+        const accountTab = document.getElementById('account-tab'); // 수정
+        
+        console.log('탭 요소 찾기:', { stockTab, accountTab }); // 디버깅용
+        
+        if (stockTab) {
+            stockTab.addEventListener('click', (e) => {
+                e.preventDefault();
+                console.log('종목 탭 클릭됨'); // 디버깅용
+                this.switchTab('stock');
+            });
+        } else {
+            console.error('stocks-tab 요소를 찾을 수 없습니다');
+        }
+        
+        if (accountTab) {
+            accountTab.addEventListener('click', (e) => {
+                e.preventDefault();
+                console.log('계좌 탭 클릭됨'); // 디버깅용
+                this.switchTab('account');
+            });
+        } else {
+            console.error('account-tab 요소를 찾을 수 없습니다');
+        }
+    }
+
+    // 탭 전환 메서드도 수정
+    switchTab(tabName) {
+        console.log('탭 전환:', tabName); // 디버깅용
+        
+        // 탭 버튼 활성화 상태 변경
+        const stockTab = document.getElementById('stocks-tab'); // 수정
+        const accountTab = document.getElementById('account-tab'); // 수정
+        const stockContent = document.getElementById('stocks-pane'); // 수정
+        const accountContent = document.getElementById('account-pane'); // 수정
+        
+        console.log('요소 찾기:', { stockTab, accountTab, stockContent, accountContent }); // 디버깅용
+        
+        // 모든 탭 비활성화
+        if (stockTab) stockTab.classList.remove('active');
+        if (accountTab) accountTab.classList.remove('active');
+        
+        // 모든 콘텐츷 숨기기
+        if (stockContent) {
+            stockContent.classList.remove('show', 'active');
+        }
+        if (accountContent) {
+            accountContent.classList.remove('show', 'active');
+        }
+        
+        // 선택된 탭 활성화
+        if (tabName === 'stock') {
+            if (stockTab) stockTab.classList.add('active');
+            if (stockContent) {
+                stockContent.classList.add('show', 'active');
+            }
+            this.currentTab = 'stock';
+            
+            // 종목 탭으로 전환 시 자동 새로고침 재시작
+            this.startAutoRefresh();
+        } else if (tabName === 'account') {
+            if (accountTab) accountTab.classList.add('active');
+            if (accountContent) {
+                accountContent.classList.add('show', 'active');
+            }
+            this.currentTab = 'account';
+            
+            // 계좌 탭으로 전환 시 계좌 정보 로드
+            this.loadAccountInfo();
+            
+            // 종목 탭이 아닐 때는 자동 새로고침 중지
+            this.stopAutoRefresh();
+        }
+    }
+
+    // 계좌 정보 로드 메서드 추가
+    async loadAccountInfo() {
+        console.log('🔍 [DEBUG] loadAccountInfo 시작');
+        try {
+            console.log('🔍 [DEBUG] API 호출 시작 - /account/balance');
+            const balanceResponse = await fetch('/account/balance');
+            console.log('🔍 [DEBUG] Balance Response Status:', balanceResponse.status);
+            const balanceData = await balanceResponse.json();
+            console.log('🔍 [DEBUG] Balance Data:', balanceData);
+            
+            // 데이터 소스 확인 및 사용자에게 알림
+            if (balanceData._data_source === 'MOCK_DATA') {
+                console.warn('⚠️ [DATA SOURCE] 임시 데이터를 사용 중입니다!');
+                console.warn('⚠️ [DATA SOURCE] API 연결 상태:', balanceData._api_connected);
+                console.warn('⚠️ [DATA SOURCE] 토큰 유효성:', balanceData._token_valid);
+                
+                // 사용자에게 시각적으로 알림
+                this.showDataSourceWarning('계좌 정보', 'MOCK_DATA');
+            } else if (balanceData._data_source === 'REAL_API') {
+                console.log('✅ [DATA SOURCE] 실제 키움 API 데이터를 사용 중입니다.');
+                this.hideDataSourceWarning();
+            }
+            
+            if (balanceResponse.ok) {
+                console.log('🔍 [DEBUG] updateAccountBalance 호출 전');
+                this.updateAccountBalance(balanceData);
+                console.log('🔍 [DEBUG] updateAccountBalance 호출 후');
+                this.updateAccountInfo(balanceData);
+            } else {
+                console.error('🔍 [DEBUG] Balance API 에러:', balanceData);
+            }
+            
+            console.log('🔍 [DEBUG] API 호출 시작 - /account/holdings');
+            const holdingsResponse = await fetch('/account/holdings');
+            console.log('🔍 [DEBUG] Holdings Response Status:', holdingsResponse.status);
+            const holdingsData = await holdingsResponse.json();
+            console.log('🔍 [DEBUG] Holdings Data:', holdingsData);
+            
+            // 보유종목 데이터 소스 확인
+            if (holdingsData._data_source === 'MOCK_DATA') {
+                console.warn('⚠️ [DATA SOURCE] 보유종목 임시 데이터를 사용 중입니다!');
+                this.showDataSourceWarning('보유종목', 'MOCK_DATA');
+            }
+            
+            if (holdingsResponse.ok) {
+                console.log('🔍 [DEBUG] updateHoldings 호출 전');
+                this.updateHoldings(holdingsData);
+                console.log('🔍 [DEBUG] updateHoldings 호출 후');
+            } else {
+                console.error('🔍 [DEBUG] Holdings API 에러:', holdingsData);
+            }
+            
+        } catch (error) {
+            console.error('🔍 [DEBUG] 계좌 정보 로딩 실패:', error);
+            this.showAccountError('계좌 정보를 불러오는데 실패했습니다.');
+        }
+    }
+    
+    // 데이터 소스 경고 표시 메서드 추가
+    showDataSourceWarning(dataType, source) {
+        const warningId = `data-source-warning-${dataType.replace(/\s+/g, '-')}`;
+        
+        // 기존 경고가 있으면 제거
+        const existingWarning = document.getElementById(warningId);
+        if (existingWarning) {
+            existingWarning.remove();
+        }
+        
+        // 새 경고 메시지 생성
+        const warningDiv = document.createElement('div');
+        warningDiv.id = warningId;
+        warningDiv.className = 'alert alert-warning alert-dismissible fade show mt-2';
+        warningDiv.innerHTML = `
+            <i class="fas fa-exclamation-triangle me-2"></i>
+            <strong>임시 데이터 사용 중:</strong> ${dataType} 정보가 실제 키움 API가 아닌 임시 데이터로 표시되고 있습니다.
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        `;
+        
+        // 계좌 탭 상단에 경고 추가
+        const accountPane = document.getElementById('account-pane');
+        if (accountPane) {
+            accountPane.insertBefore(warningDiv, accountPane.firstChild);
+        }
+    }
+    
+    // 데이터 소스 경고 숨김 메서드 추가
+    hideDataSourceWarning() {
+        const warnings = document.querySelectorAll('[id^="data-source-warning-"]');
+        warnings.forEach(warning => warning.remove());
+    }
+    
+    // 계좌 잔고 업데이트 메서드 수정
+    updateAccountBalance(data) {
+        console.log('🔍 [DEBUG] updateAccountBalance 시작, data:', data);
+        
+        const totalAssets = document.getElementById('totalAssets');
+        const totalProfitLoss = document.getElementById('totalProfitLoss');
+        const profitRate = document.getElementById('profitRate');
+        
+        console.log('🔍 [DEBUG] DOM 요소들:', {
+            totalAssets: totalAssets ? 'found' : 'NOT FOUND',
+            totalProfitLoss: totalProfitLoss ? 'found' : 'NOT FOUND', 
+            profitRate: profitRate ? 'found' : 'NOT FOUND'
+        });
+        
+        if (totalAssets) {
+            const assets = parseInt(data.aset_evlt_amt || 0);
+            const formattedAssets = this.formatPrice(assets) + '원';
+            console.log('🔍 [DEBUG] 총자산 업데이트:', formattedAssets);
+            totalAssets.textContent = formattedAssets;
+        }
+        
+        if (totalProfitLoss) {
+            const profit = parseInt(data.lspft || 0);
+            const formattedProfit = this.formatPriceDiff(profit) + '원';
+            console.log('🔍 [DEBUG] 평가손익 업데이트:', formattedProfit);
+            totalProfitLoss.textContent = formattedProfit;
+            totalProfitLoss.className = this.getPriceClass(profit);
+        }
+        
+        if (profitRate) {
+            const rate = parseFloat(data.lspft_rt || 0);
+            const formattedRate = this.formatChangeRate(rate) + '%';
+            console.log('🔍 [DEBUG] 수익률 업데이트:', formattedRate);
+            profitRate.textContent = formattedRate;
+            profitRate.className = this.getPriceClass(rate);
+        }
+        
+        console.log('🔍 [DEBUG] updateAccountBalance 완료');
+    }
+
+    // 보유 종목 업데이트 메서드 수정
+    updateHoldings(data) {
+        console.log('🔍 [DEBUG] updateHoldings 시작, data:', data);
+        
+        const container = document.getElementById('holdingsList');
+        console.log('🔍 [DEBUG] holdingsList 컨테이너:', container ? 'found' : 'NOT FOUND');
+        
+        if (!container) {
+            console.error('🔍 [DEBUG] holdingsList 요소를 찾을 수 없습니다!');
+            return;
+        }
+        
+        if (!data.stk_acnt_evlt_prst || data.stk_acnt_evlt_prst.length === 0) {
+            console.log('🔍 [DEBUG] 보유종목 데이터가 없음');
+            container.innerHTML = `
+                <div class="text-center text-muted py-4">
+                    <i class="fas fa-chart-pie fa-2x mb-2"></i>
+                    <p>보유 종목이 없습니다.</p>
+                </div>
+            `;
+            return;
+        }
+        
+        console.log('🔍 [DEBUG] 보유종목 개수:', data.stk_acnt_evlt_prst.length);
+        
+        const holdingsHtml = data.stk_acnt_evlt_prst.map(holding => {
+            const currentPrice = parseInt(holding.cur_prc || 0);
+            const avgPrice = parseInt(holding.avg_prc || 0);
+            const quantity = parseInt(holding.rmnd_qty || 0);
+            const profitLoss = parseInt(holding.pl_amt || 0);
+            const profitRate = parseFloat(holding.pl_rt || 0);
+            const evaluationAmount = parseInt(holding.evlt_amt || 0);
+            
+            return `
+                <div class="border-bottom py-2">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <h6 class="mb-1">${holding.stk_nm} (${holding.stk_cd})</h6>
+                            <small class="text-muted">${quantity}주 보유</small>
+                        </div>
+                        <div class="text-end">
+                            <div class="fw-bold">${this.formatPrice(currentPrice)}원</div>
+                            <div class="${this.getPriceClass(profitRate)} small">
+                                ${this.formatPriceDiff(profitLoss)}원 (${this.formatChangeRate(profitRate)}%)
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row mt-2 small text-muted">
+                        <div class="col-6">평균단가: ${this.formatPrice(avgPrice)}원</div>
+                        <div class="col-6 text-end">평가금액: ${this.formatPrice(evaluationAmount)}원</div>
+                    </div>
+                    <div class="row small">
+                        <div class="col-12 text-end ${this.getPriceClass(profitLoss)}">
+                            평가손익: ${this.formatPriceDiff(profitLoss)}원
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+        
+        container.innerHTML = holdingsHtml;
+        console.log('🔍 [DEBUG] 보유종목 HTML 업데이트 완료');
+    }
+
+    // 거래 내역 업데이트 메서드
+    updateTradingHistory(data) {
+        const container = document.getElementById('tradingHistoryList');
+        if (!container) return;
+        
+        if (!data.history || data.history.length === 0) {
+            container.innerHTML = `
+                <div class="text-center text-muted py-4">
+                    <i class="fas fa-history fa-2x mb-2"></i>
+                    <p>거래 내역이 없습니다.</p>
+                </div>
+            `;
+            return;
+        }
+        
+        const historyHtml = data.history.map(trade => {
+            const typeClass = trade.trade_type === '매수' ? 'text-danger' : 'text-primary';
+            
+            return `
+                <div class="trade-item border-bottom pb-2 mb-2">
+                    <div class="row align-items-center">
+                        <div class="col-md-2">
+                            <small class="text-muted">${trade.trade_date}</small>
+                        </div>
+                        <div class="col-md-2">
+                            <span class="badge ${trade.trade_type === '매수' ? 'bg-danger' : 'bg-primary'}">
+                                ${trade.trade_type}
+                            </span>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="fw-bold">${trade.stock_name}</div>
+                            <small class="text-muted">${trade.stock_code}</small>
+                        </div>
+                        <div class="col-md-2 text-end">
+                            <div>${trade.quantity}주</div>
+                        </div>
+                        <div class="col-md-2 text-end">
+                            <div>${this.formatPrice(trade.price)}원</div>
+                        </div>
+                        <div class="col-md-1 text-end">
+                            <div class="fw-bold">${this.formatPrice(trade.amount)}원</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+        
+        container.innerHTML = historyHtml;
+    }
+
+    // 계좌 오류 표시 메서드
+    showAccountError(message) {
+        const accountContent = document.getElementById('accountContent');
+        if (accountContent) {
+            accountContent.innerHTML = `
+                <div class="alert alert-danger" role="alert">
+                    <i class="fas fa-exclamation-triangle me-2"></i>
+                    ${message}
+                </div>
+            `;
+        }
     }
 
     async loadConditions() {
@@ -456,9 +744,12 @@ class StockMonitorApp {
         }
         
         startAutoRefresh() {
+            // 종목 탭에서만 자동 새로고침 실행
+            if (this.currentTab !== 'stock') return;
+            
             // 30초마다 자동 새로고침
             this.refreshInterval = setInterval(() => {
-                if (this.selectedConditionId) {
+                if (this.selectedConditionId && this.currentTab === 'stock') {
                     this.loadStocks(this.selectedConditionId);
                 }
             }, 30000);
@@ -509,32 +800,22 @@ class StockMonitorApp {
         // 새로운 뉴스 로딩 함수 추가
         async loadNews(stockCode, stockName) {
             try {
-                const response = await fetch(`/news/${stockCode}?stock_name=${encodeURIComponent(stockName)}`);
+                const response = await fetch(`/stocks/${stockCode}/news?stock_name=${encodeURIComponent(stockName)}`);
                 const newsData = await response.json();
-                
+
                 const newsContent = document.getElementById('newsContent');
-                
-                if (newsData.error) {
-                    newsContent.innerHTML = `
-                        <div class="alert alert-warning" role="alert">
-                            <i class="fas fa-exclamation-triangle me-2"></i>
-                            ${newsData.error}
-                        </div>
-                    `;
-                    return;
-                }
-                
+                if (!newsContent) return;
+
                 if (!newsData.items || newsData.items.length === 0) {
                     newsContent.innerHTML = `
-                        <div class="text-center text-muted py-3">
+                        <div class="text-center text-muted py-4">
                             <i class="fas fa-newspaper fa-2x mb-2"></i>
                             <p>관련 뉴스가 없습니다.</p>
                         </div>
                     `;
                     return;
                 }
-                
-                // 뉴스 목록 렌더링
+
                 const newsHtml = newsData.items.map(item => `
                     <div class="news-item border-bottom pb-3 mb-3">
                         <h6 class="news-title">
@@ -543,24 +824,25 @@ class StockMonitorApp {
                             </a>
                         </h6>
                         <p class="news-description text-muted mb-2">${item.description}</p>
-                        <small class="text-muted">
-                            <i class="fas fa-calendar me-1"></i>
-                            ${item.pubDate || '날짜 정보 없음'}
-                        </small>
+                        <div class="news-meta">
+                            <small class="text-muted">
+                                <i class="fas fa-calendar-alt me-1"></i>${item.pubDate || ''}
+                            </small>
+                        </div>
                     </div>
                 `).join('');
-                
+
                 newsContent.innerHTML = newsHtml;
-                
             } catch (error) {
-                console.error('뉴스 로딩 오류:', error);
                 const newsContent = document.getElementById('newsContent');
-                newsContent.innerHTML = `
-                    <div class="alert alert-danger" role="alert">
-                        <i class="fas fa-exclamation-triangle me-2"></i>
-                        뉴스를 불러오는데 실패했습니다: ${error.message}
-                    </div>
-                `;
+                if (newsContent) {
+                    newsContent.innerHTML = `
+                        <div class="text-center text-muted py-4">
+                            <i class="fas fa-newspaper fa-2x mb-2"></i>
+                            <p>관련 뉴스가 없습니다.</p>
+                        </div>
+                    `;
+                }
             }
         }
         
@@ -568,47 +850,73 @@ class StockMonitorApp {
             console.log('차트 표시:', stockCode, stockName);
             showChart(stockCode);
         }
-    }
 
-    document.addEventListener('DOMContentLoaded', () => {
-        window.app = new StockMonitorApp();
-    });
-
-    window.addEventListener('beforeunload', () => {
-        if (window.app) {
-            window.app.stopAutoRefresh();
-        }
-    });
-
-    // 차트 이미지 로드 함수
-    async function loadChartImage(stockCode) {
-        try {
-            const response = await fetch(`/chart/image/${stockCode}`);
-            const data = await response.json();
+        // 계좌 정보 업데이트 메서드 (클래스 내부로 이동)
+        updateAccountInfo(data) {
+            console.log('🔍 [DEBUG] updateAccountInfo 시작, data:', data);
             
-            // 차트 이미지 표시 (올바른 ID 사용)
-            const chartContainer = document.getElementById('chartContainer');
-            if (chartContainer) {
-                chartContainer.innerHTML = `<img src="${data.image}" alt="${stockCode} 차트" style="max-width: 100%; height: auto;">`;
-            } else {
-                console.error('chartContainer 요소를 찾을 수 없습니다.');
+            // 계좌 기본 정보 업데이트
+            const accountName = document.getElementById('accountName');
+            const branchName = document.getElementById('branchName');
+            const deposit = document.getElementById('deposit');
+            const availableCash = document.getElementById('availableCash');
+            
+            console.log('🔍 [DEBUG] 계좌정보 DOM 요소들:', {
+                accountName: accountName ? 'found' : 'NOT FOUND',
+                branchName: branchName ? 'found' : 'NOT FOUND',
+                deposit: deposit ? 'found' : 'NOT FOUND',
+                availableCash: availableCash ? 'found' : 'NOT FOUND'
+            });
+            
+            if (accountName) {
+                accountName.textContent = data.acnt_nm || '계좌명 없음';
             }
             
-        } catch (error) {
-            console.error('차트 로드 오류:', error);
-            const chartContainer = document.getElementById('chartContainer');
-            if (chartContainer) {
-                chartContainer.innerHTML = '<div class="text-center text-danger p-4"><i class="fas fa-exclamation-triangle"></i><p class="mt-2">차트를 불러올 수 없습니다.</p></div>';
+            if (branchName) {
+                branchName.textContent = data.brch_nm || '지점명 없음';
             }
+            
+            if (deposit) {
+                const formattedDeposit = this.formatPrice(parseInt(data.entr || 0)) + '원';
+                deposit.textContent = formattedDeposit;
+            }
+            
+            if (availableCash) {
+                const formattedCash = this.formatPrice(parseInt(data.d2_entra || 0)) + '원';
+                availableCash.textContent = formattedCash;
+            }
+            
+            console.log('🔍 [DEBUG] updateAccountInfo 완료');
         }
     }
 
-    // 종목 클릭 시 차트 표시
-    function showChart(stockCode) {
-        // 차트 모달 표시
-        const chartModal = new bootstrap.Modal(document.getElementById('chartModal'));
-        chartModal.show();
-        
-        // 차트 로드
-        loadChartImage(stockCode);
+    // 앱 초기화
+document.addEventListener('DOMContentLoaded', () => {
+    window.app = new StockMonitorApp();
+});
+
+window.addEventListener('beforeunload', () => {
+    if (window.app) {
+        window.app.stopAutoRefresh();
     }
+});
+
+// 차트 관련 함수들
+async function loadChartImage(stockCode) {
+    try {
+        const response = await fetch(`/api/chart/${stockCode}`);
+        if (response.ok) {
+            const blob = await response.blob();
+            const imageUrl = URL.createObjectURL(blob);
+            return imageUrl;
+        }
+    } catch (error) {
+        console.error('차트 이미지 로드 실패:', error);
+    }
+    return null;
+}
+
+function showChart(stockCode) {
+    const modal = document.getElementById('chartModal');
+    modal.style.display = 'block';
+}
