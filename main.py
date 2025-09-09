@@ -2,19 +2,19 @@ from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy.orm import Session
+# DB 관련 import는 나중에 필요시 추가
+# from sqlalchemy.orm import Session
 from typing import List, Optional
 import logging
 from datetime import datetime
 import httpx
-from urllib.parse import quote
 import re
 
-# 차트 생성을 위한 추가 import
+# 차트 생성 import
 import pandas as pd
 import mplfinance as mpf
-import matplotlib.pyplot as plt  # matplotlib.pyplot 추가
-import matplotlib.lines as mlines  # Line2D를 위한 import 추가
+import matplotlib.pyplot as plt
+import matplotlib.lines as mlines
 import io
 import base64
 from ta.trend import IchimokuIndicator
@@ -24,16 +24,12 @@ import warnings
 warnings.filterwarnings('ignore', category=FutureWarning, module='ta')
 warnings.filterwarnings('ignore', category=FutureWarning, module='pandas')
 
-from models import (
-    get_db, Condition, StockSignal, ConditionLog,
-    ConditionCreate, ConditionUpdate, ConditionResponse,
-    StockSignalResponse, ConditionLogResponse
-)
+# DB 관련 import는 나중에 필요시 추가
+# from models import get_db, Condition, StockSignal, ConditionLog
 from condition_monitor import condition_monitor
 from kiwoom_api import KiwoomAPI
 from config import Config
 
-# Config 인스턴스 생성 추가
 config = Config()
 
 # 로깅 설정
@@ -101,10 +97,6 @@ async def api_info():
 async def startup_event():
     logger.info("애플리케이션 시작")
     
-    # 데이터베이스 초기화
-    from models import init_db
-    init_db()
-    
     # 키움 API 인증 및 연결
     if kiwoom_api.authenticate():
         logger.info("키움증권 API 인증 성공")
@@ -123,16 +115,6 @@ async def startup_event():
         logger.warning("키움 API 인증 실패 - 환경변수 확인 필요")
     
     logger.info("키움증권 조건식 모니터링 시스템 시작")
-    
-    # 데이터베이스 초기화
-    from models import init_db
-    init_db()
-    
-    # 키움 API 인증
-    if kiwoom_api.authenticate():
-        logger.info("키움증권 API 인증 성공")
-    else:
-        logger.warning("키움증권 API 인증 실패 - 환경변수 확인 필요")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -180,19 +162,11 @@ async def get_conditions():
         logger.error(f"스택 트레이스: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail="키움 API 조건식 목록 조회 중 오류가 발생했습니다.")
 
-@app.get("/conditions/{condition_id}", response_model=ConditionResponse)
-async def get_condition(condition_id: int, db: Session = Depends(get_db)):
-    """조건식 상세 조회"""
-    try:
-        condition = db.query(Condition).filter(Condition.id == condition_id).first()
-        if not condition:
-            raise HTTPException(status_code=404, detail="조건식을 찾을 수 없습니다.")
-        return condition
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"조건식 조회 오류: {e}")
-        raise HTTPException(status_code=500, detail="조건식 조회 중 오류가 발생했습니다.")
+# DB 관련 엔드포인트는 나중에 필요시 추가
+# @app.get("/conditions/{condition_id}")
+# async def get_condition(condition_id: int):
+#     """조건식 상세 조회 - DB 연동 필요시 구현"""
+#     pass
 
 @app.get("/conditions/{condition_id}/stocks")
 async def get_condition_stocks(condition_id: int):
@@ -288,23 +262,11 @@ async def get_stock_chart(stock_code: str, period: str = "1D"):
         logger.error(f"차트 데이터 조회 오류: {e}")
         raise HTTPException(status_code=500, detail="차트 데이터 조회 중 오류가 발생했습니다.")
 
-# 신호 조회 API
-@app.get("/signals/", response_model=List[StockSignalResponse])
-async def get_signals(
-    condition_id: Optional[int] = None,
-    limit: int = 100,
-    db: Session = Depends(get_db)
-):
-    """신호 목록 조회"""
-    try:
-        query = db.query(StockSignal)
-        if condition_id:
-            query = query.filter(StockSignal.condition_id == condition_id)
-        signals = query.order_by(StockSignal.signal_time.desc()).limit(limit).all()
-        return signals
-    except Exception as e:
-        logger.error(f"신호 목록 조회 오류: {e}")
-        raise HTTPException(status_code=500, detail="신호 목록 조회 중 오류가 발생했습니다.")
+# 신호 조회 API - DB 연동 필요시 구현
+# @app.get("/signals/")
+# async def get_signals(condition_id: Optional[int] = None, limit: int = 100):
+#     """신호 목록 조회 - DB 연동 필요시 구현"""
+#     pass
 
 # 모니터링 제어 API
 @app.post("/monitoring/start")
@@ -550,134 +512,6 @@ async def get_status():
         "websocket_connected": kiwoom_api.websocket is not None,
         "token_valid": kiwoom_api.token_manager.is_token_valid()
     }
-
-@app.get("/chart/image/{stock_code}")
-async def get_chart_image(stock_code: str, period: str = "1M"):
-    try:
-        # 1. 키움 API에서 데이터 가져오기
-        chart_data = await kiwoom_api.get_stock_chart_data(stock_code, "1D")
-        
-        if not chart_data:
-            raise HTTPException(status_code=404, detail="차트 데이터가 없습니다")
-        
-        # 2. DataFrame으로 변환 (chart_data는 이미 리스트)
-        df = pd.DataFrame(chart_data)
-        
-        # 3. 날짜 컬럼을 인덱스로 설정
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-        df.set_index('timestamp', inplace=True)
-        
-        # 3-1. 기간에 따른 데이터 필터링
-        df = df.sort_index()
-        if period == "1Y":
-            df = df.tail(250)  # 1년치 데이터 (약 250 거래일)
-        elif period == "1M":
-            df = df.tail(30)   # 1개월치 데이터
-        elif period == "1W":
-            df = df.tail(7)    # 1주치 데이터
-        else:
-            df = df.tail(500)  # 기본값 (약 2년치)
-        
-        # 4. mplfinance에 필요한 컬럼명으로 변경
-        df = df.rename(columns={
-            'open': 'Open',
-            'high': 'High', 
-            'low': 'Low',
-            'close': 'Close',
-            'volume': 'Volume'
-        })
-        
-        # 4-1. 일목균형표 데이터 생성 (경고 억제)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            id_ichimoku = IchimokuIndicator(high=df['High'], low=df['Low'], visual=True, fillna=True)
-            df['span_a'] = id_ichimoku.ichimoku_a()
-            df['span_b'] = id_ichimoku.ichimoku_b()
-            df['base_line'] = id_ichimoku.ichimoku_base_line()
-            df['conv_line'] = id_ichimoku.ichimoku_conversion_line()
-        
-        # 5. 색상 설정
-        mc = mpf.make_marketcolors(
-            up="red",
-            down="blue",
-            volume="inherit"
-        )
-        
-        # 6. 일목균형표 그래프 추가
-        added_plots = [
-            mpf.make_addplot(df['span_a'], color='orange', alpha=0.7, width=1.5),
-            mpf.make_addplot(df['span_b'], color='purple', alpha=0.7, width=1.5),
-            mpf.make_addplot(df['base_line'], color='green', alpha=0.8, width=2),
-            mpf.make_addplot(df['conv_line'], color='red', alpha=0.8, width=2)
-        ]
-        
-        # 7. 스타일 설정
-        s = mpf.make_mpf_style(
-            base_mpf_style="charles",
-            marketcolors=mc,
-            gridaxis='both',
-            y_on_right=True,
-            facecolor='white',
-            edgecolor='black'
-        )
-        
-        # 8. 차트 생성 (메모리에 저장)
-        buf = io.BytesIO()
-        fig, axes = mpf.plot(
-            data=df,
-            type='candle',
-            style=s,
-            figratio=(18, 10),  # 차트 크기 증가
-            mav=(20, 60),  # 이동평균 20일선, 60일선으로 변경
-            volume=True,
-            scale_width_adjustment=dict(volume=0.6, candle=1.2),
-            addplot=added_plots,
-            savefig=dict(fname=buf, format='png', dpi=200, bbox_inches='tight'),  # DPI 증가
-            returnfig=True,
-            tight_layout=True
-        )
-        
-        # 8-1. 범례 추가 (수정된 버전)
-        if fig and axes and len(axes) > 0:
-            try:
-                # 메인 차트에 범례 추가 - mlines.Line2D 사용
-                legend_elements = [
-                    mlines.Line2D([0], [0], color='orange', lw=2, alpha=0.7, label='선행스팬A'),
-                    mlines.Line2D([0], [0], color='purple', lw=2, alpha=0.7, label='선행스팬B'),
-                    mlines.Line2D([0], [0], color='green', lw=2, alpha=0.8, label='기준선'),
-                    mlines.Line2D([0], [0], color='red', lw=2, alpha=0.8, label='전환선'),
-                    mlines.Line2D([0], [0], color='blue', lw=1, label='20일 이평선'),
-                    mlines.Line2D([0], [0], color='orange', lw=1, label='60일 이평선')
-                ]
-                
-                axes[0].legend(
-                    handles=legend_elements,
-                    loc='upper left',
-                    fontsize=10,
-                    frameon=True,
-                    fancybox=True,
-                    shadow=True,
-                    ncol=3,
-                    bbox_to_anchor=(0, 1)
-                )
-            except Exception as legend_error:
-                logger.warning(f"Legend 설정 오류: {legend_error}")
-        
-        buf.seek(0)
-        
-        # 9. 이미지를 base64로 인코딩
-        img_base64 = base64.b64encode(buf.getvalue()).decode('utf-8')
-        buf.close()
-        
-        # matplotlib figure 메모리 정리
-        if fig:
-            plt.close(fig)
-        
-        return {"image": f"data:image/png;base64,{img_base64}"}
-        
-    except Exception as e:
-        logger.error(f"차트 생성 오류: {e}")
-        raise HTTPException(status_code=500, detail=f"차트 생성 실패: {str(e)}")
 
 @app.get("/account/balance")
 async def get_account_balance():
