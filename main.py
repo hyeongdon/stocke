@@ -2,6 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+import os
 # DB 관련 import는 나중에 필요시 추가
 # from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -29,6 +30,7 @@ warnings.filterwarnings('ignore', category=FutureWarning, module='pandas')
 from condition_monitor import condition_monitor
 from kiwoom_api import KiwoomAPI
 from config import Config
+from naver_discussion_crawler import NaverStockDiscussionCrawler
 
 config = Config()
 
@@ -58,7 +60,14 @@ app = FastAPI(
 )
 
 # 정적 파일 서빙 설정
-app.mount("/static", StaticFiles(directory="static"), name="static")
+static_dir = os.path.join(os.path.dirname(__file__), "static")
+logger.info(f"🌐 [STATIC] 정적 파일 디렉토리: {static_dir}")
+logger.info(f"🌐 [STATIC] 디렉토리 존재 여부: {os.path.exists(static_dir)}")
+if os.path.exists(static_dir):
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    logger.info("🌐 [STATIC] 정적 파일 마운트 완료")
+else:
+    logger.error("🌐 [STATIC] 정적 파일 디렉토리를 찾을 수 없습니다!")
 
 # CORS 설정
 app.add_middleware(
@@ -72,11 +81,15 @@ app.add_middleware(
 # 키움 API 인스턴스
 kiwoom_api = KiwoomAPI()
 
+# 네이버 토론 크롤러 인스턴스
+discussion_crawler = NaverStockDiscussionCrawler()
+
 from fastapi.responses import RedirectResponse
 
 @app.get("/")
 async def root():
     """메인 페이지 - 웹 인터페이스로 리다이렉트"""
+    logger.info("🌐 [STATIC] 루트 경로 접근 - /static/index.html로 리다이렉트")
     return RedirectResponse(url="/static/index.html")
 
 @app.get("/api")
@@ -95,7 +108,14 @@ async def api_info():
 
 @app.on_event("startup")
 async def startup_event():
-    logger.info("애플리케이션 시작")
+    logger.info("🌐 [STARTUP] 애플리케이션 시작")
+    
+    # 정적 파일 디렉토리 재확인
+    logger.info(f"🌐 [STARTUP] 정적 파일 디렉토리 재확인: {static_dir}")
+    logger.info(f"🌐 [STARTUP] 디렉토리 존재: {os.path.exists(static_dir)}")
+    if os.path.exists(static_dir):
+        files = os.listdir(static_dir)
+        logger.info(f"🌐 [STARTUP] 정적 파일 목록: {files}")
     
     # 키움 API 인증 및 연결
     if kiwoom_api.authenticate():
@@ -121,8 +141,8 @@ async def shutdown_event():
     """애플리케이션 종료 시 실행"""
     logger.info("모니터링 시스템 종료")
     await condition_monitor.stop_all_monitoring()
-    # WebSocket 연결 종료 추가
-    await kiwoom_api.disconnect()
+    # WebSocket 우아한 종료
+    await kiwoom_api.graceful_shutdown()
     logger.info("키움 API WebSocket 연결 종료 완료")
 
 @app.get("/conditions/")
@@ -171,6 +191,7 @@ async def get_conditions():
 @app.get("/conditions/{condition_id}/stocks")
 async def get_condition_stocks(condition_id: int):
     """조건식으로 종목 목록 조회"""
+    logger.info(f"🌐 [API] /conditions/{condition_id}/stocks 엔드포인트 호출됨")
     try:
         logger.debug(f"조건식 종목 조회 시작: condition_id={condition_id}")
         
@@ -190,13 +211,13 @@ async def get_condition_stocks(condition_id: int):
         condition_name = condition_info.get('condition_name', f'조건식_{condition_id}')
         condition_api_id = condition_info.get('condition_id', str(condition_index))
         
-        logger.info(f"조건식 검색 시작: {condition_name} (API ID: {condition_api_id})")
+        logger.info(f"🌐 [API] 조건식 검색 시작: {condition_name} (API ID: {condition_api_id})")
         
         # 키움 API를 통해 조건식으로 종목 검색
         stocks_data = await kiwoom_api.search_condition_stocks(condition_api_id, condition_name)
         
         if not stocks_data:
-            logger.info(f"조건식 '{condition_name}'에 해당하는 종목이 없습니다.")
+            logger.info(f"🌐 [API] 조건식 '{condition_name}'에 해당하는 종목이 없습니다.")
             return JSONResponse(content={
                 "condition_id": condition_id,
                 "condition_name": condition_name,
@@ -212,7 +233,7 @@ async def get_condition_stocks(condition_id: int):
             "total_count": len(stocks_data)
         }
         
-        logger.info(f"조건식 종목 조회 완료: {condition_name}, 종목 수: {len(stocks_data)}개")
+        logger.info(f"🌐 [API] 조건식 종목 조회 완료: {condition_name}, 종목 수: {len(stocks_data)}개")
         
         # 종목 목록 출력 (콘솔에 프린트)
         print(f"\n=== 조건식: {condition_name} ===\n")
@@ -232,7 +253,7 @@ async def get_condition_stocks(condition_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"조건식 종목 조회 오류: {e}")
+        logger.error(f"🌐 [API] 조건식 종목 조회 오류: {e}")
         logger.error(f"오류 타입: {type(e).__name__}")
         import traceback
         logger.error(f"스택 트레이스: {traceback.format_exc()}")
@@ -272,31 +293,45 @@ async def get_stock_chart(stock_code: str, period: str = "1D"):
 @app.post("/monitoring/start")
 async def start_monitoring():
     """모든 조건식 모니터링 시작"""
+    logger.info("🌐 [API] /monitoring/start 엔드포인트 호출됨")
     try:
         await condition_monitor.start_all_monitoring()
-        return {"message": "모니터링이 시작되었습니다."}
+        logger.info("🌐 [API] 모니터링 시작 성공")
+        return {
+            "message": "모니터링이 시작되었습니다.",
+            "is_running": True,
+            "is_monitoring": True
+        }
     except Exception as e:
-        logger.error(f"모니터링 시작 오류: {e}")
+        logger.error(f"🌐 [API] 모니터링 시작 오류: {e}")
         raise HTTPException(status_code=500, detail="모니터링 시작 중 오류가 발생했습니다.")
 
 @app.post("/monitoring/stop")
 async def stop_monitoring():
     """모든 조건식 모니터링 중지"""
+    logger.info("🌐 [API] /monitoring/stop 엔드포인트 호출됨")
     try:
         await condition_monitor.stop_all_monitoring()
-        return {"message": "모니터링이 중지되었습니다."}
+        logger.info("🌐 [API] 모니터링 중지 성공")
+        return {
+            "message": "모니터링이 중지되었습니다.",
+            "is_running": False,
+            "is_monitoring": False
+        }
     except Exception as e:
-        logger.error(f"모니터링 중지 오류: {e}")
+        logger.error(f"🌐 [API] 모니터링 중지 오류: {e}")
         raise HTTPException(status_code=500, detail="모니터링 중지 중 오류가 발생했습니다.")
 
 @app.get("/monitoring/status")
 async def get_monitoring_status():
     """모니터링 상태 조회"""
+    logger.info("🌐 [API] /monitoring/status 엔드포인트 호출됨")
     try:
         status = condition_monitor.get_monitoring_status()
+        logger.info(f"🌐 [API] 모니터링 상태 조회 성공: {status}")
         return status
     except Exception as e:
-        logger.error(f"모니터링 상태 조회 오류: {e}")
+        logger.error(f"🌐 [API] 모니터링 상태 조회 오류: {e}")
         raise HTTPException(status_code=500, detail="모니터링 상태 조회 중 오류가 발생했습니다.")
 
 @app.get("/chart/image/{stock_code}")
@@ -500,6 +535,99 @@ async def get_stock_news(stock_code: str, stock_name: str = None):
             "display": 0
         }
 
+@app.get("/stocks/{stock_code}/discussions")
+async def get_stock_discussions(stock_code: str, page: int = 1, max_pages: int = 2):
+    """
+    네이버 종목토론방에서 토론 글 조회
+    """
+    try:
+        logger.info(f"🌐 [API] 종목토론 조회 시작 - 종목코드: {stock_code}, 페이지: {page}")
+        
+        # 네이버 토론 크롤링 (당일 글만, 최대 2페이지)
+        discussions = discussion_crawler.crawl_discussion_posts(
+            stock_code=stock_code,
+            page=page,
+            max_pages=max_pages,
+            today_only=True
+        )
+        
+        logger.info(f"🌐 [API] 종목토론 조회 완료 - {len(discussions)}개 글")
+        
+        return {
+            "stock_code": stock_code,
+            "discussions": discussions,
+            "total_count": len(discussions),
+            "page": page,
+            "max_pages": max_pages
+        }
+        
+    except Exception as e:
+        logger.error(f"🌐 [API] 종목토론 조회 오류: {e}")
+        return {
+            "stock_code": stock_code,
+            "discussions": [],
+            "total_count": 0,
+            "page": page,
+            "max_pages": max_pages,
+            "error": str(e)
+        }
+
+@app.get("/stocks/{stock_code}/info")
+async def get_stock_info(stock_code: str, stock_name: str = None):
+    """
+    종목의 뉴스와 토론 글을 함께 조회
+    """
+    try:
+        logger.info(f"🌐 [API] 종목 정보 조회 시작 - 종목코드: {stock_code}, 종목명: {stock_name}")
+        
+        # 뉴스와 토론 글을 병렬로 조회
+        import asyncio
+        
+        # 뉴스 조회
+        news_task = get_stock_news(stock_code, stock_name)
+        
+        # 토론 글 조회
+        discussions_task = get_stock_discussions(stock_code, page=1, max_pages=2)
+        
+        # 병렬 실행
+        news_data, discussions_data = await asyncio.gather(
+            news_task,
+            discussions_task,
+            return_exceptions=True
+        )
+        
+        # 예외 처리
+        if isinstance(news_data, Exception):
+            logger.error(f"뉴스 조회 오류: {news_data}")
+            news_data = {"items": [], "total": 0, "start": 1, "display": 0}
+            
+        if isinstance(discussions_data, Exception):
+            logger.error(f"토론 조회 오류: {discussions_data}")
+            discussions_data = {"discussions": [], "total_count": 0}
+        
+        result = {
+            "stock_code": stock_code,
+            "stock_name": stock_name,
+            "news": news_data,
+            "discussions": discussions_data,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        logger.info(f"🌐 [API] 종목 정보 조회 완료 - 뉴스: {len(news_data.get('items', []))}개, 토론: {len(discussions_data.get('discussions', []))}개")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"🌐 [API] 종목 정보 조회 오류: {e}")
+        return {
+            "stock_code": stock_code,
+            "stock_name": stock_name,
+            "news": {"items": [], "total": 0, "start": 1, "display": 0},
+            "discussions": {"discussions": [], "total_count": 0},
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
+
 @app.get("/api/status")
 async def get_status():
     logger.info("🔄 [DEBUG] API 상태 체크 요청")
@@ -517,24 +645,18 @@ async def get_status():
 async def get_account_balance():
     """계좌 잔고 정보 조회 - 키움 API kt00004 스펙 기반"""
     try:
-        # 키움 API 연결 상태 상세 로깅
-        logger.info(f"=== 키움 API 상태 확인 ===")
-        logger.info(f"kiwoom_api.running: {kiwoom_api.running}")
-        logger.info(f"kiwoom_api.websocket: {kiwoom_api.websocket}")
-        logger.info(f"kiwoom_api.websocket is not None: {kiwoom_api.websocket is not None}")
-        logger.info(f"토큰 유효성: {bool(kiwoom_api.token_manager.get_valid_token())}")
-        logger.info(f"실제 토큰: {kiwoom_api.token_manager.get_valid_token()}")
-        logger.info(f"조건문 결과: {not (kiwoom_api.running and kiwoom_api.websocket)}")
+        # 키움 API 상태 상세 로깅 (디버깅용)
+        logger.debug(f"=== 키움 API 상태 확인 ===")
+        logger.debug(f"WebSocket running: {kiwoom_api.running}")
+        logger.debug(f"WebSocket 객체: {kiwoom_api.websocket is not None}")
+        logger.debug(f"REST API 토큰 유효성: {bool(kiwoom_api.token_manager.get_valid_token())}")
         
-        # 키움 API 연결 상태 확인
-        if not (kiwoom_api.running and kiwoom_api.websocket):
-            logger.warning("키움 API가 연결되지 않았습니다. 임시 데이터를 반환합니다.")
-            # 각 조건별 상세 로깅
-            if not kiwoom_api.running:
-                logger.warning("- kiwoom_api.running이 False입니다.")
-            if not kiwoom_api.websocket:
-                logger.warning("- kiwoom_api.websocket이 None입니다.")
-                
+        # 키움 API 토큰 유효성 확인 (REST API는 WebSocket과 독립적)
+        token_valid = bool(kiwoom_api.token_manager.get_valid_token())
+        logger.info(f"🌐 [API] REST API 토큰 유효성: {token_valid}")
+        
+        if not token_valid:
+            logger.warning("🌐 [API] 키움 API 토큰이 유효하지 않습니다. 임시 데이터를 반환합니다.")
             # 임시 데이터에 데이터 소스 정보 추가
             balance_data = {
                 "acnt_nm": "홍길동",
@@ -556,16 +678,16 @@ async def get_account_balance():
                 "lspft_ratio": "4.29",
                 "lspft_rt": "4.29",
                 "_data_source": "MOCK_DATA",
-                "_api_connected": kiwoom_api.running,
-                "_token_valid": bool(kiwoom_api.token_manager.get_valid_token())
+                "_api_connected": False,
+                "_token_valid": False
             }
         else:
             # 실제 키움 API 호출
-            logger.info("키움 API에서 계좌 정보 조회 중...")
+            logger.info("🌐 [API] 키움 REST API에서 계좌 정보 조회 중...")
             balance_data = await kiwoom_api.get_account_balance()
             
             if not balance_data:
-                logger.warning("키움 API 호출 실패, 임시 데이터를 반환합니다.")
+                logger.warning("🌐 [API] 키움 REST API 호출 실패, 임시 데이터를 반환합니다.")
                 balance_data = {
                     "acnt_nm": "홍길동",
                     "brch_nm": "강남지점",
@@ -593,6 +715,7 @@ async def get_account_balance():
                 balance_data["_data_source"] = "REAL_API"
                 balance_data["_api_connected"] = True
                 balance_data["_token_valid"] = True
+                logger.info("🌐 [API] 키움 REST API 계좌 정보 조회 성공")
         
         logger.info("계좌 잔고 정보 조회 완료")
         return balance_data
@@ -605,66 +728,83 @@ async def get_account_balance():
 async def get_account_holdings():
     """보유종목 정보 조회 - 키움 API kt00004 스펙 기반"""
     try:
-        # 키움 API 연결 상태 확인
-        if not (kiwoom_api.running and kiwoom_api.websocket):
-            logger.warning("키움 API가 연결되지 않았습니다. 임시 데이터를 반환합니다.")
+        # 키움 API 토큰 유효성 확인 (REST API는 WebSocket과 독립적)
+        token_valid = bool(kiwoom_api.token_manager.get_valid_token())
+        logger.info(f"🌐 [API] REST API 토큰 유효성: {token_valid}")
         
-        # 키움 API kt00004 응답 구조에 맞춘 임시 데이터
-        holdings_data = {
-            "stk_acnt_evlt_prst": [
-                {
-                    "stk_cd": "005930",  # 종목코드
-                    "stk_nm": "삼성전자",  # 종목명
-                    "rmnd_qty": "10",  # 보유수량
-                    "avg_prc": "75000",  # 평균단가
-                    "cur_prc": "78000",  # 현재가
-                    "evlt_amt": "780000",  # 평가금액
-                    "pl_amt": "30000",  # 손익금액
-                    "pl_rt": "4.00",  # 손익율
-                    "loan_dt": "",  # 대출일
-                    "pur_amt": "750000",  # 매입금액
-                    "setl_remn": "10",  # 결제잔고
-                    "pred_buyq": "0",  # 전일매수수량
-                    "pred_sellq": "0",  # 전일매도수량
-                    "tdy_buyq": "0",  # 금일매수수량
-                    "tdy_sellq": "0"  # 금일매도수량
-                },
-                {
-                    "stk_cd": "000660",
-                    "stk_nm": "SK하이닉스",
-                    "rmnd_qty": "5",
-                    "avg_prc": "120000",
-                    "cur_prc": "125000",
-                    "evlt_amt": "625000",
-                    "pl_amt": "25000",
-                    "pl_rt": "4.17",
-                    "loan_dt": "",
-                    "pur_amt": "600000",
-                    "setl_remn": "5",
-                    "pred_buyq": "0",
-                    "pred_sellq": "0",
-                    "tdy_buyq": "0",
-                    "tdy_sellq": "0"
-                },
-                {
-                    "stk_cd": "035420",
-                    "stk_nm": "NAVER",
-                    "rmnd_qty": "3",
-                    "avg_prc": "200000",
-                    "cur_prc": "210000",
-                    "evlt_amt": "630000",
-                    "pl_amt": "30000",
-                    "pl_rt": "5.00",
-                    "loan_dt": "",
-                    "pur_amt": "600000",
-                    "setl_remn": "3",
-                    "pred_buyq": "0",
-                    "pred_sellq": "0",
-                    "tdy_buyq": "0",
-                    "tdy_sellq": "0"
+        if not token_valid:
+            logger.warning("🌐 [API] 키움 API 토큰이 유효하지 않습니다. 임시 데이터를 반환합니다.")
+            # 임시 데이터 반환
+            holdings_data = {
+                "stk_acnt_evlt_prst": [
+                    {
+                        "stk_cd": "005930",  # 종목코드
+                        "stk_nm": "삼성전자",  # 종목명
+                        "rmnd_qty": "10",  # 보유수량
+                        "avg_prc": "75000",  # 평균단가
+                        "cur_prc": "78000",  # 현재가
+                        "evlt_amt": "780000",  # 평가금액
+                        "pl_amt": "30000",  # 손익금액
+                        "pl_rt": "4.00",  # 손익율
+                        "loan_dt": "",  # 대출일
+                        "pur_amt": "750000",  # 매입금액
+                        "setl_remn": "10",  # 결제잔고
+                        "pred_buyq": "0",  # 전일매수수량
+                        "pred_sellq": "0",  # 전일매도수량
+                        "tdy_buyq": "0",  # 금일매수수량
+                        "tdy_sellq": "0"  # 금일매도수량
+                    },
+                    {
+                        "stk_cd": "000660",
+                        "stk_nm": "SK하이닉스",
+                        "rmnd_qty": "5",
+                        "avg_prc": "120000",
+                        "cur_prc": "125000",
+                        "evlt_amt": "625000",
+                        "pl_amt": "25000",
+                        "pl_rt": "4.17",
+                        "loan_dt": "",
+                        "pur_amt": "600000",
+                        "setl_remn": "5",
+                        "pred_buyq": "0",
+                        "pred_sellq": "0",
+                        "tdy_buyq": "0",
+                        "tdy_sellq": "0"
+                    },
+                    {
+                        "stk_cd": "035420",
+                        "stk_nm": "NAVER",
+                        "rmnd_qty": "3",
+                        "avg_prc": "200000",
+                        "cur_prc": "210000",
+                        "evlt_amt": "630000",
+                        "pl_amt": "30000",
+                        "pl_rt": "5.00",
+                        "loan_dt": "",
+                        "pur_amt": "600000",
+                        "setl_remn": "3",
+                        "pred_buyq": "0",
+                        "pred_sellq": "0",
+                        "tdy_buyq": "0",
+                        "tdy_sellq": "0"
+                    }
+                ]
+            }
+        else:
+            # 실제 키움 API에서 보유종목 조회
+            logger.info("🌐 [API] 키움 REST API에서 보유종목 조회 중...")
+            balance_data = await kiwoom_api.get_account_balance()
+            
+            if balance_data and 'stk_acnt_evlt_prst' in balance_data:
+                holdings_data = {
+                    "stk_acnt_evlt_prst": balance_data['stk_acnt_evlt_prst']
                 }
-            ]
-        }
+                logger.info(f"🌐 [API] 실제 보유종목 {len(holdings_data['stk_acnt_evlt_prst'])}건 조회 성공")
+            else:
+                logger.warning("🌐 [API] 보유종목 데이터가 없습니다. 빈 목록을 반환합니다.")
+                holdings_data = {
+                    "stk_acnt_evlt_prst": []
+                }
         
         logger.info(f"보유종목 {len(holdings_data['stk_acnt_evlt_prst'])}건 조회 완료")
         return holdings_data
@@ -679,9 +819,12 @@ async def get_account_holdings():
 async def get_trading_history(limit: int = 50):
     """거래내역 조회"""
     try:
-        # 키움 API 연결 상태 확인
-        if not (kiwoom_api.running and kiwoom_api.websocket):
-            logger.warning("키움 API가 연결되지 않았습니다. 임시 데이터를 반환합니다.")
+        # 키움 API 토큰 유효성 확인 (REST API는 WebSocket과 독립적)
+        token_valid = bool(kiwoom_api.token_manager.get_valid_token())
+        logger.info(f"🌐 [API] REST API 토큰 유효성: {token_valid}")
+        
+        if not token_valid:
+            logger.warning("🌐 [API] 키움 API 토큰이 유효하지 않습니다. 임시 데이터를 반환합니다.")
         
         # 실제 키움 API 호출 (임시 데이터로 대체)
         history_data = {

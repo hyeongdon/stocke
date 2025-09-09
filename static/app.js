@@ -717,29 +717,72 @@ class StockMonitorApp {
         
         async checkMonitoringStatus() {
             try {
+                console.log('🔍 [DEBUG] 초기 모니터링 상태 확인 시작');
                 const response = await fetch('/monitoring/status');
                 const data = await response.json();
-                this.updateMonitoringUI(data.is_monitoring);
+                console.log('🔍 [DEBUG] 초기 상태 API 응답:', data);
+                
+                const isRunning = data.is_running || data.is_monitoring;
+                console.log('🔍 [DEBUG] 초기 상태 - isRunning:', isRunning);
+                
+                // 버튼 UI만 업데이트
+                this.updateMonitoringUI(isRunning);
             } catch (error) {
-                console.error('모니터링 상태 확인 실패:', error);
+                console.error('🔍 [DEBUG] 모니터링 상태 확인 실패:', error);
             }
         }
         
         updateMonitoringUI(isMonitoring) {
+            console.log('🔍 [DEBUG] updateMonitoringUI 호출됨 - isMonitoring:', isMonitoring);
             const button = document.getElementById('toggleMonitoring');
+            console.log('🔍 [DEBUG] 버튼 요소:', button);
+            
             if (button) {
-                button.textContent = isMonitoring ? '모니터링 중지' : '모니터링 시작';
-                button.className = isMonitoring ? 'btn btn-danger' : 'btn btn-success';
+                const newText = isMonitoring ? '모니터링 중지' : '모니터링 시작';
+                const newClass = isMonitoring ? 'btn btn-danger' : 'btn btn-success';
+                
+                console.log('🔍 [DEBUG] 버튼 업데이트:', { newText, newClass });
+                
+                button.textContent = newText;
+                button.className = newClass;
+                
+                console.log('🔍 [DEBUG] 버튼 업데이트 완료:', {
+                    textContent: button.textContent,
+                    className: button.className
+                });
+            } else {
+                console.error('🔍 [DEBUG] toggleMonitoring 버튼을 찾을 수 없습니다!');
             }
         }
         
         async toggleMonitoring() {
             try {
-                const response = await fetch('/monitoring/toggle', { method: 'POST' });
+                // 현재 모니터링 상태 확인
+                const statusResponse = await fetch('/monitoring/status');
+                const statusData = await statusResponse.json();
+                const isCurrentlyRunning = statusData.is_running;
+                
+                console.log('🔍 [DEBUG] 현재 모니터링 상태:', isCurrentlyRunning);
+                
+                // 상태에 따라 시작 또는 중지
+                const endpoint = isCurrentlyRunning ? '/monitoring/stop' : '/monitoring/start';
+                const action = isCurrentlyRunning ? '중지' : '시작';
+                
+                console.log(`🔍 [DEBUG] 모니터링 ${action} 요청:`, endpoint);
+                
+                const response = await fetch(endpoint, { method: 'POST' });
                 const data = await response.json();
-                this.updateMonitoringUI(data.is_monitoring);
+                
+                console.log('🔍 [DEBUG] API 응답:', data);
+                
+                // UI 업데이트
+                const isRunning = data.is_running || data.is_monitoring;
+                console.log('🔍 [DEBUG] UI 업데이트 - isRunning:', isRunning);
+                this.updateMonitoringUI(isRunning);
+                
             } catch (error) {
-                console.error('모니터링 토글 실패:', error);
+                console.error('🔍 [DEBUG] 모니터링 토글 실패:', error);
+                alert('모니터링 상태 변경에 실패했습니다: ' + error.message);
             }
         }
         
@@ -797,49 +840,112 @@ class StockMonitorApp {
             }
         }
         
-        // 새로운 뉴스 로딩 함수 추가
+        // 새로운 뉴스 로딩 함수 추가 (뉴스 + 토론 글)
         async loadNews(stockCode, stockName) {
             try {
-                const response = await fetch(`/stocks/${stockCode}/news?stock_name=${encodeURIComponent(stockName)}`);
-                const newsData = await response.json();
+                console.log('🔍 [DEBUG] 종목 정보 로딩 시작:', stockCode, stockName);
+                
+                // 뉴스와 토론 글을 함께 가져오는 새로운 API 사용
+                const response = await fetch(`/stocks/${stockCode}/info?stock_name=${encodeURIComponent(stockName)}`);
+                const data = await response.json();
 
                 const newsContent = document.getElementById('newsContent');
                 if (!newsContent) return;
 
-                if (!newsData.items || newsData.items.length === 0) {
-                    newsContent.innerHTML = `
-                        <div class="text-center text-muted py-4">
-                            <i class="fas fa-newspaper fa-2x mb-2"></i>
-                            <p>관련 뉴스가 없습니다.</p>
+                console.log('🔍 [DEBUG] API 응답:', data);
+
+                // 뉴스 섹션
+                let newsHtml = '';
+                if (data.news && data.news.items && data.news.items.length > 0) {
+                    newsHtml += `
+                        <div class="mb-4">
+                            <h5 class="text-primary mb-3">
+                                <i class="fas fa-newspaper me-2"></i>뉴스 (${data.news.items.length}개)
+                            </h5>
+                            <div class="news-section">
+                                ${data.news.items.map(item => `
+                                    <div class="news-item border-bottom pb-3 mb-3">
+                                        <h6 class="news-title">
+                                            <a href="${item.link}" target="_blank" class="text-decoration-none">
+                                                ${item.title}
+                                            </a>
+                                        </h6>
+                                        <p class="news-description text-muted mb-2">${item.description}</p>
+                                        <div class="news-meta">
+                                            <small class="text-muted">
+                                                <i class="fas fa-calendar-alt me-1"></i>${item.pubDate || ''}
+                                            </small>
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
                         </div>
                     `;
-                    return;
+                } else {
+                    newsHtml += `
+                        <div class="mb-4">
+                            <h5 class="text-primary mb-3">
+                                <i class="fas fa-newspaper me-2"></i>뉴스
+                            </h5>
+                            <div class="text-center text-muted py-3">
+                                <i class="fas fa-newspaper fa-2x mb-2"></i>
+                                <p>관련 뉴스가 없습니다.</p>
+                            </div>
+                        </div>
+                    `;
                 }
 
-                const newsHtml = newsData.items.map(item => `
-                    <div class="news-item border-bottom pb-3 mb-3">
-                        <h6 class="news-title">
-                            <a href="${item.link}" target="_blank" class="text-decoration-none">
-                                ${item.title}
-                            </a>
-                        </h6>
-                        <p class="news-description text-muted mb-2">${item.description}</p>
-                        <div class="news-meta">
-                            <small class="text-muted">
-                                <i class="fas fa-calendar-alt me-1"></i>${item.pubDate || ''}
-                            </small>
+                // 토론 글 섹션
+                if (data.discussions && data.discussions.discussions && data.discussions.discussions.length > 0) {
+                    newsHtml += `
+                        <div class="mb-4">
+                            <h5 class="text-success mb-3">
+                                <i class="fas fa-comments me-2"></i>종목토론 (${data.discussions.discussions.length}개)
+                            </h5>
+                            <div class="discussions-section">
+                                ${data.discussions.discussions.map(discussion => `
+                                    <div class="discussion-item border-bottom pb-2 mb-2">
+                                        <div class="discussion-title">
+                                            <a href="https://finance.naver.com/item/board.nhn?code=${stockCode}" target="_blank" class="text-decoration-none">
+                                                ${discussion.title}
+                                            </a>
+                                        </div>
+                                        <div class="discussion-meta">
+                                            <small class="text-muted">
+                                                <i class="fas fa-user me-1"></i>${discussion.author || '익명'}
+                                                <i class="fas fa-clock me-1 ms-2"></i>${discussion.date || ''}
+                                            </small>
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
                         </div>
-                    </div>
-                `).join('');
+                    `;
+                } else {
+                    newsHtml += `
+                        <div class="mb-4">
+                            <h5 class="text-success mb-3">
+                                <i class="fas fa-comments me-2"></i>종목토론
+                            </h5>
+                            <div class="text-center text-muted py-3">
+                                <i class="fas fa-comments fa-2x mb-2"></i>
+                                <p>오늘의 토론 글이 없습니다.</p>
+                            </div>
+                        </div>
+                    `;
+                }
 
                 newsContent.innerHTML = newsHtml;
+                console.log('🔍 [DEBUG] 종목 정보 로딩 완료');
+                
             } catch (error) {
+                console.error('🔍 [DEBUG] 종목 정보 로딩 오류:', error);
                 const newsContent = document.getElementById('newsContent');
                 if (newsContent) {
                     newsContent.innerHTML = `
                         <div class="text-center text-muted py-4">
-                            <i class="fas fa-newspaper fa-2x mb-2"></i>
-                            <p>관련 뉴스가 없습니다.</p>
+                            <i class="fas fa-exclamation-triangle fa-2x mb-2"></i>
+                            <p>정보를 불러오는 중 오류가 발생했습니다.</p>
                         </div>
                     `;
                 }

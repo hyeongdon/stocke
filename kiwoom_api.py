@@ -55,9 +55,11 @@ class KiwoomAPI:
             self.websocket = await websockets.connect(
                 ws_url,
                 extra_headers=headers,
-                ping_interval=30,  # 30초마다 ping
-                ping_timeout=10,   # ping 응답 대기 시간
-                close_timeout=10   # 연결 종료 대기 시간
+                ping_interval=60,  # 60초마다 ping (서버 부하 감소)
+                ping_timeout=20,   # ping 응답 대기 시간 증가
+                close_timeout=30,  # 연결 종료 대기 시간 증가
+                max_size=2**20,    # 최대 메시지 크기 1MB
+                max_queue=32       # 최대 큐 크기
             )
             logger.info("🔄 [DEBUG] self.running을 True로 설정 (connect 메서드)")
             self.running = True
@@ -96,7 +98,8 @@ class KiwoomAPI:
         logger.info("🔄 [DEBUG] 메시지 핸들러 시작 - running 상태 모니터링")
         while self.running and self.websocket:
             try:
-                message = await asyncio.wait_for(self.websocket.recv(), timeout=30.0)
+                # 타임아웃을 ping_interval보다 약간 길게 설정
+                message = await asyncio.wait_for(self.websocket.recv(), timeout=90.0)
                 data = json.loads(message)
                 
                 # 안전한 키 접근으로 수정
@@ -115,9 +118,15 @@ class KiwoomAPI:
                 # 정상 종료(1000) vs 비정상 종료 구분
                 if e.code == 1000:
                     logger.info("서버에서 정상적으로 연결을 종료했습니다.")
+                    # 정상 종료 시 재연결하지 않고 종료
+                    logger.info("🔄 [DEBUG] self.running을 False로 설정 (정상 종료)")
+                    self.running = False
+                    self.websocket = None
+                    break
                 else:
                     logger.warning(f"비정상적인 연결 종료: 코드 {e.code}")
                 
+                # 비정상 종료 시에만 재연결 시도
                 if self.auto_reconnect and self.reconnect_attempts < self.max_reconnect_attempts:
                     self.reconnect_attempts += 1
                     wait_time = self.reconnect_delay * self.reconnect_attempts
@@ -161,12 +170,27 @@ class KiwoomAPI:
         try:
             # 수동 ping 테스트
             pong_waiter = await self.websocket.ping()
-            await asyncio.wait_for(pong_waiter, timeout=5.0)
+            await asyncio.wait_for(pong_waiter, timeout=10.0)
             logger.debug("연결 상태 양호 - ping 응답 정상")
             return True
         except Exception as e:
             logger.warning(f"연결 상태 불량: {e}")
             return False
+    
+    async def graceful_shutdown(self):
+        """우아한 종료"""
+        logger.info("WebSocket 우아한 종료 시작")
+        self.auto_reconnect = False  # 자동 재연결 비활성화
+        self.running = False
+        
+        if self.websocket:
+            try:
+                await self.websocket.close(code=1000, reason="Client shutdown")
+                logger.info("WebSocket 정상 종료 완료")
+            except Exception as e:
+                logger.warning(f"WebSocket 종료 중 오류: {e}")
+            finally:
+                self.websocket = None
 
     def _get_headers(self) -> Dict[str, str]:
         """API 요청 헤더 생성"""
@@ -672,7 +696,7 @@ class KiwoomAPI:
                             logger.info(f"파싱된 응답 데이터: {data}")
                             logger.info(f"data.get('return_code'): {data.get('return_code')}")
                             # 응답 확인
-                            if data.get('return_code') == '0':  # 성공
+                            if data.get('return_code') == 0:  # 성공 (숫자 0)
                                 result = self._parse_account_balance_safe(data)
                                 logger.info(f"파싱 결과: {result}")
                                 return result
@@ -707,23 +731,9 @@ class KiwoomAPI:
         try:
             logger.info(f"응답 파싱 시작: {api_response}")
             
-            # 기존 파싱 로직 먼저 시도
-            try:
-                return self._parse_account_balance(api_response)
-            except Exception as e:
-                logger.warning(f"기존 파싱 실패, 새로운 방식 시도: {e}")
-            
-            # 응답 구조 확인
-            if 'output' in api_response:
-                output = api_response['output']
-                logger.info(f"output 데이터 발견: {output}")
-            elif 'output1' in api_response:
-                output = api_response['output1']
-                logger.info(f"output1 데이터 발견: {output}")
-            else:
-                logger.warning("응답에서 output 또는 output1을 찾을 수 없습니다")
-                logger.info(f"사용 가능한 키: {list(api_response.keys())}")
-                return {}
+            # 키움 API 응답이 이미 평면화되어 있음 (output 키 없음)
+            # 직접 응답에서 데이터 추출
+            logger.info(f"사용 가능한 키: {list(api_response.keys())}")
             
             # 안전한 데이터 추출
             def safe_get(data, key, default='0'):
@@ -731,24 +741,24 @@ class KiwoomAPI:
                 return str(value) if value is not None else default
             
             result = {
-                "acnt_nm": safe_get(output, 'acnt_nm', ''),
-                "brch_nm": safe_get(output, 'brch_nm', ''),
-                "entr": safe_get(output, 'dnca_tot_amt'),
-                "d2_entra": safe_get(output, 'nxdy_excc_amt'),
-                "tot_est_amt": safe_get(output, 'scts_evlu_amt'),
-                "aset_evlt_amt": safe_get(output, 'tot_evlu_amt'),
-                "tot_pur_amt": safe_get(output, 'pchs_amt_smtl_amt'),
-                "prsm_dpst_aset_amt": safe_get(output, 'evlu_amt_smtl_amt'),
-                "tot_grnt_sella": "0",
-                "tdy_lspft_amt": safe_get(output, 'dnca_tot_amt'),
-                "invt_bsamt": safe_get(output, 'pchs_amt_smtl_amt'),
-                "lspft_amt": safe_get(output, 'pchs_amt_smtl_amt'),
-                "tdy_lspft": safe_get(output, 'evlu_pfls_smtl_amt'),
-                "lspft2": safe_get(output, 'evlu_pfls_smtl_amt'),
-                "lspft": safe_get(output, 'evlu_pfls_smtl_amt'),
-                "tdy_lspft_rt": safe_get(output, 'evlu_erng_rt'),
-                "lspft_ratio": safe_get(output, 'evlu_erng_rt'),
-                "lspft_rt": safe_get(output, 'evlu_erng_rt')
+                "acnt_nm": safe_get(api_response, 'acnt_nm', ''),
+                "brch_nm": safe_get(api_response, 'brch_nm', ''),
+                "entr": safe_get(api_response, 'entr'),
+                "d2_entra": safe_get(api_response, 'd2_entra'),
+                "tot_est_amt": safe_get(api_response, 'tot_est_amt'),
+                "aset_evlt_amt": safe_get(api_response, 'aset_evlt_amt'),
+                "tot_pur_amt": safe_get(api_response, 'tot_pur_amt'),
+                "prsm_dpst_aset_amt": safe_get(api_response, 'prsm_dpst_aset_amt'),
+                "tot_grnt_sella": safe_get(api_response, 'tot_grnt_sella'),
+                "tdy_lspft_amt": safe_get(api_response, 'tdy_lspft_amt'),
+                "invt_bsamt": safe_get(api_response, 'invt_bsamt'),
+                "lspft_amt": safe_get(api_response, 'lspft_amt'),
+                "tdy_lspft": safe_get(api_response, 'tdy_lspft'),
+                "lspft2": safe_get(api_response, 'lspft2'),
+                "lspft": safe_get(api_response, 'lspft'),
+                "tdy_lspft_rt": safe_get(api_response, 'tdy_lspft_rt'),
+                "lspft_ratio": safe_get(api_response, 'lspft_ratio'),
+                "lspft_rt": safe_get(api_response, 'lspft_rt')
             }
             
             logger.info(f"파싱 완료: {result}")
