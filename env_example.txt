@@ -1,10 +1,21 @@
 # 키움증권 API 설정
-KIWOOM_APP_KEY=your_kiwoom_app_key_here
-KIWOOM_APP_SECRET=your_kiwoom_app_secret_here
+# 실전투자용 키
+KIWOOM_APP_KEY=your_real_app_key_here
+KIWOOM_APP_SECRET=your_real_app_secret_here
+
+# 모의투자용 키
+KIWOOM_MOCK_APP_KEY=KThQv1vmgpqMoMnaIvU2sJ01M-MuU31wHah9bF49v8o
+KIWOOM_MOCK_APP_SECRET=Pfow2kdUZTUo50mC2LzHBWdlqzIaDOkKRe4s4rQHxaA
+
 KIWOOM_BASE_URL=https://openapi.kiwoom.com/v1
 KIWOOM_WS_URL=wss://openapi.kiwoom.com/v1/ws
 KIWOOM_WS_RECONNECT_INTERVAL=5
 KIWOOM_WS_PING_INTERVAL=30
+
+# 계좌 설정
+KIWOOM_ACCOUNT_NUMBER=55009525
+KIWOOM_MOCK_ACCOUNT_NUMBER=81109058
+KIWOOM_USE_MOCK_ACCOUNT=true
 
 # 데이터베이스 설정
 DATABASE_URL=sqlite:///./stock_pipeline.db

@@ -12,12 +12,28 @@ class TokenManager:
     def authenticate(self) -> bool:
         """키움증권 API 인증을 수행하고 토큰을 발급받습니다."""
         try:
+            # 투자구분 설정 (모의투자/실전투자)
+            investment_type = "1" if Config.KIWOOM_USE_MOCK_ACCOUNT else "0"  # 1: 모의투자, 0: 실전투자
+            account_type = "모의투자" if Config.KIWOOM_USE_MOCK_ACCOUNT else "실전투자"
+            
+            # 계좌 타입에 따른 App Key 선택
+            if Config.KIWOOM_USE_MOCK_ACCOUNT:
+                app_key = Config.KIWOOM_MOCK_APP_KEY
+                app_secret = Config.KIWOOM_MOCK_APP_SECRET
+            else:
+                app_key = Config.KIWOOM_APP_KEY
+                app_secret = Config.KIWOOM_APP_SECRET
+            
+            print(f"키움 API 토큰 발급 요청 - 투자구분: {account_type} (코드: {investment_type})")
+            print(f"사용할 App Key: {app_key[:10]}...")
+            
             response = requests.post(
                 f"{Config.KIWOOM_BASE_URL}/oauth2/token",
                 json={
                     "grant_type": "client_credentials",
-                    "appkey": Config.KIWOOM_APP_KEY,
-                    "secretkey": Config.KIWOOM_APP_SECRET
+                    "appkey": app_key,
+                    "secretkey": app_secret,
+                    "investment_type": investment_type  # 투자구분 추가
                 },
                 headers={
                     "Content-Type": "application/json"
@@ -62,11 +78,25 @@ class TokenManager:
             return self.authenticate()
         
         try:
+            # 투자구분 설정 (모의투자/실전투자)
+            investment_type = "1" if Config.KIWOOM_USE_MOCK_ACCOUNT else "0"  # 1: 모의투자, 0: 실전투자
+            
+            # 계좌 타입에 따른 App Key 선택
+            if Config.KIWOOM_USE_MOCK_ACCOUNT:
+                app_key = Config.KIWOOM_MOCK_APP_KEY
+                app_secret = Config.KIWOOM_MOCK_APP_SECRET
+            else:
+                app_key = Config.KIWOOM_APP_KEY
+                app_secret = Config.KIWOOM_APP_SECRET
+            
             response = requests.post(
                 f"{Config.KIWOOM_BASE_URL}/oauth2/token",
                 data={
                     "grant_type": "refresh_token",
-                    "refresh_token": self.refresh_token
+                    "refresh_token": self.refresh_token,
+                    "appkey": app_key,
+                    "secretkey": app_secret,
+                    "investment_type": investment_type  # 투자구분 추가
                 }
             )
             

@@ -466,7 +466,7 @@ class KiwoomAPI:
             logger.info(f"차트 데이터 조회 시작: {stock_code}, 기간: {period}")
             
             if not self.token_manager.get_valid_token():
-                logger.error("킀움 API 토큰이 없습니다")
+                logger.error("키움 API 토큰이 없습니다")
                 return []
             
             # 키움 API 호출 설정
@@ -509,10 +509,10 @@ class KiwoomAPI:
                         if data.get('return_code') == 0:
                             return self._parse_kiwoom_chart_data(data, stock_code)
                         else:
-                            logger.error(f"킀움 API 오류: {data.get('return_msg')}")
+                            logger.error(f"키움 API 오류: {data.get('return_msg')}")
                             return []
                     else:
-                        logger.error(f"킀움 API 호출 실패: {response.status}")
+                        logger.error(f"키움 API 호출 실패: {response.status}")
                         return []
                         
         except Exception as e:
@@ -641,21 +641,33 @@ class KiwoomAPI:
         # 현재는 일봉 데이터로 대체
         return await self.get_stock_chart_data(stock_code, "1D")
 
-    async def get_account_balance(self) -> Dict:
-        """계좌 잔고 정보 조회 - 킀움 API kt00004 사용"""
+    async def get_account_balance(self, account_number: str = None) -> Dict:
+        """계좌 잔고 정보 조회 - 키움 API kt00004 사용"""
         """계좌 잔고 정보 조회 - 개선된 에러 처리"""
         if not self.token_manager.get_valid_token():
-            logger.error("킀움 API 토큰이 없습니다")
+            logger.error("키움 API 토큰이 없습니다")
             return {}
             
         try:
-            # 킀움 API 호출 설정 - 실계좌용
-            host = 'https://api.kiwoom.com'  # 실전투자용
+            # 계좌번호 설정 (매개변수 우선, 없으면 환경변수 사용)
+            if not account_number:
+                account_number = Config.KIWOOM_ACCOUNT_NUMBER or "실계좌번호"
+            
+            # 계좌 타입에 따른 도메인 설정
+            use_mock_account = Config.KIWOOM_USE_MOCK_ACCOUNT
+            if use_mock_account:
+                # 모의투자 계좌인 경우
+                host = Config.KIWOOM_MOCK_API_URL  # 모의투자용
+                account_type = "모의투자"
+            else:
+                # 실계좌인 경우
+                host = Config.KIWOOM_REAL_API_URL  # 실전투자용
+                account_type = "실계좌"
+            
             endpoint = '/api/dostk/acnt'
             url = host + endpoint
             
-            # 환경변수에서 계좌번호 가져오기
-            account_number = Config.KIWOOM_ACCOUNT_NUMBER or "실계좌번호"
+            logger.info(f"계좌 타입: {account_type}, 도메인: {host}")
             
             # 요청 헤더
             headers = {
@@ -670,9 +682,10 @@ class KiwoomAPI:
             request_data = {
                 'qry_tp': '0',         # 상장폐지조회구분 0:전체, 1:상장폐지종목제외
                 'dmst_stex_tp': 'KRX', # 국내거래소구분 KRX:한국거래소,NXT:넥스트트레이드
+                'acnt_no': account_number,  # 계좌번호 추가
             }
             # 디버깅을 위한 로깅 추가
-            logger.info(f"킀움 API 호출: {url}")
+            logger.info(f"키움 API 호출 ({account_type}): {url}")
             logger.info(f"계좌번호: {account_number}")
             logger.info(f"앱키 존재: {bool(Config.KIWOOM_APP_KEY)}")
             
@@ -702,7 +715,7 @@ class KiwoomAPI:
                                 return result
                             else:
                                 error_msg = data.get('msg1', '알 수 없는 오류')
-                                logger.error(f"킀움 API 계좌조회 오류: {error_msg}")
+                                logger.error(f"키움 API 계좌조회 오류: {error_msg}")
                                 logger.error(f"전체 응답: {data}")
                                 return {}
                         except json.JSONDecodeError as e:
@@ -710,7 +723,7 @@ class KiwoomAPI:
                             logger.error(f"원본 응답: {response_text}")
                             return {}
                     else:
-                        logger.error(f"킀움 API 호출 실패: {response.status}")
+                        logger.error(f"키움 API 호출 실패: {response.status}")
                         logger.error(f"오류 응답: {response_text}")
                         return {}
                         
@@ -718,7 +731,7 @@ class KiwoomAPI:
             logger.error(f"HTTP 클라이언트 오류: {e}")
             return {}
         except asyncio.TimeoutError:
-            logger.error("킀움 API 호출 타임아웃")
+            logger.error("키움 API 호출 타임아웃")
             return {}
         except Exception as e:
             logger.error(f"계좌 정보 조회 중 예상치 못한 오류: {type(e).__name__}: {e}")
@@ -727,7 +740,7 @@ class KiwoomAPI:
             return {}
     
     def _parse_account_balance_safe(self, api_response: dict) -> dict:
-        """킀움 API 계좌 잔고 응답 파싱 - 안전한 버전"""
+        """키움 API 계좌 잔고 응답 파싱 - 안전한 버전"""
         try:
             logger.info(f"응답 파싱 시작: {api_response}")
             

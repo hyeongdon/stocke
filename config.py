@@ -14,13 +14,25 @@ class Config:
     DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{PROJECT_ROOT / 'stock_pipeline.db'}")
     
     # 키움증권 API 설정
+    # 실전투자용 키
     KIWOOM_APP_KEY = os.getenv("KIWOOM_APP_KEY", "")
     KIWOOM_APP_SECRET = os.getenv("KIWOOM_APP_SECRET", "")
+    
+    # 모의투자용 키
+    KIWOOM_MOCK_APP_KEY = os.getenv("KIWOOM_MOCK_APP_KEY", "KThQv1vmgpqMoMnaIvU2sJ01M-MuU31wHah9bF49v8o")
+    KIWOOM_MOCK_APP_SECRET = os.getenv("KIWOOM_MOCK_APP_SECRET", "Pfow2kdUZTUo50mC2LzHBWdlqzIaDOkKRe4s4rQHxaA")
+    
     KIWOOM_BASE_URL = os.getenv("KIWOOM_BASE_URL", "https://openapi.kiwoom.com/v1")
     KIWOOM_WS_URL = os.getenv("KIWOOM_WS_URL", "wss://api.kiwoom.com:10000")
-    KIWOOM_ACCOUNT_NUMBER = os.getenv("KIWOOM_ACCOUNT_NUMBER", "")  # 추가    
+    KIWOOM_ACCOUNT_NUMBER = os.getenv("KIWOOM_ACCOUNT_NUMBER", "")  # 추가
+    KIWOOM_MOCK_ACCOUNT_NUMBER = os.getenv("KIWOOM_MOCK_ACCOUNT_NUMBER", "81109058")  # 모의투자 계좌
+    KIWOOM_USE_MOCK_ACCOUNT = os.getenv("KIWOOM_USE_MOCK_ACCOUNT", "true").lower() == "true"  # 모의투자 사용 여부
     KIWOOM_WS_RECONNECT_INTERVAL = int(os.getenv("KIWOOM_WS_RECONNECT_INTERVAL", 5))  # 초 단위
     KIWOOM_WS_PING_INTERVAL = int(os.getenv("KIWOOM_WS_PING_INTERVAL", 30))  # 초 단위
+    
+    # 키움증권 API 도메인 설정
+    KIWOOM_REAL_API_URL = "https://api.kiwoom.com"  # 운영 도메인
+    KIWOOM_MOCK_API_URL = "https://mockapi.kiwoom.com"  # 모의투자 도메인
     
     # 모니터링 설정
     CONDITION_CHECK_INTERVAL = int(os.getenv("CONDITION_CHECK_INTERVAL", 60))  # 초 단위

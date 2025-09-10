@@ -118,6 +118,10 @@ async def startup_event():
         logger.info(f"🌐 [STARTUP] 정적 파일 목록: {files}")
     
     # 키움 API 인증 및 연결
+    # 기존 토큰 무효화 (투자구분이 바뀌었을 수 있음)
+    kiwoom_api.token_manager.access_token = None
+    kiwoom_api.token_manager.token_expiry = None
+    
     if kiwoom_api.authenticate():
         logger.info("키움증권 API 인증 성공")
         
@@ -645,6 +649,14 @@ async def get_status():
 async def get_account_balance():
     """계좌 잔고 정보 조회 - 키움 API kt00004 스펙 기반"""
     try:
+        # 모의투자 계좌 사용 여부 확인
+        use_mock_account = config.KIWOOM_USE_MOCK_ACCOUNT
+        account_number = config.KIWOOM_MOCK_ACCOUNT_NUMBER if use_mock_account else config.KIWOOM_ACCOUNT_NUMBER
+        account_type = "모의투자" if use_mock_account else "실계좌"
+        
+        logger.info(f"🌐 [API] 계좌 설정 - 타입: {account_type}, 번호: {account_number}")
+        logger.info(f"🌐 [API] 계좌 정보 조회 - {account_type} 계좌: {account_number}")
+        
         # 키움 API 상태 상세 로깅 (디버깅용)
         logger.debug(f"=== 키움 API 상태 확인 ===")
         logger.debug(f"WebSocket running: {kiwoom_api.running}")
@@ -657,67 +669,75 @@ async def get_account_balance():
         
         if not token_valid:
             logger.warning("🌐 [API] 키움 API 토큰이 유효하지 않습니다. 임시 데이터를 반환합니다.")
-            # 임시 데이터에 데이터 소스 정보 추가
+            # 임시 데이터에 모의투자 정보 추가
             balance_data = {
-                "acnt_nm": "홍길동",
-                "brch_nm": "강남지점",
-                "entr": "5000000",
-                "d2_entra": "5000000",
-                "tot_est_amt": "8500000",
-                "aset_evlt_amt": "13500000",
-                "tot_pur_amt": "8150000",
-                "prsm_dpst_aset_amt": "13500000",
+                "acnt_nm": "모의투자계좌",
+                "brch_nm": "모의투자지점",
+                "acnt_no": account_number,
+                "acnt_type": account_type,
+                "entr": "10000000",  # 모의투자 초기 자금
+                "d2_entra": "10000000",
+                "tot_est_amt": "12000000",
+                "aset_evlt_amt": "12000000",
+                "tot_pur_amt": "10000000",
+                "prsm_dpst_aset_amt": "12000000",
                 "tot_grnt_sella": "0",
-                "tdy_lspft_amt": "8150000",
-                "invt_bsamt": "8150000",
-                "lspft_amt": "8150000",
-                "tdy_lspft": "350000",
-                "lspft2": "350000",
-                "lspft": "350000",
-                "tdy_lspft_rt": "4.29",
-                "lspft_ratio": "4.29",
-                "lspft_rt": "4.29",
+                "tdy_lspft_amt": "10000000",
+                "invt_bsamt": "10000000",
+                "lspft_amt": "2000000",
+                "tdy_lspft": "2000000",
+                "lspft2": "2000000",
+                "lspft": "2000000",
+                "tdy_lspft_rt": "20.00",
+                "lspft_ratio": "20.00",
+                "lspft_rt": "20.00",
                 "_data_source": "MOCK_DATA",
                 "_api_connected": False,
-                "_token_valid": False
+                "_token_valid": False,
+                "_account_type": account_type
             }
         else:
-            # 실제 키움 API 호출
-            logger.info("🌐 [API] 키움 REST API에서 계좌 정보 조회 중...")
-            balance_data = await kiwoom_api.get_account_balance()
+            # 실제 키움 API 호출 (모의투자 계좌 사용)
+            logger.info(f"🌐 [API] 키움 REST API에서 {account_type} 계좌 정보 조회 중...")
+            balance_data = await kiwoom_api.get_account_balance(account_number=account_number)
             
             if not balance_data:
                 logger.warning("🌐 [API] 키움 REST API 호출 실패, 임시 데이터를 반환합니다.")
                 balance_data = {
-                    "acnt_nm": "홍길동",
-                    "brch_nm": "강남지점",
-                    "entr": "5000000",
-                    "d2_entra": "5000000",
-                    "tot_est_amt": "8500000",
-                    "aset_evlt_amt": "13500000",
-                    "tot_pur_amt": "8150000",
-                    "prsm_dpst_aset_amt": "13500000",
+                    "acnt_nm": "모의투자계좌",
+                    "brch_nm": "모의투자지점",
+                    "acnt_no": account_number,
+                    "acnt_type": account_type,
+                    "entr": "10000000",
+                    "d2_entra": "10000000",
+                    "tot_est_amt": "12000000",
+                    "aset_evlt_amt": "12000000",
+                    "tot_pur_amt": "10000000",
+                    "prsm_dpst_aset_amt": "12000000",
                     "tot_grnt_sella": "0",
-                    "tdy_lspft_amt": "8150000",
-                    "invt_bsamt": "8150000",
-                    "lspft_amt": "8150000",
-                    "tdy_lspft": "350000",
-                    "lspft2": "350000",
-                    "lspft": "350000",
-                    "tdy_lspft_rt": "4.29",
-                    "lspft_ratio": "4.29",
-                    "lspft_rt": "4.29",
+                    "tdy_lspft_amt": "10000000",
+                    "invt_bsamt": "10000000",
+                    "lspft_amt": "2000000",
+                    "tdy_lspft": "2000000",
+                    "lspft2": "2000000",
+                    "lspft": "2000000",
+                    "tdy_lspft_rt": "20.00",
+                    "lspft_ratio": "20.00",
+                    "lspft_rt": "20.00",
                     "_data_source": "MOCK_DATA",
                     "_api_connected": False,
-                    "_token_valid": False
+                    "_token_valid": False,
+                    "_account_type": account_type
                 }
             else:
                 balance_data["_data_source"] = "REAL_API"
                 balance_data["_api_connected"] = True
                 balance_data["_token_valid"] = True
-                logger.info("🌐 [API] 키움 REST API 계좌 정보 조회 성공")
+                balance_data["_account_type"] = account_type
+                balance_data["acnt_no"] = account_number
+                logger.info(f"🌐 [API] 키움 REST API {account_type} 계좌 정보 조회 성공")
         
-        logger.info("계좌 잔고 정보 조회 완료")
+        logger.info(f"{account_type} 계좌 잔고 정보 조회 완료")
         return balance_data
         
     except Exception as e:
@@ -728,14 +748,24 @@ async def get_account_balance():
 async def get_account_holdings():
     """보유종목 정보 조회 - 키움 API kt00004 스펙 기반"""
     try:
+        # 모의투자 계좌 사용 여부 확인
+        use_mock_account = config.KIWOOM_USE_MOCK_ACCOUNT
+        account_number = config.KIWOOM_MOCK_ACCOUNT_NUMBER if use_mock_account else config.KIWOOM_ACCOUNT_NUMBER
+        account_type = "모의투자" if use_mock_account else "실계좌"
+        
+        logger.info(f"🌐 [API] 계좌 설정 - 타입: {account_type}, 번호: {account_number}")
+        logger.info(f"🌐 [API] 보유종목 조회 - {account_type} 계좌: {account_number}")
+        
         # 키움 API 토큰 유효성 확인 (REST API는 WebSocket과 독립적)
         token_valid = bool(kiwoom_api.token_manager.get_valid_token())
         logger.info(f"🌐 [API] REST API 토큰 유효성: {token_valid}")
         
         if not token_valid:
             logger.warning("🌐 [API] 키움 API 토큰이 유효하지 않습니다. 임시 데이터를 반환합니다.")
-            # 임시 데이터 반환
+            # 모의투자 계좌 임시 데이터 반환
             holdings_data = {
+                "acnt_no": account_number,
+                "acnt_type": account_type,
                 "stk_acnt_evlt_prst": [
                     {
                         "stk_cd": "005930",  # 종목코드
@@ -791,28 +821,34 @@ async def get_account_holdings():
                 ]
             }
         else:
-            # 실제 키움 API에서 보유종목 조회
-            logger.info("🌐 [API] 키움 REST API에서 보유종목 조회 중...")
-            balance_data = await kiwoom_api.get_account_balance()
+            # 실제 키움 API에서 보유종목 조회 (모의투자 계좌 사용)
+            logger.info(f"🌐 [API] 키움 REST API에서 {account_type} 보유종목 조회 중...")
+            balance_data = await kiwoom_api.get_account_balance(account_number=account_number)
             
             if balance_data and 'stk_acnt_evlt_prst' in balance_data:
                 holdings_data = {
+                    "acnt_no": account_number,
+                    "acnt_type": account_type,
                     "stk_acnt_evlt_prst": balance_data['stk_acnt_evlt_prst']
                 }
-                logger.info(f"🌐 [API] 실제 보유종목 {len(holdings_data['stk_acnt_evlt_prst'])}건 조회 성공")
+                logger.info(f"🌐 [API] 실제 {account_type} 보유종목 {len(holdings_data['stk_acnt_evlt_prst'])}건 조회 성공")
             else:
                 logger.warning("🌐 [API] 보유종목 데이터가 없습니다. 빈 목록을 반환합니다.")
                 holdings_data = {
+                    "acnt_no": account_number,
+                    "acnt_type": account_type,
                     "stk_acnt_evlt_prst": []
                 }
         
-        logger.info(f"보유종목 {len(holdings_data['stk_acnt_evlt_prst'])}건 조회 완료")
+        logger.info(f"{account_type} 보유종목 {len(holdings_data['stk_acnt_evlt_prst'])}건 조회 완료")
         return holdings_data
         
     except Exception as e:
         logger.error(f"보유종목 조회 오류: {e}")
         return {
             "error": str(e),
+            "acnt_no": config.KIWOOM_MOCK_ACCOUNT_NUMBER if config.KIWOOM_USE_MOCK_ACCOUNT else config.KIWOOM_ACCOUNT_NUMBER,
+            "acnt_type": "모의투자" if config.KIWOOM_USE_MOCK_ACCOUNT else "실계좌",
             "stk_acnt_evlt_prst": []
         }
 @app.get("/account/history")
