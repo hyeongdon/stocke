@@ -574,7 +574,7 @@ class StockMonitorApp {
                             </div>
                             <div class="col-md-1 text-end">
                                 <button class="btn btn-outline-primary btn-sm" 
-                                    onclick="event.stopPropagation(); window.app.showStockChart('${stock.stock_code}', '${stock.stock_name}')">
+                                    onclick="return window.showStockChartHandler(event, '${stock.stock_code}', '${stock.stock_name}')">
                                     <i class="fas fa-chart-line"></i>
                                 </button>
                             </div>
@@ -735,22 +735,21 @@ class StockMonitorApp {
         updateMonitoringUI(isMonitoring) {
             console.log('🔍 [DEBUG] updateMonitoringUI 호출됨 - isMonitoring:', isMonitoring);
             const button = document.getElementById('toggleMonitoring');
-            console.log('🔍 [DEBUG] 버튼 요소:', button);
+            const textSpan = document.getElementById('monitoringText');
+            const iconEl = button ? button.querySelector('i') : null;
             
             if (button) {
-                const newText = isMonitoring ? '모니터링 중지' : '모니터링 시작';
-                const newClass = isMonitoring ? 'btn btn-danger' : 'btn btn-success';
-                
-                console.log('🔍 [DEBUG] 버튼 업데이트:', { newText, newClass });
-                
-                button.textContent = newText;
-                button.className = newClass;
-                
-                console.log('🔍 [DEBUG] 버튼 업데이트 완료:', {
-                    textContent: button.textContent,
-                    className: button.className
-                });
-            } else {
+                // 클래스 업데이트: 크기 유지하며 색상만 토글
+                button.className = `btn btn-sm ${isMonitoring ? 'btn-danger' : 'btn-success'}`;
+            }
+            if (iconEl) {
+                iconEl.classList.remove('fa-play', 'fa-stop');
+                iconEl.classList.add(isMonitoring ? 'fa-stop' : 'fa-play');
+            }
+            if (textSpan) {
+                textSpan.textContent = isMonitoring ? '모니터링 중지' : '모니터링 시작';
+            }
+            if (!button) {
                 console.error('🔍 [DEBUG] toggleMonitoring 버튼을 찾을 수 없습니다!');
             }
         }
@@ -769,20 +768,42 @@ class StockMonitorApp {
                 const action = isCurrentlyRunning ? '중지' : '시작';
                 
                 console.log(`🔍 [DEBUG] 모니터링 ${action} 요청:`, endpoint);
-                
+                // 버튼 비활성화 및 로딩 표시
+                const button = document.getElementById('toggleMonitoring');
+                const textSpan = document.getElementById('monitoringText');
+                const iconEl = button ? button.querySelector('i') : null;
+                if (button) button.disabled = true;
+                if (iconEl) {
+                    iconEl.classList.remove('fa-play', 'fa-stop');
+                    iconEl.classList.add('fa-spinner', 'fa-spin');
+                }
+                if (textSpan) textSpan.textContent = `모니터링 ${action} 중...`;
+
                 const response = await fetch(endpoint, { method: 'POST' });
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
                 const data = await response.json();
-                
                 console.log('🔍 [DEBUG] API 응답:', data);
-                
-                // UI 업데이트
                 const isRunning = data.is_running || data.is_monitoring;
-                console.log('🔍 [DEBUG] UI 업데이트 - isRunning:', isRunning);
                 this.updateMonitoringUI(isRunning);
+                
+                // 버튼 활성화 및 아이콘 복원
+                if (button) button.disabled = false;
                 
             } catch (error) {
                 console.error('🔍 [DEBUG] 모니터링 토글 실패:', error);
                 alert('모니터링 상태 변경에 실패했습니다: ' + error.message);
+                // 실패 시 버튼/아이콘 복원 시도
+                const button = document.getElementById('toggleMonitoring');
+                const textSpan = document.getElementById('monitoringText');
+                const iconEl = button ? button.querySelector('i') : null;
+                if (button) button.disabled = false;
+                if (iconEl) {
+                    iconEl.classList.remove('fa-spinner', 'fa-spin');
+                    iconEl.classList.add('fa-play');
+                }
+                if (textSpan) textSpan.textContent = '모니터링 시작';
             }
         }
         
@@ -954,7 +975,7 @@ class StockMonitorApp {
         
         showStockChart(stockCode, stockName) {
             console.log('차트 표시:', stockCode, stockName);
-            showChart(stockCode);
+            showChart(stockCode, stockName);
         }
 
         // 계좌 정보 업데이트 메서드 (클래스 내부로 이동)
@@ -999,6 +1020,21 @@ class StockMonitorApp {
     // 앱 초기화
 document.addEventListener('DOMContentLoaded', () => {
     window.app = new StockMonitorApp();
+    // 전역 클릭 핸들러 바인딩
+    window.showStockChartHandler = async (evt, code, name) => {
+        try {
+            if (evt && typeof evt.stopPropagation === 'function') evt.stopPropagation();
+            if (!window.app || typeof window.app.showStockChart !== 'function') {
+                console.warn('app.showStockChart가 없습니다. 폴백 showChart 사용');
+                if (typeof showChart === 'function') showChart(code, name);
+                return false;
+            }
+            window.app.showStockChart(code, name);
+        } catch (e) {
+            console.error('차트 핸들러 오류:', e);
+        }
+        return false;
+    };
 });
 
 window.addEventListener('beforeunload', () => {
@@ -1008,13 +1044,14 @@ window.addEventListener('beforeunload', () => {
 });
 
 // 차트 관련 함수들
-async function loadChartImage(stockCode) {
+async function loadChartImage(stockCode, period = '1M') {
     try {
-        const response = await fetch(`/api/chart/${stockCode}`);
+        const response = await fetch(`/chart/image/${stockCode}?period=${encodeURIComponent(period)}`);
         if (response.ok) {
-            const blob = await response.blob();
-            const imageUrl = URL.createObjectURL(blob);
-            return imageUrl;
+            const data = await response.json();
+            if (data && data.image) {
+                return data.image;
+            }
         }
     } catch (error) {
         console.error('차트 이미지 로드 실패:', error);
@@ -1022,7 +1059,51 @@ async function loadChartImage(stockCode) {
     return null;
 }
 
-function showChart(stockCode) {
-    const modal = document.getElementById('chartModal');
-    modal.style.display = 'block';
+function showChart(stockCode, stockName) {
+    const modalEl = document.getElementById('chartModal');
+    const chartTitle = document.getElementById('chartStockName');
+    const chartCode = document.getElementById('chartStockCode');
+    const chartContainer = document.getElementById('chartContainer');
+
+    if (chartTitle) chartTitle.textContent = stockName || '';
+    if (chartCode) chartCode.textContent = stockCode || '';
+
+    const periodRadios = document.querySelectorAll('input[name="chartPeriod"]');
+    let currentPeriod = '1M';
+    periodRadios.forEach(r => {
+        if (r.checked) currentPeriod = r.value;
+        r.onchange = async () => {
+            currentPeriod = r.value;
+            await renderChartImage(stockCode, currentPeriod, chartContainer);
+        };
+    });
+
+    renderChartImage(stockCode, currentPeriod, chartContainer);
+
+    if (window.bootstrap && typeof bootstrap.Modal === 'function') {
+        const bsModal = new bootstrap.Modal(modalEl);
+        bsModal.show();
+    } else {
+        // 폴백: 부트스트랩이 없을 경우 단순 표시
+        modalEl.style.display = 'block';
+        modalEl.classList.add('show');
+    }
+}
+
+async function renderChartImage(stockCode, period, containerEl) {
+    if (!containerEl) return;
+    containerEl.innerHTML = `
+        <div class="text-center p-4">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">차트 로딩 중...</span>
+            </div>
+            <p class="mt-2 mb-0">차트를 불러오는 중...</p>
+        </div>
+    `;
+    const imageUrl = await loadChartImage(stockCode, period);
+    if (imageUrl) {
+        containerEl.innerHTML = `<img src="${imageUrl}" alt="${stockCode} 차트" style="max-width: 100%; height: auto;" />`;
+    } else {
+        containerEl.innerHTML = `<div class="text-center text-muted py-4">차트를 불러오지 못했습니다.</div>`;
+    }
 }

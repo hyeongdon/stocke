@@ -23,7 +23,9 @@ class Config:
     KIWOOM_MOCK_APP_SECRET = os.getenv("KIWOOM_MOCK_APP_SECRET", "Pfow2kdUZTUo50mC2LzHBWdlqzIaDOkKRe4s4rQHxaA")
     
     KIWOOM_BASE_URL = os.getenv("KIWOOM_BASE_URL", "https://openapi.kiwoom.com/v1")
-    KIWOOM_WS_URL = os.getenv("KIWOOM_WS_URL", "wss://api.kiwoom.com:10000")
+    # WebSocket URL (실전/모의 분리)
+    KIWOOM_WS_URL = os.getenv("KIWOOM_WS_URL", "wss://api.kiwoom.com:10000")  # 실전 기본값(호환)
+    KIWOOM_MOCK_WS_URL = os.getenv("KIWOOM_MOCK_WS_URL", "wss://mockapi.kiwoom.com:10000")  # 모의투자 기본값
     KIWOOM_ACCOUNT_NUMBER = os.getenv("KIWOOM_ACCOUNT_NUMBER", "")  # 추가
     KIWOOM_MOCK_ACCOUNT_NUMBER = os.getenv("KIWOOM_MOCK_ACCOUNT_NUMBER", "81109058")  # 모의투자 계좌
     KIWOOM_USE_MOCK_ACCOUNT = os.getenv("KIWOOM_USE_MOCK_ACCOUNT", "true").lower() == "true"  # 모의투자 사용 여부

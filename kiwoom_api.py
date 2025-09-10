@@ -40,15 +40,21 @@ class KiwoomAPI:
             return False
             
         try:
+            # 실전/모의에 따른 WebSocket 호스트 및 앱키 선택
+            use_mock = Config.KIWOOM_USE_MOCK_ACCOUNT
+            ws_host = Config.KIWOOM_MOCK_WS_URL if use_mock else Config.KIWOOM_WS_URL
+            app_key = Config.KIWOOM_MOCK_APP_KEY if use_mock else Config.KIWOOM_APP_KEY
+            app_secret = Config.KIWOOM_MOCK_APP_SECRET if use_mock else Config.KIWOOM_APP_SECRET
+
             # 키움 API WebSocket 연결 URL 구성
-            ws_url = f"{self.ws_url}/api/dostk/websocket"
-            logger.info(f"WebSocket 연결 시도: {ws_url}")
+            ws_url = f"{ws_host}/api/dostk/websocket"
+            logger.info(f"WebSocket 연결 시도: {ws_url} (모의투자: {use_mock})")
             
             headers = {
                 "Content-Type": "application/json;charset=UTF-8",
                 "Authorization": f"Bearer {self.token_manager.get_valid_token()}",
-                "appkey": Config.KIWOOM_APP_KEY,
-                "appsecret": Config.KIWOOM_APP_SECRET
+                "appkey": app_key,
+                "appsecret": app_secret
             }
             logger.info(f"연결 헤더 준비 완료 - 토큰 길이: {len(self.token_manager.get_valid_token() or '')}")
             
@@ -194,33 +200,15 @@ class KiwoomAPI:
 
     def _get_headers(self) -> Dict[str, str]:
         """API 요청 헤더 생성"""
+        use_mock = Config.KIWOOM_USE_MOCK_ACCOUNT
+        app_key = Config.KIWOOM_MOCK_APP_KEY if use_mock else Config.KIWOOM_APP_KEY
+        app_secret = Config.KIWOOM_MOCK_APP_SECRET if use_mock else Config.KIWOOM_APP_SECRET
         return {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.token_manager.get_valid_token()}",
-            "appkey": Config.KIWOOM_APP_KEY,
-            "appsecret": Config.KIWOOM_APP_SECRET
+            "appkey": app_key,
+            "appsecret": app_secret
         }
-    
-    async def get_condition_list(self) -> List[Dict]:
-        """조건식 목록 조회"""
-        if not self.token_manager.get_valid_token():
-            return []
-            
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"{self.base_url}/uapi/domestic-stock/v1/conditions",
-                    headers=self._get_headers()
-                ) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        return result.get("conditions", [])
-                    else:
-                        logger.error(f"조건식 목록 조회 실패: {response.status}")
-                        return []
-        except Exception as e:
-            logger.error(f"조건식 목록 조회 중 오류: {e}")
-            return []
     
     async def get_condition_list_websocket(self) -> List[Dict]:
         """조건식 목록 조회 (WebSocket) - 키움증권 API 방식"""
@@ -228,15 +216,21 @@ class KiwoomAPI:
         
         # 새로운 WebSocket 연결 생성 (기존 연결과 충돌 방지)
         try:
-            ws_url = f"{self.ws_url}/api/dostk/websocket"
+            # 실전/모의에 따른 WebSocket 호스트 및 앱키 선택
+            use_mock = Config.KIWOOM_USE_MOCK_ACCOUNT
+            ws_host = Config.KIWOOM_MOCK_WS_URL if use_mock else Config.KIWOOM_WS_URL
+            app_key = Config.KIWOOM_MOCK_APP_KEY if use_mock else Config.KIWOOM_APP_KEY
+            app_secret = Config.KIWOOM_MOCK_APP_SECRET if use_mock else Config.KIWOOM_APP_SECRET
+
+            ws_url = f"{ws_host}/api/dostk/websocket"
             
             websocket = await websockets.connect(
                 ws_url,
                 extra_headers={
                     "Content-Type": "application/json;charset=UTF-8",
                     "Authorization": f"Bearer {self.token_manager.get_valid_token()}",
-                    "appkey": Config.KIWOOM_APP_KEY,
-                    "appsecret": Config.KIWOOM_APP_SECRET
+                    "appkey": app_key,
+                    "appsecret": app_secret
                 }
             )
             
@@ -309,15 +303,21 @@ class KiwoomAPI:
         logger.debug(f"조건식 검색 시작: {condition_name} (ID: {condition_id})")
         
         try:
-            ws_url = f"{self.ws_url}/api/dostk/websocket"
+            # 실전/모의에 따른 WebSocket 호스트 및 앱키 선택
+            use_mock = Config.KIWOOM_USE_MOCK_ACCOUNT
+            ws_host = Config.KIWOOM_MOCK_WS_URL if use_mock else Config.KIWOOM_WS_URL
+            app_key = Config.KIWOOM_MOCK_APP_KEY if use_mock else Config.KIWOOM_APP_KEY
+            app_secret = Config.KIWOOM_MOCK_APP_SECRET if use_mock else Config.KIWOOM_APP_SECRET
+
+            ws_url = f"{ws_host}/api/dostk/websocket"
             
             websocket = await websockets.connect(
                 ws_url,
                 extra_headers={
                     "Content-Type": "application/json;charset=UTF-8",
                     "Authorization": f"Bearer {self.token_manager.get_valid_token()}",
-                    "appkey": Config.KIWOOM_APP_KEY,
-                    "appsecret": Config.KIWOOM_APP_SECRET
+                    "appkey": app_key,
+                    "appsecret": app_secret
                 }
             )
             
@@ -469,9 +469,9 @@ class KiwoomAPI:
                 logger.error("키움 API 토큰이 없습니다")
                 return []
             
-            # 키움 API 호출 설정
-            # host = 'https://mockapi.kiwoom.com'  # 모의투자
-            host = 'https://api.kiwoom.com'  # 실전투자
+            # 키움 API 호출 설정 - 실전/모의 분기
+            use_mock = Config.KIWOOM_USE_MOCK_ACCOUNT
+            host = Config.KIWOOM_MOCK_API_URL if use_mock else Config.KIWOOM_REAL_API_URL
             endpoint = '/api/dostk/chart'
             url = host + endpoint
             

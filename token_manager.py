@@ -27,8 +27,10 @@ class TokenManager:
             print(f"키움 API 토큰 발급 요청 - 투자구분: {account_type} (코드: {investment_type})")
             print(f"사용할 App Key: {app_key[:10]}...")
             
+            # 엔드포인트 도메인 분기 (실전/모의)
+            base_host = Config.KIWOOM_MOCK_API_URL if Config.KIWOOM_USE_MOCK_ACCOUNT else Config.KIWOOM_REAL_API_URL
             response = requests.post(
-                f"{Config.KIWOOM_BASE_URL}/oauth2/token",
+                f"{base_host}/oauth2/token",
                 json={
                     "grant_type": "client_credentials",
                     "appkey": app_key,
@@ -89,8 +91,9 @@ class TokenManager:
                 app_key = Config.KIWOOM_APP_KEY
                 app_secret = Config.KIWOOM_APP_SECRET
             
+            base_host = Config.KIWOOM_MOCK_API_URL if Config.KIWOOM_USE_MOCK_ACCOUNT else Config.KIWOOM_REAL_API_URL
             response = requests.post(
-                f"{Config.KIWOOM_BASE_URL}/oauth2/token",
+                f"{base_host}/oauth2/token",
                 data={
                     "grant_type": "refresh_token",
                     "refresh_token": self.refresh_token,

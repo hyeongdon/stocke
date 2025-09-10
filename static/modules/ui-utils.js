@@ -167,10 +167,3 @@ class UIUtils {
         }
     }
 }
-class UIUtils {
-    formatPrice(price) { /* 가격 포맷팅 */ }
-    formatChangeRate(rate) { /* 변동률 포맷팅 */ }
-    showLoading(message) { /* 로딩 표시 */ }
-    hideLoading() { /* 로딩 숨김 */ }
-    showError(message) { /* 에러 표시 */ }
-}
