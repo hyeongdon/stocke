@@ -517,8 +517,8 @@ class KiwoomAPI:
                         
         except Exception as e:
             logger.error(f"실제 차트 데이터 조회 중 오류: {e}")
-            # 오류 발생 시 기존 모의 데이터로 폴백
-            return await self._get_mock_chart_data(stock_code, period)
+            # 오류 발생 시 빈 데이터 반환
+            return []
     
     def _parse_kiwoom_chart_data(self, api_response: dict, stock_code: str) -> list:
         """키움 API 응답을 차트 데이터로 변환"""
@@ -562,84 +562,102 @@ class KiwoomAPI:
             logger.error(f"차트 데이터 파싱 중 오류: {e}")
             return []
     
-    async def _get_mock_chart_data(self, stock_code: str, period: str = "1D"):
-        """기존 모의 데이터 생성 (폴백용)"""
-        # 기존 모의 데이터 생성 로직을 별도 메서드로 분리
-        import random
-        from datetime import datetime, timedelta
-        
-        # 기간에 따른 데이터 포인트 수 결정
-        if period == "1D":
-            points = 390  # 1일 (분봉)
-            interval = timedelta(minutes=1)
-        elif period == "1W":
-            points = 7  # 1주 (일봉)
-            interval = timedelta(days=1)
-        elif period == "1M":
-            points = 30  # 1개월 (일봉)
-            interval = timedelta(days=1)
-        elif period == "1Y":
-            points = 250  # 1년 (일봉, 주말 제외)
-            interval = timedelta(days=1)
-        else:
-            points = 390
-            interval = timedelta(minutes=1)
-        
-        # 종목코드를 시드로 사용하여 일관된 차트 데이터 생성
-        random.seed(hash(stock_code + period) % 1000000)
-        
-        # 기준 가격 설정 (종목코드 기반으로 일관된 값)
-        base_price = random.randint(10000, 100000)
-        
-        chart_data = []
-        if period == "1D":
-            current_time = datetime.now() - timedelta(minutes=points)
-        else:
-            current_time = datetime.now() - timedelta(days=points)
-        current_price = base_price
-        
-        for i in range(points):
-            # 가격 변동 (±1% 범위로 현실적으로 조정)
-            change_percent = random.uniform(-0.01, 0.01)
-            
-            # OHLCV 데이터 생성
-            open_price = current_price
-            
-            # 고가/저가는 시가 기준으로 ±0.5% 범위
-            high_price = int(open_price * random.uniform(1.0, 1.005))
-            low_price = int(open_price * random.uniform(0.995, 1.0))
-            
-            # 종가는 고가와 저가 사이의 값
-            close_price = random.randint(low_price, high_price)
-            
-            # 거래량은 기간에 따라 다르게 설정
-            if period == "1D":
-                volume = random.randint(100, 10000)  # 분봉 거래량
-            else:
-                volume = random.randint(10000, 1000000)  # 일봉 거래량
-            
-            current_price = close_price
-            
-            chart_data.append({
-                "timestamp": current_time.strftime("%Y-%m-%d %H:%M:%S"),
-                "open": open_price,
-                "high": high_price,
-                "low": low_price,
-                "close": close_price,
-                "volume": volume
-            })
-            
-            current_time += interval
-            current_price = close_price
-        
-        logger.info(f"모의 차트 데이터 생성 완료: {stock_code}, {len(chart_data)}개 포인트")
-        return chart_data
     
     async def get_minute_chart_data(self, stock_code: str):
         """분봉 차트 데이터 조회 (별도 API 필요)"""
         # 키움에서 분봉 조회 API가 있다면 여기에 구현
         # 현재는 일봉 데이터로 대체
         return await self.get_stock_chart_data(stock_code, "1D")
+
+    async def get_account_profit(self, stex_tp: str = "0", limit: int = 500) -> Dict:
+        """ka10085: 계좌수익률요청 - 보유종목별 수익현황 조회"""
+        if not self.token_manager.get_valid_token():
+            logger.error("키움 API 토큰이 없습니다")
+            return {"positions": [], "_data_source": "API_ERROR"}
+
+        try:
+            use_mock = Config.KIWOOM_USE_MOCK_ACCOUNT
+            host = Config.KIWOOM_MOCK_API_URL if use_mock else Config.KIWOOM_REAL_API_URL
+            url = host + "/api/dostk/acnt"
+
+            headers = {
+                'Content-Type': 'application/json;charset=UTF-8',
+                'authorization': f'Bearer {self.token_manager.get_valid_token()}',
+                'api-id': 'ka10085',
+            }
+
+            body = {
+                'stex_tp': stex_tp,
+            }
+
+            positions: List[Dict] = []
+            cont_yn, next_key = 'N', ''
+
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+                while True:
+                    h = dict(headers)
+                    h['cont-yn'] = cont_yn
+                    h['next-key'] = next_key
+
+                    async with session.post(url, headers=h, json=body) as resp:
+                        text = await resp.text()
+                        if resp.status != 200:
+                            logger.error(f"ka10085 호출 실패: {resp.status} {text}")
+                            break
+                        try:
+                            data = json.loads(text)
+                        except json.JSONDecodeError:
+                            logger.error(f"ka10085 JSON 파싱 실패: {text}")
+                            break
+
+                        if data.get('return_code') != 0:
+                            logger.error(f"ka10085 오류: {data}")
+                            break
+
+                        for it in data.get('acnt_prft_rt', []) or []:
+                            def _to_int(v: str) -> int:
+                                try:
+                                    if isinstance(v, str) and (v.startswith('+') or v.startswith('-')):
+                                        return int(v.replace('+',''))
+                                    return int(v)
+                                except Exception:
+                                    return 0
+
+                            positions.append({
+                                "stock_code": it.get('stk_cd', ''),
+                                "stock_name": it.get('stk_nm', ''),
+                                "quantity": _to_int(it.get('rmnd_qty', '0')),
+                                "avg_price": _to_int(it.get('pur_pric', '0')),
+                                "purchase_amount": _to_int(it.get('pur_amt', '0')),
+                                "current_price_delta": _to_int(it.get('cur_prc', '0')),
+                                "today_pl": _to_int(it.get('tdy_sel_pl', '0')),
+                                "commission_today": _to_int(it.get('tdy_trde_cmsn', '0')),
+                                "tax_today": _to_int(it.get('tdy_trde_tax', '0')),
+                                "credit_type": it.get('crd_tp', ''),
+                                "loan_date": it.get('loan_dt', ''),
+                                "settle_remain": _to_int(it.get('setl_remn', '0')),
+                            })
+                            if len(positions) >= limit:
+                                break
+
+                        if len(positions) >= limit:
+                            break
+
+                        cont_yn = resp.headers.get('cont-yn', 'N')
+                        next_key = resp.headers.get('next-key', '')
+                        if cont_yn != 'Y' or not next_key:
+                            break
+
+            return {
+                "positions": positions[:limit],
+                "_data_source": "REAL_API",
+                "_api_connected": True,
+                "_token_valid": True,
+            }
+
+        except Exception as e:
+            logger.error(f"계좌수익률 요청 오류: {e}")
+            return {"positions": [], "_data_source": "API_ERROR"}
 
     async def get_account_balance(self, account_number: str = None) -> Dict:
         """계좌 잔고 정보 조회 - 키움 API kt00004 사용"""

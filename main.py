@@ -668,30 +668,30 @@ async def get_account_balance():
         logger.info(f"🌐 [API] REST API 토큰 유효성: {token_valid}")
         
         if not token_valid:
-            logger.warning("🌐 [API] 키움 API 토큰이 유효하지 않습니다. 임시 데이터를 반환합니다.")
-            # 임시 데이터에 모의투자 정보 추가
+            logger.warning("🌐 [API] 키움 API 토큰이 유효하지 않습니다. 빈 데이터를 반환합니다.")
+            # API 연결 실패 시 빈 데이터 반환
             balance_data = {
-                "acnt_nm": "모의투자계좌",
-                "brch_nm": "모의투자지점",
+                "acnt_nm": "",
+                "brch_nm": "",
                 "acnt_no": account_number,
                 "acnt_type": account_type,
-                "entr": "10000000",  # 모의투자 초기 자금
-                "d2_entra": "10000000",
-                "tot_est_amt": "12000000",
-                "aset_evlt_amt": "12000000",
-                "tot_pur_amt": "10000000",
-                "prsm_dpst_aset_amt": "12000000",
+                "entr": "0",
+                "d2_entra": "0",
+                "tot_est_amt": "0",
+                "aset_evlt_amt": "0",
+                "tot_pur_amt": "0",
+                "prsm_dpst_aset_amt": "0",
                 "tot_grnt_sella": "0",
-                "tdy_lspft_amt": "10000000",
-                "invt_bsamt": "10000000",
-                "lspft_amt": "2000000",
-                "tdy_lspft": "2000000",
-                "lspft2": "2000000",
-                "lspft": "2000000",
-                "tdy_lspft_rt": "20.00",
-                "lspft_ratio": "20.00",
-                "lspft_rt": "20.00",
-                "_data_source": "MOCK_DATA",
+                "tdy_lspft_amt": "0",
+                "invt_bsamt": "0",
+                "lspft_amt": "0",
+                "tdy_lspft": "0",
+                "lspft2": "0",
+                "lspft": "0",
+                "tdy_lspft_rt": "0.00",
+                "lspft_ratio": "0.00",
+                "lspft_rt": "0.00",
+                "_data_source": "API_ERROR",
                 "_api_connected": False,
                 "_token_valid": False,
                 "_account_type": account_type
@@ -702,29 +702,29 @@ async def get_account_balance():
             balance_data = await kiwoom_api.get_account_balance(account_number=account_number)
             
             if not balance_data:
-                logger.warning("🌐 [API] 키움 REST API 호출 실패, 임시 데이터를 반환합니다.")
+                logger.warning("🌐 [API] 키움 REST API 호출 실패, 빈 데이터를 반환합니다.")
                 balance_data = {
-                    "acnt_nm": "모의투자계좌",
-                    "brch_nm": "모의투자지점",
+                    "acnt_nm": "",
+                    "brch_nm": "",
                     "acnt_no": account_number,
                     "acnt_type": account_type,
-                    "entr": "10000000",
-                    "d2_entra": "10000000",
-                    "tot_est_amt": "12000000",
-                    "aset_evlt_amt": "12000000",
-                    "tot_pur_amt": "10000000",
-                    "prsm_dpst_aset_amt": "12000000",
+                    "entr": "0",
+                    "d2_entra": "0",
+                    "tot_est_amt": "0",
+                    "aset_evlt_amt": "0",
+                    "tot_pur_amt": "0",
+                    "prsm_dpst_aset_amt": "0",
                     "tot_grnt_sella": "0",
-                    "tdy_lspft_amt": "10000000",
-                    "invt_bsamt": "10000000",
-                    "lspft_amt": "2000000",
-                    "tdy_lspft": "2000000",
-                    "lspft2": "2000000",
-                    "lspft": "2000000",
-                    "tdy_lspft_rt": "20.00",
-                    "lspft_ratio": "20.00",
-                    "lspft_rt": "20.00",
-                    "_data_source": "MOCK_DATA",
+                    "tdy_lspft_amt": "0",
+                    "invt_bsamt": "0",
+                    "lspft_amt": "0",
+                    "tdy_lspft": "0",
+                    "lspft2": "0",
+                    "lspft": "0",
+                    "tdy_lspft_rt": "0.00",
+                    "lspft_ratio": "0.00",
+                    "lspft_rt": "0.00",
+                    "_data_source": "API_ERROR",
                     "_api_connected": False,
                     "_token_valid": False,
                     "_account_type": account_type
@@ -761,64 +761,16 @@ async def get_account_holdings():
         logger.info(f"🌐 [API] REST API 토큰 유효성: {token_valid}")
         
         if not token_valid:
-            logger.warning("🌐 [API] 키움 API 토큰이 유효하지 않습니다. 임시 데이터를 반환합니다.")
-            # 모의투자 계좌 임시 데이터 반환
+            logger.warning("🌐 [API] 키움 API 토큰이 유효하지 않습니다. 빈 데이터를 반환합니다.")
+            # API 연결 실패 시 빈 데이터 반환
             holdings_data = {
                 "acnt_no": account_number,
                 "acnt_type": account_type,
-                "stk_acnt_evlt_prst": [
-                    {
-                        "stk_cd": "005930",  # 종목코드
-                        "stk_nm": "삼성전자",  # 종목명
-                        "rmnd_qty": "10",  # 보유수량
-                        "avg_prc": "75000",  # 평균단가
-                        "cur_prc": "78000",  # 현재가
-                        "evlt_amt": "780000",  # 평가금액
-                        "pl_amt": "30000",  # 손익금액
-                        "pl_rt": "4.00",  # 손익율
-                        "loan_dt": "",  # 대출일
-                        "pur_amt": "750000",  # 매입금액
-                        "setl_remn": "10",  # 결제잔고
-                        "pred_buyq": "0",  # 전일매수수량
-                        "pred_sellq": "0",  # 전일매도수량
-                        "tdy_buyq": "0",  # 금일매수수량
-                        "tdy_sellq": "0"  # 금일매도수량
-                    },
-                    {
-                        "stk_cd": "000660",
-                        "stk_nm": "SK하이닉스",
-                        "rmnd_qty": "5",
-                        "avg_prc": "120000",
-                        "cur_prc": "125000",
-                        "evlt_amt": "625000",
-                        "pl_amt": "25000",
-                        "pl_rt": "4.17",
-                        "loan_dt": "",
-                        "pur_amt": "600000",
-                        "setl_remn": "5",
-                        "pred_buyq": "0",
-                        "pred_sellq": "0",
-                        "tdy_buyq": "0",
-                        "tdy_sellq": "0"
-                    },
-                    {
-                        "stk_cd": "035420",
-                        "stk_nm": "NAVER",
-                        "rmnd_qty": "3",
-                        "avg_prc": "200000",
-                        "cur_prc": "210000",
-                        "evlt_amt": "630000",
-                        "pl_amt": "30000",
-                        "pl_rt": "5.00",
-                        "loan_dt": "",
-                        "pur_amt": "600000",
-                        "setl_remn": "3",
-                        "pred_buyq": "0",
-                        "pred_sellq": "0",
-                        "tdy_buyq": "0",
-                        "tdy_sellq": "0"
-                    }
-                ]
+                "stk_acnt_evlt_prst": [],
+                "_data_source": "API_ERROR",
+                "_api_connected": False,
+                "_token_valid": False,
+                "_account_type": account_type
             }
         else:
             # 실제 키움 API에서 보유종목 조회 (모의투자 계좌 사용)
@@ -851,49 +803,26 @@ async def get_account_holdings():
             "acnt_type": "모의투자" if config.KIWOOM_USE_MOCK_ACCOUNT else "실계좌",
             "stk_acnt_evlt_prst": []
         }
-@app.get("/account/history")
-async def get_trading_history(limit: int = 50):
-    """거래내역 조회"""
+@app.get("/account/profit")
+async def get_account_profit(limit: int = 200, stex_tp: str = "0"):
+    """보유종목 수익현황(ka10085)"""
     try:
-        # 키움 API 토큰 유효성 확인 (REST API는 WebSocket과 독립적)
         token_valid = bool(kiwoom_api.token_manager.get_valid_token())
         logger.info(f"🌐 [API] REST API 토큰 유효성: {token_valid}")
-        
+
         if not token_valid:
-            logger.warning("🌐 [API] 키움 API 토큰이 유효하지 않습니다. 임시 데이터를 반환합니다.")
-        
-        # 실제 키움 API 호출 (임시 데이터로 대체)
-        history_data = {
-            "history": [
-                {
-                    "date": "2024-01-15",
-                    "time": "09:30:15",
-                    "stock_code": "005930",
-                    "stock_name": "삼성전자",
-                    "type": "매수",
-                    "quantity": 5,
-                    "price": 75000,
-                    "amount": 375000
-                },
-                {
-                    "date": "2024-01-14",
-                    "time": "14:25:30",
-                    "stock_code": "000660",
-                    "stock_name": "SK하이닉스",
-                    "type": "매도",
-                    "quantity": 3,
-                    "price": 122000,
-                    "amount": 366000
-                }
-            ]
-        }
-        
-        logger.info(f"거래내역 {len(history_data['history'])}건 조회 완료")
-        return history_data
-        
+            logger.warning("🌐 [API] 토큰 없음 - 빈 데이터 반환")
+            return {
+                "positions": [],
+                "_data_source": "API_ERROR",
+                "_api_connected": False,
+                "_token_valid": False
+            }
+
+        result = await kiwoom_api.get_account_profit(stex_tp=stex_tp, limit=limit)
+        logger.info(f"보유종목 수익현황 {len(result.get('positions', []))}건")
+        return result
+
     except Exception as e:
-        logger.error(f"거래내역 조회 오류: {e}")
-        return {
-            "error": str(e),
-            "history": []
-        }
+        logger.error(f"보유종목 수익현황 조회 오류: {e}")
+        return {"positions": [], "_data_source": "API_ERROR"}

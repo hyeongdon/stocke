@@ -15,10 +15,10 @@ class AccountManager {
             const holdingsData = await holdingsResponse.json();
             this.updateHoldings(holdingsData);
             
-            // 거래내역 로드
-            const historyResponse = await fetch('/account/history');
-            const historyData = await historyResponse.json();
-            this.updateTradingHistory(historyData);
+            // 계좌 수익현황(ka10085) 로드
+            const profitResponse = await fetch('/account/profit');
+            const profitData = await profitResponse.json();
+            this.updateAccountProfit(profitData);
             
         } catch (error) {
             console.error('계좌 정보 로드 실패:', error);
@@ -74,6 +74,49 @@ class AccountManager {
         `;
     }
     
+    updateAccountProfit(data) {
+        const profitContainer = document.getElementById('account-profit');
+        if (!profitContainer) return;
+
+        const positions = data.positions || [];
+
+        profitContainer.innerHTML = `
+            <div class="profit-header">
+                <h3>보유종목 수익현황</h3>
+                <span class="profit-count">${positions.length}개 종목</span>
+            </div>
+            <div class="profit-table">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>종목명</th>
+                            <th>보유수량</th>
+                            <th>평균단가</th>
+                            <th>매입금액</th>
+                            <th>가격변동</th>
+                            <th>금일손익</th>
+                            <th>수수료/세금</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${positions.map(p => `
+                            <tr>
+                                <td>${p.stock_name} (${p.stock_code})</td>
+                                <td>${this.formatNumber(p.quantity)}주</td>
+                                <td>${this.formatNumber(p.avg_price)}원</td>
+                                <td>${this.formatNumber(p.purchase_amount)}원</td>
+                                <td class="${this.getProfitClass(p.current_price_delta)}">${this.formatNumber(p.current_price_delta)}원</td>
+                                <td class="${this.getProfitClass(p.today_pl)}">${this.formatNumber(p.today_pl)}원</td>
+                                <td>${this.formatNumber(p.commission_today)} / ${this.formatNumber(p.tax_today)}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+            ${positions.length === 0 ? '<div class="no-data">표시할 데이터가 없습니다.</div>' : ''}
+        `;
+    }
+
     updateHoldings(data) {
         const holdingsContainer = document.getElementById('account-holdings');
         if (!holdingsContainer) return;

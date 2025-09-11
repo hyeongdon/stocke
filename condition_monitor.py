@@ -5,6 +5,8 @@ from typing import Dict, Set
 # from sqlalchemy.orm import Session
 # from models import StockSignal, ConditionLog, get_db
 from kiwoom_api import KiwoomAPI
+from models import PendingBuySignal, get_db
+from sqlalchemy.exc import IntegrityError
 
 logger = logging.getLogger(__name__)
 
@@ -98,8 +100,28 @@ class ConditionMonitor:
                 # 신호 처리 (로깅만)
                 logger.info(f"🔍 [CONDITION_MONITOR] 조건 만족 신호 감지: {stock_name}({stock_code}) - 조건식 ID: {condition_id}")
                 
-                # 여기에 추가적인 신호 처리 로직을 구현할 수 있습니다
-                # 예: 알림 전송, 웹소켓으로 실시간 전송 등
+                # 매수대기 테이블에 적재
+                for db in get_db():
+                    try:
+                        pending = PendingBuySignal(
+                            condition_id=condition_id,
+                            stock_code=stock_code,
+                            stock_name=stock_name,
+                            status="PENDING",
+                        )
+                        db.add(pending)
+                        db.commit()
+                        logger.info(f"📝 [PENDING] 저장 완료 - {stock_name}({stock_code}), 조건식 {condition_id}")
+                    except IntegrityError:
+                        db.rollback()
+                        logger.debug(f"🛑 [PENDING] 중복으로 저장 생략 - {stock_name}({stock_code}), 조건식 {condition_id}")
+                    except Exception as ex:
+                        db.rollback()
+                        logger.error(f"❌ [PENDING] 저장 실패 - {stock_name}({stock_code}): {ex}")
+                    finally:
+                        pass
+                
+                # 여기에 추가적인 신호 처리 로직 (알림/웹소켓 등) 가능
                 logger.debug(f"🔍 [CONDITION_MONITOR] 신호 처리 완료 - {stock_name}({stock_code})")
             else:
                 logger.debug(f"🔍 [CONDITION_MONITOR] 중복 신호로 인해 처리 건너뜀 - {stock_name}({stock_code})")

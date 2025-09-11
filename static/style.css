@@ -2615,3 +2615,66 @@ h1, h2, h3, h4, h5, h6 {
     color: #6c757d;
     font-style: italic;
 }
+
+/* =============================
+   Red Theme Overrides (붉은 계열 테마)
+   기존 파란 계열(#007bff, #0d6efd 등)을 붉은 계열(#dc3545)로 통일
+   HTML/JS 수정 없이 클래스 재정의로 적용
+   ============================= */
+
+/* Bootstrap 유사 클래스 오버라이드 */
+.bg-primary { background-color: #dc3545 !important; }
+.text-primary { color: #dc3545 !important; }
+.border-primary { border-color: #dc3545 !important; }
+.btn-primary { background-color: #dc3545 !important; border-color: #dc3545 !important; }
+.btn-primary:hover { background-color: #b02a37 !important; border-color: #b02a37 !important; }
+.btn-outline-primary { color: #dc3545 !important; border-color: #dc3545 !important; }
+.btn-outline-primary:hover { background-color: #dc3545 !important; border-color: #dc3545 !important; color: #fff !important; }
+
+/* 조건식 선택 상태를 붉은 계열로 */
+.condition-item.active {
+    background-color: #dc3545 !important;
+    color: #fff !important;
+    border-color: #dc3545 !important;
+}
+.condition-item.active:hover { background-color: #b02a37 !important; }
+
+/* 카드/아이템 호버 포커스 색상 붉은 계열로 */
+.stock-item:hover { border-color: #dc3545 !important; }
+.stock-item.selected {
+    border-color: #dc3545 !important;
+    box-shadow: 0 0 0 0.2rem rgba(220, 53, 69, 0.25) !important;
+}
+
+/* 차트 버튼 그라데이션 붉은 계열로 */
+.chart-btn {
+    background: linear-gradient(45deg, #dc3545, #b02a37) !important;
+}
+.chart-btn:hover {
+    background: linear-gradient(45deg, #b02a37, #801d25) !important;
+}
+
+/* 기간 선택 스위치 색상 붉은 계열로 */
+.chart-period-selector .form-check-input:checked {
+    background-color: #dc3545 !important;
+    border-color: #dc3545 !important;
+}
+.chart-period-selector .form-check-input:checked + .form-check-label {
+    background-color: rgba(220, 53, 69, 0.1) !important;
+    color: #dc3545 !important;
+}
+
+/* 뉴스 카드 포커스 색상 붉은 계열로 */
+.news-card { border-color: #fde3e6 !important; }
+.news-card:hover { border-color: #dc3545 !important; }
+.news-title a:hover { color: #dc3545 !important; }
+
+/* 헤더/배지 등 강조 색상 붉은 계열로 */
+.holdings-count, .history-count { background-color: #dc3545 !important; }
+.balance-item { border-left-color: #dc3545 !important; }
+
+/* 로딩 스피너 색상 (text-primary 사용처 대응) */
+.spinner-border.text-primary { color: #dc3545 !important; }
+
+/* 표 헤더 밑줄 등 파란 테두리 대체 */
+.stocks-header { border-bottom-color: #dee2e6 !important; }
