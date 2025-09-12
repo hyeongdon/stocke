@@ -415,14 +415,22 @@ class StockMonitorApp {
         try {
             const htmlContent = conditions.map(condition => {
                 console.log('조건식 처리 중:', condition);
+                const isEnabled = !!condition.is_enabled;
                 return `
-                    <div class="list-group-item condition-item" data-condition-id="${condition.id}">
+                    <div class="list-group-item condition-item" data-condition-id="${condition.id}" data-condition-name="${condition.condition_name}">
                         <div class="d-flex justify-content-between align-items-center">
                             <div>
                                 <h6 class="mb-1">${condition.condition_name || '이름 없음'}</h6>
                                 <small class="text-muted">ID: ${condition.id}</small>
                             </div>
-                            <span class="badge bg-primary rounded-pill">${condition.id}</span>
+                            <div class="d-flex align-items-center gap-2">
+                                <span class="badge ${isEnabled ? 'bg-danger' : 'bg-secondary'} rounded-pill">
+                                    ${isEnabled ? '자동매매' : '비활성'}
+                                </span>
+                                <div class="form-check form-switch m-0">
+                                    <input class="form-check-input cond-toggle" type="checkbox" ${isEnabled ? 'checked' : ''} data-condition-name="${condition.condition_name}">
+                                </div>
+                            </div>
                         </div>
                     </div>
                 `;
@@ -439,8 +447,23 @@ class StockMonitorApp {
             items.forEach((item, index) => {
                 console.log(`아이템 ${index} 이벤트 바인딩:`, item);
                 item.addEventListener('click', (e) => {
+                    // 스위치 클릭은 상위 선택으로 전파하지 않음
+                    if (e.target && e.target.classList && e.target.classList.contains('cond-toggle')) {
+                        return;
+                    }
                     const conditionId = e.currentTarget.dataset.conditionId;
                     this.selectCondition(conditionId, e.currentTarget);
+                });
+            });
+
+            // 토글 스위치 이벤트 바인딩
+            const toggles = container.querySelectorAll('.cond-toggle');
+            toggles.forEach(toggle => {
+                toggle.addEventListener('click', evt => evt.stopPropagation());
+                toggle.addEventListener('change', async (evt) => {
+                    const conditionName = evt.currentTarget.dataset.conditionName;
+                    const enabled = evt.currentTarget.checked;
+                    await this.toggleAutoTradeCondition(conditionName, enabled, evt.currentTarget.closest('.condition-item'));
                 });
             });
             
@@ -453,6 +476,29 @@ class StockMonitorApp {
                     조건식 목록을 표시하는 중 오류가 발생했습니다: ${error.message}
                 </div>
             `;
+        }
+    }
+
+    async toggleAutoTradeCondition(conditionName, enabled, itemEl) {
+        try {
+            const res = await fetch('/conditions/toggle', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ condition_name: conditionName, is_enabled: enabled })
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            // UI 배지 업데이트
+            if (itemEl) {
+                const badge = itemEl.querySelector('.badge');
+                if (badge) {
+                    badge.classList.toggle('bg-danger', enabled);
+                    badge.classList.toggle('bg-secondary', !enabled);
+                    badge.textContent = enabled ? '자동매매' : '비활성';
+                }
+            }
+        } catch (e) {
+            console.error('자동매매 토글 실패:', e);
+            alert('자동매매 상태 변경에 실패했습니다.');
         }
     }
 

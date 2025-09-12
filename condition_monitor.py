@@ -1,11 +1,10 @@
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, Set
-# DB 관련 import는 나중에 필요시 추가
-# from sqlalchemy.orm import Session
-# from models import StockSignal, ConditionLog, get_db
+# DB 관련 import
 from kiwoom_api import KiwoomAPI
-from models import PendingBuySignal, get_db
+from models import PendingBuySignal, get_db, AutoTradeCondition
+from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 logger = logging.getLogger(__name__)
@@ -16,6 +15,7 @@ class ConditionMonitor:
     def __init__(self):
         self.kiwoom_api = KiwoomAPI()
         self.is_running = False
+        self.loop_sleep_seconds = 600  # 10분 주기
         self.processed_signals: Dict[str, datetime] = {}  # 중복 감지 방지 (신호키: 타임스탬프)
         self.signal_ttl_minutes = 5  # 신호 중복 방지 TTL (분)
     
@@ -131,48 +131,71 @@ class ConditionMonitor:
             import traceback
             logger.error(f"🔍 [CONDITION_MONITOR] 스택 트레이스: {traceback.format_exc()}")
     
-    async def start_all_monitoring(self):
-        """모든 조건식 모니터링 시작"""
-        logger.info("🔍 [CONDITION_MONITOR] 모든 조건식 모니터링 시작 요청")
+    async def _scan_once(self):
+        """활성 조건식에 대해 한 번 스캔 수행"""
+        # WebSocket 연결 보장
+        if not self.kiwoom_api.running or self.kiwoom_api.websocket is None:
+            logger.info("🔍 [CONDITION_MONITOR] WebSocket 미연결 상태 감지 - 재연결 시도")
+            try:
+                connected = await self.kiwoom_api.connect()
+                logger.info(f"🔍 [CONDITION_MONITOR] WebSocket 재연결 결과: {connected}")
+            except Exception as conn_err:
+                logger.error(f"🔍 [CONDITION_MONITOR] WebSocket 재연결 실패: {conn_err}")
+                pass
+
+        # 조건식 목록 조회
+        logger.debug("🔍 [CONDITION_MONITOR] 조건식 목록 조회 시작")
+        conditions = await self.kiwoom_api.get_condition_list_websocket()
+
+        # 자동매매 대상만 필터링
+        enabled_set = set()
+        for db in get_db():
+            session: Session = db
+            rows = session.query(AutoTradeCondition).filter(AutoTradeCondition.is_enabled == True).all()
+            enabled_set = {row.condition_name for row in rows}
+
+        if not conditions:
+            logger.warning("🔍 [CONDITION_MONITOR] 조건식 목록이 비어있습니다.")
+            return
+
+        logger.info(f"🔍 [CONDITION_MONITOR] 조건식 {len(conditions)}개 발견 - 순차 검색 시작")
+
+        # 각 조건식에 대해 즉시 한 번 검색 실행
+        for idx, cond in enumerate(conditions):
+            condition_name = cond.get("condition_name", f"조건식_{idx+1}")
+            condition_api_id = cond.get("condition_id", str(idx))
+            if enabled_set and condition_name not in enabled_set:
+                logger.info(f"🔍 [CONDITION_MONITOR] 비활성 조건식 스킵: {condition_name}")
+                continue
+            logger.info(f"🔍 [CONDITION_MONITOR] 조건식 실행: {condition_name} (API ID: {condition_api_id})")
+            await self.start_monitoring(condition_id=idx+1, condition_name=condition_name)
+
+        logger.info("🔍 [CONDITION_MONITOR] 모든 조건식 1회 모니터링 완료")
+
+    async def start_periodic_monitoring(self):
+        """모든 조건식을 주기적으로 모니터링 (10분 간격)"""
+        logger.info("🔍 [CONDITION_MONITOR] 주기적 모니터링 시작 요청")
+        if self.is_running:
+            logger.info("🔍 [CONDITION_MONITOR] 이미 실행 중입니다")
+            return
         self.is_running = True
         logger.info("🔍 [CONDITION_MONITOR] 모니터링 상태: RUNNING")
-        logger.info(f"🔍 [CONDITION_MONITOR] 현재 처리된 신호 수: {len(self.processed_signals)}")
-
         try:
-            # WebSocket 연결 보장
-            if not self.kiwoom_api.running or self.kiwoom_api.websocket is None:
-                logger.info("🔍 [CONDITION_MONITOR] WebSocket 미연결 상태 감지 - 재연결 시도")
+            while self.is_running:
+                logger.info("🔁 [CONDITION_MONITOR] 주기 스캔 시작")
                 try:
-                    connected = await self.kiwoom_api.connect()
-                    logger.info(f"🔍 [CONDITION_MONITOR] WebSocket 재연결 결과: {connected}")
-                except Exception as conn_err:
-                    logger.error(f"🔍 [CONDITION_MONITOR] WebSocket 재연결 실패: {conn_err}")
-                    # 연결 실패 시에도 조건 검색은 REST/대체 경로가 있으면 진행할 수 있음
-                    # 여기서는 경고만 남기고 계속 진행
-                    pass
-
-            # 조건식 목록 조회 (WebSocket 연결 전제)
-            logger.debug("🔍 [CONDITION_MONITOR] 조건식 목록 조회 시작")
-            conditions = await self.kiwoom_api.get_condition_list_websocket()
-
-            if not conditions:
-                logger.warning("🔍 [CONDITION_MONITOR] 조건식 목록이 비어있습니다. 모니터링을 종료합니다.")
-                return
-
-            logger.info(f"🔍 [CONDITION_MONITOR] 조건식 {len(conditions)}개 발견 - 순차 검색 시작")
-
-            # 각 조건식에 대해 즉시 한 번 검색 실행 (실시간 스트리밍 아님)
-            for idx, cond in enumerate(conditions):
-                condition_name = cond.get("condition_name", f"조건식_{idx+1}")
-                condition_api_id = cond.get("condition_id", str(idx))
-                logger.info(f"🔍 [CONDITION_MONITOR] 조건식 실행: {condition_name} (API ID: {condition_api_id})")
-                await self.start_monitoring(condition_id=idx+1, condition_name=condition_name)
-
-            logger.info("🔍 [CONDITION_MONITOR] 모든 조건식 1회 모니터링 완료")
-        except Exception as e:
-            logger.error(f"🔍 [CONDITION_MONITOR] 전체 모니터링 실행 중 오류: {e}")
-            import traceback
-            logger.error(f"🔍 [CONDITION_MONITOR] 스택 트레이스: {traceback.format_exc()}")
+                    await self._scan_once()
+                except Exception as e:
+                    logger.error(f"🔍 [CONDITION_MONITOR] 스캔 중 오류: {e}")
+                    import traceback
+                    logger.error(f"🔍 [CONDITION_MONITOR] 스택 트레이스: {traceback.format_exc()}")
+                logger.info(f"⏳ [CONDITION_MONITOR] 다음 스캔까지 대기 {self.loop_sleep_seconds}초")
+                if not self.is_running:
+                    break
+                import asyncio
+                await asyncio.sleep(self.loop_sleep_seconds)
+        finally:
+            logger.info("🛑 [CONDITION_MONITOR] 주기적 모니터링 루프 종료")
     
     async def stop_all_monitoring(self):
         """모든 조건식 모니터링 중지"""

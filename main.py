@@ -25,8 +25,10 @@ import warnings
 warnings.filterwarnings('ignore', category=FutureWarning, module='ta')
 warnings.filterwarnings('ignore', category=FutureWarning, module='pandas')
 
-# DB 관련 import는 나중에 필요시 추가
-# from models import get_db, Condition, StockSignal, ConditionLog
+# DB 연동
+from models import get_db, AutoTradeCondition
+from sqlalchemy.orm import Session
+from pydantic import BaseModel
 from condition_monitor import condition_monitor
 from kiwoom_api import KiwoomAPI
 from config import Config
@@ -85,6 +87,28 @@ kiwoom_api = KiwoomAPI()
 discussion_crawler = NaverStockDiscussionCrawler()
 
 from fastapi.responses import RedirectResponse
+class ToggleConditionRequest(BaseModel):
+    condition_name: str
+    is_enabled: bool
+
+@app.post("/conditions/toggle")
+async def toggle_condition(req: ToggleConditionRequest):
+    try:
+        for db in get_db():
+            session: Session = db
+            row = session.query(AutoTradeCondition).filter(AutoTradeCondition.condition_name == req.condition_name).first()
+            if row is None:
+                row = AutoTradeCondition(condition_name=req.condition_name, is_enabled=req.is_enabled, updated_at=datetime.utcnow())
+                session.add(row)
+            else:
+                row.is_enabled = req.is_enabled
+                row.updated_at = datetime.utcnow()
+            session.commit()
+        return {"condition_name": req.condition_name, "is_enabled": req.is_enabled}
+    except Exception as e:
+        logger.error(f"조건식 토글 실패: {e}")
+        raise HTTPException(status_code=500, detail="조건식 토글 실패")
+
 
 @app.get("/")
 async def root():
@@ -163,7 +187,14 @@ async def get_conditions():
             logger.debug("키움 API에서 조건식이 없습니다.")
             return JSONResponse(content=[], media_type="application/json; charset=utf-8")
         
-        # 키움 API 응답을 ConditionResponse 형태로 변환
+        # DB의 자동매매 활성화 상태 로드
+        enabled_map = {}
+        for db in get_db():
+            session: Session = db
+            rows = session.query(AutoTradeCondition).all()
+            enabled_map = {row.condition_name: bool(row.is_enabled) for row in rows}
+
+        # 키움 API 응답을 ConditionResponse 형태로 변환 (+ is_enabled 병합)
         conditions = []
         for i, condition_data in enumerate(conditions_data):
             # 키움 API 응답 형태에 따라 조정 필요
@@ -172,6 +203,7 @@ async def get_conditions():
                 "condition_name": condition_data.get('condition_name', f'조건식_{i+1}'),
                 "condition_expression": condition_data.get('expression', ''),
                 "is_active": True,
+                "is_enabled": enabled_map.get(condition_data.get('condition_name', f'조건식_{i+1}'), False),
                 "created_at": datetime.utcnow().isoformat(),
                 "updated_at": datetime.utcnow().isoformat()
             }
@@ -186,11 +218,7 @@ async def get_conditions():
         logger.error(f"스택 트레이스: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail="키움 API 조건식 목록 조회 중 오류가 발생했습니다.")
 
-# DB 관련 엔드포인트는 나중에 필요시 추가
-# @app.get("/conditions/{condition_id}")
-# async def get_condition(condition_id: int):
-#     """조건식 상세 조회 - DB 연동 필요시 구현"""
-#     pass
+# 조건식 상세 조회는 키움 API를 통해 처리됨
 
 @app.get("/conditions/{condition_id}/stocks")
 async def get_condition_stocks(condition_id: int):
@@ -299,7 +327,7 @@ async def start_monitoring():
     """모든 조건식 모니터링 시작"""
     logger.info("🌐 [API] /monitoring/start 엔드포인트 호출됨")
     try:
-        await condition_monitor.start_all_monitoring()
+        await condition_monitor.start_periodic_monitoring()
         logger.info("🌐 [API] 모니터링 시작 성공")
         return {
             "message": "모니터링이 시작되었습니다.",
