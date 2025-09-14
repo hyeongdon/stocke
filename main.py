@@ -2,7 +2,9 @@ from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from contextlib import asynccontextmanager
 import os
+import asyncio
 # DB 관련 import는 나중에 필요시 추가
 # from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -55,10 +57,56 @@ if hasattr(sys.stderr, 'reconfigure'):
 
 logger = logging.getLogger(__name__)
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    logger.info("🌐 [STARTUP] 애플리케이션 시작")
+    
+    # 정적 파일 디렉토리 재확인
+    static_dir = os.path.join(os.path.dirname(__file__), "static")
+    logger.info(f"🌐 [STARTUP] 정적 파일 디렉토리 재확인: {static_dir}")
+    logger.info(f"🌐 [STARTUP] 디렉토리 존재: {os.path.exists(static_dir)}")
+    if os.path.exists(static_dir):
+        files = os.listdir(static_dir)
+        logger.info(f"🌐 [STARTUP] 정적 파일 목록: {files}")
+    
+    # 키움 API 인증 및 연결
+    # 기존 토큰 무효화 (투자구분이 바뀌었을 수 있음)
+    kiwoom_api.token_manager.access_token = None
+    kiwoom_api.token_manager.token_expiry = None
+    
+    if kiwoom_api.authenticate():
+        logger.info("키움증권 API 인증 성공")
+        
+        # WebSocket 연결 시도
+        try:
+            if await kiwoom_api.connect():
+                logger.info("키움 API WebSocket 연결 성공")
+                logger.info(f"키움 API 상태 - running: {kiwoom_api.running}, websocket: {kiwoom_api.websocket is not None}")
+            else:
+                logger.warning("키움 API WebSocket 연결 실패 - REST API만 사용")
+        except Exception as e:
+            logger.error(f"키움 API WebSocket 연결 중 오류: {e}")
+            logger.warning("WebSocket 연결 실패 - REST API만 사용")
+    else:
+        logger.warning("키움 API 인증 실패 - 환경변수 확인 필요")
+    
+    logger.info("키움증권 조건식 모니터링 시스템 시작")
+    
+    yield
+    
+    # Shutdown
+    logger.info("모니터링 시스템 종료")
+    await condition_monitor.stop_all_monitoring()
+    # WebSocket 우아한 종료
+    await kiwoom_api.graceful_shutdown()
+    logger.info("키움 API WebSocket 연결 종료 완료")
+
 app = FastAPI(
     title="키움증권 조건식 모니터링 시스템",
     description="사용자가 지정한 조건식을 통해 종목을 실시간으로 감시하는 시스템",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # 정적 파일 서빙 설정
@@ -85,6 +133,7 @@ kiwoom_api = KiwoomAPI()
 
 # 네이버 토론 크롤러 인스턴스
 discussion_crawler = NaverStockDiscussionCrawler()
+
 
 from fastapi.responses import RedirectResponse
 class ToggleConditionRequest(BaseModel):
@@ -136,48 +185,6 @@ async def api_info():
         }
     }
 
-@app.on_event("startup")
-async def startup_event():
-    logger.info("🌐 [STARTUP] 애플리케이션 시작")
-    
-    # 정적 파일 디렉토리 재확인
-    logger.info(f"🌐 [STARTUP] 정적 파일 디렉토리 재확인: {static_dir}")
-    logger.info(f"🌐 [STARTUP] 디렉토리 존재: {os.path.exists(static_dir)}")
-    if os.path.exists(static_dir):
-        files = os.listdir(static_dir)
-        logger.info(f"🌐 [STARTUP] 정적 파일 목록: {files}")
-    
-    # 키움 API 인증 및 연결
-    # 기존 토큰 무효화 (투자구분이 바뀌었을 수 있음)
-    kiwoom_api.token_manager.access_token = None
-    kiwoom_api.token_manager.token_expiry = None
-    
-    if kiwoom_api.authenticate():
-        logger.info("키움증권 API 인증 성공")
-        
-        # WebSocket 연결 시도
-        try:
-            if await kiwoom_api.connect():
-                logger.info("키움 API WebSocket 연결 성공")
-                logger.info(f"키움 API 상태 - running: {kiwoom_api.running}, websocket: {kiwoom_api.websocket is not None}")
-            else:
-                logger.warning("키움 API WebSocket 연결 실패 - REST API만 사용")
-        except Exception as e:
-            logger.error(f"키움 API WebSocket 연결 중 오류: {e}")
-            logger.warning("WebSocket 연결 실패 - REST API만 사용")
-    else:
-        logger.warning("키움 API 인증 실패 - 환경변수 확인 필요")
-    
-    logger.info("키움증권 조건식 모니터링 시스템 시작")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """애플리케이션 종료 시 실행"""
-    logger.info("모니터링 시스템 종료")
-    await condition_monitor.stop_all_monitoring()
-    # WebSocket 우아한 종료
-    await kiwoom_api.graceful_shutdown()
-    logger.info("키움 API WebSocket 연결 종료 완료")
 
 @app.get("/signals/pending")
 async def get_pending_signals(limit: int = 100, status: str = "PENDING"):
@@ -197,7 +204,36 @@ async def get_pending_signals(limit: int = 100, status: str = "PENDING"):
                 q = q.filter(PendingBuySignal.status == status.upper())
             rows = q.order_by(PendingBuySignal.detected_at.desc()).limit(limit).all()
             logger.info(f"[PENDING_API] rows fetched={len(rows)}")
-            for r in rows:
+            
+            for i, r in enumerate(rows):
+                # 현재가격 조회
+                current_price = 0
+                try:
+                    # API 호출 제한을 피하기 위해 종목 간 1초 대기
+                    if i > 0:
+                        await asyncio.sleep(1)
+                    
+                    # 키움 API로 현재가 조회
+                    chart_data = await kiwoom_api.get_stock_chart_data(r.stock_code, "1D")
+                    if chart_data and len(chart_data) > 0:
+                        current_price = int(chart_data[0].get('close', 0))
+                except Exception as e:
+                    logger.warning(f"[PENDING_API] 현재가 조회 실패 {r.stock_code}: {e}")
+                    # 429 오류인 경우 더 긴 대기 시간
+                    if "429" in str(e):
+                        await asyncio.sleep(5)
+                
+                # 매수목표금액 계산
+                if r.condition_id == 999 and r.target_price:  # 대량거래 전략
+                    # 대량거래 고가의 절반이 목표가
+                    target_amount = r.target_price
+                    target_quantity = 1  # 1주 기준
+                else:
+                    # 일반 조건식의 경우 10만원 상당
+                    max_invest_amount = 100000
+                    target_quantity = max_invest_amount // current_price if current_price > 0 else 0
+                    target_amount = target_quantity * current_price if current_price > 0 else 0
+                
                 items.append({
                     "id": r.id,
                     "condition_id": r.condition_id,
@@ -205,6 +241,9 @@ async def get_pending_signals(limit: int = 100, status: str = "PENDING"):
                     "stock_name": r.stock_name,
                     "detected_at": r.detected_at.isoformat() if r.detected_at else None,
                     "status": r.status,
+                    "current_price": current_price,
+                    "target_quantity": target_quantity,
+                    "target_amount": target_amount,
                 })
         payload = {"items": items, "total": len(items), "_debug": {"db": Config.DATABASE_URL, "limit": limit, "status": status}}
         logger.info(f"[PENDING_API] response total={payload['total']}")
@@ -953,3 +992,80 @@ async def get_account_profit(limit: int = 200, stex_tp: str = "0"):
     except Exception as e:
         logger.error(f"보유종목 수익현황 조회 오류: {e}")
         return {"positions": [], "_data_source": "API_ERROR"}
+
+# 매수 주문 관련 API
+class BuyOrderRequest(BaseModel):
+    stock_code: str
+    quantity: int
+    price: int = 0  # 0이면 시장가
+    order_type: str = "01"  # 01: 시장가, 00: 지정가
+
+@app.post("/trading/buy")
+async def place_buy_order(req: BuyOrderRequest):
+    """주식 매수 주문"""
+    try:
+        logger.info(f"매수 주문 요청: {req.stock_code}, 수량: {req.quantity}, 가격: {req.price}")
+        
+        result = await kiwoom_api.place_buy_order(
+            stock_code=req.stock_code,
+            quantity=req.quantity,
+            price=req.price,
+            order_type=req.order_type
+        )
+        
+        if result.get("success"):
+            logger.info(f"매수 주문 성공: {req.stock_code}")
+            return {
+                "success": True,
+                "message": "매수 주문이 성공적으로 접수되었습니다.",
+                "order_id": result.get("order_id", ""),
+                "stock_code": req.stock_code,
+                "quantity": req.quantity,
+                "price": req.price
+            }
+        else:
+            logger.error(f"매수 주문 실패: {req.stock_code} - {result.get('error')}")
+            return {
+                "success": False,
+                "message": f"매수 주문 실패: {result.get('error')}",
+                "stock_code": req.stock_code
+            }
+            
+    except Exception as e:
+        logger.error(f"매수 주문 API 오류: {e}")
+        raise HTTPException(status_code=500, detail="매수 주문 중 오류가 발생했습니다.")
+
+@app.get("/trading/orders")
+async def get_order_history():
+    """주문 내역 조회"""
+    try:
+        # 매수대기 테이블에서 주문 내역 조회
+        orders = []
+        for db in get_db():
+            session: Session = db
+            rows = session.query(PendingBuySignal).filter(
+                PendingBuySignal.status.in_(["ORDERED", "FAILED"])
+            ).order_by(PendingBuySignal.detected_at.desc()).limit(50).all()
+            
+            orders = [
+                {
+                    "id": row.id,
+                    "stock_code": row.stock_code,
+                    "stock_name": row.stock_name,
+                    "status": row.status,
+                    "detected_at": row.detected_at.isoformat() if row.detected_at else None,
+                    "condition_id": row.condition_id
+                }
+                for row in rows
+            ]
+            break
+        
+        return {
+            "orders": orders,
+            "total": len(orders)
+        }
+        
+    except Exception as e:
+        logger.error(f"주문 내역 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail="주문 내역 조회 중 오류가 발생했습니다.")
+

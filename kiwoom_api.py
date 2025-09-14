@@ -659,6 +659,93 @@ class KiwoomAPI:
             logger.error(f"계좌수익률 요청 오류: {e}")
             return {"positions": [], "_data_source": "API_ERROR"}
 
+    async def place_buy_order(self, stock_code: str, quantity: int, price: int = 0, order_type: str = "00") -> Dict:
+        """주식 매수 주문 (키움 API)"""
+        if not self.token_manager.get_valid_token():
+            logger.error("키움 API 토큰이 없습니다")
+            return {"success": False, "error": "토큰 없음"}
+            
+        try:
+            # 계좌번호 설정
+            account_number = Config.KIWOOM_MOCK_ACCOUNT_NUMBER if Config.KIWOOM_USE_MOCK_ACCOUNT else Config.KIWOOM_ACCOUNT_NUMBER
+            
+            # 계좌 타입에 따른 도메인 설정
+            use_mock_account = Config.KIWOOM_USE_MOCK_ACCOUNT
+            if use_mock_account:
+                host = Config.KIWOOM_MOCK_API_URL
+            else:
+                host = Config.KIWOOM_REAL_API_URL
+            
+            endpoint = '/api/dostk/order'
+            url = host + endpoint
+            
+            # 요청 헤더
+            headers = {
+                'Content-Type': 'application/json;charset=UTF-8',
+                'authorization': f'Bearer {self.token_manager.get_valid_token()}',
+                'api-id': 'kt00001',  # 주식 주문 API
+            }
+            
+            # 주문 요청 데이터
+            request_data = {
+                'acnt_no': account_number,  # 계좌번호
+                'stk_cd': stock_code,       # 종목코드
+                'ord_qty': str(quantity),   # 주문수량
+                'ord_prc': str(price),      # 주문가격 (0이면 시장가)
+                'ord_tp': order_type,       # 주문구분 (00:지정가, 01:시장가)
+                'ord_side': 'BUY'           # 매수
+            }
+            
+            logger.info(f"매수 주문 요청: {stock_code}, 수량: {quantity}, 가격: {price}")
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    url, 
+                    headers=headers, 
+                    json=request_data,
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as response:
+                    
+                    response_text = await response.text()
+                    logger.info(f"매수 주문 응답: {response.status} - {response_text}")
+                    
+                    if response.status == 200:
+                        try:
+                            data = json.loads(response_text)
+                            if data.get('return_code') == 0:
+                                logger.info(f"매수 주문 성공: {stock_code}")
+                                return {
+                                    "success": True,
+                                    "order_id": data.get('order_id', ''),
+                                    "message": "매수 주문이 성공적으로 접수되었습니다."
+                                }
+                            else:
+                                error_msg = data.get('return_msg', '알 수 없는 오류')
+                                logger.error(f"매수 주문 실패: {error_msg}")
+                                return {
+                                    "success": False,
+                                    "error": error_msg
+                                }
+                        except json.JSONDecodeError as e:
+                            logger.error(f"매수 주문 응답 파싱 실패: {e}")
+                            return {
+                                "success": False,
+                                "error": "응답 파싱 실패"
+                            }
+                    else:
+                        logger.error(f"매수 주문 API 호출 실패: {response.status}")
+                        return {
+                            "success": False,
+                            "error": f"API 호출 실패: {response.status}"
+                        }
+                        
+        except Exception as e:
+            logger.error(f"매수 주문 중 오류: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
     async def get_account_balance(self, account_number: str = None) -> Dict:
         """계좌 잔고 정보 조회 - 키움 API kt00004 사용"""
         """계좌 잔고 정보 조회 - 개선된 에러 처리"""

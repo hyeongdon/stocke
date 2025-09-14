@@ -58,7 +58,6 @@ class StockMonitorApp {
     bindTabEvents() {
         const stockTab = document.getElementById('stocks-tab'); // 수정
         const accountTab = document.getElementById('account-tab'); // 수정
-        
         console.log('탭 요소 찾기:', { stockTab, accountTab }); // 디버깅용
         
         if (stockTab) {
@@ -98,7 +97,7 @@ class StockMonitorApp {
         if (stockTab) stockTab.classList.remove('active');
         if (accountTab) accountTab.classList.remove('active');
         
-        // 모든 콘텐츷 숨기기
+        // 모든 콘텐츠 숨기기
         if (stockContent) {
             stockContent.classList.remove('show', 'active');
         }
@@ -232,13 +231,38 @@ class StockMonitorApp {
 
             const html = items.map(it => {
                 const time = it.detected_at ? new Date(it.detected_at).toLocaleTimeString() : '';
+                const currentPrice = it.current_price ? it.current_price.toLocaleString() + '원' : '조회중...';
+                const targetAmount = it.target_amount ? it.target_amount.toLocaleString() + '원' : '계산중...';
+                const targetQuantity = it.target_quantity || 0;
+                
+                // 대량거래 전략인지 확인
+                const isVolumeSpike = it.condition_id === 999;
+                const strategyText = isVolumeSpike ? '대량거래 전략' : `조건식 ${it.condition_id}`;
+                
                 return `
                     <div class="d-flex justify-content-between align-items-center border-bottom py-2">
-                        <div>
+                        <div class="flex-grow-1">
                             <div class="fw-bold">${it.stock_name} <small class="text-muted">(${it.stock_code})</small></div>
-                            <small class="text-muted">조건식: ${it.condition_id} • ${time}</small>
+                            <div class="row mt-1">
+                                <div class="col-6">
+                                    <small class="text-muted">현재가: <span class="text-primary fw-bold">${currentPrice}</span></small>
+                                </div>
+                                <div class="col-6">
+                                    <small class="text-muted">목표가: <span class="text-success fw-bold">${targetAmount}</span></small>
+                                </div>
+                            </div>
+                            <div class="row">
+                                <div class="col-6">
+                                    <small class="text-muted">${isVolumeSpike ? '매수수량: 1주' : `매수수량: ${targetQuantity}주`}</small>
+                                </div>
+                                <div class="col-6">
+                                    <small class="text-muted">${strategyText} • ${time}</small>
+                                </div>
+                            </div>
                         </div>
-                        <span class="badge bg-secondary">${it.status}</span>
+                        <div class="text-end">
+                            <span class="badge bg-secondary">${it.status}</span>
+                        </div>
                     </div>
                 `;
             }).join('');

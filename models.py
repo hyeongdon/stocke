@@ -27,6 +27,11 @@ class PendingBuySignal(Base):
     stock_name = Column(String(100), nullable=False)
     detected_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
     status = Column(String(20), nullable=False, default="PENDING")  # PENDING, ORDERED, CANCELED 등
+    
+    # 대량거래 전략용 필드들
+    reference_candle_high = Column(Integer, nullable=True)  # 기준봉 고가
+    reference_candle_date = Column(DateTime, nullable=True)  # 기준봉 날짜
+    target_price = Column(Integer, nullable=True)  # 목표가 (고가의 절반)
 
     __table_args__ = (
         # 동일 조건식/종목이 같은 시각대(초 단위)에 중복 저장되는 것을 1차 방지
