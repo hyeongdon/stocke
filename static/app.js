@@ -9,6 +9,18 @@ class StockMonitorApp {
         this.loadConditions();
         this.checkMonitoringStatus();
         this.startAutoRefresh();
+        this.loadTradingSettings();
+        console.log('🔍 [PENDING] init: scheduling initial load');
+        const pendingListEl = document.getElementById('pendingList');
+        const refreshBtn = document.getElementById('refreshPending');
+        console.log('🔍 [PENDING] DOM probe:', {
+            pendingListFound: !!pendingListEl,
+            refreshBtnFound: !!refreshBtn
+        });
+        setTimeout(() => {
+            console.log('🔍 [PENDING] calling loadPendingSignals()');
+            this.loadPendingSignals();
+        }, 100);
     }
 
     bindEvents() {
@@ -25,6 +37,21 @@ class StockMonitorApp {
         document.getElementById('toggleMonitoring').addEventListener('click', () => {
             this.toggleMonitoring();
         });
+
+        const refreshPendingBtn = document.getElementById('refreshPending');
+        if (refreshPendingBtn) {
+            refreshPendingBtn.addEventListener('click', () => this.loadPendingSignals());
+        }
+
+        const refreshAccountBtn = document.getElementById('refreshAccount');
+        if (refreshAccountBtn) {
+            refreshAccountBtn.addEventListener('click', () => this.loadAccountInfo());
+        }
+
+        const saveTradingSettingsBtn = document.getElementById('saveTradingSettings');
+        if (saveTradingSettingsBtn) {
+            saveTradingSettingsBtn.addEventListener('click', () => this.saveTradingSettings());
+        }
     }
 
     // 탭 이벤트 바인딩 메서드 수정
@@ -159,6 +186,70 @@ class StockMonitorApp {
         } catch (error) {
             console.error('🔍 [DEBUG] 계좌 정보 로딩 실패:', error);
             this.showAccountError('계좌 정보를 불러오는데 실패했습니다.');
+        }
+    }
+
+    async loadPendingSignals() {
+        console.log('🔍 [PENDING] loadPendingSignals invoked');
+        try {
+            const container = document.getElementById('pendingList');
+            console.log('🔍 [PENDING] lookup #pendingList =>', !!container);
+            if (!container) {
+                console.warn('🔍 [PENDING] #pendingList not found');
+                return;
+            }
+            container.innerHTML = `
+                <div class="text-center py-3">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">로딩 중...</span>
+                    </div>
+                </div>
+            `;
+
+            console.log('🔍 [PENDING] fetching /signals/pending');
+            const res = await fetch('/signals/pending');
+            console.log('🔍 [PENDING] fetch status:', res.status, res.statusText);
+            let data = null;
+            try {
+                data = await res.json();
+            } catch (parseErr) {
+                const txt = await res.text().catch(() => '');
+                console.error('🔍 [PENDING] response parse error:', parseErr, 'raw=', txt);
+            }
+            console.log('🔍 [PENDING] response JSON:', data);
+            const items = (data && Array.isArray(data.items)) ? data.items : [];
+            console.log('🔍 [PENDING] items.length =', items.length, 'total =', data && data.total);
+
+            if (items.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center text-muted py-4">
+                        <i class="fas fa-inbox fa-2x mb-2"></i>
+                        <p>매수대기 종목이 없습니다.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            const html = items.map(it => {
+                const time = it.detected_at ? new Date(it.detected_at).toLocaleTimeString() : '';
+                return `
+                    <div class="d-flex justify-content-between align-items-center border-bottom py-2">
+                        <div>
+                            <div class="fw-bold">${it.stock_name} <small class="text-muted">(${it.stock_code})</small></div>
+                            <small class="text-muted">조건식: ${it.condition_id} • ${time}</small>
+                        </div>
+                        <span class="badge bg-secondary">${it.status}</span>
+                    </div>
+                `;
+            }).join('');
+
+            container.innerHTML = html;
+        } catch (e) {
+            console.error('🔍 [PENDING] load error:', e && e.stack ? e.stack : e);
+            const container = document.getElementById('pendingList');
+            if (container) {
+                container.innerHTML = `<div class="text-danger">매수대기 목록을 불러오지 못했습니다.</div>`;
+            }
         }
     }
     
@@ -862,6 +953,9 @@ class StockMonitorApp {
                 if (this.selectedConditionId && this.currentTab === 'stock') {
                     this.loadStocks(this.selectedConditionId);
                 }
+                // 매수대기 목록도 함께 새로고침
+                console.log('🔁 [PENDING] auto refresh tick');
+                this.loadPendingSignals();
             }, 30000);
         }
         
@@ -1061,9 +1155,65 @@ class StockMonitorApp {
             
             console.log('🔍 [DEBUG] updateAccountInfo 완료');
         }
+
+    async loadTradingSettings() {
+        try {
+            console.log('🔍 [TRADING] Loading trading settings...');
+            const response = await fetch('/trading/settings');
+            const data = await response.json();
+            console.log('🔍 [TRADING] Settings loaded:', data);
+
+            // UI 업데이트
+            const autoToggle = document.getElementById('autoTradingToggle');
+            const maxInvest = document.getElementById('maxInvestAmount');
+            const stopLoss = document.getElementById('stopLossRate');
+            const takeProfit = document.getElementById('takeProfitRate');
+
+            if (autoToggle) autoToggle.checked = data.is_enabled;
+            if (maxInvest) maxInvest.value = data.max_invest_amount;
+            if (stopLoss) stopLoss.value = data.stop_loss_rate;
+            if (takeProfit) takeProfit.value = data.take_profit_rate;
+
+            console.log('🔍 [TRADING] UI updated with settings');
+        } catch (error) {
+            console.error('🔍 [TRADING] Failed to load trading settings:', error);
+        }
     }
 
-    // 앱 초기화
+    async saveTradingSettings() {
+        try {
+            console.log('🔍 [TRADING] Saving trading settings...');
+            
+            const settings = {
+                is_enabled: document.getElementById('autoTradingToggle').checked,
+                max_invest_amount: parseInt(document.getElementById('maxInvestAmount').value) || 1000000,
+                stop_loss_rate: parseInt(document.getElementById('stopLossRate').value) || 5,
+                take_profit_rate: parseInt(document.getElementById('takeProfitRate').value) || 10
+            };
+
+            console.log('🔍 [TRADING] Settings to save:', settings);
+
+            const response = await fetch('/trading/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(settings)
+            });
+
+            if (response.ok) {
+                const result = await response.json();
+                console.log('🔍 [TRADING] Settings saved:', result);
+                alert('자동매매 설정이 저장되었습니다.');
+            } else {
+                throw new Error(`HTTP ${response.status}`);
+            }
+        } catch (error) {
+            console.error('🔍 [TRADING] Failed to save trading settings:', error);
+            alert('설정 저장에 실패했습니다: ' + error.message);
+        }
+    }
+}
+
+// 앱 초기화
 document.addEventListener('DOMContentLoaded', () => {
     window.app = new StockMonitorApp();
     // 전역 클릭 핸들러 바인딩

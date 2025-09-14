@@ -225,8 +225,26 @@
                         </div>
                     </div>
 
-                    <!-- 오른쪽 컬럼: 자동매매 설정 -->
+                    <!-- 오른쪽 컬럼: 자동매매 설정 및 매수대기 목록 -->
                     <div class="col-md-6">
+                        <!-- 매수대기 목록 -->
+                        <div class="card mb-3">
+                            <div class="card-header d-flex justify-content-between align-items-center">
+                                <span><i class="fas fa-list me-2"></i>매수대기 목록</span>
+                                <button class="btn btn-outline-secondary btn-sm" id="refreshPending">
+                                    <i class="fas fa-sync-alt"></i> 새로고침
+                                </button>
+                            </div>
+                            <div class="card-body">
+                                <div id="pendingList" style="max-height: 260px; overflow-y: auto;">
+                                    <div class="text-center text-muted py-4">
+                                        <i class="fas fa-inbox fa-2x mb-2"></i>
+                                        <p>매수대기 종목이 없습니다.</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
                         <div class="card trading-card">
                             <div class="card-header d-flex justify-content-between align-items-center">
                                 <span><i class="fas fa-robot me-2"></i>자동매매 설정</span>

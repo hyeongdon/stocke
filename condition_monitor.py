@@ -158,17 +158,23 @@ class ConditionMonitor:
             logger.warning("🔍 [CONDITION_MONITOR] 조건식 목록이 비어있습니다.")
             return
 
+        # 자동매매 활성 조건이 하나도 없으면 스캔하지 않음
+        if not enabled_set:
+            logger.info("🔍 [CONDITION_MONITOR] 활성화된 자동매매 조건이 없음 - 스캔 건너뜀")
+            return
+
         logger.info(f"🔍 [CONDITION_MONITOR] 조건식 {len(conditions)}개 발견 - 순차 검색 시작")
 
         # 각 조건식에 대해 즉시 한 번 검색 실행
         for idx, cond in enumerate(conditions):
             condition_name = cond.get("condition_name", f"조건식_{idx+1}")
             condition_api_id = cond.get("condition_id", str(idx))
-            if enabled_set and condition_name not in enabled_set:
+            if condition_name not in enabled_set:
                 logger.info(f"🔍 [CONDITION_MONITOR] 비활성 조건식 스킵: {condition_name}")
                 continue
             logger.info(f"🔍 [CONDITION_MONITOR] 조건식 실행: {condition_name} (API ID: {condition_api_id})")
-            await self.start_monitoring(condition_id=idx+1, condition_name=condition_name)
+            # 키움에서 제공한 실제 조건식 ID로 조회
+            await self.start_monitoring(condition_id=condition_api_id, condition_name=condition_name)
 
         logger.info("🔍 [CONDITION_MONITOR] 모든 조건식 1회 모니터링 완료")
 

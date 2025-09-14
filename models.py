@@ -3,9 +3,10 @@ from typing import Generator
 
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, create_engine, UniqueConstraint
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
+from config import Config
 
-# SQLite DB (workspace 루트의 stock_pipeline.db 사용)
-DATABASE_URL = "sqlite:///stock_pipeline.db"
+# SQLite DB (절대경로 사용 - config의 DATABASE_URL과 통일)
+DATABASE_URL = Config.DATABASE_URL
 
 engine = create_engine(
     DATABASE_URL,
@@ -44,6 +45,22 @@ class AutoTradeCondition(Base):
 
     __table_args__ = (
         UniqueConstraint("condition_name", name="uq_autotrade_condition_name"),
+    )
+
+
+class AutoTradeSettings(Base):
+    __tablename__ = "auto_trade_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    is_enabled = Column(Boolean, nullable=False, default=False, index=True)
+    max_invest_amount = Column(Integer, nullable=False, default=1000000)  # 최대 투자 금액
+    stop_loss_rate = Column(Integer, nullable=False, default=5)  # 손절 비율 (%)
+    take_profit_rate = Column(Integer, nullable=False, default=10)  # 익절 비율 (%)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        # 설정은 하나만 유지 (싱글톤)
+        UniqueConstraint("id", name="uq_autotrade_settings_singleton"),
     )
 
 

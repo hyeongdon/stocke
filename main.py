@@ -26,7 +26,7 @@ warnings.filterwarnings('ignore', category=FutureWarning, module='ta')
 warnings.filterwarnings('ignore', category=FutureWarning, module='pandas')
 
 # DB 연동
-from models import get_db, AutoTradeCondition
+from models import get_db, AutoTradeCondition, PendingBuySignal, AutoTradeSettings
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from condition_monitor import condition_monitor
@@ -90,6 +90,12 @@ from fastapi.responses import RedirectResponse
 class ToggleConditionRequest(BaseModel):
     condition_name: str
     is_enabled: bool
+
+class TradingSettingsRequest(BaseModel):
+    is_enabled: bool
+    max_invest_amount: int
+    stop_loss_rate: int
+    take_profit_rate: int
 
 @app.post("/conditions/toggle")
 async def toggle_condition(req: ToggleConditionRequest):
@@ -172,6 +178,99 @@ async def shutdown_event():
     # WebSocket 우아한 종료
     await kiwoom_api.graceful_shutdown()
     logger.info("키움 API WebSocket 연결 종료 완료")
+
+@app.get("/signals/pending")
+async def get_pending_signals(limit: int = 100, status: str = "PENDING"):
+    """매수대기(PENDING) 신호 목록 조회. status=ALL 전달 시 전체 조회"""
+    try:
+        logger.info(f"[PENDING_API] request: limit={limit} status={status}")
+        items = []
+        for db in get_db():
+            session: Session = db
+            # 디버그: 전체/페딩 카운트 로깅
+            total_all = session.query(PendingBuySignal).count()
+            total_pending = session.query(PendingBuySignal).filter(PendingBuySignal.status == "PENDING").count()
+            logger.info(f"[PENDING_API] DB URL={Config.DATABASE_URL} total_all={total_all} total_pending={total_pending}")
+
+            q = session.query(PendingBuySignal)
+            if status.upper() != "ALL":
+                q = q.filter(PendingBuySignal.status == status.upper())
+            rows = q.order_by(PendingBuySignal.detected_at.desc()).limit(limit).all()
+            logger.info(f"[PENDING_API] rows fetched={len(rows)}")
+            for r in rows:
+                items.append({
+                    "id": r.id,
+                    "condition_id": r.condition_id,
+                    "stock_code": r.stock_code,
+                    "stock_name": r.stock_name,
+                    "detected_at": r.detected_at.isoformat() if r.detected_at else None,
+                    "status": r.status,
+                })
+        payload = {"items": items, "total": len(items), "_debug": {"db": Config.DATABASE_URL, "limit": limit, "status": status}}
+        logger.info(f"[PENDING_API] response total={payload['total']}")
+        return payload
+    except Exception as e:
+        logger.error(f"매수대기 신호 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail="매수대기 신호 조회 실패")
+
+@app.get("/trading/settings")
+async def get_trading_settings():
+    """자동매매 설정 조회"""
+    try:
+        for db in get_db():
+            session: Session = db
+            settings = session.query(AutoTradeSettings).first()
+            if not settings:
+                # 기본 설정 생성
+                settings = AutoTradeSettings(
+                    is_enabled=False,
+                    max_invest_amount=1000000,
+                    stop_loss_rate=5,
+                    take_profit_rate=10
+                )
+                session.add(settings)
+                session.commit()
+            
+            return {
+                "is_enabled": settings.is_enabled,
+                "max_invest_amount": settings.max_invest_amount,
+                "stop_loss_rate": settings.stop_loss_rate,
+                "take_profit_rate": settings.take_profit_rate,
+                "updated_at": settings.updated_at.isoformat() if settings.updated_at else None
+            }
+    except Exception as e:
+        logger.error(f"자동매매 설정 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail="자동매매 설정 조회 실패")
+
+@app.post("/trading/settings")
+async def save_trading_settings(req: TradingSettingsRequest):
+    """자동매매 설정 저장"""
+    try:
+        for db in get_db():
+            session: Session = db
+            settings = session.query(AutoTradeSettings).first()
+            if not settings:
+                settings = AutoTradeSettings()
+                session.add(settings)
+            
+            settings.is_enabled = req.is_enabled
+            settings.max_invest_amount = req.max_invest_amount
+            settings.stop_loss_rate = req.stop_loss_rate
+            settings.take_profit_rate = req.take_profit_rate
+            settings.updated_at = datetime.utcnow()
+            
+            session.commit()
+            
+            return {
+                "message": "자동매매 설정이 저장되었습니다.",
+                "is_enabled": settings.is_enabled,
+                "max_invest_amount": settings.max_invest_amount,
+                "stop_loss_rate": settings.stop_loss_rate,
+                "take_profit_rate": settings.take_profit_rate
+            }
+    except Exception as e:
+        logger.error(f"자동매매 설정 저장 오류: {e}")
+        raise HTTPException(status_code=500, detail="자동매매 설정 저장 실패")
 
 @app.get("/conditions/")
 async def get_conditions():
