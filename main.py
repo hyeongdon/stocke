@@ -224,10 +224,14 @@ async def get_pending_signals(limit: int = 100, status: str = "PENDING"):
                         await asyncio.sleep(5)
                 
                 # 매수목표금액 계산
-                if r.condition_id == 999 and r.target_price:  # 대량거래 전략
-                    # 대량거래 고가의 절반이 목표가
+                if r.target_price:  # 조건식 기준봉 전략
+                    # 기준봉 기반 목표가 사용
                     target_amount = r.target_price
-                    target_quantity = 1  # 1주 기준
+                    max_invest_amount = 100000  # 10만원 상당
+                    target_quantity = max_invest_amount // current_price if current_price > 0 else 0
+                    if target_quantity < 1:
+                        target_quantity = 1
+                    target_amount = target_quantity * current_price if current_price > 0 else r.target_price
                 else:
                     # 일반 조건식의 경우 10만원 상당
                     max_invest_amount = 100000
@@ -453,11 +457,6 @@ async def get_stock_chart(stock_code: str, period: str = "1D"):
         logger.error(f"차트 데이터 조회 오류: {e}")
         raise HTTPException(status_code=500, detail="차트 데이터 조회 중 오류가 발생했습니다.")
 
-# 신호 조회 API - DB 연동 필요시 구현
-# @app.get("/signals/")
-# async def get_signals(condition_id: Optional[int] = None, limit: int = 100):
-#     """신호 목록 조회 - DB 연동 필요시 구현"""
-#     pass
 
 # 모니터링 제어 API
 @app.post("/monitoring/start")

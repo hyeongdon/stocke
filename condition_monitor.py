@@ -1,4 +1,5 @@
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Dict, Set, List, Optional
 import pandas as pd
@@ -20,13 +21,11 @@ class ConditionMonitor:
         self.processed_signals: Dict[str, datetime] = {}  # 중복 감지 방지 (신호키: 타임스탬프)
         self.signal_ttl_minutes = 5  # 신호 중복 방지 TTL (분)
         
-        # 대량거래 전략 관련 속성
-        self.volume_spike_candles: Dict[str, Dict] = {}  # 종목별 기준봉 저장
-        self.volume_spike_threshold = 3.0  # 평균 거래량의 3배 이상
-        self.high_gain_threshold = 5.0     # 5% 이상 상승
-        self.price_drop_threshold = 0.5    # 기준봉 가격의 50% 하락
-        self.lookback_days = 20           # 평균 거래량 계산 기간
-        self.max_candle_age_days = 30     # 기준봉 최대 유효 기간
+        
+        # 조건식별 기준봉 전략 관련 속성
+        self.condition_reference_candles: Dict[int, Dict[str, Dict]] = {}  # {condition_id: {stock_code: candle_data}}
+        self.condition_strategies: Dict[int, Dict] = {}  # 조건식별 전략 설정
+        self._last_condition_candle_check: Dict[int, float] = {}  # 조건식별 마지막 기준봉 확인 시간
     
     async def start_monitoring(self, condition_id: int, condition_name: str) -> bool:
         """조건식 모니터링 시작"""
@@ -38,7 +37,11 @@ class ConditionMonitor:
             
             if results:
                 logger.info(f"🔍 [CONDITION_MONITOR] 종목 검색 완료 - {len(results)}개 종목 발견")
-                # 조건 만족 종목들에 대해 신호 처리 (DB 없이)
+                
+                # 조건식별 기준봉 전략 적용
+                await self._apply_condition_reference_strategy(condition_id, condition_name, results)
+                
+                # 조건 만족 종목들에 대해 신호 처리
                 for i, stock_data in enumerate(results, 1):
                     logger.debug(f"🔍 [CONDITION_MONITOR] 신호 처리 중 ({i}/{len(results)}) - {stock_data.get('stock_name', 'Unknown')}")
                     await self._process_signal(condition_id, stock_data)
@@ -187,16 +190,17 @@ class ConditionMonitor:
 
         logger.info("🔍 [CONDITION_MONITOR] 모든 조건식 1회 모니터링 완료")
         
-        # 매수대기 종목들에 대해 대량거래 전략 적용 (API 제한을 고려하여 30분마다만 실행)
+        # 조건식별 기준봉 하락 확인 (5분마다 실행)
         import time
         current_time = time.time()
-        last_volume_spike_check = getattr(self, '_last_volume_spike_check', 0)
+        last_condition_check = getattr(self, '_last_condition_check', 0)
         
-        if current_time - last_volume_spike_check > 1800:  # 30분 (1800초)
-            await self._check_pending_stocks_volume_spike()
-            self._last_volume_spike_check = current_time
+        if current_time - last_condition_check > 300:  # 5분 (300초)
+            for condition_id in self.condition_reference_candles.keys():
+                await self._check_condition_reference_drops(condition_id)
+            self._last_condition_check = current_time
         else:
-            logger.debug("🔍 [VOLUME_SPIKE] API 제한을 고려하여 대량거래 전략 건너뜀")
+            logger.debug("🔍 [CONDITION_REF] API 제한을 고려하여 조건식 기준봉 확인 건너뜀")
 
     async def start_periodic_monitoring(self):
         """모든 조건식을 주기적으로 모니터링 (10분 간격)"""
@@ -247,212 +251,23 @@ class ConditionMonitor:
         logger.debug(f"🔍 [CONDITION_MONITOR] 모니터링 상태: {status}")
         return status
 
-    async def _check_pending_stocks_volume_spike(self):
-        """매수대기 종목들에 대해 대량거래 전략 적용 (API 제한 고려)"""
+
+    async def _update_signal_status(self, signal_id: int, status: str, order_id: str = ""):
+        """매수 신호 상태 업데이트"""
         try:
-            logger.info("🔍 [VOLUME_SPIKE] 매수대기 종목 대량거래 전략 확인 시작")
-            
-            # 매수대기 종목 목록 조회
-            pending_stocks = []
             for db in get_db():
                 session: Session = db
-                rows = session.query(PendingBuySignal).filter(PendingBuySignal.status == "PENDING").all()
-                pending_stocks = [{"stock_code": row.stock_code, "stock_name": row.stock_name} for row in rows]
+                signal = session.query(PendingBuySignal).filter(PendingBuySignal.id == signal_id).first()
+                if signal:
+                    signal.status = status
+                    if order_id:
+                        # 주문 ID를 저장할 필드가 있다면 여기에 추가
+                        pass
+                    session.commit()
+                    logger.info(f"🔍 [SIGNAL_UPDATE] 신호 상태 변경: ID {signal_id} -> {status}")
                 break
-            
-            if not pending_stocks:
-                logger.info("🔍 [VOLUME_SPIKE] 매수대기 종목이 없습니다.")
-                return
-            
-            # API 제한을 고려하여 최대 5개 종목만 처리
-            max_stocks = min(5, len(pending_stocks))
-            selected_stocks = pending_stocks[:max_stocks]
-            
-            logger.info(f"🔍 [VOLUME_SPIKE] 매수대기 종목 {len(selected_stocks)}개 확인 시작 (API 제한 고려)")
-            
-            # 각 매수대기 종목에 대해 대량거래 전략 적용 (순차 처리로 API 부하 감소)
-            for i, stock in enumerate(selected_stocks):
-                try:
-                    await self._analyze_stock_volume_spike(stock["stock_code"], stock["stock_name"])
-                    
-                    # API 호출 간격 조절 (1초 대기)
-                    if i < len(selected_stocks) - 1:  # 마지막이 아닌 경우에만
-                        import asyncio
-                        await asyncio.sleep(1)
-                        
-                except Exception as stock_error:
-                    logger.error(f"🔍 [VOLUME_SPIKE] 종목 {stock['stock_code']} 처리 중 오류: {stock_error}")
-                    continue
-                
         except Exception as e:
-            logger.error(f"🔍 [VOLUME_SPIKE] 매수대기 종목 대량거래 전략 확인 중 오류: {e}")
-            import traceback
-            logger.error(f"🔍 [VOLUME_SPIKE] 스택 트레이스: {traceback.format_exc()}")
-
-    async def _analyze_stock_volume_spike(self, stock_code: str, stock_name: str):
-        """종목에 대해 대량거래 전략 분석 (API 오류 처리 강화)"""
-        try:
-            logger.debug(f"🔍 [VOLUME_SPIKE] 종목 분석 시작: {stock_name}({stock_code})")
-            
-            # 1. 차트 데이터 조회 (오류 처리 강화)
-            try:
-                chart_data = await self.kiwoom_api.get_stock_chart_data(stock_code, "1D")
-            except Exception as api_error:
-                logger.warning(f"🔍 [VOLUME_SPIKE] API 호출 실패 {stock_code}: {api_error}")
-                return
-            
-            if not chart_data or len(chart_data) < self.lookback_days:
-                logger.debug(f"🔍 [VOLUME_SPIKE] 차트 데이터 부족: {stock_code}")
-                return
-            
-            # 2. DataFrame으로 변환
-            try:
-                df = pd.DataFrame(chart_data)
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
-                df = df.sort_values('timestamp')
-            except Exception as df_error:
-                logger.error(f"🔍 [VOLUME_SPIKE] 데이터 변환 오류 {stock_code}: {df_error}")
-                return
-            
-            # 3. 기준봉이 이미 있는지 확인
-            if stock_code in self.volume_spike_candles:
-                # 기존 기준봉이 있으면 50% 하락 확인
-                await self._check_existing_candle_drop(stock_code, stock_name, df)
-            else:
-                # 기준봉이 없으면 새로 찾기
-                await self._find_volume_spike_candle(stock_code, stock_name, df)
-                
-        except Exception as e:
-            logger.error(f"🔍 [VOLUME_SPIKE] 종목 분석 오류 {stock_code}: {e}")
-            # API 제한 오류인 경우 더 긴 대기 시간 설정
-            if "허용된 요청 개수를 초과" in str(e) or "429" in str(e):
-                logger.warning(f"🔍 [VOLUME_SPIKE] API 제한 감지 - 대량거래 전략 일시 중단")
-                self._last_volume_spike_check = time.time() + 3600  # 1시간 후 재시도
-
-    async def _find_volume_spike_candle(self, stock_code: str, stock_name: str, df: pd.DataFrame):
-        """대량거래 및 높은 상승률 기준봉 찾기"""
-        try:
-            if len(df) < self.lookback_days:
-                return
-            
-            # 최근 데이터에서 기준봉 찾기 (최신부터 역순으로)
-            for i in range(len(df) - 1, max(0, len(df) - 30), -1):  # 최근 30일 내에서만
-                row = df.iloc[i]
-                
-                # 1. 거래량 스파이크 확인
-                recent_volume = df.iloc[max(0, i-self.lookback_days):i+1]['volume']
-                avg_volume = recent_volume.mean()
-                volume_ratio = row['volume'] / avg_volume if avg_volume > 0 else 0
-                
-                # 2. 상승률 확인
-                prev_close = df.iloc[i-1]['close'] if i > 0 else row['open']
-                change_rate = ((row['close'] - prev_close) / prev_close) * 100 if prev_close > 0 else 0
-                
-                # 3. 조건 확인
-                is_volume_spike = volume_ratio >= self.volume_spike_threshold
-                is_high_gain = change_rate >= self.high_gain_threshold
-                
-                if is_volume_spike and is_high_gain:
-                    # 기준봉 발견
-                    candle_data = {
-                        "stock_code": stock_code,
-                        "stock_name": stock_name,
-                        "timestamp": row['timestamp'],
-                        "open_price": int(row['open']),
-                        "high_price": int(row['high']),
-                        "low_price": int(row['low']),
-                        "close_price": int(row['close']),
-                        "volume": int(row['volume']),
-                        "change_rate": change_rate,
-                        "volume_ratio": volume_ratio,
-                        "is_volume_spike": is_volume_spike,
-                        "is_high_gain": is_high_gain
-                    }
-                    
-                    self.volume_spike_candles[stock_code] = candle_data
-                    
-                    logger.info(f"🔍 [VOLUME_SPIKE] 기준봉 발견: {stock_name}({stock_code}) - "
-                              f"{row['timestamp'].strftime('%Y-%m-%d')} "
-                              f"거래량비율: {volume_ratio:.2f}, 상승률: {change_rate:.2f}%")
-                    break
-            
-        except Exception as e:
-            logger.error(f"🔍 [VOLUME_SPIKE] 기준봉 찾기 오류 {stock_code}: {e}")
-
-    async def _check_existing_candle_drop(self, stock_code: str, stock_name: str, df: pd.DataFrame):
-        """기존 기준봉에 대한 50% 하락 확인"""
-        try:
-            candle = self.volume_spike_candles[stock_code]
-            
-            # 기준봉이 너무 오래된 경우 제거
-            if (datetime.now() - candle['timestamp']).days > self.max_candle_age_days:
-                del self.volume_spike_candles[stock_code]
-                logger.info(f"🔍 [VOLUME_SPIKE] 오래된 기준봉 제거: {stock_name}({stock_code})")
-                return
-            
-            # 현재가 조회
-            current_price = df.iloc[-1]['close']
-            target_price = int(candle['close_price'] * self.price_drop_threshold)
-            
-            if current_price <= target_price:
-                # 50% 하락 달성 - 매수 신호 생성
-                await self._create_volume_spike_buy_signal(stock_code, stock_name, current_price, target_price, candle)
-            else:
-                logger.debug(f"🔍 [VOLUME_SPIKE] 아직 하락 미달성: {stock_name}({stock_code}) - "
-                           f"현재가: {current_price}, 목표가: {target_price}")
-                
-        except Exception as e:
-            logger.error(f"🔍 [VOLUME_SPIKE] 기존 기준봉 확인 오류 {stock_code}: {e}")
-
-    async def _create_volume_spike_buy_signal(self, stock_code: str, stock_name: str, current_price: int, target_price: int, candle: Dict):
-        """대량거래 전략 매수 신호 생성 및 실제 주문 실행"""
-        try:
-            # 매수 신호를 매수대기 테이블에 추가 (특별한 condition_id 사용)
-            for db in get_db():
-                session: Session = db
-                
-                # 중복 신호 확인
-                existing = session.query(PendingBuySignal).filter(
-                    PendingBuySignal.stock_code == stock_code,
-                    PendingBuySignal.status == "PENDING",
-                    PendingBuySignal.condition_id == 999  # 대량거래 전략용 ID
-                ).first()
-                
-                if existing:
-                    logger.debug(f"🔍 [VOLUME_SPIKE] 이미 대기 중인 매수 신호 존재: {stock_code}")
-                    return
-                
-                # 새 매수 신호 저장 (기준봉 정보 포함)
-                pending_signal = PendingBuySignal(
-                    condition_id=999,  # 대량거래 전략용 특별 ID
-                    stock_code=stock_code,
-                    stock_name=stock_name,
-                    detected_at=datetime.now(),
-                    status="PENDING",
-                    reference_candle_high=candle['high_price'],
-                    reference_candle_date=candle['timestamp'],
-                    target_price=target_price  # 고가의 절반
-                )
-                
-                session.add(pending_signal)
-                session.commit()
-                
-                logger.info(f"🔍 [VOLUME_SPIKE] 매수 신호 생성: {stock_name}({stock_code}) - "
-                          f"현재가: {current_price}, 목표가: {target_price}, "
-                          f"기준봉: {candle['timestamp'].strftime('%Y-%m-%d')} "
-                          f"({candle['close_price']}원)")
-                
-                # 실제 매수 주문 실행
-                await self._execute_buy_order(stock_code, stock_name, current_price, pending_signal.id)
-                
-                # 기준봉 제거 (한 번만 신호 생성)
-                if stock_code in self.volume_spike_candles:
-                    del self.volume_spike_candles[stock_code]
-                
-                break
-                
-        except Exception as e:
-            logger.error(f"🔍 [VOLUME_SPIKE] 매수 신호 생성 오류 {stock_code}: {e}")
+            logger.error(f"🔍 [SIGNAL_UPDATE] 신호 상태 업데이트 오류: {e}")
 
     async def _execute_buy_order(self, stock_code: str, stock_name: str, current_price: int, signal_id: int):
         """실제 매수 주문 실행"""
@@ -472,7 +287,7 @@ class ConditionMonitor:
                 stock_code=stock_code,
                 quantity=quantity,
                 price=0,  # 시장가
-                order_type="01"  # 시장가
+                order_type="3"  # 시장가 (kt10000 스펙)
             )
             
             if result.get("success"):
@@ -491,22 +306,225 @@ class ConditionMonitor:
             # 매수 신호 상태를 FAILED로 변경
             await self._update_signal_status(signal_id, "FAILED", str(e))
 
-    async def _update_signal_status(self, signal_id: int, status: str, order_id: str = ""):
-        """매수 신호 상태 업데이트"""
+    async def _apply_condition_reference_strategy(self, condition_id: int, condition_name: str, stocks: List[Dict]):
+        """조건식별 기준봉 전략 적용"""
         try:
+            logger.info(f"🔍 [CONDITION_REF] 조건식 {condition_name} 기준봉 전략 시작 - {len(stocks)}개 종목")
+            
+            # 조건식별 전략 설정 초기화 (없는 경우)
+            if condition_id not in self.condition_strategies:
+                self.condition_strategies[condition_id] = {
+                    "volume_threshold": 2.0,  # 평균 거래량의 2배 이상
+                    "gain_threshold": 3.0,    # 3% 이상 상승
+                    "target_drop_rate": 0.3,  # 30% 하락 시 매수
+                    "lookback_days": 15,      # 15일 평균 거래량
+                    "max_candle_age_days": 20 # 기준봉 최대 유효 기간
+                }
+            
+            # 조건식별 기준봉 저장소 초기화
+            if condition_id not in self.condition_reference_candles:
+                self.condition_reference_candles[condition_id] = {}
+            
+            # 각 종목에 대해 기준봉 찾기 (API 제한 고려하지 않고 진행)
+            for i, stock in enumerate(stocks):
+                try:
+                    stock_code = stock.get('stock_code', '')
+                    stock_name = stock.get('stock_name', '')
+                    
+                    if not stock_code:
+                        continue
+                    
+                    logger.debug(f"🔍 [CONDITION_REF] 종목 기준봉 분석: {stock_name}({stock_code})")
+                    await self._find_condition_reference_candle(condition_id, stock_code, stock_name)
+                    
+                    # API 호출 간격 조절 (0.5초 대기)
+                    if i < len(stocks) - 1:
+                        import asyncio
+                        await asyncio.sleep(0.5)
+                        
+                except Exception as stock_error:
+                    logger.error(f"🔍 [CONDITION_REF] 종목 {stock.get('stock_code', '')} 처리 중 오류: {stock_error}")
+                    continue
+            
+            logger.info(f"🔍 [CONDITION_REF] 조건식 {condition_name} 기준봉 전략 완료")
+            
+        except Exception as e:
+            logger.error(f"🔍 [CONDITION_REF] 조건식 기준봉 전략 오류: {e}")
+            import traceback
+            logger.error(f"🔍 [CONDITION_REF] 스택 트레이스: {traceback.format_exc()}")
+
+    async def _find_condition_reference_candle(self, condition_id: int, stock_code: str, stock_name: str):
+        """조건식별 기준봉 찾기"""
+        try:
+            # 차트 데이터 조회
+            chart_data = await self.kiwoom_api.get_stock_chart_data(stock_code, "1D")
+            
+            if not chart_data or len(chart_data) < 15:
+                logger.debug(f"🔍 [CONDITION_REF] 차트 데이터 부족: {stock_name}({stock_code})")
+                return
+            
+            # DataFrame으로 변환
+            df = pd.DataFrame(chart_data)
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            df = df.sort_values('timestamp')
+            
+            strategy = self.condition_strategies[condition_id]
+            lookback_days = strategy['lookback_days']
+            volume_threshold = strategy['volume_threshold']
+            gain_threshold = strategy['gain_threshold']
+            
+            # 최근 데이터에서 기준봉 찾기
+            for i in range(len(df) - 1, max(0, len(df) - 30), -1):  # 최근 30일 내에서만
+                row = df.iloc[i]
+                
+                # 1. 거래량 스파이크 확인
+                recent_volume = df.iloc[max(0, i-lookback_days):i+1]['volume']
+                avg_volume = recent_volume.mean()
+                volume_ratio = row['volume'] / avg_volume if avg_volume > 0 else 0
+                
+                # 2. 상승률 확인
+                prev_close = df.iloc[i-1]['close'] if i > 0 else row['open']
+                change_rate = ((row['close'] - prev_close) / prev_close) * 100 if prev_close > 0 else 0
+                
+                # 3. 조건 확인
+                is_volume_spike = volume_ratio >= volume_threshold
+                is_high_gain = change_rate >= gain_threshold
+                
+                if is_volume_spike and is_high_gain:
+                    # 기준봉 발견
+                    candle_data = {
+                        "stock_code": stock_code,
+                        "stock_name": stock_name,
+                        "timestamp": row['timestamp'],
+                        "open_price": int(row['open']),
+                        "high_price": int(row['high']),
+                        "low_price": int(row['low']),
+                        "close_price": int(row['close']),
+                        "volume": int(row['volume']),
+                        "change_rate": change_rate,
+                        "volume_ratio": volume_ratio,
+                        "is_volume_spike": is_volume_spike,
+                        "is_high_gain": is_high_gain,
+                        "strategy": strategy
+                    }
+                    
+                    # 조건식별 기준봉 저장
+                    self.condition_reference_candles[condition_id][stock_code] = candle_data
+                    
+                    logger.info(f"🔍 [CONDITION_REF] 기준봉 발견: {stock_name}({stock_code}) - "
+                              f"{row['timestamp'].strftime('%Y-%m-%d')} "
+                              f"거래량비율: {volume_ratio:.2f}, 상승률: {change_rate:.2f}%")
+                    break
+            
+        except Exception as e:
+            logger.error(f"🔍 [CONDITION_REF] 기준봉 찾기 오류 {stock_code}: {e}")
+            # API 제한 오류인 경우 더 긴 대기 시간 설정
+            if "허용된 요청 개수를 초과" in str(e) or "429" in str(e) or "API 제한" in str(e):
+                logger.warning(f"🔍 [CONDITION_REF] API 제한 감지 - 조건식 기준봉 전략 일시 중단")
+                self._last_condition_check = time.time() + 1800  # 30분 후 재시도
+
+    async def _check_condition_reference_drops(self, condition_id: int):
+        """조건식별 기준봉 하락 확인 및 매수 신호 생성"""
+        try:
+            if condition_id not in self.condition_reference_candles:
+                return
+            
+            strategy = self.condition_strategies.get(condition_id, {})
+            target_drop_rate = strategy.get('target_drop_rate', 0.3)
+            max_candle_age_days = strategy.get('max_candle_age_days', 20)
+            
+            current_time = datetime.now()
+            candles_to_remove = []
+            
+            for stock_code, candle in self.condition_reference_candles[condition_id].items():
+                try:
+                    # 기준봉이 너무 오래된 경우 제거
+                    if (current_time - candle['timestamp']).days > max_candle_age_days:
+                        candles_to_remove.append(stock_code)
+                        logger.info(f"🔍 [CONDITION_REF] 오래된 기준봉 제거: {candle['stock_name']}({stock_code})")
+                        continue
+                    
+                    # 현재가 조회
+                    chart_data = await self.kiwoom_api.get_stock_chart_data(stock_code, "1D")
+                    if not chart_data or len(chart_data) == 0:
+                        continue
+                    
+                    current_price = int(chart_data[-1].get('close', 0))
+                    target_price = int(candle['close_price'] * (1 - target_drop_rate))
+                    
+                    if current_price <= target_price:
+                        # 목표 하락 달성 - 매수 신호 생성
+                        await self._create_condition_reference_buy_signal(
+                            condition_id, stock_code, candle['stock_name'], 
+                            current_price, target_price, candle
+                        )
+                        candles_to_remove.append(stock_code)
+                    else:
+                        logger.debug(f"🔍 [CONDITION_REF] 아직 하락 미달성: {candle['stock_name']}({stock_code}) - "
+                                   f"현재가: {current_price}, 목표가: {target_price}")
+                
+                except Exception as stock_error:
+                    logger.error(f"🔍 [CONDITION_REF] 종목 {stock_code} 확인 중 오류: {stock_error}")
+                    continue
+            
+            # 처리된 기준봉들 제거
+            for stock_code in candles_to_remove:
+                if stock_code in self.condition_reference_candles[condition_id]:
+                    del self.condition_reference_candles[condition_id][stock_code]
+            
+        except Exception as e:
+            logger.error(f"🔍 [CONDITION_REF] 기준봉 하락 확인 오류: {e}")
+            # API 제한 오류인 경우 더 긴 대기 시간 설정
+            if "허용된 요청 개수를 초과" in str(e) or "429" in str(e) or "API 제한" in str(e):
+                logger.warning(f"🔍 [CONDITION_REF] API 제한 감지 - 조건식 기준봉 하락 확인 일시 중단")
+                self._last_condition_check = time.time() + 1800  # 30분 후 재시도
+
+    async def _create_condition_reference_buy_signal(self, condition_id: int, stock_code: str, stock_name: str, 
+                                                   current_price: int, target_price: int, candle: Dict):
+        """조건식 기준봉 전략 매수 신호 생성"""
+        try:
+            # 매수 신호를 매수대기 테이블에 추가
             for db in get_db():
                 session: Session = db
-                signal = session.query(PendingBuySignal).filter(PendingBuySignal.id == signal_id).first()
-                if signal:
-                    signal.status = status
-                    if order_id:
-                        # 주문 ID를 저장할 필드가 있다면 여기에 추가
-                        pass
-                    session.commit()
-                    logger.info(f"🔍 [SIGNAL_UPDATE] 신호 상태 변경: ID {signal_id} -> {status}")
+                
+                # 중복 신호 확인
+                existing = session.query(PendingBuySignal).filter(
+                    PendingBuySignal.stock_code == stock_code,
+                    PendingBuySignal.status == "PENDING",
+                    PendingBuySignal.condition_id == condition_id
+                ).first()
+                
+                if existing:
+                    logger.debug(f"🔍 [CONDITION_REF] 이미 대기 중인 매수 신호 존재: {stock_code}")
+                    return
+                
+                # 새 매수 신호 저장
+                pending_signal = PendingBuySignal(
+                    condition_id=condition_id,
+                    stock_code=stock_code,
+                    stock_name=stock_name,
+                    detected_at=datetime.now(),
+                    status="PENDING",
+                    reference_candle_high=candle['high_price'],
+                    reference_candle_date=candle['timestamp'],
+                    target_price=target_price
+                )
+                
+                session.add(pending_signal)
+                session.commit()
+                
+                logger.info(f"🔍 [CONDITION_REF] 매수 신호 생성: {stock_name}({stock_code}) - "
+                          f"현재가: {current_price}, 목표가: {target_price}, "
+                          f"기준봉: {candle['timestamp'].strftime('%Y-%m-%d')} "
+                          f"({candle['close_price']}원)")
+                
+                # 실제 매수 주문 실행
+                await self._execute_buy_order(stock_code, stock_name, current_price, pending_signal.id)
+                
                 break
+                
         except Exception as e:
-            logger.error(f"🔍 [SIGNAL_UPDATE] 신호 상태 업데이트 오류: {e}")
+            logger.error(f"🔍 [CONDITION_REF] 매수 신호 생성 오류 {stock_code}: {e}")
 
 # 전역 인스턴스
 condition_monitor = ConditionMonitor()

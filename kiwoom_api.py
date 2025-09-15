@@ -167,21 +167,6 @@ class KiwoomAPI:
         
         logger.info("🔄 [DEBUG] 메시지 핸들러 종료")
         
-    # 연결 상태 모니터링 메서드 추가
-    async def check_connection_health(self):
-        """연결 상태 확인"""
-        if not self.websocket:
-            return False
-            
-        try:
-            # 수동 ping 테스트
-            pong_waiter = await self.websocket.ping()
-            await asyncio.wait_for(pong_waiter, timeout=10.0)
-            logger.debug("연결 상태 양호 - ping 응답 정상")
-            return True
-        except Exception as e:
-            logger.warning(f"연결 상태 불량: {e}")
-            return False
     
     async def graceful_shutdown(self):
         """우아한 종료"""
@@ -198,17 +183,6 @@ class KiwoomAPI:
             finally:
                 self.websocket = None
 
-    def _get_headers(self) -> Dict[str, str]:
-        """API 요청 헤더 생성"""
-        use_mock = Config.KIWOOM_USE_MOCK_ACCOUNT
-        app_key = Config.KIWOOM_MOCK_APP_KEY if use_mock else Config.KIWOOM_APP_KEY
-        app_secret = Config.KIWOOM_MOCK_APP_SECRET if use_mock else Config.KIWOOM_APP_SECRET
-        return {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.token_manager.get_valid_token()}",
-            "appkey": app_key,
-            "appsecret": app_secret
-        }
     
     async def get_condition_list_websocket(self) -> List[Dict]:
         """조건식 목록 조회 (WebSocket) - 키움증권 API 방식"""
@@ -563,11 +537,6 @@ class KiwoomAPI:
             return []
     
     
-    async def get_minute_chart_data(self, stock_code: str):
-        """분봉 차트 데이터 조회 (별도 API 필요)"""
-        # 키움에서 분봉 조회 API가 있다면 여기에 구현
-        # 현재는 일봉 데이터로 대체
-        return await self.get_stock_chart_data(stock_code, "1D")
 
     async def get_account_profit(self, stex_tp: str = "0", limit: int = 500) -> Dict:
         """ka10085: 계좌수익률요청 - 보유종목별 수익현황 조회"""
@@ -659,16 +628,13 @@ class KiwoomAPI:
             logger.error(f"계좌수익률 요청 오류: {e}")
             return {"positions": [], "_data_source": "API_ERROR"}
 
-    async def place_buy_order(self, stock_code: str, quantity: int, price: int = 0, order_type: str = "00") -> Dict:
-        """주식 매수 주문 (키움 API)"""
+    async def place_buy_order(self, stock_code: str, quantity: int, price: int = 0, order_type: str = "3") -> Dict:
+        """주식 매수 주문 (키움 API kt10000 스펙)"""
         if not self.token_manager.get_valid_token():
             logger.error("키움 API 토큰이 없습니다")
             return {"success": False, "error": "토큰 없음"}
             
         try:
-            # 계좌번호 설정
-            account_number = Config.KIWOOM_MOCK_ACCOUNT_NUMBER if Config.KIWOOM_USE_MOCK_ACCOUNT else Config.KIWOOM_ACCOUNT_NUMBER
-            
             # 계좌 타입에 따른 도메인 설정
             use_mock_account = Config.KIWOOM_USE_MOCK_ACCOUNT
             if use_mock_account:
@@ -676,27 +642,29 @@ class KiwoomAPI:
             else:
                 host = Config.KIWOOM_REAL_API_URL
             
-            endpoint = '/api/dostk/order'
+            endpoint = '/api/dostk/ordr'
             url = host + endpoint
             
-            # 요청 헤더
+            # 요청 헤더 (kt10000 스펙)
             headers = {
                 'Content-Type': 'application/json;charset=UTF-8',
                 'authorization': f'Bearer {self.token_manager.get_valid_token()}',
-                'api-id': 'kt00001',  # 주식 주문 API
+                'cont-yn': 'N',  # 연속조회여부
+                'next-key': '',  # 연속조회키
+                'api-id': 'kt10000',  # TR명
             }
             
-            # 주문 요청 데이터
+            # 주문 요청 데이터 (kt10000 스펙)
             request_data = {
-                'acnt_no': account_number,  # 계좌번호
-                'stk_cd': stock_code,       # 종목코드
-                'ord_qty': str(quantity),   # 주문수량
-                'ord_prc': str(price),      # 주문가격 (0이면 시장가)
-                'ord_tp': order_type,       # 주문구분 (00:지정가, 01:시장가)
-                'ord_side': 'BUY'           # 매수
+                'dmst_stex_tp': 'KRX',  # 국내거래소구분 KRX,NXT,SOR
+                'stk_cd': stock_code,   # 종목코드
+                'ord_qty': str(quantity),  # 주문수량
+                'ord_uv': str(price) if price > 0 else '',  # 주문단가 (시장가면 빈 문자열)
+                'trde_tp': order_type,  # 매매구분 (3:시장가, 0:보통)
+                'cond_uv': '',  # 조건단가
             }
             
-            logger.info(f"매수 주문 요청: {stock_code}, 수량: {quantity}, 가격: {price}")
+            logger.info(f"매수 주문 요청: {stock_code}, 수량: {quantity}, 가격: {price}, 타입: {order_type}")
             
             async with aiohttp.ClientSession() as session:
                 async with session.post(
@@ -713,11 +681,13 @@ class KiwoomAPI:
                         try:
                             data = json.loads(response_text)
                             if data.get('return_code') == 0:
-                                logger.info(f"매수 주문 성공: {stock_code}")
+                                order_no = data.get('ord_no', '')
+                                logger.info(f"매수 주문 성공: {stock_code} - 주문번호: {order_no}")
                                 return {
                                     "success": True,
-                                    "order_id": data.get('order_id', ''),
-                                    "message": "매수 주문이 성공적으로 접수되었습니다."
+                                    "order_id": order_no,
+                                    "order_no": order_no,
+                                    "message": data.get('return_msg', '정상적으로 처리되었습니다')
                                 }
                             else:
                                 error_msg = data.get('return_msg', '알 수 없는 오류')
