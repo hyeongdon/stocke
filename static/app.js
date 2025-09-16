@@ -886,11 +886,50 @@ class StockMonitorApp {
                 const isRunning = data.is_running || data.is_monitoring;
                 console.log('🔍 [DEBUG] 초기 상태 - isRunning:', isRunning);
                 
-                // 버튼 UI만 업데이트
-                this.updateMonitoringUI(isRunning);
+                // 자동 시작: 실행 중이 아니면 바로 시작 요청
+                if (!isRunning) {
+                    try {
+                        console.log('▶️ [AUTO] 모니터링 자동 시작 시도');
+                        const startRes = await fetch('/monitoring/start', { method: 'POST' });
+                        let startData = {};
+                        try {
+                            startData = await startRes.json();
+                        } catch (_) {}
+                        const nowRunning = startData.is_running || startData.is_monitoring || startRes.ok;
+                        console.log('▶️ [AUTO] 모니터링 시작 결과:', nowRunning, startData);
+                        // 시작 직후 반영이 늦을 수 있어 폴링으로 확인
+                        await this.pollMonitoring(true, 10000, 1000);
+                    } catch (e) {
+                        console.error('❌ [AUTO] 모니터링 자동 시작 실패:', e);
+                        this.updateMonitoringUI(false);
+                    }
+                } else {
+                    // 이미 실행 중이면 UI만 동기화
+                    this.updateMonitoringUI(true);
+                }
             } catch (error) {
                 console.error('🔍 [DEBUG] 모니터링 상태 확인 실패:', error);
             }
+        }
+
+        // 모니터링 상태를 원하는 값이 될 때까지 일정 시간 폴링
+        async pollMonitoring(desiredRunning, timeoutMs = 10000, intervalMs = 1000) {
+            const end = Date.now() + timeoutMs;
+            while (Date.now() < end) {
+                try {
+                    const res = await fetch('/monitoring/status');
+                    const data = await res.json().catch(() => ({}));
+                    const isRunning = !!(data.is_running || data.is_monitoring);
+                    this.updateMonitoringUI(isRunning);
+                    if (isRunning === desiredRunning) {
+                        return true;
+                    }
+                } catch (e) {
+                    console.error('🔁 상태 확인 실패:', e);
+                }
+                await new Promise(r => setTimeout(r, intervalMs));
+            }
+            return false;
         }
         
         updateMonitoringUI(isMonitoring) {
@@ -904,6 +943,8 @@ class StockMonitorApp {
                 button.className = `btn btn-sm ${isMonitoring ? 'btn-danger' : 'btn-success'}`;
             }
             if (iconEl) {
+                // 어떤 상태든 스피너는 제거
+                iconEl.classList.remove('fa-spinner', 'fa-spin');
                 iconEl.classList.remove('fa-play', 'fa-stop');
                 iconEl.classList.add(isMonitoring ? 'fa-stop' : 'fa-play');
             }
@@ -939,18 +980,22 @@ class StockMonitorApp {
                     iconEl.classList.add('fa-spinner', 'fa-spin');
                 }
                 if (textSpan) textSpan.textContent = `모니터링 ${action} 중...`;
-
-                const response = await fetch(endpoint, { method: 'POST' });
+                // 타임아웃이 있는 요청으로 전환 (네트워크 지연 시 UI 고정 방지)
+                const response = await this.fetchWithTimeout(endpoint, { method: 'POST' }, 15000);
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}`);
                 }
                 const data = await response.json();
                 console.log('🔍 [DEBUG] API 응답:', data);
                 const isRunning = data.is_running || data.is_monitoring;
+                // 응답 즉시 UI를 낙관적으로 갱신
                 this.updateMonitoringUI(isRunning);
+                // 백엔드 반영 지연 대비 폴링으로 확정
+                await this.pollMonitoring(!isCurrentlyRunning, 10000, 1000);
                 
                 // 버튼 활성화 및 아이콘 복원
                 if (button) button.disabled = false;
+                if (iconEl) iconEl.classList.remove('fa-spinner', 'fa-spin');
                 
             } catch (error) {
                 console.error('🔍 [DEBUG] 모니터링 토글 실패:', error);
@@ -965,6 +1010,35 @@ class StockMonitorApp {
                     iconEl.classList.add('fa-play');
                 }
                 if (textSpan) textSpan.textContent = '모니터링 시작';
+            } finally {
+                // 어떤 경우에도 스피너 정리 및 최종 상태 동기화 시도
+                try {
+                    const button = document.getElementById('toggleMonitoring');
+                    const textSpan = document.getElementById('monitoringText');
+                    const iconEl = button ? button.querySelector('i') : null;
+                    if (button) button.disabled = false;
+                    if (iconEl) iconEl.classList.remove('fa-spinner', 'fa-spin');
+                    // 서버 상태로 최종 동기화
+                    const res = await fetch('/monitoring/status');
+                    const st = await res.json().catch(() => ({}));
+                    const on = !!(st.is_running || st.is_monitoring);
+                    this.updateMonitoringUI(on);
+                    if (textSpan && !on) textSpan.textContent = '모니터링 시작';
+                } catch (syncErr) {
+                    console.error('🔁 최종 상태 동기화 실패:', syncErr);
+                }
+            }
+        }
+
+        // fetch 타임아웃 헬퍼
+        async fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
+            const controller = new AbortController();
+            const id = setTimeout(() => controller.abort(), timeoutMs);
+            try {
+                const resp = await fetch(url, { ...options, signal: controller.signal });
+                return resp;
+            } finally {
+                clearTimeout(id);
             }
         }
         
