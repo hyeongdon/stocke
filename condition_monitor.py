@@ -9,6 +9,11 @@ from models import PendingBuySignal, get_db, AutoTradeCondition
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
+# 개선된 모듈들 import
+from signal_manager import signal_manager, SignalType, SignalStatus
+from api_rate_limiter import api_rate_limiter
+from buy_order_executor import buy_order_executor
+
 logger = logging.getLogger(__name__)
 
 class ConditionMonitor:
@@ -18,9 +23,6 @@ class ConditionMonitor:
         self.kiwoom_api = KiwoomAPI()
         self.is_running = False
         self.loop_sleep_seconds = 600  # 10분 주기
-        self.processed_signals: Dict[str, datetime] = {}  # 중복 감지 방지 (신호키: 타임스탬프)
-        self.signal_ttl_minutes = 5  # 신호 중복 방지 TTL (분)
-        
         
         # 조건식별 기준봉 전략 관련 속성
         self.condition_reference_candles: Dict[int, Dict[str, Dict]] = {}  # {condition_id: {stock_code: candle_data}}
@@ -31,9 +33,17 @@ class ConditionMonitor:
         """조건식 모니터링 시작"""
         logger.info(f"🔍 [CONDITION_MONITOR] 조건식 모니터링 시작 요청 - ID: {condition_id}, 이름: {condition_name}")
         try:
+            # API 제한 확인
+            if not api_rate_limiter.is_api_available():
+                logger.warning(f"🔍 [CONDITION_MONITOR] API 제한 상태 - 조건식 {condition_id} 모니터링 건너뜀")
+                return False
+            
             # 조건식으로 종목 검색
             logger.debug(f"🔍 [CONDITION_MONITOR] 키움 API로 종목 검색 시작 - 조건식 ID: {condition_id}")
             results = await self.kiwoom_api.search_condition_stocks(str(condition_id), condition_name)
+            
+            # API 호출 기록
+            api_rate_limiter.record_api_call(f"search_condition_stocks_{condition_id}")
             
             if results:
                 logger.info(f"🔍 [CONDITION_MONITOR] 종목 검색 완료 - {len(results)}개 종목 발견")
@@ -54,89 +64,37 @@ class ConditionMonitor:
             
         except Exception as e:
             logger.error(f"🔍 [CONDITION_MONITOR] 조건식 {condition_id} 모니터링 시작 실패: {e}")
+            # API 오류 처리
+            api_rate_limiter.handle_api_error(e)
             import traceback
             logger.error(f"🔍 [CONDITION_MONITOR] 스택 트레이스: {traceback.format_exc()}")
             return False
     
-    def _cleanup_expired_signals(self):
-        """만료된 신호 정리"""
-        current_time = datetime.now()
-        expired_keys = [
-            key for key, timestamp in self.processed_signals.items()
-            if current_time - timestamp > timedelta(minutes=self.signal_ttl_minutes)
-        ]
-        
-        for key in expired_keys:
-            del self.processed_signals[key]
-        
-        if expired_keys:
-            logger.debug(f"만료된 신호 {len(expired_keys)}개 정리 완료")
-    
-    def is_duplicate_signal(self, condition_id: int, stock_code: str) -> bool:
-        """중복 신호 확인 (TTL 기반)"""
-        signal_key = f"{condition_id}_{stock_code}"
-        current_time = datetime.now()
-        
-        logger.debug(f"🔍 [CONDITION_MONITOR] 중복 신호 확인 - 신호키: {signal_key}")
-        
-        # 만료된 신호 정리
-        self._cleanup_expired_signals()
-        
-        if signal_key in self.processed_signals:
-            # TTL 내의 신호인지 확인
-            signal_time = self.processed_signals[signal_key]
-            time_diff = current_time - signal_time
-            if time_diff <= timedelta(minutes=self.signal_ttl_minutes):
-                logger.debug(f"🔍 [CONDITION_MONITOR] 중복 신호 감지 - {signal_key} (TTL 내: {time_diff.total_seconds():.1f}초 전)")
-                return True
-            else:
-                # 만료된 신호는 제거하고 새로 등록
-                logger.debug(f"🔍 [CONDITION_MONITOR] 만료된 신호 제거 - {signal_key} (TTL 초과: {time_diff.total_seconds():.1f}초 전)")
-                del self.processed_signals[signal_key]
-        
-        # 새 신호 등록
-        self.processed_signals[signal_key] = current_time
-        logger.debug(f"🔍 [CONDITION_MONITOR] 새 신호 등록 - {signal_key}")
-        return False
     
     async def _process_signal(self, condition_id: int, stock_data: Dict):
-        """신호 처리 (DB 없이)"""
+        """신호 처리 (개선된 신호 관리 시스템 사용)"""
         stock_code = stock_data.get("stock_code", "Unknown")
         stock_name = stock_data.get("stock_name", "Unknown")
         
         logger.debug(f"🔍 [CONDITION_MONITOR] 신호 처리 시작 - {stock_name}({stock_code})")
         
         try:
-            # 중복 신호 확인
-            if not self.is_duplicate_signal(condition_id, stock_code):
-                # 신호 처리 (로깅만)
-                logger.info(f"🔍 [CONDITION_MONITOR] 조건 만족 신호 감지: {stock_name}({stock_code}) - 조건식 ID: {condition_id}")
-                
-                # 매수대기 테이블에 적재
-                for db in get_db():
-                    try:
-                        pending = PendingBuySignal(
-                            condition_id=condition_id,
-                            stock_code=stock_code,
-                            stock_name=stock_name,
-                            status="PENDING",
-                        )
-                        db.add(pending)
-                        db.commit()
-                        logger.info(f"📝 [PENDING] 저장 완료 - {stock_name}({stock_code}), 조건식 {condition_id}")
-                    except IntegrityError:
-                        db.rollback()
-                        logger.debug(f"🛑 [PENDING] 중복으로 저장 생략 - {stock_name}({stock_code}), 조건식 {condition_id}")
-                    except Exception as ex:
-                        db.rollback()
-                        logger.error(f"❌ [PENDING] 저장 실패 - {stock_name}({stock_code}): {ex}")
-                    finally:
-                        pass
-                
-                # 여기에 추가적인 신호 처리 로직 (알림/웹소켓 등) 가능
-                logger.debug(f"🔍 [CONDITION_MONITOR] 신호 처리 완료 - {stock_name}({stock_code})")
+            # 개선된 신호 관리 시스템을 사용하여 신호 생성
+            success = await signal_manager.create_signal(
+                condition_id=condition_id,
+                stock_code=stock_code,
+                stock_name=stock_name,
+                signal_type=SignalType.CONDITION_SIGNAL,
+                additional_data={
+                    "detected_price": stock_data.get("current_price", 0),
+                    "detected_volume": stock_data.get("volume", 0)
+                }
+            )
+            
+            if success:
+                logger.info(f"🔍 [CONDITION_MONITOR] 조건 만족 신호 생성 완료: {stock_name}({stock_code}) - 조건식 ID: {condition_id}")
             else:
-                logger.debug(f"🔍 [CONDITION_MONITOR] 중복 신호로 인해 처리 건너뜀 - {stock_name}({stock_code})")
+                logger.debug(f"🔍 [CONDITION_MONITOR] 신호 생성 건너뜀 (중복 또는 기타 이유): {stock_name}({stock_code})")
                 
         except Exception as e:
             logger.error(f"🔍 [CONDITION_MONITOR] 신호 처리 중 오류 - {stock_name}({stock_code}): {e}")
@@ -236,75 +194,29 @@ class ConditionMonitor:
         await self.kiwoom_api.disconnect()
         logger.info("🔍 [CONDITION_MONITOR] 모든 조건식 모니터링 중지 및 WebSocket 연결 종료")
     
-    def get_monitoring_status(self) -> Dict:
-        """모니터링 상태 조회"""
+    async def get_monitoring_status(self) -> Dict:
+        """모니터링 상태 조회 (개선된 상태 정보 포함)"""
         logger.debug("🔍 [CONDITION_MONITOR] 모니터링 상태 조회 요청")
-        # 만료된 신호 정리
-        self._cleanup_expired_signals()
+        
+        # 신호 통계 조회
+        signal_stats = await signal_manager.get_signal_statistics()
+        
+        # API 제한 상태 조회
+        api_status = api_rate_limiter.get_status_info()
         
         status = {
             "is_running": self.is_running,
-            "processed_signals": len(self.processed_signals),
-            "signal_ttl_minutes": self.signal_ttl_minutes
+            "loop_sleep_seconds": self.loop_sleep_seconds,
+            "signal_statistics": signal_stats,
+            "api_status": api_status,
+            "reference_candles_count": sum(len(candles) for candles in self.condition_reference_candles.values()),
+            "active_strategies": len(self.condition_strategies)
         }
         
         logger.debug(f"🔍 [CONDITION_MONITOR] 모니터링 상태: {status}")
         return status
 
 
-    async def _update_signal_status(self, signal_id: int, status: str, order_id: str = ""):
-        """매수 신호 상태 업데이트"""
-        try:
-            for db in get_db():
-                session: Session = db
-                signal = session.query(PendingBuySignal).filter(PendingBuySignal.id == signal_id).first()
-                if signal:
-                    signal.status = status
-                    if order_id:
-                        # 주문 ID를 저장할 필드가 있다면 여기에 추가
-                        pass
-                    session.commit()
-                    logger.info(f"🔍 [SIGNAL_UPDATE] 신호 상태 변경: ID {signal_id} -> {status}")
-                break
-        except Exception as e:
-            logger.error(f"🔍 [SIGNAL_UPDATE] 신호 상태 업데이트 오류: {e}")
-
-    async def _execute_buy_order(self, stock_code: str, stock_name: str, current_price: int, signal_id: int):
-        """실제 매수 주문 실행"""
-        try:
-            # 매수 수량 계산 (예: 10만원 상당)
-            max_invest_amount = 100000  # 10만원
-            quantity = max_invest_amount // current_price
-            
-            if quantity < 1:
-                logger.warning(f"🔍 [BUY_ORDER] 매수 수량 부족: {stock_name}({stock_code}) - 수량: {quantity}")
-                return
-            
-            logger.info(f"🔍 [BUY_ORDER] 매수 주문 실행: {stock_name}({stock_code}) - 수량: {quantity}, 가격: {current_price}")
-            
-            # 키움 API로 매수 주문
-            result = await self.kiwoom_api.place_buy_order(
-                stock_code=stock_code,
-                quantity=quantity,
-                price=0,  # 시장가
-                order_type="3"  # 시장가 (kt10000 스펙)
-            )
-            
-            if result.get("success"):
-                logger.info(f"🔍 [BUY_ORDER] 매수 주문 성공: {stock_name}({stock_code}) - 주문ID: {result.get('order_id')}")
-                
-                # 매수 신호 상태를 ORDERED로 변경
-                await self._update_signal_status(signal_id, "ORDERED", result.get("order_id", ""))
-            else:
-                logger.error(f"🔍 [BUY_ORDER] 매수 주문 실패: {stock_name}({stock_code}) - 오류: {result.get('error')}")
-                
-                # 매수 신호 상태를 FAILED로 변경
-                await self._update_signal_status(signal_id, "FAILED", result.get("error", ""))
-                
-        except Exception as e:
-            logger.error(f"🔍 [BUY_ORDER] 매수 주문 실행 오류 {stock_code}: {e}")
-            # 매수 신호 상태를 FAILED로 변경
-            await self._update_signal_status(signal_id, "FAILED", str(e))
 
     async def _apply_condition_reference_strategy(self, condition_id: int, condition_name: str, stocks: List[Dict]):
         """조건식별 기준봉 전략 적용"""
@@ -481,50 +393,34 @@ class ConditionMonitor:
 
     async def _create_condition_reference_buy_signal(self, condition_id: int, stock_code: str, stock_name: str, 
                                                    current_price: int, target_price: int, candle: Dict):
-        """조건식 기준봉 전략 매수 신호 생성"""
+        """조건식 기준봉 전략 매수 신호 생성 (개선된 신호 관리 시스템 사용)"""
         try:
-            # 매수 신호를 매수대기 테이블에 추가
-            for db in get_db():
-                session: Session = db
-                
-                # 중복 신호 확인
-                existing = session.query(PendingBuySignal).filter(
-                    PendingBuySignal.stock_code == stock_code,
-                    PendingBuySignal.status == "PENDING",
-                    PendingBuySignal.condition_id == condition_id
-                ).first()
-                
-                if existing:
-                    logger.debug(f"🔍 [CONDITION_REF] 이미 대기 중인 매수 신호 존재: {stock_code}")
-                    return
-                
-                # 새 매수 신호 저장
-                pending_signal = PendingBuySignal(
-                    condition_id=condition_id,
-                    stock_code=stock_code,
-                    stock_name=stock_name,
-                    detected_at=datetime.now(),
-                    status="PENDING",
-                    reference_candle_high=candle['high_price'],
-                    reference_candle_date=candle['timestamp'],
-                    target_price=target_price
-                )
-                
-                session.add(pending_signal)
-                session.commit()
-                
-                logger.info(f"🔍 [CONDITION_REF] 매수 신호 생성: {stock_name}({stock_code}) - "
+            # 개선된 신호 관리 시스템을 사용하여 신호 생성
+            success = await signal_manager.create_signal(
+                condition_id=condition_id,
+                stock_code=stock_code,
+                stock_name=stock_name,
+                signal_type=SignalType.REFERENCE_CANDLE,
+                additional_data={
+                    "detected_price": current_price,
+                    "target_price": target_price,
+                    "reference_candle_high": candle['high_price'],
+                    "reference_candle_date": candle['timestamp'],
+                    "reference_candle_close": candle['close_price'],
+                    "strategy": "reference_candle_drop"
+                }
+            )
+            
+            if success:
+                logger.info(f"🔍 [CONDITION_REF] 기준봉 매수 신호 생성 완료: {stock_name}({stock_code}) - "
                           f"현재가: {current_price}, 목표가: {target_price}, "
                           f"기준봉: {candle['timestamp'].strftime('%Y-%m-%d')} "
                           f"({candle['close_price']}원)")
-                
-                # 실제 매수 주문 실행
-                await self._execute_buy_order(stock_code, stock_name, current_price, pending_signal.id)
-                
-                break
+            else:
+                logger.debug(f"🔍 [CONDITION_REF] 기준봉 신호 생성 건너뜀 (중복 또는 기타 이유): {stock_code}")
                 
         except Exception as e:
-            logger.error(f"🔍 [CONDITION_REF] 매수 신호 생성 오류 {stock_code}: {e}")
+            logger.error(f"🔍 [CONDITION_REF] 기준봉 매수 신호 생성 오류 {stock_code}: {e}")
 
 # 전역 인스턴스
 condition_monitor = ConditionMonitor()

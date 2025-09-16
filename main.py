@@ -36,6 +36,11 @@ from kiwoom_api import KiwoomAPI
 from config import Config
 from naver_discussion_crawler import NaverStockDiscussionCrawler
 
+# 개선된 모듈들 import
+from signal_manager import signal_manager, SignalType, SignalStatus
+from api_rate_limiter import api_rate_limiter
+from buy_order_executor import buy_order_executor
+
 config = Config()
 
 # 로깅 설정
@@ -93,10 +98,26 @@ async def lifespan(app: FastAPI):
     
     logger.info("키움증권 조건식 모니터링 시스템 시작")
     
+    # 개선된 시스템들 시작
+    try:
+        # 매수 주문 실행기 시작
+        asyncio.create_task(buy_order_executor.start_processing())
+        logger.info("💰 [STARTUP] 매수 주문 실행기 시작")
+    except Exception as e:
+        logger.error(f"💰 [STARTUP] 매수 주문 실행기 시작 실패: {e}")
+    
     yield
     
     # Shutdown
     logger.info("모니터링 시스템 종료")
+    
+    # 개선된 시스템들 종료
+    try:
+        await buy_order_executor.stop_processing()
+        logger.info("💰 [SHUTDOWN] 매수 주문 실행기 종료")
+    except Exception as e:
+        logger.error(f"💰 [SHUTDOWN] 매수 주문 실행기 종료 실패: {e}")
+    
     await condition_monitor.stop_all_monitoring()
     # WebSocket 우아한 종료
     await kiwoom_api.graceful_shutdown()
@@ -493,11 +514,35 @@ async def stop_monitoring():
 
 @app.get("/monitoring/status")
 async def get_monitoring_status():
-    """모니터링 상태 조회"""
+    """모니터링 상태 조회 (개선된 상태 정보 포함)"""
     logger.info("🌐 [API] /monitoring/status 엔드포인트 호출됨")
     try:
-        status = condition_monitor.get_monitoring_status()
-        logger.info(f"🌐 [API] 모니터링 상태 조회 성공: {status}")
+        # 기본 모니터링 상태
+        monitoring_status = await condition_monitor.get_monitoring_status()
+        
+        # 신호 통계
+        signal_stats = await signal_manager.get_signal_statistics()
+        
+        # API 제한 상태
+        api_status = api_rate_limiter.get_status_info()
+        
+        # 매수 주문 실행기 상태
+        buy_executor_status = {
+            "is_running": buy_order_executor.is_running,
+            "max_invest_amount": buy_order_executor.max_invest_amount,
+            "max_retry_attempts": buy_order_executor.max_retry_attempts
+        }
+        
+        # 통합 상태 정보
+        status = {
+            "monitoring": monitoring_status,
+            "signals": signal_stats,
+            "api_limiter": api_status,
+            "buy_executor": buy_executor_status,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        logger.info(f"🌐 [API] 모니터링 상태 조회 성공")
         return status
     except Exception as e:
         logger.error(f"🌐 [API] 모니터링 상태 조회 오류: {e}")
@@ -1067,4 +1112,86 @@ async def get_order_history():
     except Exception as e:
         logger.error(f"주문 내역 조회 오류: {e}")
         raise HTTPException(status_code=500, detail="주문 내역 조회 중 오류가 발생했습니다.")
+
+# 개선된 시스템 관련 API 엔드포인트들
+@app.get("/api/rate-limiter/status")
+async def get_api_rate_limiter_status():
+    """API 제한 상태 조회"""
+    try:
+        status = api_rate_limiter.get_status_info()
+        return status
+    except Exception as e:
+        logger.error(f"API 제한 상태 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail="API 제한 상태 조회 중 오류가 발생했습니다.")
+
+@app.post("/api/rate-limiter/reset")
+async def reset_api_rate_limiter():
+    """API 제한 상태 수동 리셋"""
+    try:
+        api_rate_limiter.reset_limits()
+        return {"message": "API 제한 상태가 리셋되었습니다."}
+    except Exception as e:
+        logger.error(f"API 제한 상태 리셋 오류: {e}")
+        raise HTTPException(status_code=500, detail="API 제한 상태 리셋 중 오류가 발생했습니다.")
+
+@app.get("/signals/statistics")
+async def get_signal_statistics():
+    """신호 통계 조회"""
+    try:
+        stats = await signal_manager.get_signal_statistics()
+        return stats
+    except Exception as e:
+        logger.error(f"신호 통계 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail="신호 통계 조회 중 오류가 발생했습니다.")
+
+@app.post("/signals/cleanup")
+async def cleanup_old_signals(days: int = 7):
+    """오래된 신호 정리"""
+    try:
+        deleted_count = await signal_manager.cleanup_old_signals(days)
+        return {
+            "message": f"오래된 신호 {deleted_count}개가 정리되었습니다.",
+            "deleted_count": deleted_count
+        }
+    except Exception as e:
+        logger.error(f"신호 정리 오류: {e}")
+        raise HTTPException(status_code=500, detail="신호 정리 중 오류가 발생했습니다.")
+
+@app.get("/buy-executor/status")
+async def get_buy_executor_status():
+    """매수 주문 실행기 상태 조회"""
+    try:
+        status = {
+            "is_running": buy_order_executor.is_running,
+            "max_invest_amount": buy_order_executor.max_invest_amount,
+            "max_retry_attempts": buy_order_executor.max_retry_attempts,
+            "retry_delay_seconds": buy_order_executor.retry_delay_seconds
+        }
+        return status
+    except Exception as e:
+        logger.error(f"매수 주문 실행기 상태 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail="매수 주문 실행기 상태 조회 중 오류가 발생했습니다.")
+
+@app.post("/buy-executor/start")
+async def start_buy_executor():
+    """매수 주문 실행기 시작"""
+    try:
+        if not buy_order_executor.is_running:
+            asyncio.create_task(buy_order_executor.start_processing())
+            return {"message": "매수 주문 실행기가 시작되었습니다."}
+        else:
+            return {"message": "매수 주문 실행기가 이미 실행 중입니다."}
+    except Exception as e:
+        logger.error(f"매수 주문 실행기 시작 오류: {e}")
+        raise HTTPException(status_code=500, detail="매수 주문 실행기 시작 중 오류가 발생했습니다.")
+
+@app.post("/buy-executor/stop")
+async def stop_buy_executor():
+    """매수 주문 실행기 중지"""
+    try:
+        await buy_order_executor.stop_processing()
+        return {"message": "매수 주문 실행기가 중지되었습니다."}
+    except Exception as e:
+        logger.error(f"매수 주문 실행기 중지 오류: {e}")
+        raise HTTPException(status_code=500, detail="매수 주문 실행기 중지 중 오류가 발생했습니다.")
 
