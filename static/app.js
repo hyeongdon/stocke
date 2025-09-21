@@ -48,6 +48,12 @@ class StockMonitorApp {
             refreshAccountBtn.addEventListener('click', () => this.loadAccountInfo());
         }
 
+        // 선택 해제 버튼 이벤트
+        const clearSelectionBtn = document.getElementById('clearSelection');
+        if (clearSelectionBtn) {
+            clearSelectionBtn.addEventListener('click', () => this.clearStockSelection());
+        }
+
         const saveTradingSettingsBtn = document.getElementById('saveTradingSettings');
         if (saveTradingSettingsBtn) {
             saveTradingSettingsBtn.addEventListener('click', () => this.saveTradingSettings());
@@ -1073,7 +1079,13 @@ class StockMonitorApp {
         
         selectStockForNews(stockCode, stockName) {
             this.selectedStockForNews = { code: stockCode, name: stockName };
-            console.log('뉴스용 종목 선택:', stockCode, stockName);
+            console.log('종목 선택:', stockCode, stockName);
+            
+            // 선택된 종목을 헤더에 표시
+            this.updateSelectedStockDisplay(stockCode, stockName);
+            
+            // 종목 선택 시각적 피드백
+            this.updateStockSelection(stockCode);
             
             // 뉴스 섹션 표시
             const newsSection = document.getElementById('newsSection');
@@ -1096,6 +1108,62 @@ class StockMonitorApp {
                 
                 // 뉴스 로딩
                 this.loadNews(stockCode, stockName);
+            }
+        }
+
+        // 선택된 종목을 헤더에 표시하는 함수
+        updateSelectedStockDisplay(stockCode, stockName) {
+            const selectedStockInfo = document.getElementById('selectedStockInfo');
+            const selectedStockName = document.getElementById('selectedStockName');
+            const selectedStockCode = document.getElementById('selectedStockCode');
+            
+            if (selectedStockInfo && selectedStockName && selectedStockCode) {
+                selectedStockName.textContent = stockName;
+                selectedStockCode.textContent = `(${stockCode})`;
+                selectedStockInfo.style.display = 'block';
+            }
+        }
+
+        // 종목 선택 시각적 피드백
+        updateStockSelection(selectedStockCode) {
+            // 모든 종목 아이템에서 선택 상태 제거
+            const allStockItems = document.querySelectorAll('.stock-item');
+            allStockItems.forEach(item => {
+                item.classList.remove('selected');
+            });
+            
+            // 선택된 종목에 선택 상태 추가
+            const selectedItem = document.querySelector(`[data-stock-code="${selectedStockCode}"]`);
+            if (selectedItem) {
+                selectedItem.classList.add('selected');
+            }
+        }
+
+        // 선택 해제 함수
+        clearStockSelection() {
+            this.selectedStockForNews = null;
+            
+            // 헤더에서 선택된 종목 정보 숨기기
+            const selectedStockInfo = document.getElementById('selectedStockInfo');
+            if (selectedStockInfo) {
+                selectedStockInfo.style.display = 'none';
+            }
+            
+            // 모든 종목 아이템에서 선택 상태 제거
+            const allStockItems = document.querySelectorAll('.stock-item');
+            allStockItems.forEach(item => {
+                item.classList.remove('selected');
+            });
+            
+            // 뉴스 섹션 초기화
+            const newsContent = document.getElementById('newsContent');
+            if (newsContent) {
+                newsContent.innerHTML = `
+                    <div class="text-center text-muted py-3">
+                        <i class="fas fa-newspaper fa-2x mb-2"></i>
+                        <p class="mb-0">종목을 클릭하여 관련 뉴스를 확인하세요.</p>
+                    </div>
+                `;
             }
         }
         

@@ -1,10 +1,55 @@
 /* 전체 레이아웃 */
 body {
-    background-color: #f8f9fa;
+    background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
     font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
     font-size: 14px;
     line-height: 1.6;
     color: #333;
+    min-height: 100vh;
+}
+
+/* 헤더 스타일 */
+header.bg-primary {
+    background: linear-gradient(135deg, #e91e63 0%, #c2185b 100%) !important;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    border-radius: 0 0 15px 15px;
+}
+
+/* 선택된 종목 정보 스타일 */
+.selected-stock-info {
+    background: rgba(255, 255, 255, 0.15);
+    backdrop-filter: blur(10px);
+    border-radius: 25px;
+    padding: 0.5rem 1rem;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    animation: slideInRight 0.3s ease-out;
+}
+
+.selected-stock-info .btn-outline-light {
+    border-radius: 50%;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+}
+
+.selected-stock-info .btn-outline-light:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+    transform: scale(1.1);
+}
+
+@keyframes slideInRight {
+    from {
+        opacity: 0;
+        transform: translateX(30px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
 }
 
 /* 헤더 폰트 개선 */
@@ -15,8 +60,9 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 /* 메인 컨테이너 높이 조정 */
-.main-container {
-    height: calc(100vh - 120px);
+.stocks-main-row {
+    min-height: 400px;
+    max-height: 50vh;
 }
 
 /* 조건식 목록과 종목 리스트 높이 맞추기 */
@@ -24,6 +70,10 @@ h1, h2, h3, h4, h5, h6 {
     height: 100%;
     display: flex;
     flex-direction: column;
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.1);
 }
 
 .conditions-card .card-body, .stocks-card .card-body {
@@ -46,12 +96,15 @@ h1, h2, h3, h4, h5, h6 {
 /* 카드 스타일 */
 .card {
     border: none;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+    border-radius: 15px;
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
 }
 
 .card-header {
-    background-color: #fff;
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
     border-bottom: 2px solid #e9ecef;
     font-weight: 700;
     font-size: 16px;
@@ -59,23 +112,27 @@ h1, h2, h3, h4, h5, h6 {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    border-radius: 8px 8px 0 0;
+    border-radius: 15px 15px 0 0;
 }
 
 .card-header .btn {
     font-size: 0.75rem;
     padding: 0.25rem 0.5rem;
+    border-radius: 20px;
 }
 
 /* 조건식 목록 스타일 */
 .condition-item {
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: all 0.3s ease;
     border: 1px solid #dee2e6;
-    margin-bottom: 3px;
+    margin-bottom: 8px;
     font-size: 14px;
     line-height: 1.4;
-    padding: 0.5rem 0.75rem;
+    padding: 0.75rem 1rem;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(5px);
 }
 
 .condition-item h6 {
@@ -91,23 +148,25 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .condition-item:hover {
-    background-color: #f8f9fa;
-    transform: translateY(-1px);
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
 }
 
 .condition-item.active {
-    background-color: var(--bs-primary);
+    background: linear-gradient(135deg, #e91e63 0%, #c2185b 100%);
     color: #fff;
-    border-color: var(--bs-primary);
+    border-color: #e91e63;
+    box-shadow: 0 4px 20px rgba(233, 30, 99, 0.3);
 }
 
 .condition-item.active:hover {
-    background-color: var(--bs-primary);
+    background: linear-gradient(135deg, #d81b60 0%, #ad1457 100%);
 }
 
 /* 헤더 스타일 */
 .stocks-header {
-    background-color: #f8f9fa;
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
     border-bottom: 2px solid #dee2e6;
     font-weight: bold;
     padding: 10px 0;
@@ -122,11 +181,13 @@ h1, h2, h3, h4, h5, h6 {
 
 /* 가격 색상 */
 .price-up {
-    color: #dc3545 !important;
+    color: #e74c3c !important;
+    font-weight: 600;
 }
 
 .price-down {
-    color: #0d6efd !important;
+    color: #3498db !important;
+    font-weight: 600;
 }
 
 .price-neutral {
@@ -135,15 +196,30 @@ h1, h2, h3, h4, h5, h6 {
 
 /* 상태 배지 */
 .status-running {
-    background-color: #28a745 !important;
+    background: linear-gradient(135deg, #2ecc71 0%, #27ae60 100%) !important;
+    color: white;
+    padding: 0.25rem 0.75rem;
+    border-radius: 15px;
+    font-size: 0.8rem;
+    font-weight: 600;
 }
 
 .status-stopped {
-    background-color: #dc3545 !important;
+    background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%) !important;
+    color: white;
+    padding: 0.25rem 0.75rem;
+    border-radius: 15px;
+    font-size: 0.8rem;
+    font-weight: 600;
 }
 
 .status-unknown {
-    background-color: #6c757d !important;
+    background: linear-gradient(135deg, #95a5a6 0%, #7f8c8d 100%) !important;
+    color: white;
+    padding: 0.25rem 0.75rem;
+    border-radius: 15px;
+    font-size: 0.8rem;
+    font-weight: 600;
 }
 
 /* 로딩 애니메이션 */
@@ -153,17 +229,27 @@ h1, h2, h3, h4, h5, h6 {
     left: 0;
     right: 0;
     bottom: 0;
-    background-color: rgba(255, 255, 255, 0.8);
+    background-color: rgba(255, 255, 255, 0.9);
     display: flex;
     align-items: center;
     justify-content: center;
     z-index: 1000;
+    border-radius: 15px;
 }
 
 /* 반응형 디자인 */
 @media (max-width: 768px) {
     body {
         font-size: 13px;
+    }
+    
+    .stocks-main-row {
+        min-height: 300px;
+        max-height: 40vh;
+    }
+    
+    .news-card {
+        max-height: 35vh;
     }
     
     .news-title {
@@ -197,28 +283,43 @@ h1, h2, h3, h4, h5, h6 {
     }
 }
 
+@media (max-width: 576px) {
+    .stocks-main-row {
+        min-height: 250px;
+        max-height: 35vh;
+    }
+    
+    .news-card {
+        max-height: 30vh;
+    }
+}
+
 /* 스크롤바 스타일 */
 .stocks-container {
     max-height: 500px;
     overflow-y: auto;
 }
 
-.stocks-container::-webkit-scrollbar {
+.stocks-container::-webkit-scrollbar,
+.news-card .card-body::-webkit-scrollbar {
     width: 6px;
 }
 
-.stocks-container::-webkit-scrollbar-track {
+.stocks-container::-webkit-scrollbar-track,
+.news-card .card-body::-webkit-scrollbar-track {
     background: #f1f1f1;
     border-radius: 3px;
 }
 
-.stocks-container::-webkit-scrollbar-thumb {
-    background: #c1c1c1;
+.stocks-container::-webkit-scrollbar-thumb,
+.news-card .card-body::-webkit-scrollbar-thumb {
+    background: linear-gradient(135deg, #e91e63 0%, #c2185b 100%);
     border-radius: 3px;
 }
 
-.stocks-container::-webkit-scrollbar-thumb:hover {
-    background: #a8a8a8;
+.stocks-container::-webkit-scrollbar-thumb:hover,
+.news-card .card-body::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(135deg, #d81b60 0%, #ad1457 100%);
 }
 
 /* 애니메이션 */
@@ -233,10 +334,10 @@ h1, h2, h3, h4, h5, h6 {
 
 /* 툴팁 스타일 */
 .tooltip-inner {
-    background-color: #333;
+    background: linear-gradient(135deg, #e91e63 0%, #c2185b 100%);
     color: white;
-    border-radius: 4px;
-    padding: 5px 10px;
+    border-radius: 8px;
+    padding: 8px 12px;
     font-size: 0.8rem;
 }
 
@@ -251,6 +352,7 @@ h1, h2, h3, h4, h5, h6 {
     font-size: 3rem;
     margin-bottom: 20px;
     opacity: 0.5;
+    color: #e91e63;
 }
 
 /* 새로고침 버튼 애니메이션 */
@@ -272,16 +374,16 @@ h1, h2, h3, h4, h5, h6 {
     padding: 0.25rem 0.5rem;
     font-size: 0.75rem;
     border: none;
-    background: linear-gradient(45deg, #007bff, #0056b3);
+    background: linear-gradient(135deg, #e91e63 0%, #c2185b 100%);
     color: white;
-    border-radius: 4px;
+    border-radius: 6px;
     transition: all 0.2s ease;
 }
 
 .chart-btn:hover {
-    background: linear-gradient(45deg, #0056b3, #004085);
+    background: linear-gradient(135deg, #d81b60 0%, #ad1457 100%);
     transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    box-shadow: 0 4px 12px rgba(233, 30, 99, 0.3);
 }
 
 .modal-dialog {
@@ -331,8 +433,8 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .chart-period-selector .form-check-input:checked {
-    background-color: #007bff;
-    border-color: #007bff;
+    background-color: #e91e63;
+    border-color: #e91e63;
 }
 
 .chart-period-selector .form-check-label {
@@ -344,46 +446,59 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .chart-period-selector .form-check-input:checked + .form-check-label {
-    background-color: rgba(0, 123, 255, 0.1);
-    color: #007bff;
+    background-color: rgba(233, 30, 99, 0.1);
+    color: #e91e63;
     font-weight: 500;
 }
 
 /* 뉴스 카드 특별 스타일 */
 .news-card {
-    border: 2px solid #e3f2fd;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-    border-radius: 12px;
+    border: 2px solid #fce4ec;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+    border-radius: 15px;
     overflow: hidden;
     transition: all 0.3s ease;
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(10px);
+    max-height: 40vh;
+    display: flex;
+    flex-direction: column;
 }
 
 .news-card:hover {
     transform: translateY(-2px);
-    box-shadow: 0 8px 25px rgba(0,0,0,0.12);
-    border-color: var(--bs-primary);
+    box-shadow: 0 8px 30px rgba(0,0,0,0.12);
+    border-color: #e91e63;
 }
 
 .news-card .card-header {
     background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-    border-bottom: 2px solid var(--bs-primary);
+    border-bottom: 2px solid #e91e63;
+    flex-shrink: 0;
+}
+
+.news-card .card-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1rem;
 }
 
 /* 뉴스 아이템 스타일 개선 */
 .news-item {
     transition: all 0.3s ease;
     padding: 1rem;
-    border-radius: 8px;
+    border-radius: 10px;
     margin-bottom: 1rem;
     border: 1px solid #f0f0f0;
-    background: #fff;
+    background: rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(5px);
 }
 
 .news-item:hover {
-    background-color: #f8f9fa;
-    border-color: var(--bs-primary);
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    border-color: #e91e63;
     transform: translateX(5px);
-    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
 }
 
 .news-title {
@@ -400,7 +515,7 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .news-title a:hover {
-    color: var(--bs-primary);
+    color: #e91e63;
     text-decoration: underline;
 }
 
@@ -428,21 +543,40 @@ h1, h2, h3, h4, h5, h6 {
     font-size: 14px;
     line-height: 1.4;
     cursor: pointer !important;
-    transition: all 0.2s ease;
+    transition: all 0.3s ease;
     user-select: none;
     border: 1px solid #dee2e6;
+    background: rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(5px);
+    border-radius: 10px;
+    margin-bottom: 8px;
+    padding: 0.75rem 1rem;
 }
 
 .stock-item:hover {
     transform: translateY(-2px);
-    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-    background-color: #f8f9fa !important;
-    border-color: var(--bs-primary);
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%) !important;
+    border-color: #e91e63;
 }
 
 .stock-item.selected {
-    border-color: var(--bs-primary);
-    box-shadow: 0 0 0 0.2rem rgba(var(--bs-primary-rgb), 0.25);
+    border-color: #e91e63;
+    box-shadow: 0 0 0 0.2rem rgba(233, 30, 99, 0.25);
+    background: linear-gradient(135deg, #fce4ec 0%, #f8bbd9 100%) !important;
+    transform: translateY(-2px);
+    position: relative;
+}
+
+.stock-item.selected::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 4px;
+    background: linear-gradient(135deg, #e91e63 0%, #c2185b 100%);
+    border-radius: 0 2px 2px 0;
 }
 
 .stock-item .stock-name {
@@ -485,1988 +619,6 @@ h1, h2, h3, h4, h5, h6 {
     }
 }
 
-/* 새로고침 버튼 애니메이션 */
-.btn-refresh.loading {
-    pointer-events: none;
-}
-
-.btn-refresh.loading i {
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-
-/* Chart Modal Styles */
-.chart-btn {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
-    border: none;
-    background: linear-gradient(45deg, #007bff, #0056b3);
-    color: white;
-    border-radius: 4px;
-    transition: all 0.2s ease;
-}
-
-.chart-btn:hover {
-    background: linear-gradient(45deg, #0056b3, #004085);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-}
-
-.modal-dialog {
-    max-width: 95vw;
-}
-
-#chartContainer {
-    height: 60vh;
-    min-height: 400px;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container img {
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-}
-
-#chartCanvas {
-    width: 100% !important;
-    height: 100% !important;
-}
-
-.chart-period-selector {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-}
-
-.chart-period-selector .form-check {
-    margin-bottom: 0;
-}
-
-.chart-period-selector .form-check-input:checked {
-    background-color: #007bff;
-    border-color: #007bff;
-}
-
-.chart-period-selector .form-check-label {
-    font-size: 0.85rem;
-    cursor: pointer;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    transition: background-color 0.2s ease;
-}
-
-.chart-period-selector .form-check-input:checked + .form-check-label {
-    background-color: rgba(0, 123, 255, 0.1);
-    color: #007bff;
-    font-weight: 500;
-}
-
-/* 새로고침 버튼 애니메이션 */
-.btn-refresh.loading {
-    pointer-events: none;
-}
-
-.btn-refresh.loading i {
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-
-/* Chart Modal Styles */
-.chart-btn {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
-    border: none;
-    background: linear-gradient(45deg, #007bff, #0056b3);
-    color: white;
-    border-radius: 4px;
-    transition: all 0.2s ease;
-}
-
-.chart-btn:hover {
-    background: linear-gradient(45deg, #0056b3, #004085);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-}
-
-.modal-dialog {
-    max-width: 95vw;
-}
-
-#chartContainer {
-    height: 60vh;
-    min-height: 400px;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container img {
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-}
-
-#chartCanvas {
-    width: 100% !important;
-    height: 100% !important;
-}
-
-.chart-period-selector {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-}
-
-.chart-period-selector .form-check {
-    margin-bottom: 0;
-}
-
-.chart-period-selector .form-check-input:checked {
-    background-color: #007bff;
-    border-color: #007bff;
-}
-
-.chart-period-selector .form-check-label {
-    font-size: 0.85rem;
-    cursor: pointer;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    transition: background-color 0.2s ease;
-}
-
-.chart-period-selector .form-check-input:checked + .form-check-label {
-    background-color: rgba(0, 123, 255, 0.1);
-    color: #007bff;
-    font-weight: 500;
-}
-
-/* 새로고침 버튼 애니메이션 */
-.btn-refresh.loading {
-    pointer-events: none;
-}
-
-.btn-refresh.loading i {
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-
-/* Chart Modal Styles */
-.chart-btn {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
-    border: none;
-    background: linear-gradient(45deg, #007bff, #0056b3);
-    color: white;
-    border-radius: 4px;
-    transition: all 0.2s ease;
-}
-
-.chart-btn:hover {
-    background: linear-gradient(45deg, #0056b3, #004085);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-}
-
-.modal-dialog {
-    max-width: 95vw;
-}
-
-#chartContainer {
-    height: 60vh;
-    min-height: 400px;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container img {
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-}
-
-#chartCanvas {
-    width: 100% !important;
-    height: 100% !important;
-}
-
-.chart-period-selector {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-}
-
-.chart-period-selector .form-check {
-    margin-bottom: 0;
-}
-
-.chart-period-selector .form-check-input:checked {
-    background-color: #007bff;
-    border-color: #007bff;
-}
-
-.chart-period-selector .form-check-label {
-    font-size: 0.85rem;
-    cursor: pointer;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    transition: background-color 0.2s ease;
-}
-
-.chart-period-selector .form-check-input:checked + .form-check-label {
-    background-color: rgba(0, 123, 255, 0.1);
-    color: #007bff;
-    font-weight: 500;
-}
-
-/* 새로고침 버튼 애니메이션 */
-.btn-refresh.loading {
-    pointer-events: none;
-}
-
-.btn-refresh.loading i {
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-
-/* Chart Modal Styles */
-.chart-btn {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
-    border: none;
-    background: linear-gradient(45deg, #007bff, #0056b3);
-    color: white;
-    border-radius: 4px;
-    transition: all 0.2s ease;
-}
-
-.chart-btn:hover {
-    background: linear-gradient(45deg, #0056b3, #004085);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-}
-
-.modal-dialog {
-    max-width: 95vw;
-}
-
-#chartContainer {
-    height: 60vh;
-    min-height: 400px;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container img {
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-}
-
-#chartCanvas {
-    width: 100% !important;
-    height: 100% !important;
-}
-
-.chart-period-selector {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-}
-
-.chart-period-selector .form-check {
-    margin-bottom: 0;
-}
-
-.chart-period-selector .form-check-input:checked {
-    background-color: #007bff;
-    border-color: #007bff;
-}
-
-.chart-period-selector .form-check-label {
-    font-size: 0.85rem;
-    cursor: pointer;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    transition: background-color 0.2s ease;
-}
-
-.chart-period-selector .form-check-input:checked + .form-check-label {
-    background-color: rgba(0, 123, 255, 0.1);
-    color: #007bff;
-    font-weight: 500;
-}
-
-/* 새로고침 버튼 애니메이션 */
-.btn-refresh.loading {
-    pointer-events: none;
-}
-
-.btn-refresh.loading i {
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-
-/* Chart Modal Styles */
-.chart-btn {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
-    border: none;
-    background: linear-gradient(45deg, #007bff, #0056b3);
-    color: white;
-    border-radius: 4px;
-    transition: all 0.2s ease;
-}
-
-.chart-btn:hover {
-    background: linear-gradient(45deg, #0056b3, #004085);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-}
-
-.modal-dialog {
-    max-width: 95vw;
-}
-
-#chartContainer {
-    height: 60vh;
-    min-height: 400px;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container img {
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-}
-
-#chartCanvas {
-    width: 100% !important;
-    height: 100% !important;
-}
-
-.chart-period-selector {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-}
-
-.chart-period-selector .form-check {
-    margin-bottom: 0;
-}
-
-.chart-period-selector .form-check-input:checked {
-    background-color: #007bff;
-    border-color: #007bff;
-}
-
-.chart-period-selector .form-check-label {
-    font-size: 0.85rem;
-    cursor: pointer;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    transition: background-color 0.2s ease;
-}
-
-.chart-period-selector .form-check-input:checked + .form-check-label {
-    background-color: rgba(0, 123, 255, 0.1);
-    color: #007bff;
-    font-weight: 500;
-}
-
-/* 새로고침 버튼 애니메이션 */
-.btn-refresh.loading {
-    pointer-events: none;
-}
-
-.btn-refresh.loading i {
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-
-/* Chart Modal Styles */
-.chart-btn {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
-    border: none;
-    background: linear-gradient(45deg, #007bff, #0056b3);
-    color: white;
-    border-radius: 4px;
-    transition: all 0.2s ease;
-}
-
-.chart-btn:hover {
-    background: linear-gradient(45deg, #0056b3, #004085);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-}
-
-.modal-dialog {
-    max-width: 95vw;
-}
-
-#chartContainer {
-    height: 60vh;
-    min-height: 400px;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container img {
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-}
-
-#chartCanvas {
-    width: 100% !important;
-    height: 100% !important;
-}
-
-.chart-period-selector {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-}
-
-.chart-period-selector .form-check {
-    margin-bottom: 0;
-}
-
-.chart-period-selector .form-check-input:checked {
-    background-color: #007bff;
-    border-color: #007bff;
-}
-
-.chart-period-selector .form-check-label {
-    font-size: 0.85rem;
-    cursor: pointer;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    transition: background-color 0.2s ease;
-}
-
-.chart-period-selector .form-check-input:checked + .form-check-label {
-    background-color: rgba(0, 123, 255, 0.1);
-    color: #007bff;
-    font-weight: 500;
-}
-
-/* 새로고침 버튼 애니메이션 */
-.btn-refresh.loading {
-    pointer-events: none;
-}
-
-.btn-refresh.loading i {
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-
-/* Chart Modal Styles */
-.chart-btn {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
-    border: none;
-    background: linear-gradient(45deg, #007bff, #0056b3);
-    color: white;
-    border-radius: 4px;
-    transition: all 0.2s ease;
-}
-
-.chart-btn:hover {
-    background: linear-gradient(45deg, #0056b3, #004085);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-}
-
-.modal-dialog {
-    max-width: 95vw;
-}
-
-#chartContainer {
-    height: 60vh;
-    min-height: 400px;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container img {
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-}
-
-#chartCanvas {
-    width: 100% !important;
-    height: 100% !important;
-}
-
-.chart-period-selector {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-}
-
-.chart-period-selector .form-check {
-    margin-bottom: 0;
-}
-
-.chart-period-selector .form-check-input:checked {
-    background-color: #007bff;
-    border-color: #007bff;
-}
-
-.chart-period-selector .form-check-label {
-    font-size: 0.85rem;
-    cursor: pointer;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    transition: background-color 0.2s ease;
-}
-
-.chart-period-selector .form-check-input:checked + .form-check-label {
-    background-color: rgba(0, 123, 255, 0.1);
-    color: #007bff;
-    font-weight: 500;
-}
-
-/* 새로고침 버튼 애니메이션 */
-.btn-refresh.loading {
-    pointer-events: none;
-}
-
-.btn-refresh.loading i {
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-
-/* Chart Modal Styles */
-.chart-btn {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
-    border: none;
-    background: linear-gradient(45deg, #007bff, #0056b3);
-    color: white;
-    border-radius: 4px;
-    transition: all 0.2s ease;
-}
-
-.chart-btn:hover {
-    background: linear-gradient(45deg, #0056b3, #004085);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-}
-
-.modal-dialog {
-    max-width: 95vw;
-}
-
-#chartContainer {
-    height: 60vh;
-    min-height: 400px;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container img {
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-}
-
-#chartCanvas {
-    width: 100% !important;
-    height: 100% !important;
-}
-
-.chart-period-selector {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-}
-
-.chart-period-selector .form-check {
-    margin-bottom: 0;
-}
-
-.chart-period-selector .form-check-input:checked {
-    background-color: #007bff;
-    border-color: #007bff;
-}
-
-.chart-period-selector .form-check-label {
-    font-size: 0.85rem;
-    cursor: pointer;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    transition: background-color 0.2s ease;
-}
-
-.chart-period-selector .form-check-input:checked + .form-check-label {
-    background-color: rgba(0, 123, 255, 0.1);
-    color: #007bff;
-    font-weight: 500;
-}
-
-/* 새로고침 버튼 애니메이션 */
-.btn-refresh.loading {
-    pointer-events: none;
-}
-
-.btn-refresh.loading i {
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-
-/* Chart Modal Styles */
-.chart-btn {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
-    border: none;
-    background: linear-gradient(45deg, #007bff, #0056b3);
-    color: white;
-    border-radius: 4px;
-    transition: all 0.2s ease;
-}
-
-.chart-btn:hover {
-    background: linear-gradient(45deg, #0056b3, #004085);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-}
-
-.modal-dialog {
-    max-width: 95vw;
-}
-
-#chartContainer {
-    height: 60vh;
-    min-height: 400px;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container img {
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-}
-
-#chartCanvas {
-    width: 100% !important;
-    height: 100% !important;
-}
-
-.chart-period-selector {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-}
-
-.chart-period-selector .form-check {
-    margin-bottom: 0;
-}
-
-.chart-period-selector .form-check-input:checked {
-    background-color: #007bff;
-    border-color: #007bff;
-}
-
-.chart-period-selector .form-check-label {
-    font-size: 0.85rem;
-    cursor: pointer;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    transition: background-color 0.2s ease;
-}
-
-.chart-period-selector .form-check-input:checked + .form-check-label {
-    background-color: rgba(0, 123, 255, 0.1);
-    color: #007bff;
-    font-weight: 500;
-}
-
-/* 새로고침 버튼 애니메이션 */
-.btn-refresh.loading {
-    pointer-events: none;
-}
-
-.btn-refresh.loading i {
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-
-/* Chart Modal Styles */
-.chart-btn {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
-    border: none;
-    background: linear-gradient(45deg, #007bff, #0056b3);
-    color: white;
-    border-radius: 4px;
-    transition: all 0.2s ease;
-}
-
-.chart-btn:hover {
-    background: linear-gradient(45deg, #0056b3, #004085);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-}
-
-.modal-dialog {
-    max-width: 95vw;
-}
-
-#chartContainer {
-    height: 60vh;
-    min-height: 400px;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container img {
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-}
-
-#chartCanvas {
-    width: 100% !important;
-    height: 100% !important;
-}
-
-.chart-period-selector {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-}
-
-.chart-period-selector .form-check {
-    margin-bottom: 0;
-}
-
-.chart-period-selector .form-check-input:checked {
-    background-color: #007bff;
-    border-color: #007bff;
-}
-
-.chart-period-selector .form-check-label {
-    font-size: 0.85rem;
-    cursor: pointer;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    transition: background-color 0.2s ease;
-}
-
-.chart-period-selector .form-check-input:checked + .form-check-label {
-    background-color: rgba(0, 123, 255, 0.1);
-    color: #007bff;
-    font-weight: 500;
-}
-
-/* 새로고침 버튼 애니메이션 */
-.btn-refresh.loading {
-    pointer-events: none;
-}
-
-.btn-refresh.loading i {
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-
-/* Chart Modal Styles */
-.chart-btn {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
-    border: none;
-    background: linear-gradient(45deg, #007bff, #0056b3);
-    color: white;
-    border-radius: 4px;
-    transition: all 0.2s ease;
-}
-
-.chart-btn:hover {
-    background: linear-gradient(45deg, #0056b3, #004085);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-}
-
-.modal-dialog {
-    max-width: 95vw;
-}
-
-#chartContainer {
-    height: 60vh;
-    min-height: 400px;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container img {
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-}
-
-#chartCanvas {
-    width: 100% !important;
-    height: 100% !important;
-}
-
-.chart-period-selector {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-}
-
-.chart-period-selector .form-check {
-    margin-bottom: 0;
-}
-
-.chart-period-selector .form-check-input:checked {
-    background-color: #007bff;
-    border-color: #007bff;
-}
-
-.chart-period-selector .form-check-label {
-    font-size: 0.85rem;
-    cursor: pointer;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    transition: background-color 0.2s ease;
-}
-
-.chart-period-selector .form-check-input:checked + .form-check-label {
-    background-color: rgba(0, 123, 255, 0.1);
-    color: #007bff;
-    font-weight: 500;
-}
-
-/* 새로고침 버튼 애니메이션 */
-.btn-refresh.loading {
-    pointer-events: none;
-}
-
-.btn-refresh.loading i {
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-
-/* Chart Modal Styles */
-.chart-btn {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
-    border: none;
-    background: linear-gradient(45deg, #007bff, #0056b3);
-    color: white;
-    border-radius: 4px;
-    transition: all 0.2s ease;
-}
-
-.chart-btn:hover {
-    background: linear-gradient(45deg, #0056b3, #004085);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-}
-
-.modal-dialog {
-    max-width: 95vw;
-}
-
-#chartContainer {
-    height: 60vh;
-    min-height: 400px;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container img {
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-}
-
-#chartCanvas {
-    width: 100% !important;
-    height: 100% !important;
-}
-
-.chart-period-selector {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-}
-
-.chart-period-selector .form-check {
-    margin-bottom: 0;
-}
-
-.chart-period-selector .form-check-input:checked {
-    background-color: #007bff;
-    border-color: #007bff;
-}
-
-.chart-period-selector .form-check-label {
-    font-size: 0.85rem;
-    cursor: pointer;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    transition: background-color 0.2s ease;
-}
-
-.chart-period-selector .form-check-input:checked + .form-check-label {
-    background-color: rgba(0, 123, 255, 0.1);
-    color: #007bff;
-    font-weight: 500;
-}
-
-/* 새로고침 버튼 애니메이션 */
-.btn-refresh.loading {
-    pointer-events: none;
-}
-
-.btn-refresh.loading i {
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-
-/* Chart Modal Styles */
-.chart-btn {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
-    border: none;
-    background: linear-gradient(45deg, #007bff, #0056b3);
-    color: white;
-    border-radius: 4px;
-    transition: all 0.2s ease;
-}
-
-.chart-btn:hover {
-    background: linear-gradient(45deg, #0056b3, #004085);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-}
-
-.modal-dialog {
-    max-width: 95vw;
-}
-
-#chartContainer {
-    height: 60vh;
-    min-height: 400px;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container img {
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-}
-
-#chartCanvas {
-    width: 100% !important;
-    height: 100% !important;
-}
-
-.chart-period-selector {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-}
-
-.chart-period-selector .form-check {
-    margin-bottom: 0;
-}
-
-.chart-period-selector .form-check-input:checked {
-    background-color: #007bff;
-    border-color: #007bff;
-}
-
-.chart-period-selector .form-check-label {
-    font-size: 0.85rem;
-    cursor: pointer;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    transition: background-color 0.2s ease;
-}
-
-.chart-period-selector .form-check-input:checked + .form-check-label {
-    background-color: rgba(0, 123, 255, 0.1);
-    color: #007bff;
-    font-weight: 500;
-}
-
-/* 새로고침 버튼 애니메이션 */
-.btn-refresh.loading {
-    pointer-events: none;
-}
-
-.btn-refresh.loading i {
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-
-/* Chart Modal Styles */
-.chart-btn {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
-    border: none;
-    background: linear-gradient(45deg, #007bff, #0056b3);
-    color: white;
-    border-radius: 4px;
-    transition: all 0.2s ease;
-}
-
-.chart-btn:hover {
-    background: linear-gradient(45deg, #0056b3, #004085);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-}
-
-.modal-dialog {
-    max-width: 95vw;
-}
-
-#chartContainer {
-    height: 60vh;
-    min-height: 400px;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container img {
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-}
-
-#chartCanvas {
-    width: 100% !important;
-    height: 100% !important;
-}
-
-.chart-period-selector {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-}
-
-.chart-period-selector .form-check {
-    margin-bottom: 0;
-}
-
-.chart-period-selector .form-check-input:checked {
-    background-color: #007bff;
-    border-color: #007bff;
-}
-
-.chart-period-selector .form-check-label {
-    font-size: 0.85rem;
-    cursor: pointer;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    transition: background-color 0.2s ease;
-}
-
-.chart-period-selector .form-check-input:checked + .form-check-label {
-    background-color: rgba(0, 123, 255, 0.1);
-    color: #007bff;
-    font-weight: 500;
-}
-
-/* 새로고침 버튼 애니메이션 */
-.btn-refresh.loading {
-    pointer-events: none;
-}
-
-.btn-refresh.loading i {
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-
-/* Chart Modal Styles */
-.chart-btn {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
-    border: none;
-    background: linear-gradient(45deg, #007bff, #0056b3);
-    color: white;
-    border-radius: 4px;
-    transition: all 0.2s ease;
-}
-
-.chart-btn:hover {
-    background: linear-gradient(45deg, #0056b3, #004085);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-}
-
-.modal-dialog {
-    max-width: 95vw;
-}
-
-#chartContainer {
-    height: 60vh;
-    min-height: 400px;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container img {
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-}
-
-#chartCanvas {
-    width: 100% !important;
-    height: 100% !important;
-}
-
-.chart-period-selector {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-}
-
-.chart-period-selector .form-check {
-    margin-bottom: 0;
-}
-
-.chart-period-selector .form-check-input:checked {
-    background-color: #007bff;
-    border-color: #007bff;
-}
-
-.chart-period-selector .form-check-label {
-    font-size: 0.85rem;
-    cursor: pointer;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    transition: background-color 0.2s ease;
-}
-
-.chart-period-selector .form-check-input:checked + .form-check-label {
-    background-color: rgba(0, 123, 255, 0.1);
-    color: #007bff;
-    font-weight: 500;
-}
-
-/* 새로고침 버튼 애니메이션 */
-.btn-refresh.loading {
-    pointer-events: none;
-}
-
-.btn-refresh.loading i {
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-
-/* Chart Modal Styles */
-.chart-btn {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
-    border: none;
-    background: linear-gradient(45deg, #007bff, #0056b3);
-    color: white;
-    border-radius: 4px;
-    transition: all 0.2s ease;
-}
-
-.chart-btn:hover {
-    background: linear-gradient(45deg, #0056b3, #004085);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-}
-
-.modal-dialog {
-    max-width: 95vw;
-}
-
-#chartContainer {
-    height: 60vh;
-    min-height: 400px;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container img {
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-}
-
-#chartCanvas {
-    width: 100% !important;
-    height: 100% !important;
-}
-
-.chart-period-selector {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-}
-
-.chart-period-selector .form-check {
-    margin-bottom: 0;
-}
-
-.chart-period-selector .form-check-input:checked {
-    background-color: #007bff;
-    border-color: #007bff;
-}
-
-.chart-period-selector .form-check-label {
-    font-size: 0.85rem;
-    cursor: pointer;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    transition: background-color 0.2s ease;
-}
-
-.chart-period-selector .form-check-input:checked + .form-check-label {
-    background-color: rgba(0, 123, 255, 0.1);
-    color: #007bff;
-    font-weight: 500;
-}
-
-/* 새로고침 버튼 애니메이션 */
-.btn-refresh.loading {
-    pointer-events: none;
-}
-
-.btn-refresh.loading i {
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-
-/* Chart Modal Styles */
-.chart-btn {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
-    border: none;
-    background: linear-gradient(45deg, #007bff, #0056b3);
-    color: white;
-    border-radius: 4px;
-    transition: all 0.2s ease;
-}
-
-.chart-btn:hover {
-    background: linear-gradient(45deg, #0056b3, #004085);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-}
-
-.modal-dialog {
-    max-width: 95vw;
-}
-
-#chartContainer {
-    height: 60vh;
-    min-height: 400px;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container img {
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-}
-
-#chartCanvas {
-    width: 100% !important;
-    height: 100% !important;
-}
-
-.chart-period-selector {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-}
-
-.chart-period-selector .form-check {
-    margin-bottom: 0;
-}
-
-.chart-period-selector .form-check-input:checked {
-    background-color: #007bff;
-    border-color: #007bff;
-}
-
-.chart-period-selector .form-check-label {
-    font-size: 0.85rem;
-    cursor: pointer;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    transition: background-color 0.2s ease;
-}
-
-.chart-period-selector .form-check-input:checked + .form-check-label {
-    background-color: rgba(0, 123, 255, 0.1);
-    color: #007bff;
-    font-weight: 500;
-}
-
-/* 새로고침 버튼 애니메이션 */
-.btn-refresh.loading {
-    pointer-events: none;
-}
-
-.btn-refresh.loading i {
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-
-/* Chart Modal Styles */
-.chart-btn {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
-    border: none;
-    background: linear-gradient(45deg, #007bff, #0056b3);
-    color: white;
-    border-radius: 4px;
-    transition: all 0.2s ease;
-}
-
-.chart-btn:hover {
-    background: linear-gradient(45deg, #0056b3, #004085);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-}
-
-.modal-dialog {
-    max-width: 95vw;
-}
-
-#chartContainer {
-    height: 60vh;
-    min-height: 400px;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container img {
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-}
-
-#chartCanvas {
-    width: 100% !important;
-    height: 100% !important;
-}
-
-.chart-period-selector {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-}
-
-.chart-period-selector .form-check {
-    margin-bottom: 0;
-}
-
-.chart-period-selector .form-check-input:checked {
-    background-color: #007bff;
-    border-color: #007bff;
-}
-
-.chart-period-selector .form-check-label {
-    font-size: 0.85rem;
-    cursor: pointer;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    transition: background-color 0.2s ease;
-}
-
-.chart-period-selector .form-check-input:checked + .form-check-label {
-    background-color: rgba(0, 123, 255, 0.1);
-    color: #007bff;
-    font-weight: 500;
-}
-
-/* 새로고침 버튼 애니메이션 */
-.btn-refresh.loading {
-    pointer-events: none;
-}
-
-.btn-refresh.loading i {
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-
-/* Chart Modal Styles */
-.chart-btn {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
-    border: none;
-    background: linear-gradient(45deg, #007bff, #0056b3);
-    color: white;
-    border-radius: 4px;
-    transition: all 0.2s ease;
-}
-
-.chart-btn:hover {
-    background: linear-gradient(45deg, #0056b3, #004085);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-}
-
-.modal-dialog {
-    max-width: 95vw;
-}
-
-#chartContainer {
-    height: 60vh;
-    min-height: 400px;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container img {
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-}
-
-#chartCanvas {
-    width: 100% !important;
-    height: 100% !important;
-}
-
-.chart-period-selector {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-}
-
-.chart-period-selector .form-check {
-    margin-bottom: 0;
-}
-
-.chart-period-selector .form-check-input:checked {
-    background-color: #007bff;
-    border-color: #007bff;
-}
-
-.chart-period-selector .form-check-label {
-    font-size: 0.85rem;
-    cursor: pointer;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    transition: background-color 0.2s ease;
-}
-
-.chart-period-selector .form-check-input:checked + .form-check-label {
-    background-color: rgba(0, 123, 255, 0.1);
-    color: #007bff;
-    font-weight: 500;
-}
-
-/* 새로고침 버튼 애니메이션 */
-.btn-refresh.loading {
-    pointer-events: none;
-}
-
-.btn-refresh.loading i {
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-
-/* Chart Modal Styles */
-.chart-btn {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
-    border: none;
-    background: linear-gradient(45deg, #007bff, #0056b3);
-    color: white;
-    border-radius: 4px;
-    transition: all 0.2s ease;
-}
-
-.chart-btn:hover {
-    background: linear-gradient(45deg, #0056b3, #004085);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-}
-
-.modal-dialog {
-    max-width: 95vw;
-}
-
-#chartContainer {
-    height: 60vh;
-    min-height: 400px;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container img {
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-}
-
-#chartCanvas {
-    width: 100% !important;
-    height: 100% !important;
-}
-
-.chart-period-selector {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-}
-
-.chart-period-selector .form-check {
-    margin-bottom: 0;
-}
-
-.chart-period-selector .form-check-input:checked {
-    background-color: #007bff;
-    border-color: #007bff;
-}
-
-.chart-period-selector .form-check-label {
-    font-size: 0.85rem;
-    cursor: pointer;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    transition: background-color 0.2s ease;
-}
-
-.chart-period-selector .form-check-input:checked + .form-check-label {
-    background-color: rgba(0, 123, 255, 0.1);
-    color: #007bff;
-    font-weight: 500;
-}
-
-/* 새로고침 버튼 애니메이션 */
-.btn-refresh.loading {
-    pointer-events: none;
-}
-
-.btn-refresh.loading i {
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-
-/* Chart Modal Styles */
-.chart-btn {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
-    border: none;
-    background: linear-gradient(45deg, #007bff, #0056b3);
-    color: white;
-    border-radius: 4px;
-    transition: all 0.2s ease;
-}
-
-.chart-btn:hover {
-    background: linear-gradient(45deg, #0056b3, #004085);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-}
-
-.modal-dialog {
-    max-width: 95vw;
-}
-
-#chartContainer {
-    height: 60vh;
-    min-height: 400px;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart-image-container img {
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-    border-radius: 8px;
-    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-}
-
 /* 모의투자 계좌 스타일 */
 .account-type {
     display: inline-block;
@@ -2479,13 +631,13 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .mock-account {
-    background-color: #e3f2fd;
+    background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
     color: #1976d2;
     border: 1px solid #bbdefb;
 }
 
 .real-account {
-    background-color: #f3e5f5;
+    background: linear-gradient(135deg, #f3e5f5 0%, #ce93d8 100%);
     color: #7b1fa2;
     border: 1px solid #ce93d8;
 }
@@ -2510,9 +662,9 @@ h1, h2, h3, h4, h5, h6 {
     display: flex;
     flex-direction: column;
     padding: 0.75rem;
-    background-color: #f8f9fa;
-    border-radius: 6px;
-    border-left: 4px solid #007bff;
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    border-radius: 10px;
+    border-left: 4px solid #667eea;
 }
 
 .balance-item label {
@@ -2538,7 +690,7 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .holdings-count, .history-count {
-    background-color: #007bff;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;
     padding: 0.25rem 0.75rem;
     border-radius: 15px;
@@ -2564,19 +716,19 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .holdings-table th, .history-table th {
-    background-color: #f8f9fa;
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
     font-weight: 600;
     color: #495057;
     font-size: 0.9rem;
 }
 
 .profit {
-    color: #dc3545;
+    color: #e74c3c;
     font-weight: 600;
 }
 
 .loss {
-    color: #28a745;
+    color: #27ae60;
     font-weight: 600;
 }
 
@@ -2585,12 +737,12 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .buy {
-    color: #dc3545;
+    color: #e74c3c;
     font-weight: 600;
 }
 
 .sell {
-    color: #28a745;
+    color: #27ae60;
     font-weight: 600;
 }
 
@@ -2598,9 +750,9 @@ h1, h2, h3, h4, h5, h6 {
     display: flex;
     align-items: center;
     padding: 0.75rem;
-    background-color: #fff3cd;
+    background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
     border: 1px solid #ffeaa7;
-    border-radius: 6px;
+    border-radius: 10px;
     margin-top: 1rem;
 }
 
@@ -2616,65 +768,167 @@ h1, h2, h3, h4, h5, h6 {
     font-style: italic;
 }
 
-/* =============================
-   Pink Theme Overrides (핑크 계열 테마)
-   기존 파란 계열(#007bff, #0d6efd 등)을 핑크 계열(#e91e63)로 통일
-   HTML/JS 수정 없이 클래스 재정의로 적용
-   ============================= */
-
 /* Bootstrap 유사 클래스 오버라이드 */
-.bg-primary { background-color: #e91e63 !important; }
-.text-primary { color: #e91e63 !important; }
-.border-primary { border-color: #e91e63 !important; }
-.btn-primary { background-color: #e91e63 !important; border-color: #e91e63 !important; }
-.btn-primary:hover { background-color: #c2185b !important; border-color: #c2185b !important; }
-.btn-outline-primary { color: #e91e63 !important; border-color: #e91e63 !important; }
-.btn-outline-primary:hover { background-color: #e91e63 !important; border-color: #e91e63 !important; color: #fff !important; }
+.bg-primary { 
+    background: linear-gradient(135deg, #e91e63 0%, #c2185b 100%) !important; 
+}
 
-/* 조건식 선택 상태를 핑크 계열로 */
+.text-primary { 
+    color: #e91e63 !important; 
+}
+
+.border-primary { 
+    border-color: #e91e63 !important; 
+}
+
+.btn-primary { 
+    background: linear-gradient(135deg, #e91e63 0%, #c2185b 100%) !important; 
+    border: none !important;
+    border-radius: 8px;
+    transition: all 0.3s ease;
+}
+
+.btn-primary:hover { 
+    background: linear-gradient(135deg, #d81b60 0%, #ad1457 100%) !important; 
+    transform: translateY(-1px);
+    box-shadow: 0 4px 15px rgba(233, 30, 99, 0.3);
+}
+
+.btn-outline-primary { 
+    color: #e91e63 !important; 
+    border-color: #e91e63 !important;
+    border-radius: 8px;
+    transition: all 0.3s ease;
+}
+
+.btn-outline-primary:hover { 
+    background: linear-gradient(135deg, #e91e63 0%, #c2185b 100%) !important; 
+    border-color: #e91e63 !important; 
+    color: #fff !important;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 15px rgba(233, 30, 99, 0.3);
+}
+
+/* 조건식 선택 상태 */
 .condition-item.active {
-    background-color: #e91e63 !important;
+    background: linear-gradient(135deg, #e91e63 0%, #c2185b 100%) !important;
     color: #fff !important;
     border-color: #e91e63 !important;
 }
-.condition-item.active:hover { background-color: #c2185b !important; }
 
-/* 카드/아이템 호버 포커스 색상 핑크 계열로 */
-.stock-item:hover { border-color: #e91e63 !important; }
-.stock-item.selected {
-    border-color: #e91e63 !important;
-    box-shadow: 0 0 0 0.2rem rgba(233, 30, 99, 0.25) !important;
+.condition-item.active:hover { 
+    background: linear-gradient(135deg, #d81b60 0%, #ad1457 100%) !important; 
 }
 
-/* 차트 버튼 그라데이션 핑크 계열로 */
-.chart-btn {
-    background: linear-gradient(45deg, #e91e63, #c2185b) !important;
-}
-.chart-btn:hover {
-    background: linear-gradient(45deg, #c2185b, #ad1457) !important;
+/* 카드/아이템 호버 포커스 색상 */
+.stock-item:hover { 
+    border-color: #e91e63 !important; 
 }
 
-/* 기간 선택 스위치 색상 핑크 계열로 */
-.chart-period-selector .form-check-input:checked {
-    background-color: #e91e63 !important;
-    border-color: #e91e63 !important;
-}
-.chart-period-selector .form-check-input:checked + .form-check-label {
-    background-color: rgba(233, 30, 99, 0.1) !important;
-    color: #e91e63 !important;
+
+/* 뉴스 카드 포커스 색상 */
+.news-card { 
+    border-color: #fce4ec !important; 
 }
 
-/* 뉴스 카드 포커스 색상 핑크 계열로 */
-.news-card { border-color: #fce4ec !important; }
-.news-card:hover { border-color: #e91e63 !important; }
-.news-title a:hover { color: #e91e63 !important; }
+.news-card:hover { 
+    border-color: #e91e63 !important; 
+}
 
-/* 헤더/배지 등 강조 색상 핑크 계열로 */
-.holdings-count, .history-count { background-color: #e91e63 !important; }
-.balance-item { border-left-color: #e91e63 !important; }
+.news-title a:hover { 
+    color: #e91e63 !important; 
+}
 
-/* 로딩 스피너 색상 (text-primary 사용처 대응) */
-.spinner-border.text-primary { color: #e91e63 !important; }
+/* 로딩 스피너 색상 */
+.spinner-border.text-primary { 
+    color: #e91e63 !important; 
+}
 
-/* 표 헤더 밑줄 등 파란 테두리 대체 */
-.stocks-header { border-bottom-color: #dee2e6 !important; }
+/* 탭 스타일 개선 */
+.nav-tabs .nav-link {
+    font-weight: 500;
+    border-radius: 10px 10px 0 0;
+    transition: all 0.3s ease;
+    background: rgba(255, 255, 255, 0.5);
+    backdrop-filter: blur(5px);
+}
+
+.nav-tabs .nav-link:hover {
+    background: rgba(233, 30, 99, 0.1);
+    border-color: transparent;
+}
+
+.nav-tabs .nav-link.active {
+    background: linear-gradient(135deg, #e91e63 0%, #c2185b 100%);
+    color: white;
+    border-color: transparent;
+}
+
+.tab-content {
+    margin-top: 20px;
+}
+
+/* 모달 스타일 개선 */
+.modal-content {
+    border-radius: 15px;
+    border: none;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+}
+
+.modal-header {
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    border-bottom: 2px solid #e9ecef;
+    border-radius: 15px 15px 0 0;
+}
+
+/* 폼 컨트롤 스타일 개선 */
+.form-control {
+    border-radius: 8px;
+    border: 1px solid #dee2e6;
+    transition: all 0.3s ease;
+}
+
+.form-control:focus {
+    border-color: #e91e63;
+    box-shadow: 0 0 0 0.2rem rgba(233, 30, 99, 0.25);
+}
+
+/* 테이블 스타일 개선 */
+.table {
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.table thead th {
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    border-bottom: 2px solid #dee2e6;
+    font-weight: 600;
+    color: #495057;
+}
+
+/* 배지 스타일 개선 */
+.badge {
+    border-radius: 15px;
+    font-weight: 500;
+}
+
+.badge.bg-primary {
+    background: linear-gradient(135deg, #e91e63 0%, #c2185b 100%) !important;
+}
+
+/* 스위치 스타일 개선 */
+.form-check-input:checked {
+    background-color: #e91e63;
+    border-color: #e91e63;
+}
+
+/* 버튼 그룹 스타일 */
+.btn-group .btn {
+    border-radius: 8px;
+}
+
+.btn-check:checked + .btn-outline-primary {
+    background: linear-gradient(135deg, #e91e63 0%, #c2185b 100%);
+    border-color: #e91e63;
+    color: white;
+}
