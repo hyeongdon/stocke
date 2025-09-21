@@ -27,6 +27,7 @@ class PendingBuySignal(Base):
     stock_name = Column(String(100), nullable=False)
     detected_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
     status = Column(String(20), nullable=False, default="PENDING")  # PENDING, ORDERED, CANCELED 등
+    signal_type = Column(String(20), nullable=False, default="condition", index=True)  # 신호 타입
     
     # 대량거래 전략용 필드들
     reference_candle_high = Column(Integer, nullable=True)  # 기준봉 고가

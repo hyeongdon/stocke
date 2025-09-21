@@ -889,32 +889,17 @@ class StockMonitorApp {
                 const data = await response.json();
                 console.log('🔍 [DEBUG] 초기 상태 API 응답:', data);
                 
-                const isRunning = data.is_running || data.is_monitoring;
+                // API 응답 구조에 맞게 수정
+                const isRunning = data.monitoring?.is_running || data.is_running || data.is_monitoring;
                 console.log('🔍 [DEBUG] 초기 상태 - isRunning:', isRunning);
+                console.log('🔍 [DEBUG] monitoring 객체:', data.monitoring);
                 
-                // 자동 시작: 실행 중이 아니면 바로 시작 요청
-                if (!isRunning) {
-                    try {
-                        console.log('▶️ [AUTO] 모니터링 자동 시작 시도');
-                        const startRes = await fetch('/monitoring/start', { method: 'POST' });
-                        let startData = {};
-                        try {
-                            startData = await startRes.json();
-                        } catch (_) {}
-                        const nowRunning = startData.is_running || startData.is_monitoring || startRes.ok;
-                        console.log('▶️ [AUTO] 모니터링 시작 결과:', nowRunning, startData);
-                        // 시작 직후 반영이 늦을 수 있어 폴링으로 확인
-                        await this.pollMonitoring(true, 10000, 1000);
-                    } catch (e) {
-                        console.error('❌ [AUTO] 모니터링 자동 시작 실패:', e);
-                        this.updateMonitoringUI(false);
-                    }
-                } else {
-                    // 이미 실행 중이면 UI만 동기화
-                    this.updateMonitoringUI(true);
-                }
+                // UI만 현재 상태에 맞게 업데이트 (자동 시작하지 않음)
+                this.updateMonitoringUI(isRunning);
             } catch (error) {
                 console.error('🔍 [DEBUG] 모니터링 상태 확인 실패:', error);
+                // 오류 시 기본적으로 중지 상태로 표시
+                this.updateMonitoringUI(false);
             }
         }
 
@@ -925,7 +910,7 @@ class StockMonitorApp {
                 try {
                     const res = await fetch('/monitoring/status');
                     const data = await res.json().catch(() => ({}));
-                    const isRunning = !!(data.is_running || data.is_monitoring);
+                    const isRunning = !!(data.monitoring?.is_running || data.is_running || data.is_monitoring);
                     this.updateMonitoringUI(isRunning);
                     if (isRunning === desiredRunning) {
                         return true;
@@ -967,7 +952,7 @@ class StockMonitorApp {
                 // 현재 모니터링 상태 확인
                 const statusResponse = await fetch('/monitoring/status');
                 const statusData = await statusResponse.json();
-                const isCurrentlyRunning = statusData.is_running;
+                const isCurrentlyRunning = statusData.monitoring?.is_running || statusData.is_running || statusData.is_monitoring;
                 
                 console.log('🔍 [DEBUG] 현재 모니터링 상태:', isCurrentlyRunning);
                 
@@ -993,7 +978,7 @@ class StockMonitorApp {
                 }
                 const data = await response.json();
                 console.log('🔍 [DEBUG] API 응답:', data);
-                const isRunning = data.is_running || data.is_monitoring;
+                const isRunning = data.monitoring?.is_running || data.is_running || data.is_monitoring;
                 // 응답 즉시 UI를 낙관적으로 갱신
                 this.updateMonitoringUI(isRunning);
                 // 백엔드 반영 지연 대비 폴링으로 확정
@@ -1027,7 +1012,7 @@ class StockMonitorApp {
                     // 서버 상태로 최종 동기화
                     const res = await fetch('/monitoring/status');
                     const st = await res.json().catch(() => ({}));
-                    const on = !!(st.is_running || st.is_monitoring);
+                    const on = !!(st.monitoring?.is_running || st.is_running || st.is_monitoring);
                     this.updateMonitoringUI(on);
                     if (textSpan && !on) textSpan.textContent = '모니터링 시작';
                 } catch (syncErr) {

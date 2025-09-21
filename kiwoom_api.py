@@ -245,14 +245,23 @@ class KiwoomAPI:
                     conditions = []
                     
                     if condition_data:
-                        for item in condition_data:
+                        logger.info(f"키움 API 원본 조건식 데이터: {condition_data}")
+                        logger.info(f"원본 데이터 개수: {len(condition_data)}")
+                        for i, item in enumerate(condition_data):
+                            logger.info(f"원본 아이템 {i}: {item} (타입: {type(item)}, 길이: {len(item) if isinstance(item, list) else 'N/A'})")
                             if isinstance(item, list) and len(item) == 2:
                                 conditions.append({
                                     "condition_id": item[0],
                                     "condition_name": item[1]
                                 })
+                                logger.info(f"조건식 추가: ID={item[0]}, 이름={item[1]}")
+                            else:
+                                logger.warning(f"조건식 파싱 실패: {item}")
                     
                     logger.info(f"조건식 목록 조회 성공: {len(conditions)}개")
+                    logger.info(f"반환할 조건식 목록:")
+                    for i, cond in enumerate(conditions):
+                        logger.info(f"  {i+1}. {cond.get('condition_name')} (API ID: {cond.get('condition_id')})")
                     return conditions
                 else:
                     logger.error(f"조건식 목록 응답 오류: {data}")

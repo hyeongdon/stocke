@@ -59,7 +59,7 @@ class ConditionMonitor:
                 logger.info(f"🔍 [CONDITION_MONITOR] 조건식 {condition_id} 모니터링 완료 - {len(results)}개 종목 처리됨")
                 return True
             else:
-                logger.info(f"🔍 [CONDITION_MONITOR] 조건식 {condition_id}에 해당하는 종목이 없음")
+                logger.info(f"🔍 [CONDITION_MONITOR] 조건식 {condition_name} (API ID: {condition_id})에 해당하는 종목이 없음")
                 return False
             
         except Exception as e:
@@ -116,6 +116,9 @@ class ConditionMonitor:
         # 조건식 목록 조회
         logger.debug("🔍 [CONDITION_MONITOR] 조건식 목록 조회 시작")
         conditions = await self.kiwoom_api.get_condition_list_websocket()
+        logger.info(f"🔍 [CONDITION_MONITOR] 키움 API에서 받은 조건식: {len(conditions)}개")
+        for i, cond in enumerate(conditions):
+            logger.info(f"🔍 [CONDITION_MONITOR]   {i+1}. {cond.get('condition_name')} (API ID: {cond.get('condition_id')})")
 
         # 자동매매 대상만 필터링
         enabled_set = set()
@@ -140,7 +143,7 @@ class ConditionMonitor:
             condition_name = cond.get("condition_name", f"조건식_{idx+1}")
             condition_api_id = cond.get("condition_id", str(idx))
             if condition_name not in enabled_set:
-                logger.info(f"🔍 [CONDITION_MONITOR] 비활성 조건식 스킵: {condition_name}")
+                logger.info(f"🔍 [CONDITION_MONITOR] 비활성 조건식 스킵: {condition_name} (API ID: {condition_api_id})")
                 continue
             logger.info(f"🔍 [CONDITION_MONITOR] 조건식 실행: {condition_name} (API ID: {condition_api_id})")
             # 키움에서 제공한 실제 조건식 ID로 조회

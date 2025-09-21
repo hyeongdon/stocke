@@ -932,3 +932,30 @@ h1, h2, h3, h4, h5, h6 {
     border-color: #e91e63;
     color: white;
 }
+
+/* 모니터링 버튼 스타일 */
+#toggleMonitoring.btn-success {
+    background: linear-gradient(135deg, #28a745 0%, #20c997 100%) !important;
+    border: none !important;
+    color: white !important;
+    transition: all 0.3s ease;
+}
+
+#toggleMonitoring.btn-success:hover {
+    background: linear-gradient(135deg, #218838 0%, #1e7e34 100%) !important;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 15px rgba(40, 167, 69, 0.3);
+}
+
+#toggleMonitoring.btn-danger {
+    background: linear-gradient(135deg, #dc3545 0%, #c82333 100%) !important;
+    border: none !important;
+    color: white !important;
+    transition: all 0.3s ease;
+}
+
+#toggleMonitoring.btn-danger:hover {
+    background: linear-gradient(135deg, #c82333 0%, #bd2130 100%) !important;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 15px rgba(220, 53, 69, 0.3);
+}
