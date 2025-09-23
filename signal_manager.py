@@ -142,9 +142,27 @@ class SignalManager:
                     "signal_type": signal_type.value
                 }
                 
-                # 추가 데이터가 있으면 포함
+                # 추가 데이터가 있으면 모델에 존재하는 필드만 포함
                 if additional_data:
-                    signal_data.update(additional_data)
+                    # PendingBuySignal 모델의 허용 필드 화이트리스트
+                    allowed_extra_fields = {
+                        # 공통/기본 필드(이미 포함되어 있으므로 굳이 추가할 필요 없음)
+                        "condition_id",
+                        "stock_code",
+                        "stock_name",
+                        "status",
+                        "detected_at",
+                        "signal_type",
+                        # 모델에 실제로 존재하는 추가 필드들만 허용
+                        "reference_candle_high",
+                        "reference_candle_date",
+                        "target_price",
+                    }
+                    filtered = {k: v for k, v in additional_data.items() if k in allowed_extra_fields}
+                    ignored_keys = set(additional_data.keys()) - set(filtered.keys())
+                    if ignored_keys:
+                        logger.debug(f"📡 [SIGNAL_MANAGER] 모델에 없는 필드 무시: {sorted(list(ignored_keys))}")
+                    signal_data.update(filtered)
                 
                 # 신호 생성
                 pending_signal = PendingBuySignal(**signal_data)
@@ -198,7 +216,25 @@ class SignalManager:
                     if error_msg:
                         pass  # 오류 메시지 필드가 있다면 여기에 추가
                     
-                    session.commit()
+                    try:
+                        session.commit()
+                    except IntegrityError:
+                        # 동일 (condition_id, stock_code, status) 레코드가 이미 존재하는 경우
+                        session.rollback()
+                        duplicate = session.query(PendingBuySignal).filter(
+                            PendingBuySignal.condition_id == signal.condition_id,
+                            PendingBuySignal.stock_code == signal.stock_code,
+                            PendingBuySignal.status == status.value,
+                            PendingBuySignal.id != signal.id
+                        ).first()
+                        if duplicate:
+                            # 현재 레코드를 삭제하여 유니크 충돌 해소
+                            session.delete(signal)
+                            session.commit()
+                            logger.info(f"📡 [SIGNAL_MANAGER] 상태 중복 감지로 레코드 정리 - 기존 유지(ID: {duplicate.id}), 삭제(ID: {signal_id})")
+                        else:
+                            # 예외 재발생 방지용 재시도
+                            session.commit()
                     
                     logger.info(f"📡 [SIGNAL_MANAGER] 신호 상태 변경 - ID: {signal_id}, {old_status} -> {status.value}")
                     

@@ -1,11 +1,13 @@
 import json
 import logging
 import asyncio
+import random
 import websockets
 import aiohttp
 from datetime import datetime
 from typing import Dict, Optional, Callable, List
 from config import Config
+from api_rate_limiter import api_rate_limiter
 from token_manager import TokenManager
 
 logger = logging.getLogger(__name__)
@@ -452,6 +454,11 @@ class KiwoomAPI:
                 logger.error("키움 API 토큰이 없습니다")
                 return []
             
+            # 레이트 리미터: 가용성 확인 (제한 중이면 즉시 건너뜀)
+            if not api_rate_limiter.is_api_available():
+                logger.warning("차트 조회 건너뜀 - API 제한 상태")
+                return []
+            
             # 키움 API 호출 설정 - 실전/모의 분기
             use_mock = Config.KIWOOM_USE_MOCK_ACCOUNT
             host = Config.KIWOOM_MOCK_API_URL if use_mock else Config.KIWOOM_REAL_API_URL
@@ -478,25 +485,47 @@ class KiwoomAPI:
                 "upd_stkpc_tp": "1"    # 수정주가타입 (1: 수정주가)
             }
             
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    url, 
-                    headers=headers, 
-                    json=request_data
-                ) as response:
-                    
-                    if response.status == 200:
-                        data = await response.json()
-                        
-                        # 응답 확인
-                        if data.get('return_code') == 0:
-                            return self._parse_kiwoom_chart_data(data, stock_code)
+            # 지수 백오프 리트라이
+            max_attempts = 3
+            for attempt in range(max_attempts):
+                # 호출 기록 (윈도우 초과 시 제한 전환 및 중단)
+                if not api_rate_limiter.record_api_call("chart_data"):
+                    logger.warning("차트 조회 호출 한도 초과 - 제한 트리거됨")
+                    return []
+
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        url,
+                        headers=headers,
+                        json=request_data
+                    ) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            if data.get('return_code') == 0:
+                                return self._parse_kiwoom_chart_data(data, stock_code)
+                            else:
+                                # 응답 본문에 제한 관련 문구가 있으면 제한 처리
+                                msg = (data.get('return_msg') or "").lower()
+                                if any(k in msg for k in ["rate limit", "too many", "요청 한도", "429", "제한"]):
+                                    api_rate_limiter.handle_api_error(Exception(data.get('return_msg', 'rate limit')))
+                                    backoff = (2 ** attempt) + random.uniform(0, 0.5)
+                                    logger.warning(f"차트 조회 제한 감지 - {backoff:.2f}s 대기 후 재시도 {attempt+1}/{max_attempts}")
+                                    await asyncio.sleep(backoff)
+                                    continue
+                                logger.error(f"키움 API 오류: {data.get('return_msg')}")
+                                return []
+                        elif response.status == 429:
+                            # HTTP 429 - 제한
+                            api_rate_limiter.handle_api_error(Exception("429 Too Many Requests"))
+                            backoff = (2 ** attempt) + random.uniform(0, 0.5)
+                            logger.warning(f"HTTP 429 수신 - {backoff:.2f}s 대기 후 재시도 {attempt+1}/{max_attempts}")
+                            await asyncio.sleep(backoff)
+                            continue
                         else:
-                            logger.error(f"키움 API 오류: {data.get('return_msg')}")
+                            logger.error(f"키움 API 호출 실패: {response.status}")
                             return []
-                    else:
-                        logger.error(f"키움 API 호출 실패: {response.status}")
-                        return []
+            # 모든 재시도 실패
+            return []
                         
         except Exception as e:
             logger.error(f"실제 차트 데이터 조회 중 오류: {e}")

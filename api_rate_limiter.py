@@ -28,10 +28,10 @@ class APIRateLimiter:
         self.call_history = []
         self.max_history_size = 100
         self.rate_limit_window = 60  # 1분 윈도우
-        self.max_calls_per_window = 50  # 1분당 최대 호출 수
+        self.max_calls_per_window = 20  # 1분당 최대 호출 수 (보수적 설정)
         
         # 제한 복구 설정
-        self.limit_duration_minutes = 30  # 제한 지속 시간 (분)
+        self.limit_duration_minutes = 10  # 제한 지속 시간 (분)
         self.recovery_check_interval = 300  # 복구 확인 간격 (초)
         
     def is_api_available(self) -> bool:
