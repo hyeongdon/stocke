@@ -51,15 +51,7 @@ sqlite3 .\stock_pipeline.db
 종료:
 ```sql
 .quit
-```
-
-### 2) sqlite3 미설치 시, Python 한 줄 접속 확인
-```powershell
-cd C:\Users\A87719\project\stocke_new\stocke
-python -c "import sqlite3;print(sqlite3.connect('stock_pipeline.db').execute('SELECT name FROM sqlite_master WHERE type=\'table\'').fetchall())"
-```
-
----
+```  
 
 ### 테이블: pending_buy_signals
 기본 조회

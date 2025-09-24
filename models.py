@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Generator
 
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, create_engine, UniqueConstraint
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, create_engine, UniqueConstraint, Date
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from config import Config
 
@@ -26,6 +26,7 @@ class PendingBuySignal(Base):
     stock_code = Column(String(20), nullable=False, index=True)
     stock_name = Column(String(100), nullable=False)
     detected_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    detected_date = Column(Date, nullable=False, index=True)  # 일자별 관리용 필드
     status = Column(String(20), nullable=False, default="PENDING")  # PENDING, ORDERED, CANCELED 등
     signal_type = Column(String(20), nullable=False, default="condition", index=True)  # 신호 타입
     
@@ -35,8 +36,8 @@ class PendingBuySignal(Base):
     target_price = Column(Integer, nullable=True)  # 목표가 (고가의 절반)
 
     __table_args__ = (
-        # 동일 조건식/종목이 같은 시각대(초 단위)에 중복 저장되는 것을 1차 방지
-        UniqueConstraint("condition_id", "stock_code", "status", name="uq_pending_unique"),
+        # 일자별로 같은 조건식/종목은 하나만 유지 (일자별 관리)
+        UniqueConstraint("detected_date", "condition_id", "stock_code", name="uq_pending_daily_unique"),
     )
 
 

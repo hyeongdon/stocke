@@ -852,8 +852,24 @@ async def get_status():
     return {
         "running": kiwoom_api.running,
         "websocket_connected": kiwoom_api.websocket is not None,
-        "token_valid": kiwoom_api.token_manager.is_token_valid()
+        "token_valid": kiwoom_api.token_manager.is_token_valid(),
+        "api_rate_limit": api_rate_limiter.get_status_info()
     }
+
+@app.get("/api/rate-limit-status")
+async def get_rate_limit_status():
+    """API 제한 상태 상세 조회"""
+    try:
+        status_info = api_rate_limiter.get_status_info()
+        
+        # 로그에도 현재 상태 출력
+        api_rate_limiter.log_current_status()
+        
+        return JSONResponse(content=status_info, media_type="application/json; charset=utf-8")
+        
+    except Exception as e:
+        logger.error(f"API 제한 상태 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail="API 제한 상태 조회 중 오류가 발생했습니다.")
 
 @app.get("/account/balance")
 async def get_account_balance():
@@ -909,7 +925,7 @@ async def get_account_balance():
         else:
             # 실제 키움 API 호출 (모의투자 계좌 사용)
             logger.info(f"🌐 [API] 키움 REST API에서 {account_type} 계좌 정보 조회 중...")
-            balance_data = await kiwoom_api.get_account_balance(account_number=account_number)
+            balance_data = await kiwoom_api.get_account_balance(account_number)
             
             if not balance_data:
                 logger.warning("🌐 [API] 키움 REST API 호출 실패, 빈 데이터를 반환합니다.")
@@ -985,7 +1001,7 @@ async def get_account_holdings():
         else:
             # 실제 키움 API에서 보유종목 조회 (모의투자 계좌 사용)
             logger.info(f"🌐 [API] 키움 REST API에서 {account_type} 보유종목 조회 중...")
-            balance_data = await kiwoom_api.get_account_balance(account_number=account_number)
+            balance_data = await kiwoom_api.get_account_balance(account_number)
             
             if balance_data and 'stk_acnt_evlt_prst' in balance_data:
                 holdings_data = {

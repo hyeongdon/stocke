@@ -1,6 +1,6 @@
 import logging
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import Dict, List, Optional, Set
 from enum import Enum
 from sqlalchemy.orm import Session
@@ -47,11 +47,13 @@ class SignalManager:
                 logger.debug(f"📡 [SIGNAL_MANAGER] 중복 신호 감지 - {stock_name}({stock_code})")
                 return False
             
-            # 2. 기존 신호 상태 확인
-            existing_signal = await self._get_existing_signal(stock_code, condition_id)
-            if existing_signal and existing_signal.status in ["PENDING", "PROCESSING"]:
-                logger.debug(f"📡 [SIGNAL_MANAGER] 이미 처리 중인 신호 존재 - {stock_name}({stock_code})")
-                return False
+            # 2. 기존 신호 상태 확인 (일자별 관리)
+            current_date = date.today()
+            existing_signal = await self._get_existing_signal(stock_code, condition_id, current_date)
+            if existing_signal:
+                # 같은 일자의 같은 종목이 이미 있으면 업데이트
+                logger.info(f"📡 [SIGNAL_MANAGER] 같은 일자 신호 존재 - 업데이트: {stock_name}({stock_code})")
+                return await self._update_existing_signal(existing_signal, signal_type, additional_data)
             
             # 3. 신호 생성
             signal_id = await self._save_signal_to_db(
@@ -100,15 +102,18 @@ class SignalManager:
             logger.error(f"📡 [SIGNAL_MANAGER] 중복 신호 확인 오류: {e}")
             return False
     
-    async def _get_existing_signal(self, stock_code: str, condition_id: int) -> Optional[PendingBuySignal]:
-        """기존 신호 조회"""
+    async def _get_existing_signal(self, stock_code: str, condition_id: int, target_date: date = None) -> Optional[PendingBuySignal]:
+        """기존 신호 조회 (일자별 관리)"""
         try:
+            if target_date is None:
+                target_date = date.today()
+                
             for db in get_db():
                 session: Session = db
                 existing_signal = session.query(PendingBuySignal).filter(
                     PendingBuySignal.stock_code == stock_code,
                     PendingBuySignal.condition_id == condition_id,
-                    PendingBuySignal.status.in_(["PENDING", "PROCESSING"])
+                    PendingBuySignal.detected_date == target_date
                 ).first()
                 
                 if existing_signal:
@@ -139,6 +144,7 @@ class SignalManager:
                     "stock_name": stock_name,
                     "status": SignalStatus.PENDING.value,
                     "detected_at": datetime.now(),
+                    "detected_date": date.today(),  # 일자별 관리용
                     "signal_type": signal_type.value
                 }
                 
@@ -178,6 +184,40 @@ class SignalManager:
         except Exception as e:
             logger.error(f"📡 [SIGNAL_MANAGER] 신호 DB 저장 오류: {e}")
             return None
+    
+    async def _update_existing_signal(self, 
+                                    existing_signal: PendingBuySignal, 
+                                    signal_type: SignalType,
+                                    additional_data: Optional[Dict] = None) -> bool:
+        """기존 신호 업데이트 (일자별 관리)"""
+        try:
+            for db in get_db():
+                session: Session = db
+                
+                # 기존 신호 업데이트
+                existing_signal.detected_at = datetime.now()
+                existing_signal.signal_type = signal_type.value
+                existing_signal.status = SignalStatus.PENDING.value  # 상태를 PENDING으로 리셋
+                
+                # 추가 데이터가 있으면 업데이트
+                if additional_data:
+                    allowed_extra_fields = {
+                        "reference_candle_high",
+                        "reference_candle_date", 
+                        "target_price",
+                    }
+                    for field, value in additional_data.items():
+                        if field in allowed_extra_fields and hasattr(existing_signal, field):
+                            setattr(existing_signal, field, value)
+                
+                session.commit()
+                
+                logger.info(f"📡 [SIGNAL_MANAGER] 기존 신호 업데이트 완료 - ID: {existing_signal.id}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"📡 [SIGNAL_MANAGER] 기존 신호 업데이트 오류: {e}")
+            return False
     
     def _cleanup_expired_signals(self):
         """만료된 신호 정리"""

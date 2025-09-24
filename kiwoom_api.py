@@ -583,6 +583,16 @@ class KiwoomAPI:
             return {"positions": [], "_data_source": "API_ERROR"}
 
         try:
+            # API 제한 확인 및 기록
+            if not api_rate_limiter.is_api_available():
+                logger.warning("🚫 [KIWOOM_API] API 제한 상태로 인해 손익 조회 건너뜀")
+                return {"positions": [], "_data_source": "API_ERROR"}
+            
+            # API 호출 기록 (간격 체크 포함)
+            if not api_rate_limiter.record_api_call("get_account_profit"):
+                logger.warning("🚫 [KIWOOM_API] API 호출 간격 부족으로 손익 조회 건너뜀")
+                return {"positions": [], "_data_source": "API_ERROR"}
+            
             use_mock = Config.KIWOOM_USE_MOCK_ACCOUNT
             host = Config.KIWOOM_MOCK_API_URL if use_mock else Config.KIWOOM_REAL_API_URL
             url = host + "/api/dostk/acnt"
@@ -762,6 +772,16 @@ class KiwoomAPI:
             return {}
             
         try:
+            # API 제한 확인 및 기록
+            if not api_rate_limiter.is_api_available():
+                logger.warning("🚫 [KIWOOM_API] API 제한 상태로 인해 계좌 조회 건너뜀")
+                return {}
+            
+            # API 호출 기록 (간격 체크 포함)
+            if not api_rate_limiter.record_api_call("get_account_balance"):
+                logger.warning("🚫 [KIWOOM_API] API 호출 간격 부족으로 계좌 조회 건너뜀")
+                return {}
+            
             # 계좌번호 설정 (매개변수 우선, 없으면 환경변수 사용)
             if not account_number:
                 account_number = Config.KIWOOM_ACCOUNT_NUMBER or "실계좌번호"

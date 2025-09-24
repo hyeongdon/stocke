@@ -164,7 +164,7 @@ class BuyOrderExecutor:
         """계좌 정보 조회"""
         try:
             # 키움 API로 계좌 정보 조회
-            account_info = await self.kiwoom_api.get_account_info()
+            account_info = await self.kiwoom_api.get_account_balance()
             return account_info
         except Exception as e:
             logger.error(f"💰 [BUY_EXECUTOR] 계좌 정보 조회 오류: {e}")
