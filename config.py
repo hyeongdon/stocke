@@ -33,7 +33,7 @@ class Config:
     KIWOOM_WS_PING_INTERVAL = int(os.getenv("KIWOOM_WS_PING_INTERVAL", 30))  # 초 단위
     
     # 키움증권 API 도메인 설정
-    KIWOOM_REAL_API_URL = "https://api.kiwoom.com"  # 운영 도메인
+    KIWOOM_REAL_API_URL = "https://api.kiwoom.com"  # 운영 도메인2
     KIWOOM_MOCK_API_URL = "https://mockapi.kiwoom.com"  # 모의투자 도메인
     
     # 모니터링 설정
