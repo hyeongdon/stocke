@@ -94,12 +94,36 @@ class KiwoomAPI:
             return False
             
     async def disconnect(self):
-        """웹소켓 연결 종료"""
+        """웹소켓 연결 종료 (빠르고 안전하게)"""
         logger.info("🔄 [DEBUG] self.running을 False로 설정 (disconnect 메서드)")
         self.running = False
+        # 자동 재연결 방지
+        try:
+            self.auto_reconnect = False
+        except Exception:
+            pass
+        # 메시지 태스크 취소
+        message_task = getattr(self, 'message_task', None)
+        if message_task:
+            message_task.cancel()
+            try:
+                await message_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+            finally:
+                self.message_task = None
+        # 웹소켓 종료 (타임아웃 포함)
         if self.websocket:
-            await self.websocket.close()
-            self.websocket = None
+            try:
+                await asyncio.wait_for(self.websocket.close(), timeout=2.0)
+            except asyncio.TimeoutError:
+                logger.warning("WebSocket close timed out; forcing cleanup")
+            except Exception as e:
+                logger.warning(f"WebSocket close error: {e}")
+            finally:
+                self.websocket = None
             
     async def _message_handler(self):
         """웹소켓 메시지 처리 - Keep-Alive 포함"""

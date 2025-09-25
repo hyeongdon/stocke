@@ -904,7 +904,7 @@ class StockMonitorApp {
         }
 
         // 모니터링 상태를 원하는 값이 될 때까지 일정 시간 폴링
-        async pollMonitoring(desiredRunning, timeoutMs = 10000, intervalMs = 1000) {
+        async pollMonitoring(desiredRunning, timeoutMs = 30000, intervalMs = 2000) {
             const end = Date.now() + timeoutMs;
             while (Date.now() < end) {
                 try {
@@ -972,7 +972,7 @@ class StockMonitorApp {
                 }
                 if (textSpan) textSpan.textContent = `모니터링 ${action} 중...`;
                 // 타임아웃이 있는 요청으로 전환 (네트워크 지연 시 UI 고정 방지)
-                const response = await this.fetchWithTimeout(endpoint, { method: 'POST' }, 15000);
+                const response = await this.fetchWithTimeout(endpoint, { method: 'POST' }, 30000);
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}`);
                 }
@@ -982,7 +982,7 @@ class StockMonitorApp {
                 // 응답 즉시 UI를 낙관적으로 갱신
                 this.updateMonitoringUI(isRunning);
                 // 백엔드 반영 지연 대비 폴링으로 확정
-                await this.pollMonitoring(!isCurrentlyRunning, 10000, 1000);
+                await this.pollMonitoring(!isCurrentlyRunning, 30000, 2000);
                 
                 // 버튼 활성화 및 아이콘 복원
                 if (button) button.disabled = false;
@@ -990,7 +990,9 @@ class StockMonitorApp {
                 
             } catch (error) {
                 console.error('🔍 [DEBUG] 모니터링 토글 실패:', error);
-                alert('모니터링 상태 변경에 실패했습니다: ' + error.message);
+                const isAbort = (error && (error.name === 'AbortError' || /aborted/i.test(String(error.message))));
+                const message = isAbort ? '요청 시간이 초과되었습니다. 잠시 후 다시 시도해주세요.' : ('모니터링 상태 변경에 실패했습니다: ' + error.message);
+                alert(message);
                 // 실패 시 버튼/아이콘 복원 시도
                 const button = document.getElementById('toggleMonitoring');
                 const textSpan = document.getElementById('monitoringText');
@@ -1022,7 +1024,7 @@ class StockMonitorApp {
         }
 
         // fetch 타임아웃 헬퍼
-        async fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
+        async fetchWithTimeout(url, options = {}, timeoutMs = 30000) {
             const controller = new AbortController();
             const id = setTimeout(() => controller.abort(), timeoutMs);
             try {

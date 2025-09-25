@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Generator
 
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, create_engine, UniqueConstraint, Date
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, create_engine, UniqueConstraint, Date, text
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from config import Config
 
@@ -29,6 +29,7 @@ class PendingBuySignal(Base):
     detected_date = Column(Date, nullable=False, index=True)  # 일자별 관리용 필드
     status = Column(String(20), nullable=False, default="PENDING")  # PENDING, ORDERED, CANCELED 등
     signal_type = Column(String(20), nullable=False, default="condition", index=True)  # 신호 타입
+    failure_reason = Column(String(255), nullable=True)  # 실패 사유 저장
     
     # 대량거래 전략용 필드들
     reference_candle_high = Column(Integer, nullable=True)  # 기준봉 고가
@@ -81,6 +82,17 @@ def get_db() -> Generator[Session, None, None]:
 
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
+    # 간단한 마이그레이션: 컬럼이 없으면 추가 (SQLite 전용)
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("PRAGMA table_info('pending_buy_signals')"))
+            columns = {row[1] for row in result}
+            if 'failure_reason' not in columns:
+                conn.execute(text("ALTER TABLE pending_buy_signals ADD COLUMN failure_reason VARCHAR(255)"))
+                conn.commit()
+    except Exception:
+        # 마이그레이션 실패는 치명적이지 않게 무시
+        pass
 
 
 # 모듈 import 시점에 테이블 보장

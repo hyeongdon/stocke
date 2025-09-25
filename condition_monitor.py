@@ -1,4 +1,5 @@
 import logging
+import asyncio
 import time
 from datetime import datetime, timedelta
 from typing import Dict, Set, List, Optional
@@ -23,6 +24,7 @@ class ConditionMonitor:
         self.kiwoom_api = KiwoomAPI()
         self.is_running = False
         self.loop_sleep_seconds = 600  # 10분 주기
+        self._monitor_task: Optional[asyncio.Task] = None
         
         # 조건식별 기준봉 전략 관련 속성
         self.condition_reference_candles: Dict[int, Dict[str, Dict]] = {}  # {condition_id: {stock_code: candle_data}}
@@ -164,13 +166,18 @@ class ConditionMonitor:
             logger.debug("🔍 [CONDITION_REF] API 제한을 고려하여 조건식 기준봉 확인 건너뜀")
 
     async def start_periodic_monitoring(self):
-        """모든 조건식을 주기적으로 모니터링 (10분 간격)"""
+        """모든 조건식을 주기적으로 모니터링 (백그라운드 태스크로 실행)"""
         logger.info("🔍 [CONDITION_MONITOR] 주기적 모니터링 시작 요청")
         if self.is_running:
             logger.info("🔍 [CONDITION_MONITOR] 이미 실행 중입니다")
             return
         self.is_running = True
         logger.info("🔍 [CONDITION_MONITOR] 모니터링 상태: RUNNING")
+        # 백그라운드 태스크로 루프 실행
+        self._monitor_task = asyncio.create_task(self._monitor_loop())
+        logger.info("🔍 [CONDITION_MONITOR] 모니터링 루프가 백그라운드에서 시작되었습니다")
+
+    async def _monitor_loop(self):
         try:
             while self.is_running:
                 logger.info("🔁 [CONDITION_MONITOR] 주기 스캔 시작")
@@ -183,7 +190,6 @@ class ConditionMonitor:
                 logger.info(f"⏳ [CONDITION_MONITOR] 다음 스캔까지 대기 {self.loop_sleep_seconds}초")
                 if not self.is_running:
                     break
-                import asyncio
                 await asyncio.sleep(self.loop_sleep_seconds)
         finally:
             logger.info("🛑 [CONDITION_MONITOR] 주기적 모니터링 루프 종료")
@@ -193,8 +199,23 @@ class ConditionMonitor:
         logger.info("🔍 [CONDITION_MONITOR] 모든 조건식 모니터링 중지 요청")
         self.is_running = False
         logger.info("🔍 [CONDITION_MONITOR] 모니터링 상태: STOPPED")
-        # WebSocket 연결 종료 추가
-        await self.kiwoom_api.disconnect()
+        # 백그라운드 태스크가 있다면 안전하게 종료 대기/취소
+        if self._monitor_task is not None:
+            try:
+                await asyncio.wait_for(self._monitor_task, timeout=1.0)
+            except asyncio.TimeoutError:
+                self._monitor_task.cancel()
+                try:
+                    await self._monitor_task
+                except asyncio.CancelledError:
+                    pass
+            finally:
+                self._monitor_task = None
+        # WebSocket 연결 종료 추가 (타임아웃 내 비차단)
+        try:
+            await asyncio.wait_for(self.kiwoom_api.disconnect(), timeout=3.0)
+        except asyncio.TimeoutError:
+            logger.warning("🔍 [CONDITION_MONITOR] disconnect 타임아웃 - 강제 종료 진행")
         logger.info("🔍 [CONDITION_MONITOR] 모든 조건식 모니터링 중지 및 WebSocket 연결 종료")
     
     async def get_monitoring_status(self) -> Dict:

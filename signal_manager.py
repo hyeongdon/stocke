@@ -238,7 +238,7 @@ class SignalManager:
             logger.error(f"📡 [SIGNAL_MANAGER] 만료된 신호 정리 오류: {e}")
     
     async def update_signal_status(self, signal_id: int, status: SignalStatus, order_id: str = "", error_msg: str = ""):
-        """신호 상태 업데이트"""
+        """신호 상태 업데이트 (실패 사유/주문ID 반영)"""
         try:
             for db in get_db():
                 session: Session = db
@@ -252,9 +252,13 @@ class SignalManager:
                     if order_id:
                         pass  # 주문 ID 필드가 있다면 여기에 추가
                     
-                    # 오류 메시지 저장 (필드가 있다면)
-                    if error_msg:
-                        pass  # 오류 메시지 필드가 있다면 여기에 추가
+                    # 실패 사유 저장 (모델 컬럼 존재 시)
+                    if error_msg and status == SignalStatus.FAILED:
+                        try:
+                            signal.failure_reason = str(error_msg)[:255]
+                        except Exception:
+                            # 컬럼이 없거나 매핑 이슈 시 조용히 무시
+                            pass
                     
                     try:
                         session.commit()

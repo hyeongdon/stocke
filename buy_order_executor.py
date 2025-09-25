@@ -275,19 +275,24 @@ class BuyOrderExecutor:
                 else:
                     await self._update_signal_status(signal.id, "FAILED", str(e))
     
-    async def _update_signal_status(self, signal_id: int, status: str, order_id: str = ""):
-        """신호 상태 업데이트"""
+    async def _update_signal_status(self, signal_id: int, status: str, reason: str = "", order_id: str = ""):
+        """신호 상태 업데이트 (실패 사유 포함)"""
         try:
             for db in get_db():
                 session: Session = db
                 signal = session.query(PendingBuySignal).filter(PendingBuySignal.id == signal_id).first()
                 if signal:
                     signal.status = status
+                    if reason and status == "FAILED":
+                        signal.failure_reason = reason[:255]
                     if order_id:
                         # 주문 ID 저장 (필드가 있다면)
                         pass
                     session.commit()
-                    logger.info(f"💰 [BUY_EXECUTOR] 신호 상태 변경: ID {signal_id} -> {status}")
+                    if reason:
+                        logger.info(f"💰 [BUY_EXECUTOR] 신호 상태 변경: ID {signal_id} -> {status}, reason={reason}")
+                    else:
+                        logger.info(f"💰 [BUY_EXECUTOR] 신호 상태 변경: ID {signal_id} -> {status}")
                 break
         except Exception as e:
             logger.error(f"💰 [BUY_EXECUTOR] 신호 상태 업데이트 오류: {e}")
