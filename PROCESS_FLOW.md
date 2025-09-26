@@ -92,12 +92,34 @@ flowchart LR
 
 ## 주요 엔드포인트와 내부 처리
 
-- **/monitoring/start**: `ConditionMonitor.start_periodic_monitoring` 시작 → 10분 간격 스캔 → 신호 생성
-- **/monitoring/stop**: 모니터링 중지 및 WebSocket 종료
-- **/signals/pending**: DB에서 신호 조회 + 실시간 현재가 보강
-- **/trading/buy**: 즉시 매수 주문 (직접 주문 경로)
-- **/buy-executor/*:** 백그라운드 주문 실행기 상태/제어
-- **/conditions/**, **/conditions/{id}/stocks**: 조건식 목록/종목 조회(키움 API)
+### 모니터링 관리
+- **POST /monitoring/start**: `ConditionMonitor.start_periodic_monitoring` 시작 → 10분 간격 스캔 → 신호 생성
+- **POST /monitoring/stop**: 모니터링 중지 및 WebSocket 종료
+- **GET /monitoring/status**: 통합 상태 조회 (모니터링/신호/API제한/실행기 상태)
+
+### 신호 관리
+- **GET /signals/pending**: DB에서 신호 조회 + 실시간 현재가 보강
+- **GET /signals/statistics**: 신호 통계 및 히스토리 조회
+
+### 조건식 관리
+- **GET /conditions/**: 조건식 목록 조회 (키움 API)
+- **GET /conditions/{id}/stocks**: 특정 조건식의 종목 조회
+- **POST /conditions/toggle**: 조건식 활성화/비활성화 토글
+
+### 자동매매 설정
+- **GET /trading/settings**: 자동매매 설정 조회
+- **POST /trading/settings**: 자동매매 설정 업데이트
+- **GET /buy-executor/status**: 백그라운드 주문 실행기 상태/제어
+
+### 차트 및 분석
+- **GET /chart/image/{stock_code}**: 종목 차트 이미지 생성
+- **GET /kiwoom/account**: 계좌 정보 조회
+- **GET /kiwoom/balance**: 잔고 조회
+- **GET /stocks/{stock_code}/info**: 종목 정보 및 토론 크롤링
+
+### 시스템 상태
+- **GET /api/status**: API 연결 상태 체크
+- **GET /api/rate-limit-status**: API 제한 상태 상세 조회
 
 ---
 
