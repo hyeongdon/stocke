@@ -21,6 +21,8 @@ import matplotlib.lines as mlines
 import io
 import base64
 from ta.trend import IchimokuIndicator
+from ta.momentum import RSIIndicator
+from ta.volatility import BollingerBands
 import warnings
 
 # pandas와 ta 라이브러리의 FutureWarning 억제
@@ -28,7 +30,7 @@ warnings.filterwarnings('ignore', category=FutureWarning, module='ta')
 warnings.filterwarnings('ignore', category=FutureWarning, module='pandas')
 
 # DB 연동
-from models import get_db, AutoTradeCondition, PendingBuySignal, AutoTradeSettings
+from models import get_db, AutoTradeCondition, PendingBuySignal, AutoTradeSettings, WatchlistStock, TradingStrategy, StrategySignal
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from condition_monitor import condition_monitor
@@ -40,6 +42,7 @@ from naver_discussion_crawler import NaverStockDiscussionCrawler
 from signal_manager import signal_manager, SignalType, SignalStatus
 from api_rate_limiter import api_rate_limiter
 from buy_order_executor import buy_order_executor
+from strategy_manager import strategy_manager
 
 config = Config()
 
@@ -166,6 +169,24 @@ class TradingSettingsRequest(BaseModel):
     max_invest_amount: int
     stop_loss_rate: int
     take_profit_rate: int
+
+# 관심종목 관리용 Pydantic 모델들
+class WatchlistAddRequest(BaseModel):
+    stock_code: str
+    stock_name: str
+    notes: Optional[str] = None
+
+class WatchlistToggleRequest(BaseModel):
+    stock_code: str
+    is_active: bool
+
+class StrategyConfigureRequest(BaseModel):
+    strategy_type: str  # MOMENTUM, DISPARITY, BOLLINGER, RSI
+    parameters: dict
+
+class StrategyToggleRequest(BaseModel):
+    strategy_id: int
+    is_enabled: bool
 
 @app.post("/conditions/toggle")
 async def toggle_condition(req: ToggleConditionRequest):
@@ -1210,4 +1231,613 @@ async def stop_buy_executor():
     except Exception as e:
         logger.error(f"매수 주문 실행기 중지 오류: {e}")
         raise HTTPException(status_code=500, detail="매수 주문 실행기 중지 중 오류가 발생했습니다.")
+
+# ===== 관심종목 관리 API =====
+
+@app.get("/watchlist/")
+async def get_watchlist():
+    """관심종목 목록 조회"""
+    try:
+        for db in get_db():
+            session: Session = db
+            watchlist = session.query(WatchlistStock).order_by(WatchlistStock.added_at.desc()).all()
+            
+            result = []
+            for stock in watchlist:
+                result.append({
+                    "id": stock.id,
+                    "stock_code": stock.stock_code,
+                    "stock_name": stock.stock_name,
+                    "added_at": stock.added_at.isoformat(),
+                    "is_active": stock.is_active,
+                    "notes": stock.notes
+                })
+            
+            return {"watchlist": result}
+    except Exception as e:
+        logger.error(f"관심종목 목록 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail="관심종목 목록 조회 중 오류가 발생했습니다.")
+
+@app.post("/watchlist/add")
+async def add_watchlist_stock(req: WatchlistAddRequest):
+    """관심종목 추가"""
+    try:
+        for db in get_db():
+            session: Session = db
+            
+            # 중복 확인
+            existing = session.query(WatchlistStock).filter(
+                WatchlistStock.stock_code == req.stock_code
+            ).first()
+            
+            if existing:
+                raise HTTPException(status_code=400, detail=f"이미 관심종목에 등록된 종목입니다: {req.stock_code}")
+            
+            # 새 관심종목 추가
+            new_stock = WatchlistStock(
+                stock_code=req.stock_code,
+                stock_name=req.stock_name,
+                notes=req.notes,
+                is_active=True
+            )
+            
+            session.add(new_stock)
+            session.commit()
+            
+            logger.info(f"관심종목 추가 완료: {req.stock_name}({req.stock_code})")
+            return {"message": f"관심종목이 추가되었습니다: {req.stock_name}({req.stock_code})"}
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"관심종목 추가 오류: {e}")
+        raise HTTPException(status_code=500, detail="관심종목 추가 중 오류가 발생했습니다.")
+
+@app.delete("/watchlist/{stock_code}")
+async def remove_watchlist_stock(stock_code: str):
+    """관심종목 제거"""
+    try:
+        for db in get_db():
+            session: Session = db
+            
+            stock = session.query(WatchlistStock).filter(
+                WatchlistStock.stock_code == stock_code
+            ).first()
+            
+            if not stock:
+                raise HTTPException(status_code=404, detail=f"관심종목을 찾을 수 없습니다: {stock_code}")
+            
+            session.delete(stock)
+            session.commit()
+            
+            logger.info(f"관심종목 제거 완료: {stock.stock_name}({stock_code})")
+            return {"message": f"관심종목이 제거되었습니다: {stock.stock_name}({stock_code})"}
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"관심종목 제거 오류: {e}")
+        raise HTTPException(status_code=500, detail="관심종목 제거 중 오류가 발생했습니다.")
+
+@app.put("/watchlist/{stock_code}/toggle")
+async def toggle_watchlist_stock(stock_code: str, req: WatchlistToggleRequest):
+    """관심종목 활성화/비활성화"""
+    try:
+        for db in get_db():
+            session: Session = db
+            
+            stock = session.query(WatchlistStock).filter(
+                WatchlistStock.stock_code == stock_code
+            ).first()
+            
+            if not stock:
+                raise HTTPException(status_code=404, detail=f"관심종목을 찾을 수 없습니다: {stock_code}")
+            
+            stock.is_active = req.is_active
+            session.commit()
+            
+            status = "활성화" if req.is_active else "비활성화"
+            logger.info(f"관심종목 {status} 완료: {stock.stock_name}({stock_code})")
+            return {"message": f"관심종목이 {status}되었습니다: {stock.stock_name}({stock_code})"}
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"관심종목 토글 오류: {e}")
+        raise HTTPException(status_code=500, detail="관심종목 토글 중 오류가 발생했습니다.")
+
+# ===== 전략 설정 관리 API =====
+
+@app.get("/strategies/")
+async def get_strategies():
+    """전략 목록 조회"""
+    try:
+        for db in get_db():
+            session: Session = db
+            strategies = session.query(TradingStrategy).order_by(TradingStrategy.strategy_type).all()
+            
+            result = []
+            for strategy in strategies:
+                result.append({
+                    "id": strategy.id,
+                    "strategy_name": strategy.strategy_name,
+                    "strategy_type": strategy.strategy_type,
+                    "is_enabled": strategy.is_enabled,
+                    "parameters": strategy.parameters,
+                    "updated_at": strategy.updated_at.isoformat()
+                })
+            
+            return {"strategies": result}
+    except Exception as e:
+        logger.error(f"전략 목록 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail="전략 목록 조회 중 오류가 발생했습니다.")
+
+@app.post("/strategies/{strategy_type}/configure")
+async def configure_strategy(strategy_type: str, req: StrategyConfigureRequest):
+    """전략 파라미터 설정"""
+    try:
+        valid_types = ["MOMENTUM", "DISPARITY", "BOLLINGER", "RSI"]
+        if strategy_type not in valid_types:
+            raise HTTPException(status_code=400, detail=f"유효하지 않은 전략 타입입니다: {strategy_type}")
+        
+        for db in get_db():
+            session: Session = db
+            
+            strategy = session.query(TradingStrategy).filter(
+                TradingStrategy.strategy_type == strategy_type
+            ).first()
+            
+            if not strategy:
+                raise HTTPException(status_code=404, detail=f"전략을 찾을 수 없습니다: {strategy_type}")
+            
+            strategy.parameters = req.parameters
+            strategy.updated_at = datetime.utcnow()
+            session.commit()
+            
+            logger.info(f"전략 파라미터 설정 완료: {strategy.strategy_name}")
+            return {"message": f"전략 파라미터가 설정되었습니다: {strategy.strategy_name}"}
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"전략 파라미터 설정 오류: {e}")
+        raise HTTPException(status_code=500, detail="전략 파라미터 설정 중 오류가 발생했습니다.")
+
+@app.put("/strategies/{strategy_id}/toggle")
+async def toggle_strategy(strategy_id: int, req: StrategyToggleRequest):
+    """전략 활성화/비활성화"""
+    try:
+        for db in get_db():
+            session: Session = db
+            
+            strategy = session.query(TradingStrategy).filter(
+                TradingStrategy.id == strategy_id
+            ).first()
+            
+            if not strategy:
+                raise HTTPException(status_code=404, detail=f"전략을 찾을 수 없습니다: {strategy_id}")
+            
+            strategy.is_enabled = req.is_enabled
+            strategy.updated_at = datetime.utcnow()
+            session.commit()
+            
+            status = "활성화" if req.is_enabled else "비활성화"
+            logger.info(f"전략 {status} 완료: {strategy.strategy_name}")
+            return {"message": f"전략이 {status}되었습니다: {strategy.strategy_name}"}
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"전략 토글 오류: {e}")
+        raise HTTPException(status_code=500, detail="전략 토글 중 오류가 발생했습니다.")
+
+# ===== 전략 모니터링 관리 API =====
+
+@app.post("/strategy/start")
+async def start_strategy_monitoring():
+    """전략 모니터링 시작"""
+    try:
+        await strategy_manager.start_strategy_monitoring()
+        return {"message": "전략 모니터링이 시작되었습니다."}
+    except Exception as e:
+        logger.error(f"전략 모니터링 시작 오류: {e}")
+        raise HTTPException(status_code=500, detail="전략 모니터링 시작 중 오류가 발생했습니다.")
+
+@app.post("/strategy/stop")
+async def stop_strategy_monitoring():
+    """전략 모니터링 중지"""
+    try:
+        await strategy_manager.stop_strategy_monitoring()
+        return {"message": "전략 모니터링이 중지되었습니다."}
+    except Exception as e:
+        logger.error(f"전략 모니터링 중지 오류: {e}")
+        raise HTTPException(status_code=500, detail="전략 모니터링 중지 중 오류가 발생했습니다.")
+
+@app.get("/strategy/status")
+async def get_strategy_status():
+    """전략 모니터링 상태 조회"""
+    try:
+        return {
+            "is_running": strategy_manager.running,
+            "monitoring_task_active": strategy_manager.monitoring_task is not None and not strategy_manager.monitoring_task.done()
+        }
+    except Exception as e:
+        logger.error(f"전략 모니터링 상태 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail="전략 모니터링 상태 조회 중 오류가 발생했습니다.")
+
+# ===== 전략 신호 조회 API =====
+
+@app.get("/signals/by-strategy/{strategy_id}")
+async def get_strategy_signals(strategy_id: int, limit: int = 50):
+    """특정 전략의 신호 조회"""
+    try:
+        for db in get_db():
+            session: Session = db
+            
+            signals = session.query(StrategySignal).filter(
+                StrategySignal.strategy_id == strategy_id
+            ).order_by(StrategySignal.detected_at.desc()).limit(limit).all()
+            
+            result = []
+            for signal in signals:
+                result.append({
+                    "id": signal.id,
+                    "stock_code": signal.stock_code,
+                    "stock_name": signal.stock_name,
+                    "signal_type": signal.signal_type,
+                    "signal_value": signal.signal_value,
+                    "detected_at": signal.detected_at.isoformat(),
+                    "status": signal.status,
+                    "additional_data": signal.additional_data
+                })
+            
+            return {"signals": result}
+    except Exception as e:
+        logger.error(f"전략 신호 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail="전략 신호 조회 중 오류가 발생했습니다.")
+
+# ===== 전략별 차트 시각화 API =====
+
+@app.get("/chart/strategy/{stock_code}/{strategy_type}")
+async def get_strategy_chart(stock_code: str, strategy_type: str, period: str = "1M"):
+    """특정 전략 지표가 포함된 차트 생성"""
+    try:
+        # 1. 키움 API에서 데이터 가져오기
+        chart_data = await kiwoom_api.get_stock_chart_data(stock_code, "1D")
+        
+        if not chart_data:
+            raise HTTPException(status_code=404, detail="차트 데이터가 없습니다")
+        
+        # 2. DataFrame으로 변환
+        df = pd.DataFrame(chart_data)
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        df.set_index('timestamp', inplace=True)
+        df = df.sort_index()
+        
+        # 3. 기간에 따른 데이터 필터링
+        if period == "1Y":
+            df = df.tail(250)
+        elif period == "1M":
+            df = df.tail(30)
+        elif period == "1W":
+            df = df.tail(7)
+        else:
+            df = df.tail(500)
+        
+        # 4. 컬럼명 변경
+        df = df.rename(columns={
+            'open': 'Open',
+            'high': 'High', 
+            'low': 'Low',
+            'close': 'Close',
+            'volume': 'Volume'
+        })
+        
+        # 5. 전략별 지표 계산
+        added_plots = []
+        legend_elements = []
+        
+        if strategy_type.upper() == "MOMENTUM":
+            # 모멘텀 계산 (10일 기준)
+            df['momentum'] = df['Close'] - df['Close'].shift(10)
+            df['momentum_ma'] = df['momentum'].rolling(window=5).mean()
+            
+            # 0선 추가
+            df['zero_line'] = 0
+            
+            added_plots = [
+                mpf.make_addplot(df['momentum'], color='blue', alpha=0.8, width=2, secondary_y=True),
+                mpf.make_addplot(df['momentum_ma'], color='red', alpha=0.8, width=1.5, secondary_y=True),
+                mpf.make_addplot(df['zero_line'], color='black', alpha=0.5, width=1, linestyle='--', secondary_y=True)
+            ]
+            
+            legend_elements = [
+                mlines.Line2D([0], [0], color='blue', lw=2, label='모멘텀'),
+                mlines.Line2D([0], [0], color='red', lw=1.5, label='모멘텀 이동평균'),
+                mlines.Line2D([0], [0], color='black', lw=1, linestyle='--', label='0선')
+            ]
+            
+        elif strategy_type.upper() == "DISPARITY":
+            # 이격도 계산 (20일 이동평균 기준)
+            df['ma20'] = df['Close'].rolling(window=20).mean()
+            df['disparity'] = (df['Close'] / df['ma20']) * 100
+            
+            added_plots = [
+                mpf.make_addplot(df['ma20'], color='orange', alpha=0.8, width=2),
+                mpf.make_addplot(df['disparity'], color='purple', alpha=0.8, width=2, secondary_y=True)
+            ]
+            
+            legend_elements = [
+                mlines.Line2D([0], [0], color='orange', lw=2, label='20일 이동평균'),
+                mlines.Line2D([0], [0], color='purple', lw=2, label='이격도(%)')
+            ]
+            
+        elif strategy_type.upper() == "BOLLINGER":
+            # 볼린저밴드 계산
+            bb_indicator = BollingerBands(close=df['Close'], window=20, window_dev=2)
+            df['bb_upper'] = bb_indicator.bollinger_hband()
+            df['bb_middle'] = bb_indicator.bollinger_mavg()
+            df['bb_lower'] = bb_indicator.bollinger_lband()
+            
+            added_plots = [
+                mpf.make_addplot(df['bb_upper'], color='red', alpha=0.7, width=1.5),
+                mpf.make_addplot(df['bb_middle'], color='blue', alpha=0.8, width=2),
+                mpf.make_addplot(df['bb_lower'], color='red', alpha=0.7, width=1.5)
+            ]
+            
+            legend_elements = [
+                mlines.Line2D([0], [0], color='red', lw=1.5, alpha=0.7, label='볼린저밴드 상단'),
+                mlines.Line2D([0], [0], color='blue', lw=2, alpha=0.8, label='볼린저밴드 중간'),
+                mlines.Line2D([0], [0], color='red', lw=1.5, alpha=0.7, label='볼린저밴드 하단')
+            ]
+            
+        elif strategy_type.upper() == "RSI":
+            # RSI 계산
+            rsi_indicator = RSIIndicator(close=df['Close'], window=14)
+            df['rsi'] = rsi_indicator.rsi()
+            
+            # RSI 기준선 추가
+            df['rsi_70'] = 70
+            df['rsi_30'] = 30
+            df['rsi_50'] = 50
+            
+            added_plots = [
+                mpf.make_addplot(df['rsi'], color='purple', alpha=0.8, width=2, secondary_y=True),
+                mpf.make_addplot(df['rsi_70'], color='red', alpha=0.5, width=1, linestyle='--', secondary_y=True),
+                mpf.make_addplot(df['rsi_30'], color='blue', alpha=0.5, width=1, linestyle='--', secondary_y=True),
+                mpf.make_addplot(df['rsi_50'], color='gray', alpha=0.3, width=1, linestyle=':', secondary_y=True)
+            ]
+            
+            legend_elements = [
+                mlines.Line2D([0], [0], color='purple', lw=2, label='RSI'),
+                mlines.Line2D([0], [0], color='red', lw=1, linestyle='--', alpha=0.5, label='과매수(70)'),
+                mlines.Line2D([0], [0], color='blue', lw=1, linestyle='--', alpha=0.5, label='과매도(30)'),
+                mlines.Line2D([0], [0], color='gray', lw=1, linestyle=':', alpha=0.3, label='중립(50)')
+            ]
+        
+        else:
+            raise HTTPException(status_code=400, detail=f"지원하지 않는 전략 타입입니다: {strategy_type}")
+        
+        # 6. 색상 설정
+        mc = mpf.make_marketcolors(
+            up="red",
+            down="blue",
+            volume="inherit"
+        )
+        
+        # 7. 스타일 설정
+        s = mpf.make_mpf_style(
+            base_mpf_style="charles",
+            marketcolors=mc,
+            gridaxis='both',
+            y_on_right=True,
+            facecolor='white',
+            edgecolor='black'
+        )
+        
+        # 8. 차트 생성
+        buf = io.BytesIO()
+        
+        # 전략에 따라 secondary_y 사용 여부 결정
+        use_secondary_y = strategy_type.upper() in ["MOMENTUM", "DISPARITY", "RSI"]
+        
+        fig, axes = mpf.plot(
+            data=df,
+            type='candle',
+            style=s,
+            figratio=(18, 10),
+            mav=(20, 60),
+            volume=True,
+            scale_width_adjustment=dict(volume=0.6, candle=1.2),
+            addplot=added_plots,
+            savefig=dict(fname=buf, format='png', dpi=200, bbox_inches='tight'),
+            returnfig=True,
+            tight_layout=True
+        )
+        
+        # 9. 범례 추가
+        if fig and axes and len(axes) > 0:
+            try:
+                # 기본 범례 요소 추가
+                base_legend_elements = [
+                    mlines.Line2D([0], [0], color='blue', lw=1, label='20일 이평선'),
+                    mlines.Line2D([0], [0], color='orange', lw=1, label='60일 이평선')
+                ]
+                
+                all_legend_elements = legend_elements + base_legend_elements
+                
+                axes[0].legend(
+                    handles=all_legend_elements,
+                    loc='upper left',
+                    fontsize=10,
+                    frameon=True,
+                    fancybox=True,
+                    shadow=True,
+                    ncol=2,
+                    bbox_to_anchor=(0, 1)
+                )
+            except Exception as e:
+                logger.warning(f"범례 추가 실패: {e}")
+        
+        # 10. 이미지 반환
+        buf.seek(0)
+        image_data = buf.getvalue()
+        buf.close()
+        
+        # Base64 인코딩
+        image_base64 = base64.b64encode(image_data).decode('utf-8')
+        
+        return {
+            "image": f"data:image/png;base64,{image_base64}",
+            "strategy_type": strategy_type.upper(),
+            "stock_code": stock_code,
+            "period": period
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"전략 차트 생성 오류: {e}")
+        raise HTTPException(status_code=500, detail="전략 차트 생성 중 오류가 발생했습니다.")
+
+@app.get("/chart/strategy/{stock_code}")
+async def get_all_strategies_chart(stock_code: str, period: str = "1M"):
+    """모든 전략 지표가 포함된 종합 차트 생성"""
+    try:
+        # 1. 키움 API에서 데이터 가져오기
+        chart_data = await kiwoom_api.get_stock_chart_data(stock_code, "1D")
+        
+        if not chart_data:
+            raise HTTPException(status_code=404, detail="차트 데이터가 없습니다")
+        
+        # 2. DataFrame으로 변환
+        df = pd.DataFrame(chart_data)
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        df.set_index('timestamp', inplace=True)
+        df = df.sort_index()
+        
+        # 3. 기간에 따른 데이터 필터링
+        if period == "1Y":
+            df = df.tail(250)
+        elif period == "1M":
+            df = df.tail(30)
+        elif period == "1W":
+            df = df.tail(7)
+        else:
+            df = df.tail(500)
+        
+        # 4. 컬럼명 변경
+        df = df.rename(columns={
+            'open': 'Open',
+            'high': 'High', 
+            'low': 'Low',
+            'close': 'Close',
+            'volume': 'Volume'
+        })
+        
+        # 5. 모든 전략 지표 계산
+        # 모멘텀
+        df['momentum'] = df['Close'] - df['Close'].shift(10)
+        
+        # 이격도
+        df['ma20'] = df['Close'].rolling(window=20).mean()
+        df['disparity'] = (df['Close'] / df['ma20']) * 100
+        
+        # 볼린저밴드
+        bb_indicator = BollingerBands(close=df['Close'], window=20, window_dev=2)
+        df['bb_upper'] = bb_indicator.bollinger_hband()
+        df['bb_middle'] = bb_indicator.bollinger_mavg()
+        df['bb_lower'] = bb_indicator.bollinger_lband()
+        
+        # RSI
+        rsi_indicator = RSIIndicator(close=df['Close'], window=14)
+        df['rsi'] = rsi_indicator.rsi()
+        
+        # 6. 차트 플롯 설정
+        added_plots = [
+            # 볼린저밴드
+            mpf.make_addplot(df['bb_upper'], color='red', alpha=0.5, width=1),
+            mpf.make_addplot(df['bb_middle'], color='blue', alpha=0.7, width=1.5),
+            mpf.make_addplot(df['bb_lower'], color='red', alpha=0.5, width=1),
+            # 이동평균
+            mpf.make_addplot(df['ma20'], color='orange', alpha=0.8, width=2),
+        ]
+        
+        # 7. 색상 설정
+        mc = mpf.make_marketcolors(
+            up="red",
+            down="blue",
+            volume="inherit"
+        )
+        
+        # 8. 스타일 설정
+        s = mpf.make_mpf_style(
+            base_mpf_style="charles",
+            marketcolors=mc,
+            gridaxis='both',
+            y_on_right=True,
+            facecolor='white',
+            edgecolor='black'
+        )
+        
+        # 9. 차트 생성
+        buf = io.BytesIO()
+        fig, axes = mpf.plot(
+            data=df,
+            type='candle',
+            style=s,
+            figratio=(18, 10),
+            mav=(20, 60),
+            volume=True,
+            scale_width_adjustment=dict(volume=0.6, candle=1.2),
+            addplot=added_plots,
+            savefig=dict(fname=buf, format='png', dpi=200, bbox_inches='tight'),
+            returnfig=True,
+            tight_layout=True
+        )
+        
+        # 10. 범례 추가
+        if fig and axes and len(axes) > 0:
+            try:
+                legend_elements = [
+                    mlines.Line2D([0], [0], color='red', lw=1, alpha=0.5, label='볼린저밴드 상/하단'),
+                    mlines.Line2D([0], [0], color='blue', lw=1.5, alpha=0.7, label='볼린저밴드 중간'),
+                    mlines.Line2D([0], [0], color='orange', lw=2, alpha=0.8, label='20일 이동평균'),
+                    mlines.Line2D([0], [0], color='blue', lw=1, label='20일 이평선'),
+                    mlines.Line2D([0], [0], color='orange', lw=1, label='60일 이평선')
+                ]
+                
+                axes[0].legend(
+                    handles=legend_elements,
+                    loc='upper left',
+                    fontsize=10,
+                    frameon=True,
+                    fancybox=True,
+                    shadow=True,
+                    ncol=2,
+                    bbox_to_anchor=(0, 1)
+                )
+            except Exception as e:
+                logger.warning(f"범례 추가 실패: {e}")
+        
+        # 11. 이미지 반환
+        buf.seek(0)
+        image_data = buf.getvalue()
+        buf.close()
+        
+        # Base64 인코딩
+        image_base64 = base64.b64encode(image_data).decode('utf-8')
+        
+        return {
+            "image": f"data:image/png;base64,{image_base64}",
+            "stock_code": stock_code,
+            "period": period,
+            "strategies": ["MOMENTUM", "DISPARITY", "BOLLINGER", "RSI"]
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"종합 전략 차트 생성 오류: {e}")
+        raise HTTPException(status_code=500, detail="종합 전략 차트 생성 중 오류가 발생했습니다.")
 

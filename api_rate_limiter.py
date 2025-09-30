@@ -28,8 +28,8 @@ class APIRateLimiter:
         self.call_history = []
         self.max_history_size = 100
         self.rate_limit_window = 60  # 1분 윈도우
-        self.max_calls_per_window = 30  # 1분당 최대 호출 수 (더 보수적으로 설정)
-        self.min_call_interval = 2.0  # 최소 호출 간격 (초) - 키움 API는 빠른 연속 호출을 제한
+        self.max_calls_per_window = 60  # 1분당 최대 호출 수 (전략매매 고려하여 증가)
+        self.min_call_interval = 1.0  # 최소 호출 간격 (초) - 전략매매를 위해 완화
         
         # 제한 복구 설정
         self.limit_duration_minutes = 10  # 제한 지속 시간 (분)

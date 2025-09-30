@@ -508,6 +508,21 @@ class KiwoomAPI:
                 "base_dt": base_dt,    # 기준일자
                 "upd_stkpc_tp": "1"    # 수정주가타입 (1: 수정주가)
             }
+
+            # 기간/주기 설정 (분봉 지원)
+            # 예시: 5분봉("5m" 또는 "5M") → intrvl_tp=5M, 일봉("1D")는 기본
+            normalized = (period or "1D").strip().upper()
+            if normalized in {"5M", "5MIN", "M5", "5MINUTE", "5"}:
+                request_data["intrvl_tp"] = "5M"
+            elif normalized in {"1M", "M1", "1MIN"}:
+                request_data["intrvl_tp"] = "1M"
+            elif normalized in {"15M", "M15"}:
+                request_data["intrvl_tp"] = "15M"
+            elif normalized in {"30M", "M30"}:
+                request_data["intrvl_tp"] = "30M"
+            else:
+                # 기본은 일봉
+                request_data["intrvl_tp"] = "1D"
             
             # 지수 백오프 리트라이
             max_attempts = 3
@@ -573,9 +588,13 @@ class KiwoomAPI:
                 close_price = int(item.get('cur_prc', 0))  # 종가
                 volume = int(item.get('trde_qty', 0))      # 거래량
                 
-                # 날짜 형식 변환 (YYYYMMDD -> YYYY-MM-DD HH:MM:SS)
+                # 날짜 형식 변환
+                # - 일봉: YYYYMMDD → YYYY-MM-DD 15:30:00 (장마감 기준)
+                # - 분봉: YYYYMMDDHHMM → YYYY-MM-DD HH:MM:00
                 if len(dt) == 8:
-                    formatted_date = f"{dt[:4]}-{dt[4:6]}-{dt[6:8]} 15:30:00"  # 장마감 시간
+                    formatted_date = f"{dt[:4]}-{dt[4:6]}-{dt[6:8]} 15:30:00"
+                elif len(dt) == 12:
+                    formatted_date = f"{dt[:4]}-{dt[4:6]}-{dt[6:8]} {dt[8:10]}:{dt[10:12]}:00"
                 else:
                     formatted_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
