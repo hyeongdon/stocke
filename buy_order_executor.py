@@ -15,6 +15,7 @@ class SignalType(Enum):
     """신호 타입 정의"""
     CONDITION_SIGNAL = "condition"  # 조건식 신호
     REFERENCE_CANDLE = "reference"  # 기준봉 신호
+    STRATEGY = "strategy"          # 전략 신호
 
 class BuyOrderExecutor:
     """매수 주문 실행기 - 별도 프로세스에서 매수 주문 처리"""

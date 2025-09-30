@@ -55,6 +55,34 @@ class StrategyManager:
                 "overbought_threshold": 70.0
             }
         }
+
+    def _to_native_json(self, value: Any) -> Any:
+        """NumPy/pandas/Datetime 등을 JSON 직렬화 가능한 기본 파이썬 타입으로 변환"""
+        # 딕셔너리
+        if isinstance(value, dict):
+            return {k: self._to_native_json(v) for k, v in value.items()}
+        # 리스트/튜플/시퀀스
+        if isinstance(value, (list, tuple)):
+            return [self._to_native_json(v) for v in value]
+        # NumPy 스칼라 타입
+        if isinstance(value, (np.integer,)):
+            return int(value)
+        if isinstance(value, (np.floating,)):
+            return float(value)
+        if isinstance(value, (np.bool_,)):
+            return bool(value)
+        # pandas Timestamp/NaT 처리
+        try:
+            import pandas as _pd  # 이미 상단에 임포트되어 있지만, 방어적 참조
+            if isinstance(value, _pd.Timestamp):
+                return value.isoformat()
+        except Exception:
+            pass
+        # datetime/date
+        if isinstance(value, (datetime, date)):
+            return value.isoformat()
+        # 그 외 기본 타입은 그대로 반환
+        return value
     
     async def start_strategy_monitoring(self):
         """전략 모니터링 시작"""
@@ -458,14 +486,26 @@ class StrategyManager:
             for db in get_db():
                 session: Session = db
                 
+                # NumPy/판다스 타입을 기본 파이썬 타입으로 변환
+                raw_value = signal_result.get("signal_value")
+                signal_value = None
+                if raw_value is not None:
+                    # np.float64 등 처리
+                    try:
+                        signal_value = float(raw_value)
+                    except Exception:
+                        signal_value = self._to_native_json(raw_value)
+
+                additional_data_native = self._to_native_json(signal_result.get("additional_data", {}))
+
                 signal = StrategySignal(
                     strategy_id=strategy.id,
                     stock_code=stock.stock_code,
                     stock_name=stock.stock_name,
                     signal_type=signal_result["signal_type"],
-                    signal_value=signal_result["signal_value"],
+                    signal_value=signal_value,
                     detected_date=date.today(),
-                    additional_data=signal_result.get("additional_data", {})
+                    additional_data=additional_data_native
                 )
                 
                 session.add(signal)
