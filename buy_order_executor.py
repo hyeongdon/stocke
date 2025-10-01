@@ -132,7 +132,22 @@ class BuyOrderExecutor:
             if not account_info:
                 return {"valid": False, "reason": "계좌 정보 조회 실패"}
             
-            available_cash = account_info.get("available_cash", 0)
+            def _to_int(v):
+                try:
+                    if isinstance(v, str):
+                        v = v.replace(',', '').replace('+', '')
+                    return int(v)
+                except Exception:
+                    return 0
+
+            # 우선순위: D+2 출금가능액(d2_entra) > 추정예수금(prsm_dpst_aset_amt) > 예수금(entr) > available_cash
+            available_cash = 0
+            for key in ("d2_entra", "prsm_dpst_aset_amt", "entr", "available_cash"):
+                if key in account_info:
+                    available_cash = _to_int(account_info.get(key))
+                    if available_cash:
+                        break
+
             if available_cash < self.max_invest_amount:
                 return {"valid": False, "reason": f"잔고 부족: {available_cash:,}원"}
             

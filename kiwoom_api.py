@@ -570,6 +570,37 @@ class KiwoomAPI:
             logger.error(f"실제 차트 데이터 조회 중 오류: {e}")
             # 오류 발생 시 빈 데이터 반환
             return []
+
+    async def get_current_price(self, stock_code: str) -> Optional[int]:
+        """현재가 조회: 가장 최근 캔들의 종가를 반환"""
+        try:
+            # 더 세밀한 최신가가 필요하면 5분봉을 우선 시도 후, 실패 시 일봉 사용
+            for frame in ("5M", "1D"):
+                data = await self.get_stock_chart_data(stock_code, frame)
+                if data:
+                    try:
+                        return int(data[-1].get('close', 0))
+                    except Exception:
+                        pass
+            return None
+        except Exception as e:
+            logger.error(f"현재가 조회 오류: {e}")
+            return None
+
+    async def get_stock_info(self, stock_code: str) -> Dict:
+        """종목 기본 정보 조회 (안전 스텁)
+        실제 API 연동 시 상태/거래정지 여부 등을 반환하도록 확장 가능.
+        """
+        try:
+            # 최소한 거래 가능으로 가정. 필요 시 별도 엔드포인트 연동
+            return {
+                "stock_code": stock_code,
+                "status": "NORMAL",
+                "tradeable": True,
+            }
+        except Exception as e:
+            logger.error(f"종목 정보 조회 오류: {e}")
+            return {}
     
     def _parse_kiwoom_chart_data(self, api_response: dict, stock_code: str) -> list:
         """키움 API 응답을 차트 데이터로 변환"""
@@ -726,6 +757,13 @@ class KiwoomAPI:
             return {"success": False, "error": "토큰 없음"}
             
         try:
+            # 외부 호출자가 01/00 형태로 전달해도 내부 코드(3/0)로 정규화
+            normalized_order_type = order_type
+            if order_type in ("01", "1"):
+                normalized_order_type = "3"  # 시장가
+            elif order_type in ("00", "0"):
+                normalized_order_type = "0"  # 보통(지정가)
+
             # 계좌 타입에 따른 도메인 설정
             use_mock_account = Config.KIWOOM_USE_MOCK_ACCOUNT
             if use_mock_account:
@@ -751,7 +789,7 @@ class KiwoomAPI:
                 'stk_cd': stock_code,   # 종목코드
                 'ord_qty': str(quantity),  # 주문수량
                 'ord_uv': str(price) if price > 0 else '',  # 주문단가 (시장가면 빈 문자열)
-                'trde_tp': order_type,  # 매매구분 (3:시장가, 0:보통)
+                'trde_tp': normalized_order_type,  # 매매구분 (3:시장가, 0:보통)
                 'cond_uv': '',  # 조건단가
             }
             
