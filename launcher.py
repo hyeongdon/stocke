@@ -15,6 +15,9 @@ class ServerLauncher:
         self.server_process = None
         self.setup_ui()
         
+        # 자동 시작: GUI 표시 후 1초 뒤 자동으로 서버 시작
+        self.root.after(1000, self.auto_start_server)
+        
     def setup_ui(self):
         # 제목
         title_label = tk.Label(self.root, text="키움증권 모니터링 시스템", 
@@ -74,6 +77,20 @@ class ServerLauncher:
             
         except Exception as e:
             messagebox.showerror("오류", f"서버 시작 실패: {str(e)}")
+    
+    def auto_start_server(self):
+        """자동 시작: 서버 시작 후 GUI 최소화"""
+        try:
+            print("🚀 자동 시작: 서버 시작 중...")
+            self.start_server()
+            
+            # GUI 최소화
+            self.root.iconify()  # 최소화
+            print("📱 GUI 최소화 완료")
+            
+        except Exception as e:
+            print(f"❌ 자동 시작 실패: {e}")
+            messagebox.showerror("오류", f"자동 시작 실패: {str(e)}")
             
     def stop_server(self):
         try:
@@ -101,5 +118,10 @@ class ServerLauncher:
         self.root.mainloop()
 
 if __name__ == "__main__":
+    print("🚀 키움증권 모니터링 시스템 시작")
+    print("📱 서버가 자동으로 시작됩니다.")
+    print("🌐 브라우저가 자동으로 열립니다.")
+    print("=" * 50)
+    
     launcher = ServerLauncher()
     launcher.run()

@@ -31,7 +31,7 @@ class StrategyManager:
         
         # 차트 데이터 캐싱 (중복 호출 방지)
         self.chart_cache = {}
-        self.cache_duration = 300  # 5분 캐시 유지
+        self.cache_duration = 600  # 10분 캐시 (API 호출 감소) 유지
         
         # 전략별 파라미터 기본값
         self.default_strategies = {
@@ -139,9 +139,15 @@ class StrategyManager:
                     await asyncio.sleep(60)  # 1분 대기
                     continue
                 
-                # 각 전략별로 관심종목 스캔
-                for strategy in strategies:
+                # 각 전략별로 관심종목 스캔 (순차 실행으로 API 제한 방지)
+                for i, strategy in enumerate(strategies):
+                    logger.info(f"🎯 [STRATEGY_MANAGER] 전략 {i+1}/{len(strategies)} 실행: {strategy.strategy_name}")
                     await self._scan_strategy_signals(strategy, watchlist)
+                    
+                    # 전략 간 대기 (마지막 전략 제외)
+                    if i < len(strategies) - 1:
+                        logger.debug(f"🎯 [STRATEGY_MANAGER] 다음 전략 실행 전 3초 대기...")
+                        await asyncio.sleep(3)
                 
                 logger.info(f"🎯 [STRATEGY_MANAGER] 전략 모니터링 완료 - {len(strategies)}개 전략, {len(watchlist)}개 종목")
                 
@@ -180,25 +186,32 @@ class StrategyManager:
     async def _scan_strategy_signals(self, strategy: TradingStrategy, watchlist: List[WatchlistStock]):
         """특정 전략으로 관심종목 스캔"""
         try:
-            logger.info(f"🎯 [STRATEGY_MANAGER] {strategy.strategy_name} 전략 스캔 시작")
+            logger.info(f"🎯 [STRATEGY_MANAGER] {strategy.strategy_name} 전략 스캔 시작 - 대상 종목: {len(watchlist)}개")
             
-            for stock in watchlist:
+            signal_count = 0
+            for i, stock in enumerate(watchlist, 1):
                 try:
+                    logger.debug(f"🔍 [SCAN_DEBUG] {i}/{len(watchlist)} - {stock.stock_name}({stock.stock_code}) 스캔 중...")
+                    
                     # 종목별 신호 계산
                     signal_result = await self._calculate_strategy_signal(strategy, stock)
                     
                     if signal_result:
                         # 신호 생성
                         await self._create_strategy_signal(strategy, stock, signal_result)
+                        signal_count += 1
+                        logger.info(f"✅ [SCAN_RESULT] {stock.stock_name} - {signal_result['signal_type']} 신호 감지!")
+                    else:
+                        logger.debug(f"❌ [SCAN_RESULT] {stock.stock_name} - 신호 없음")
                         
                 except Exception as e:
                     logger.error(f"🎯 [STRATEGY_MANAGER] {stock.stock_name}({stock.stock_code}) 신호 계산 오류: {e}")
                     continue
                 
-                # API 제한 고려하여 잠시 대기 (캐싱으로 인해 대기 시간 단축)
-                await asyncio.sleep(0.5)
+                # API 제한 고려하여 충분한 대기 (최소 1.5초 간격 보장)
+                await asyncio.sleep(1.8)
             
-            logger.info(f"🎯 [STRATEGY_MANAGER] {strategy.strategy_name} 전략 스캔 완료")
+            logger.info(f"🎯 [STRATEGY_MANAGER] {strategy.strategy_name} 전략 스캔 완료 - 신호 발생: {signal_count}개")
             
         except Exception as e:
             logger.error(f"🎯 [STRATEGY_MANAGER] 전략 스캔 오류: {e}")
@@ -211,29 +224,68 @@ class StrategyManager:
             # 캐시 확인
             if stock_code in self.chart_cache:
                 cached_data, cache_time = self.chart_cache[stock_code]
-                if (current_time - cache_time).total_seconds() < self.cache_duration:
-                    logger.debug(f"🎯 [STRATEGY_MANAGER] 캐시된 차트 데이터 사용: {stock_code}")
+                cache_age = (current_time - cache_time).total_seconds()
+                if cache_age < self.cache_duration:
+                    logger.debug(f"🎯 [CHART_DEBUG] 캐시된 차트 데이터 사용: {stock_code} (캐시나이: {cache_age:.1f}초)")
+                    logger.debug(f"🎯 [CHART_DEBUG] 캐시데이터 개수: {len(cached_data) if cached_data else 0}개")
+                    if cached_data and len(cached_data) > 0:
+                        logger.debug(f"🎯 [CHART_DEBUG] 캐시데이터 샘플: {cached_data[0] if cached_data else 'None'}")
                     return cached_data
+                else:
+                    logger.debug(f"🎯 [CHART_DEBUG] 캐시 만료: {stock_code} (캐시나이: {cache_age:.1f}초 > {self.cache_duration}초)")
             
             # API 제한 확인
             from api_rate_limiter import api_rate_limiter
             if not api_rate_limiter.is_api_available():
-                logger.warning(f"🎯 [STRATEGY_MANAGER] API 제한 상태로 차트 조회 건너뜀: {stock_code}")
+                logger.warning(f"🎯 [CHART_DEBUG] API 제한 상태로 차트 조회 건너뜀: {stock_code}")
+                # 제한 상태에서는 캐시된 데이터라도 반환 (빈 데이터가 아닌 경우)
+                if stock_code in self.chart_cache:
+                    cached_data, _ = self.chart_cache[stock_code]
+                    if cached_data and len(cached_data) > 0:
+                        logger.info(f"🎯 [CHART_DEBUG] API 제한 중 - 캐시된 데이터 사용: {stock_code}")
+                        return cached_data
                 return None
             
             # 새로 조회
-            logger.info(f"🎯 [STRATEGY_MANAGER] 차트 데이터 새로 조회: {stock_code}")
+            logger.info(f"🎯 [CHART_DEBUG] 차트 데이터 새로 조회 시작: {stock_code}")
             # 데이트레이딩용 5분봉 요청
             chart_data = await self.kiwoom_api.get_stock_chart_data(stock_code, period="5M")
+            
+            # 디버깅: 조회 결과 상세 분석
+            logger.debug(f"🎯 [CHART_DEBUG] API 조회 결과: {stock_code}")
+            logger.debug(f"🎯 [CHART_DEBUG] - 데이터 타입: {type(chart_data)}")
+            logger.debug(f"🎯 [CHART_DEBUG] - 데이터 개수: {len(chart_data) if chart_data else 0}개")
+            logger.debug(f"🎯 [CHART_DEBUG] - 데이터가 None인가: {chart_data is None}")
+            logger.debug(f"🎯 [CHART_DEBUG] - 데이터가 빈 리스트인가: {chart_data == []}")
+            
+            if chart_data:
+                logger.debug(f"🎯 [CHART_DEBUG] - 첫 번째 데이터: {chart_data[0] if len(chart_data) > 0 else 'None'}")
+                logger.debug(f"🎯 [CHART_DEBUG] - 마지막 데이터: {chart_data[-1] if len(chart_data) > 0 else 'None'}")
+                
+                # 데이터 구조 검증
+                if len(chart_data) > 0:
+                    first_item = chart_data[0]
+                    logger.debug(f"🎯 [CHART_DEBUG] - 첫 데이터 키들: {list(first_item.keys()) if isinstance(first_item, dict) else 'Not a dict'}")
+                    if isinstance(first_item, dict):
+                        for key in ['timestamp', 'open', 'high', 'low', 'close', 'volume']:
+                            value = first_item.get(key, 'MISSING')
+                            logger.debug(f"🎯 [CHART_DEBUG] - {key}: {value}")
+            else:
+                logger.warning(f"🎯 [CHART_DEBUG] ⚠️ {stock_code} 차트 데이터가 비어있음!")
             
             # 캐시에 저장
             if chart_data:
                 self.chart_cache[stock_code] = (chart_data, current_time)
+                logger.debug(f"🎯 [CHART_DEBUG] 캐시에 저장 완료: {stock_code}")
+            else:
+                logger.warning(f"🎯 [CHART_DEBUG] ⚠️ {stock_code} 빈 데이터로 인해 캐시 저장 안함")
             
             return chart_data
             
         except Exception as e:
-            logger.error(f"🎯 [STRATEGY_MANAGER] 차트 데이터 조회 오류: {e}")
+            logger.error(f"🎯 [CHART_DEBUG] 차트 데이터 조회 오류: {stock_code} - {e}")
+            import traceback
+            logger.error(f"🎯 [CHART_DEBUG] 스택 트레이스: {traceback.format_exc()}")
             return None
 
     async def _calculate_strategy_signal(self, strategy: TradingStrategy, stock: WatchlistStock) -> Optional[Dict]:
@@ -242,9 +294,26 @@ class StrategyManager:
             # 캐시된 차트 데이터 조회
             chart_data = await self._get_cached_chart_data(stock.stock_code)
             
-            if not chart_data or len(chart_data) < 20:
-                logger.warning(f"🎯 [STRATEGY_MANAGER] {stock.stock_name} 차트 데이터 부족")
+            # 디버깅: 차트 데이터 부족 원인 분석
+            logger.debug(f"🎯 [CHART_DEBUG] {stock.stock_name}({stock.stock_code}) 차트 데이터 검증:")
+            logger.debug(f"🎯 [CHART_DEBUG] - chart_data is None: {chart_data is None}")
+            logger.debug(f"🎯 [CHART_DEBUG] - chart_data == []: {chart_data == []}")
+            logger.debug(f"🎯 [CHART_DEBUG] - len(chart_data): {len(chart_data) if chart_data else 0}")
+            logger.debug(f"🎯 [CHART_DEBUG] - 최소 필요 개수: 20개")
+            
+            if not chart_data:
+                logger.warning(f"🎯 [CHART_DEBUG] ⚠️ {stock.stock_name} 차트 데이터가 None 또는 빈 리스트")
+                logger.warning(f"🎯 [STRATEGY_MANAGER] {stock.stock_name} 차트 데이터 부족 (데이터 없음)")
                 return None
+            
+            if len(chart_data) < 20:
+                logger.warning(f"🎯 [CHART_DEBUG] ⚠️ {stock.stock_name} 차트 데이터 개수 부족: {len(chart_data)}개 < 20개")
+                logger.warning(f"🎯 [STRATEGY_MANAGER] {stock.stock_name} 차트 데이터 부족 (개수 부족)")
+                # 데이터가 부족해도 디버깅 정보는 출력
+                self._log_strategy_debug_info(strategy, stock, chart_data, "데이터 부족")
+                return None
+            
+            logger.debug(f"🎯 [CHART_DEBUG] ✅ {stock.stock_name} 차트 데이터 충분: {len(chart_data)}개")
             
             # DataFrame 생성
             df = pd.DataFrame(chart_data)
@@ -269,12 +338,20 @@ class StrategyManager:
             df['Volume'] = pd.to_numeric(df['Volume'])
             
             # 전략별 신호 계산
-            # JSON 파라미터 파싱
+            # JSON 파라미터 파싱 (이미 dict인 경우와 문자열인 경우 모두 처리)
             import json
             try:
-                parameters = json.loads(strategy.parameters) if strategy.parameters else {}
+                if isinstance(strategy.parameters, dict):
+                    parameters = strategy.parameters
+                elif isinstance(strategy.parameters, str):
+                    parameters = json.loads(strategy.parameters) if strategy.parameters else {}
+                else:
+                    parameters = {}
             except (json.JSONDecodeError, TypeError):
                 parameters = {}
+            
+            # 전략별 신호 계산 전 디버깅 정보 출력
+            self._log_strategy_debug_info(strategy, stock, chart_data, "정상")
             
             if strategy.strategy_type == "MOMENTUM":
                 return await self._calculate_momentum_signal(df, parameters)
@@ -288,6 +365,197 @@ class StrategyManager:
         except Exception as e:
             logger.error(f"🎯 [STRATEGY_MANAGER] {stock.stock_name} 신호 계산 오류: {e}")
             return None
+    
+    def _log_strategy_debug_info(self, strategy, stock, chart_data, status):
+        """전략별 디버깅 정보 출력"""
+        try:
+            logger.info(f"📊 [STRATEGY_DEBUG] ===== {strategy.strategy_name} 전략 디버깅 =====")
+            logger.info(f"📊 [STRATEGY_DEBUG] 종목: {stock.stock_name}({stock.stock_code})")
+            logger.info(f"📊 [STRATEGY_DEBUG] 상태: {status}")
+            logger.info(f"📊 [STRATEGY_DEBUG] 전략 타입: {strategy.strategy_type}")
+            logger.info(f"📊 [STRATEGY_DEBUG] 전략 파라미터: {strategy.parameters}")
+            logger.info(f"📊 [STRATEGY_DEBUG] 차트 데이터 개수: {len(chart_data) if chart_data else 0}")
+            
+            if chart_data and len(chart_data) > 0:
+                # 최신 데이터 정보
+                latest_data = chart_data[-1]
+                logger.info(f"📊 [STRATEGY_DEBUG] 최신 데이터: {latest_data}")
+                
+                # 가격 정보
+                if 'close' in latest_data:
+                    current_price = latest_data['close']
+                    logger.info(f"📊 [STRATEGY_DEBUG] 현재가: {current_price}")
+                    
+                    # 전략별 기준값 계산 및 출력
+                    if strategy.strategy_type == "MOMENTUM":
+                        self._log_momentum_debug(strategy, chart_data, current_price)
+                    elif strategy.strategy_type == "DISPARITY":
+                        self._log_disparity_debug(strategy, chart_data, current_price)
+                    elif strategy.strategy_type == "BOLLINGER":
+                        self._log_bollinger_debug(strategy, chart_data, current_price)
+                    elif strategy.strategy_type == "RSI":
+                        self._log_rsi_debug(strategy, chart_data, current_price)
+            
+            logger.info(f"📊 [STRATEGY_DEBUG] ===== {strategy.strategy_name} 디버깅 완료 =====")
+            
+        except Exception as e:
+            logger.error(f"📊 [STRATEGY_DEBUG] 디버깅 정보 출력 오류: {e}")
+    
+    def _log_momentum_debug(self, strategy, chart_data, current_price):
+        """모멘텀 전략 디버깅 정보"""
+        try:
+            import json
+            # strategy.parameters가 이미 dict인 경우와 문자열인 경우 모두 처리
+            if isinstance(strategy.parameters, dict):
+                parameters = strategy.parameters
+            elif isinstance(strategy.parameters, str):
+                parameters = json.loads(strategy.parameters) if strategy.parameters else {}
+            else:
+                parameters = {}
+            momentum_period = parameters.get("momentum_period", 10)
+            
+            if len(chart_data) >= momentum_period + 1:
+                prev_price = chart_data[-momentum_period-1]['close']
+                momentum = current_price - prev_price
+                
+                logger.info(f"📊 [MOMENTUM_DEBUG] 모멘텀 기간: {momentum_period}일")
+                logger.info(f"📊 [MOMENTUM_DEBUG] 현재가: {current_price}")
+                logger.info(f"📊 [MOMENTUM_DEBUG] {momentum_period}일전가: {prev_price}")
+                logger.info(f"📊 [MOMENTUM_DEBUG] 모멘텀 값: {momentum:.2f}")
+                logger.info(f"📊 [MOMENTUM_DEBUG] 0선 돌파 조건: {momentum > 0}")
+                logger.info(f"📊 [MOMENTUM_DEBUG] 매수 조건: 0선 상향 돌파 (현재 모멘텀 > 0 이고 이전 모멘텀 <= 0)")
+                logger.info(f"📊 [MOMENTUM_DEBUG] 매도 조건: 0선 하향 돌파 (현재 모멘텀 < 0 이고 이전 모멘텀 >= 0)")
+            else:
+                logger.info(f"📊 [MOMENTUM_DEBUG] 데이터 부족으로 모멘텀 계산 불가")
+                
+        except Exception as e:
+            logger.error(f"📊 [MOMENTUM_DEBUG] 모멘텀 디버깅 오류: {e}")
+    
+    def _log_disparity_debug(self, strategy, chart_data, current_price):
+        """이격도 전략 디버깅 정보"""
+        try:
+            import json
+            # strategy.parameters가 이미 dict인 경우와 문자열인 경우 모두 처리
+            if isinstance(strategy.parameters, dict):
+                parameters = strategy.parameters
+            elif isinstance(strategy.parameters, str):
+                parameters = json.loads(strategy.parameters) if strategy.parameters else {}
+            else:
+                parameters = {}
+            ma_period = parameters.get("ma_period", 20)
+            buy_threshold = parameters.get("buy_threshold", 95.0)
+            sell_threshold = parameters.get("sell_threshold", 105.0)
+            
+            if len(chart_data) >= ma_period:
+                # 이동평균 계산
+                recent_prices = [data['close'] for data in chart_data[-ma_period:]]
+                ma_value = sum(recent_prices) / len(recent_prices)
+                disparity = (current_price / ma_value) * 100
+                
+                logger.info(f"📊 [DISPARITY_DEBUG] 이동평균 기간: {ma_period}일")
+                logger.info(f"📊 [DISPARITY_DEBUG] 현재가: {current_price}")
+                logger.info(f"📊 [DISPARITY_DEBUG] {ma_period}일 이동평균: {ma_value:.2f}")
+                logger.info(f"📊 [DISPARITY_DEBUG] 이격도: {disparity:.2f}%")
+                logger.info(f"📊 [DISPARITY_DEBUG] 매수 임계값: {buy_threshold}%")
+                logger.info(f"📊 [DISPARITY_DEBUG] 매도 임계값: {sell_threshold}%")
+                logger.info(f"📊 [DISPARITY_DEBUG] 매수 조건: {disparity < buy_threshold}")
+                logger.info(f"📊 [DISPARITY_DEBUG] 매도 조건: {disparity > sell_threshold}")
+            else:
+                logger.info(f"📊 [DISPARITY_DEBUG] 데이터 부족으로 이격도 계산 불가")
+                
+        except Exception as e:
+            logger.error(f"📊 [DISPARITY_DEBUG] 이격도 디버깅 오류: {e}")
+    
+    def _log_bollinger_debug(self, strategy, chart_data, current_price):
+        """볼린저밴드 전략 디버깅 정보"""
+        try:
+            import json
+            import statistics
+            # strategy.parameters가 이미 dict인 경우와 문자열인 경우 모두 처리
+            if isinstance(strategy.parameters, dict):
+                parameters = strategy.parameters
+            elif isinstance(strategy.parameters, str):
+                parameters = json.loads(strategy.parameters) if strategy.parameters else {}
+            else:
+                parameters = {}
+            ma_period = parameters.get("ma_period", 20)
+            std_multiplier = parameters.get("std_multiplier", 2.0)
+            
+            if len(chart_data) >= ma_period:
+                # 이동평균과 표준편차 계산
+                recent_prices = [data['close'] for data in chart_data[-ma_period:]]
+                ma_value = sum(recent_prices) / len(recent_prices)
+                std_value = statistics.stdev(recent_prices)
+                
+                upper_band = ma_value + (std_value * std_multiplier)
+                lower_band = ma_value - (std_value * std_multiplier)
+                
+                logger.info(f"📊 [BOLLINGER_DEBUG] 이동평균 기간: {ma_period}일")
+                logger.info(f"📊 [BOLLINGER_DEBUG] 표준편차 배수: {std_multiplier}")
+                logger.info(f"📊 [BOLLINGER_DEBUG] 현재가: {current_price}")
+                logger.info(f"📊 [BOLLINGER_DEBUG] {ma_period}일 이동평균: {ma_value:.2f}")
+                logger.info(f"📊 [BOLLINGER_DEBUG] 표준편차: {std_value:.2f}")
+                logger.info(f"📊 [BOLLINGER_DEBUG] 상단밴드: {upper_band:.2f}")
+                logger.info(f"📊 [BOLLINGER_DEBUG] 하단밴드: {lower_band:.2f}")
+                logger.info(f"📊 [BOLLINGER_DEBUG] 매수 조건 (하단밴드 터치): {current_price <= lower_band}")
+                logger.info(f"📊 [BOLLINGER_DEBUG] 매도 조건 (상단밴드 터치): {current_price >= upper_band}")
+            else:
+                logger.info(f"📊 [BOLLINGER_DEBUG] 데이터 부족으로 볼린저밴드 계산 불가")
+                
+        except Exception as e:
+            logger.error(f"📊 [BOLLINGER_DEBUG] 볼린저밴드 디버깅 오류: {e}")
+    
+    def _log_rsi_debug(self, strategy, chart_data, current_price):
+        """RSI 전략 디버깅 정보"""
+        try:
+            import json
+            # strategy.parameters가 이미 dict인 경우와 문자열인 경우 모두 처리
+            if isinstance(strategy.parameters, dict):
+                parameters = strategy.parameters
+            elif isinstance(strategy.parameters, str):
+                parameters = json.loads(strategy.parameters) if strategy.parameters else {}
+            else:
+                parameters = {}
+            rsi_period = parameters.get("rsi_period", 14)
+            oversold_threshold = parameters.get("oversold_threshold", 30.0)
+            overbought_threshold = parameters.get("overbought_threshold", 70.0)
+            
+            if len(chart_data) >= rsi_period + 1:
+                # RSI 계산
+                prices = [data['close'] for data in chart_data[-rsi_period-1:]]
+                gains = []
+                losses = []
+                
+                for i in range(1, len(prices)):
+                    change = prices[i] - prices[i-1]
+                    if change > 0:
+                        gains.append(change)
+                        losses.append(0)
+                    else:
+                        gains.append(0)
+                        losses.append(-change)
+                
+                avg_gain = sum(gains) / len(gains) if gains else 0
+                avg_loss = sum(losses) / len(losses) if losses else 0
+                
+                if avg_loss != 0:
+                    rs = avg_gain / avg_loss
+                    rsi = 100 - (100 / (1 + rs))
+                else:
+                    rsi = 100
+                
+                logger.info(f"📊 [RSI_DEBUG] RSI 기간: {rsi_period}일")
+                logger.info(f"📊 [RSI_DEBUG] 현재가: {current_price}")
+                logger.info(f"📊 [RSI_DEBUG] RSI 값: {rsi:.2f}")
+                logger.info(f"📊 [RSI_DEBUG] 과매도 임계값: {oversold_threshold}")
+                logger.info(f"📊 [RSI_DEBUG] 과매수 임계값: {overbought_threshold}")
+                logger.info(f"📊 [RSI_DEBUG] 매수 조건 (과매도): {rsi < oversold_threshold}")
+                logger.info(f"📊 [RSI_DEBUG] 매도 조건 (과매수): {rsi > overbought_threshold}")
+            else:
+                logger.info(f"📊 [RSI_DEBUG] 데이터 부족으로 RSI 계산 불가")
+                
+        except Exception as e:
+            logger.error(f"📊 [RSI_DEBUG] RSI 디버깅 오류: {e}")
     
     async def _calculate_momentum_signal(self, df: pd.DataFrame, params: Dict) -> Optional[Dict]:
         """모멘텀 전략 신호 계산"""
@@ -304,15 +572,33 @@ class StrategyManager:
             # 최근 데이터
             current_momentum = df['momentum'].iloc[-1]
             prev_momentum = df['momentum'].iloc[-2]
+            current_price = df['Close'].iloc[-1]
+            prev_price = df['Close'].iloc[-momentum_period-1]
+            
+            # 디버깅 로그: 현재값과 기준값 비교
+            logger.info(f"📊 [MOMENTUM_DEBUG] 현재가: {current_price:.2f}, {momentum_period}일전가: {prev_price:.2f}")
+            logger.info(f"📊 [MOMENTUM_DEBUG] 현재모멘텀: {current_momentum:.2f}, 이전모멘텀: {prev_momentum:.2f}")
+            logger.info(f"📊 [MOMENTUM_DEBUG] 0선돌파조건 - 현재>0: {current_momentum > 0}, 이전<=0: {prev_momentum <= 0}")
+            logger.info(f"📊 [MOMENTUM_DEBUG] 0선하향조건 - 현재<0: {current_momentum < 0}, 이전>=0: {prev_momentum >= 0}")
             
             # 신호 판단
             signal_type = None
-            if current_momentum > 0 and prev_momentum <= 0:
+            buy_condition = current_momentum > 0 and prev_momentum <= 0
+            sell_condition = current_momentum < 0 and prev_momentum >= 0
+            
+            logger.info(f"📊 [MOMENTUM_DEBUG] 매수 조건 (0선 상향 돌파): {buy_condition}")
+            logger.info(f"📊 [MOMENTUM_DEBUG] 매도 조건 (0선 하향 돌파): {sell_condition}")
+            
+            if buy_condition:
                 # 0선 상향 돌파
                 signal_type = "BUY"
-            elif current_momentum < 0 and prev_momentum >= 0:
+                logger.info(f"🚀 [MOMENTUM_SIGNAL] BUY 신호 발생! 모멘텀: {current_momentum:.2f} (이전: {prev_momentum:.2f})")
+            elif sell_condition:
                 # 0선 하향 돌파
                 signal_type = "SELL"
+                logger.info(f"📉 [MOMENTUM_SIGNAL] SELL 신호 발생! 모멘텀: {current_momentum:.2f} (이전: {prev_momentum:.2f})")
+            else:
+                logger.info(f"📊 [MOMENTUM_DEBUG] 신호 없음 - 매수/매도 조건 미충족")
             
             if signal_type:
                 return {
@@ -320,8 +606,8 @@ class StrategyManager:
                     "signal_value": current_momentum,
                     "additional_data": {
                         "momentum_period": momentum_period,
-                        "current_price": df['Close'].iloc[-1],
-                        "prev_price": df['Close'].iloc[-momentum_period-1]
+                        "current_price": current_price,
+                        "prev_price": prev_price
                     }
                 }
             
@@ -350,15 +636,26 @@ class StrategyManager:
             # 최근 데이터
             current_disparity = df['disparity'].iloc[-1]
             prev_disparity = df['disparity'].iloc[-2]
+            current_price = df['Close'].iloc[-1]
+            ma_value = df['ma'].iloc[-1]
+            
+            # 디버깅 로그: 현재값과 기준값 비교
+            logger.debug(f"📊 [DISPARITY_DEBUG] 현재가: {current_price:.2f}, {ma_period}일이동평균: {ma_value:.2f}")
+            logger.debug(f"📊 [DISPARITY_DEBUG] 현재이격도: {current_disparity:.2f}%, 이전이격도: {prev_disparity:.2f}%")
+            logger.debug(f"📊 [DISPARITY_DEBUG] 매수임계값: {buy_threshold}%, 매도임계값: {sell_threshold}%")
+            logger.debug(f"📊 [DISPARITY_DEBUG] 매수조건 - 현재<임계값: {current_disparity < buy_threshold}, 이전>=임계값: {prev_disparity >= buy_threshold}")
+            logger.debug(f"📊 [DISPARITY_DEBUG] 매도조건 - 현재>임계값: {current_disparity > sell_threshold}, 이전<=임계값: {prev_disparity <= sell_threshold}")
             
             # 신호 판단
             signal_type = None
             if current_disparity < buy_threshold and prev_disparity >= buy_threshold:
                 # 매수 임계값 하향 돌파
                 signal_type = "BUY"
+                logger.info(f"🚀 [DISPARITY_SIGNAL] BUY 신호 발생! 이격도: {current_disparity:.2f}% (임계값: {buy_threshold}%)")
             elif current_disparity > sell_threshold and prev_disparity <= sell_threshold:
                 # 매도 임계값 상향 돌파
                 signal_type = "SELL"
+                logger.info(f"📉 [DISPARITY_SIGNAL] SELL 신호 발생! 이격도: {current_disparity:.2f}% (임계값: {sell_threshold}%)")
             
             if signal_type:
                 return {
@@ -366,8 +663,8 @@ class StrategyManager:
                     "signal_value": current_disparity,
                     "additional_data": {
                         "ma_period": ma_period,
-                        "current_price": df['Close'].iloc[-1],
-                        "ma_value": df['ma'].iloc[-1],
+                        "current_price": current_price,
+                        "ma_value": ma_value,
                         "buy_threshold": buy_threshold,
                         "sell_threshold": sell_threshold
                     }
@@ -401,15 +698,26 @@ class StrategyManager:
             current_price = df['Close'].iloc[-1]
             upper_band = df['upper_band'].iloc[-1]
             lower_band = df['lower_band'].iloc[-1]
+            ma_value = df['ma'].iloc[-1]
+            std_value = df['std'].iloc[-1]
+            
+            # 디버깅 로그: 현재값과 기준값 비교
+            logger.debug(f"📊 [BOLLINGER_DEBUG] 현재가: {current_price:.2f}, {ma_period}일이동평균: {ma_value:.2f}")
+            logger.debug(f"📊 [BOLLINGER_DEBUG] 표준편차: {std_value:.2f}, 배수: {std_multiplier}")
+            logger.debug(f"📊 [BOLLINGER_DEBUG] 상단밴드: {upper_band:.2f}, 하단밴드: {lower_band:.2f}")
+            logger.debug(f"📊 [BOLLINGER_DEBUG] 매수조건 - 현재가<=하단밴드: {current_price <= lower_band}")
+            logger.debug(f"📊 [BOLLINGER_DEBUG] 매도조건 - 현재가>=상단밴드: {current_price >= upper_band}")
             
             # 신호 판단
             signal_type = None
             if current_price <= lower_band:
                 # 하단밴드 터치 - 매수 신호
                 signal_type = "BUY"
+                logger.info(f"🚀 [BOLLINGER_SIGNAL] BUY 신호 발생! 현재가: {current_price:.2f} (하단밴드: {lower_band:.2f})")
             elif current_price >= upper_band:
                 # 상단밴드 터치 - 매도 신호
                 signal_type = "SELL"
+                logger.info(f"📉 [BOLLINGER_SIGNAL] SELL 신호 발생! 현재가: {current_price:.2f} (상단밴드: {upper_band:.2f})")
             
             if signal_type:
                 return {
@@ -421,7 +729,7 @@ class StrategyManager:
                         "current_price": current_price,
                         "upper_band": upper_band,
                         "lower_band": lower_band,
-                        "ma_value": df['ma'].iloc[-1]
+                        "ma_value": ma_value
                     }
                 }
             
@@ -451,15 +759,25 @@ class StrategyManager:
             # 최근 데이터
             current_rsi = df['rsi'].iloc[-1]
             prev_rsi = df['rsi'].iloc[-2]
+            current_price = df['Close'].iloc[-1]
+            
+            # 디버깅 로그: 현재값과 기준값 비교
+            logger.debug(f"📊 [RSI_DEBUG] 현재가: {current_price:.2f}, RSI기간: {rsi_period}일")
+            logger.debug(f"📊 [RSI_DEBUG] 현재RSI: {current_rsi:.2f}, 이전RSI: {prev_rsi:.2f}")
+            logger.debug(f"📊 [RSI_DEBUG] 과매도임계값: {oversold_threshold}, 과매수임계값: {overbought_threshold}")
+            logger.debug(f"📊 [RSI_DEBUG] 매수조건 - 현재<과매도: {current_rsi < oversold_threshold}, 이전>=과매도: {prev_rsi >= oversold_threshold}")
+            logger.debug(f"📊 [RSI_DEBUG] 매도조건 - 현재>과매수: {current_rsi > overbought_threshold}, 이전<=과매수: {prev_rsi <= overbought_threshold}")
             
             # 신호 판단
             signal_type = None
             if current_rsi < oversold_threshold and prev_rsi >= oversold_threshold:
                 # 과매도 구간 진입 - 매수 신호
                 signal_type = "BUY"
+                logger.info(f"🚀 [RSI_SIGNAL] BUY 신호 발생! RSI: {current_rsi:.2f} (과매도임계값: {oversold_threshold})")
             elif current_rsi > overbought_threshold and prev_rsi <= overbought_threshold:
                 # 과매수 구간 진입 - 매도 신호
                 signal_type = "SELL"
+                logger.info(f"📉 [RSI_SIGNAL] SELL 신호 발생! RSI: {current_rsi:.2f} (과매수임계값: {overbought_threshold})")
             
             if signal_type:
                 return {
@@ -467,7 +785,7 @@ class StrategyManager:
                     "signal_value": current_rsi,
                     "additional_data": {
                         "rsi_period": rsi_period,
-                        "current_price": df['Close'].iloc[-1],
+                        "current_price": current_price,
                         "oversold_threshold": oversold_threshold,
                         "overbought_threshold": overbought_threshold
                     }

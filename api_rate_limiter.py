@@ -28,8 +28,8 @@ class APIRateLimiter:
         self.call_history = []
         self.max_history_size = 100
         self.rate_limit_window = 60  # 1분 윈도우
-        self.max_calls_per_window = 60  # 1분당 최대 호출 수 (전략매매 고려하여 증가)
-        self.min_call_interval = 1.0  # 최소 호출 간격 (초) - 전략매매를 위해 완화
+        self.max_calls_per_window = 40  # 1분당 최대 호출 수 (안전한 수준으로 감소)
+        self.min_call_interval = 1.5  # 최소 호출 간격 (초) - 안전한 간격으로 증가
         
         # 제한 복구 설정
         self.limit_duration_minutes = 10  # 제한 지속 시간 (분)
@@ -38,40 +38,55 @@ class APIRateLimiter:
     def is_api_available(self) -> bool:
         """API 사용 가능 여부 확인"""
         try:
+            current_time = datetime.now()
+            logger.debug(f"🚫 [API_LIMITER_DEBUG] API 가용성 확인 시작 - 현재 상태: {self.status.value}")
+            
             # 제한 상태 확인
             if self.status == APILimitStatus.LIMITED:
-                if self.limit_until and datetime.now() < self.limit_until:
-                    logger.debug(f"🚫 [API_LIMITER] API 제한 중 - {self.limit_until}까지 대기")
+                if self.limit_until and current_time < self.limit_until:
+                    remaining_time = (self.limit_until - current_time).total_seconds()
+                    logger.warning(f"🚫 [API_LIMITER_DEBUG] API 제한 중 - {remaining_time:.1f}초 남음 (제한 해제: {self.limit_until})")
                     return False
                 else:
                     # 제한 시간 만료 - 복구 상태로 변경
                     self.status = APILimitStatus.RECOVERING
                     self.limit_until = None
-                    logger.info("🔄 [API_LIMITER] API 제한 해제 - 복구 모드로 전환")
+                    logger.info("🔄 [API_LIMITER_DEBUG] API 제한 해제 - 복구 모드로 전환")
             
             # 경고 상태 확인
             if self.status == APILimitStatus.WARNING:
                 self._check_warning_reset()
             
+            # 호출 기록 현황
+            if self.call_history:
+                recent_calls = [
+                    call for call in self.call_history
+                    if (current_time - call["timestamp"]).total_seconds() <= self.rate_limit_window
+                ]
+                logger.debug(f"🚫 [API_LIMITER_DEBUG] 최근 {self.rate_limit_window}초 내 호출: {len(recent_calls)}/{self.max_calls_per_window}")
+            
+            logger.debug(f"🚫 [API_LIMITER_DEBUG] API 사용 가능: True")
             return True
             
         except Exception as e:
-            logger.error(f"🚫 [API_LIMITER] API 가용성 확인 오류: {e}")
+            logger.error(f"🚫 [API_LIMITER_DEBUG] API 가용성 확인 오류: {e}")
             return False
     
     def record_api_call(self, api_name: str = "unknown") -> bool:
         """API 호출 기록 및 제한 확인"""
         try:
             current_time = datetime.now()
+            logger.debug(f"🚫 [API_LIMITER_DEBUG] API 호출 기록 시작 - {api_name}")
             
             # 최근 호출과의 간격 확인
             if self.call_history:
                 last_call_time = self.call_history[-1]["timestamp"]
                 time_since_last_call = (current_time - last_call_time).total_seconds()
+                logger.debug(f"🚫 [API_LIMITER_DEBUG] 마지막 호출로부터 경과: {time_since_last_call:.2f}초 (최소: {self.min_call_interval}초)")
                 
                 if time_since_last_call < self.min_call_interval:
                     wait_time = self.min_call_interval - time_since_last_call
-                    logger.warning(f"⏳ [API_LIMITER] 호출 간격 부족 - {wait_time:.1f}초 대기 필요 (최소 간격: {self.min_call_interval}초)")
+                    logger.warning(f"🚫 [API_LIMITER_DEBUG] ⚠️ 호출 간격 부족 - {wait_time:.1f}초 대기 필요 (최소 간격: {self.min_call_interval}초)")
                     return False
             
             # 호출 기록 추가
@@ -79,10 +94,12 @@ class APIRateLimiter:
                 "api_name": api_name,
                 "timestamp": current_time
             })
+            logger.debug(f"🚫 [API_LIMITER_DEBUG] 호출 기록 추가 완료 - 총 기록 수: {len(self.call_history)}")
             
             # 기록 크기 제한
             if len(self.call_history) > self.max_history_size:
                 self.call_history = self.call_history[-self.max_history_size:]
+                logger.debug(f"🚫 [API_LIMITER_DEBUG] 호출 기록 크기 제한 적용 - {self.max_history_size}개로 축소")
             
             # 윈도우 내 호출 수 확인
             window_start = current_time - timedelta(seconds=self.rate_limit_window)
@@ -95,10 +112,10 @@ class APIRateLimiter:
             remaining_calls = self.max_calls_per_window - len(recent_calls)
             usage_percent = (len(recent_calls) / self.max_calls_per_window) * 100
             
-            logger.info(f"📊 [API_LIMITER] API 호출 현황 - {api_name}: {len(recent_calls)}/{self.max_calls_per_window} ({usage_percent:.1f}%), 남은 횟수: {remaining_calls}")
+            logger.info(f"📊 [API_LIMITER_DEBUG] API 호출 현황 - {api_name}: {len(recent_calls)}/{self.max_calls_per_window} ({usage_percent:.1f}%), 남은 횟수: {remaining_calls}")
             
             if len(recent_calls) > self.max_calls_per_window:
-                logger.warning(f"🚫 [API_LIMITER] API 호출 한도 초과 - {len(recent_calls)}/{self.max_calls_per_window}")
+                logger.warning(f"🚫 [API_LIMITER_DEBUG] ❌ API 호출 한도 초과 - {len(recent_calls)}/{self.max_calls_per_window}")
                 self._trigger_rate_limit()
                 return False
             
@@ -106,12 +123,13 @@ class APIRateLimiter:
             if len(recent_calls) > self.max_calls_per_window * 0.8:  # 80% 이상
                 if self.status == APILimitStatus.NORMAL:
                     self.status = APILimitStatus.WARNING
-                    logger.warning(f"⚠️ [API_LIMITER] API 호출 빈도 높음 - 경고 상태 ({usage_percent:.1f}% 사용)")
+                    logger.warning(f"🚫 [API_LIMITER_DEBUG] ⚠️ API 호출 빈도 높음 - 경고 상태 ({usage_percent:.1f}% 사용)")
             
+            logger.debug(f"🚫 [API_LIMITER_DEBUG] ✅ API 호출 허용: {api_name}")
             return True
             
         except Exception as e:
-            logger.error(f"🚫 [API_LIMITER] API 호출 기록 오류: {e}")
+            logger.error(f"🚫 [API_LIMITER_DEBUG] API 호출 기록 오류: {e}")
             return True  # 오류 시에도 호출 허용
     
     def handle_api_error(self, error: Exception) -> bool:
@@ -145,14 +163,26 @@ class APIRateLimiter:
     def _trigger_rate_limit(self):
         """API 제한 트리거"""
         try:
+            current_time = datetime.now()
             self.status = APILimitStatus.LIMITED
-            self.limit_until = datetime.now() + timedelta(minutes=self.limit_duration_minutes)
+            self.limit_until = current_time + timedelta(minutes=self.limit_duration_minutes)
             self.warning_count = 0
             
-            logger.warning(f"🚫 [API_LIMITER] API 제한 활성화 - {self.limit_until}까지 제한")
+            logger.warning(f"🚫 [API_LIMITER_DEBUG] ❌ API 제한 활성화!")
+            logger.warning(f"🚫 [API_LIMITER_DEBUG] - 제한 지속 시간: {self.limit_duration_minutes}분")
+            logger.warning(f"🚫 [API_LIMITER_DEBUG] - 제한 해제 시간: {self.limit_until}")
+            logger.warning(f"🚫 [API_LIMITER_DEBUG] - 현재 시간: {current_time}")
+            
+            # 호출 기록 현황
+            if self.call_history:
+                recent_calls = [
+                    call for call in self.call_history
+                    if (current_time - call["timestamp"]).total_seconds() <= self.rate_limit_window
+                ]
+                logger.warning(f"🚫 [API_LIMITER_DEBUG] - 제한 시점 호출 수: {len(recent_calls)}/{self.max_calls_per_window}")
             
         except Exception as e:
-            logger.error(f"🚫 [API_LIMITER] API 제한 트리거 오류: {e}")
+            logger.error(f"🚫 [API_LIMITER_DEBUG] API 제한 트리거 오류: {e}")
     
     def _increment_warning_count(self):
         """경고 카운트 증가"""
