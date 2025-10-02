@@ -33,10 +33,10 @@ class StrategyManager:
         self.chart_cache = {}
         self.cache_duration = 600  # 10분 캐시 (API 호출 감소) 유지
         
-        # 전략별 파라미터 기본값
+        # 전략별 파라미터 기본값 (5분봉 기준)
         self.default_strategies = {
             "MOMENTUM": {
-                "momentum_period": 10,
+                "momentum_period": 24,  # 24개 봉 = 2시간 (5분봉 기준)
                 "trend_confirmation_days": 3
             },
             "DISPARITY": {
@@ -57,23 +57,25 @@ class StrategyManager:
         }
 
     def _to_native_json(self, value: Any) -> Any:
-        """NumPy/pandas/Datetime 등을 JSON 직렬화 가능한 기본 파이썬 타입으로 변환"""
+        """pandas/Datetime 등을 JSON 직렬화 가능한 기본 파이썬 타입으로 변환"""
         # 딕셔너리
         if isinstance(value, dict):
             return {k: self._to_native_json(v) for k, v in value.items()}
         # 리스트/튜플/시퀀스
         if isinstance(value, (list, tuple)):
             return [self._to_native_json(v) for v in value]
-        # NumPy 스칼라 타입
+        
+        # NumPy 타입 처리
         if isinstance(value, (np.integer,)):
             return int(value)
         if isinstance(value, (np.floating,)):
             return float(value)
         if isinstance(value, (np.bool_,)):
             return bool(value)
+            
         # pandas Timestamp/NaT 처리
         try:
-            import pandas as _pd  # 이미 상단에 임포트되어 있지만, 방어적 참조
+            import pandas as _pd
             if isinstance(value, _pd.Timestamp):
                 return value.isoformat()
         except Exception:
@@ -121,9 +123,12 @@ class StrategyManager:
     
     async def _monitoring_loop(self):
         """전략 모니터링 루프 (1분 주기)"""
+        from datetime import datetime
+        
         while self.running:
             try:
-                logger.info("🎯 [STRATEGY_MANAGER] 전략 모니터링 실행")
+                start_time = datetime.now()
+                logger.info(f"🎯 [STRATEGY_MANAGER] 전략 모니터링 실행 시작 - {start_time.strftime('%H:%M:%S')}")
                 
                 # 활성화된 전략들 조회
                 strategies = await self._get_active_strategies()
@@ -141,6 +146,10 @@ class StrategyManager:
                 
                 # 각 전략별로 관심종목 스캔 (순차 실행으로 API 제한 방지)
                 for i, strategy in enumerate(strategies):
+                    if not self.running:  # 중지 요청 확인
+                        logger.info("🎯 [STRATEGY_MANAGER] 모니터링 중지 요청으로 루프 종료")
+                        return
+                        
                     logger.info(f"🎯 [STRATEGY_MANAGER] 전략 {i+1}/{len(strategies)} 실행: {strategy.strategy_name}")
                     await self._scan_strategy_signals(strategy, watchlist)
                     
@@ -149,13 +158,23 @@ class StrategyManager:
                         logger.debug(f"🎯 [STRATEGY_MANAGER] 다음 전략 실행 전 3초 대기...")
                         await asyncio.sleep(3)
                 
-                logger.info(f"🎯 [STRATEGY_MANAGER] 전략 모니터링 완료 - {len(strategies)}개 전략, {len(watchlist)}개 종목")
+                end_time = datetime.now()
+                duration = (end_time - start_time).total_seconds()
+                logger.info(f"🎯 [STRATEGY_MANAGER] 전략 모니터링 완료 - {len(strategies)}개 전략, {len(watchlist)}개 종목 (소요시간: {duration:.1f}초)")
+                from datetime import timedelta
+                logger.info(f"🎯 [STRATEGY_MANAGER] 다음 실행까지 60초 대기... 다음 실행 예정: {(end_time + timedelta(seconds=60)).strftime('%H:%M:%S')}")
                 
             except Exception as e:
                 logger.error(f"🎯 [STRATEGY_MANAGER] 모니터링 루프 오류: {e}")
+                import traceback
+                logger.error(f"🎯 [STRATEGY_MANAGER] 스택 트레이스: {traceback.format_exc()}")
             
-            # 1분 대기
-            await asyncio.sleep(60)
+            # 1분 대기 (중지 요청 확인하면서)
+            for i in range(60):
+                if not self.running:
+                    logger.info("🎯 [STRATEGY_MANAGER] 대기 중 중지 요청으로 루프 종료")
+                    return
+                await asyncio.sleep(1)
     
     async def _get_active_strategies(self) -> List[TradingStrategy]:
         """활성화된 전략들 조회"""
@@ -306,14 +325,37 @@ class StrategyManager:
                 logger.warning(f"🎯 [STRATEGY_MANAGER] {stock.stock_name} 차트 데이터 부족 (데이터 없음)")
                 return None
             
-            if len(chart_data) < 20:
-                logger.warning(f"🎯 [CHART_DEBUG] ⚠️ {stock.stock_name} 차트 데이터 개수 부족: {len(chart_data)}개 < 20개")
-                logger.warning(f"🎯 [STRATEGY_MANAGER] {stock.stock_name} 차트 데이터 부족 (개수 부족)")
+            # RSI 계산을 위한 최소 데이터 확인 (RSI 기간 + 여유분)
+            min_required = 30  # RSI 14 + 여유분 16
+            if len(chart_data) < min_required:
+                logger.warning(f"🎯 [CHART_DEBUG] ⚠️ {stock.stock_name} 차트 데이터 개수 부족: {len(chart_data)}개 < {min_required}개")
+                logger.warning(f"🎯 [STRATEGY_MANAGER] {stock.stock_name} 차트 데이터 부족 (RSI 계산 불가)")
                 # 데이터가 부족해도 디버깅 정보는 출력
                 self._log_strategy_debug_info(strategy, stock, chart_data, "데이터 부족")
                 return None
             
             logger.debug(f"🎯 [CHART_DEBUG] ✅ {stock.stock_name} 차트 데이터 충분: {len(chart_data)}개")
+            
+            # 5분봉 데이터 로그 출력 (전체 개수 + 기간 정보)
+            first_time = chart_data[0].get('timestamp', 'N/A') if chart_data else 'N/A'
+            last_time = chart_data[-1].get('timestamp', 'N/A') if chart_data else 'N/A'
+            
+            logger.info(f"📊 [5분봉 데이터] {stock.stock_name}({stock.stock_code})")
+            logger.info(f"📊 [데이터 범위] 전체: {len(chart_data)}개, 기간: {first_time} ~ {last_time}")
+            
+            # 첫 3개 데이터 (시작 시점)
+            logger.info(f"📊 [첫 3개 봉]:")
+            for i, candle in enumerate(chart_data[:3]):
+                timestamp = candle.get('timestamp', 'N/A')
+                close = candle.get('close', 0)
+                logger.info(f"📊 [{i+1}] {timestamp}, 종가: {close:,}원")
+            
+            # 최신 3개 데이터 (현재 시점)
+            logger.info(f"📊 [최신 3개 봉]:")
+            for i, candle in enumerate(chart_data[-3:]):
+                timestamp = candle.get('timestamp', 'N/A')
+                close = candle.get('close', 0)
+                logger.info(f"📊 [{i+1}] {timestamp}, 종가: {close:,}원")
             
             # DataFrame 생성
             df = pd.DataFrame(chart_data)
@@ -329,6 +371,11 @@ class StrategyManager:
                 'close': 'Close',
                 'volume': 'Volume'
             })
+            
+            # 기준 시간과 기준 금액 로그 출력
+            latest_time = df.index[-1]
+            latest_close = df['Close'].iloc[-1]
+            logger.info(f"📊 [기준 데이터] {stock.stock_name} - 기준시간: {latest_time}, 기준금액: {latest_close:,}원")
             
             # 데이터 타입 변환
             df['Open'] = pd.to_numeric(df['Open'])
@@ -566,7 +613,7 @@ class StrategyManager:
             if len(df) < momentum_period + trend_confirmation_days:
                 return None
             
-            # 모멘텀 계산: 당일 종가 - n기간 전 종가 (분봉에도 동일 적용)
+            # 모멘텀 계산: 현재 종가 - n개 봉 전 종가 (5분봉 기준)
             df['momentum'] = df['Close'] - df['Close'].shift(momentum_period)
             
             # 최근 데이터
@@ -575,8 +622,12 @@ class StrategyManager:
             current_price = df['Close'].iloc[-1]
             prev_price = df['Close'].iloc[-momentum_period-1]
             
+            # 시간 계산 (5분봉 기준)
+            time_ago_minutes = momentum_period * 5
+            time_ago_hours = time_ago_minutes / 60
+            
             # 디버깅 로그: 현재값과 기준값 비교
-            logger.info(f"📊 [MOMENTUM_DEBUG] 현재가: {current_price:.2f}, {momentum_period}일전가: {prev_price:.2f}")
+            logger.info(f"📊 [MOMENTUM_DEBUG] 현재가: {current_price:.2f}, {momentum_period}개봉전가({time_ago_hours:.1f}시간전): {prev_price:.2f}")
             logger.info(f"📊 [MOMENTUM_DEBUG] 현재모멘텀: {current_momentum:.2f}, 이전모멘텀: {prev_momentum:.2f}")
             logger.info(f"📊 [MOMENTUM_DEBUG] 0선돌파조건 - 현재>0: {current_momentum > 0}, 이전<=0: {prev_momentum <= 0}")
             logger.info(f"📊 [MOMENTUM_DEBUG] 0선하향조건 - 현재<0: {current_momentum < 0}, 이전>=0: {prev_momentum >= 0}")
@@ -747,6 +798,7 @@ class StrategyManager:
             overbought_threshold = params.get("overbought_threshold", 70.0)
             
             if len(df) < rsi_period + 1:
+                logger.warning(f"🎯 [RSI_DEBUG] DataFrame 데이터 부족: {len(df)}개 < {rsi_period + 1}개 (RSI 기간 + 1)")
                 return None
             
             # RSI 계산
@@ -762,22 +814,28 @@ class StrategyManager:
             current_price = df['Close'].iloc[-1]
             
             # 디버깅 로그: 현재값과 기준값 비교
-            logger.debug(f"📊 [RSI_DEBUG] 현재가: {current_price:.2f}, RSI기간: {rsi_period}일")
-            logger.debug(f"📊 [RSI_DEBUG] 현재RSI: {current_rsi:.2f}, 이전RSI: {prev_rsi:.2f}")
-            logger.debug(f"📊 [RSI_DEBUG] 과매도임계값: {oversold_threshold}, 과매수임계값: {overbought_threshold}")
-            logger.debug(f"📊 [RSI_DEBUG] 매수조건 - 현재<과매도: {current_rsi < oversold_threshold}, 이전>=과매도: {prev_rsi >= oversold_threshold}")
-            logger.debug(f"📊 [RSI_DEBUG] 매도조건 - 현재>과매수: {current_rsi > overbought_threshold}, 이전<=과매수: {prev_rsi <= overbought_threshold}")
+            logger.info(f"📊 [RSI_DEBUG] 현재가: {current_price:.0f}")
+            logger.info(f"📊 [RSI_DEBUG] RSI 기간: {rsi_period}일")
+            logger.info(f"📊 [RSI_DEBUG] 현재가: {current_price:.0f}")
+            logger.info(f"📊 [RSI_DEBUG] RSI 값: {current_rsi:.2f}")
+            logger.info(f"📊 [RSI_DEBUG] 이전 RSI 값: {prev_rsi:.2f}")
+            logger.info(f"📊 [RSI_DEBUG] 과매도 임계값: {oversold_threshold}")
+            logger.info(f"📊 [RSI_DEBUG] 과매수 임계값: {overbought_threshold}")
+            logger.info(f"📊 [RSI_DEBUG] 매수 조건1 (현재RSI>30): {current_rsi > oversold_threshold}")
+            logger.info(f"📊 [RSI_DEBUG] 매수 조건2 (이전RSI<=30): {prev_rsi <= oversold_threshold}")
+            logger.info(f"📊 [RSI_DEBUG] 매수 조건 (과매도 상향돌파): {current_rsi > oversold_threshold and prev_rsi <= oversold_threshold}")
+            logger.info(f"📊 [RSI_DEBUG] 매도 조건 (과매수 하향돌파): {current_rsi < overbought_threshold and prev_rsi >= overbought_threshold}")
             
             # 신호 판단
             signal_type = None
-            if current_rsi < oversold_threshold and prev_rsi >= oversold_threshold:
-                # 과매도 구간 진입 - 매수 신호
+            if current_rsi > oversold_threshold and prev_rsi <= oversold_threshold:
+                # 과매도 구간 탈출 (상향돌파) - 매수 신호
                 signal_type = "BUY"
-                logger.info(f"🚀 [RSI_SIGNAL] BUY 신호 발생! RSI: {current_rsi:.2f} (과매도임계값: {oversold_threshold})")
-            elif current_rsi > overbought_threshold and prev_rsi <= overbought_threshold:
-                # 과매수 구간 진입 - 매도 신호
+                logger.info(f"🚀 [RSI_SIGNAL] BUY 신호 발생! RSI 상향돌파: {current_rsi:.2f} (과매도임계값: {oversold_threshold})")
+            elif current_rsi < overbought_threshold and prev_rsi >= overbought_threshold:
+                # 과매수 구간 탈출 (하향돌파) - 매도 신호
                 signal_type = "SELL"
-                logger.info(f"📉 [RSI_SIGNAL] SELL 신호 발생! RSI: {current_rsi:.2f} (과매수임계값: {overbought_threshold})")
+                logger.info(f"📉 [RSI_SIGNAL] SELL 신호 발생! RSI 하향돌파: {current_rsi:.2f} (과매수임계값: {overbought_threshold})")
             
             if signal_type:
                 return {
@@ -804,11 +862,10 @@ class StrategyManager:
             for db in get_db():
                 session: Session = db
                 
-                # NumPy/판다스 타입을 기본 파이썬 타입으로 변환
+                # 판다스 타입을 기본 파이썬 타입으로 변환
                 raw_value = signal_result.get("signal_value")
                 signal_value = None
                 if raw_value is not None:
-                    # np.float64 등 처리
                     try:
                         signal_value = float(raw_value)
                     except Exception:

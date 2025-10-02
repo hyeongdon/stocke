@@ -1,12 +1,8 @@
 import requests
-import urllib3
 import re
 from bs4 import BeautifulSoup
 from datetime import datetime
 from typing import List, Dict, Optional
-
-# SSL 경고 비활성화
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 class NaverStockDiscussionCrawler:
     """

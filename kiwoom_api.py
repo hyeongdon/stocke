@@ -489,9 +489,49 @@ class KiwoomAPI:
             endpoint = '/api/dostk/chart'
             url = host + endpoint
             
-            # 현재 날짜를 기준 날짜로 설정
-            from datetime import datetime
-            base_dt = datetime.now().strftime('%Y%m%d')
+            # 기간/주기에 따른 API 분기
+            normalized = (period or "1D").strip().upper()
+            is_minute_chart = normalized in {"5M", "5MIN", "M5", "5MINUTE", "5", "1M", "M1", "1MIN", "3M", "M3", "3MIN", "10M", "M10", "10MIN", "15M", "M15", "30M", "M30", "60M", "M60", "60MIN", "1H"}
+            
+            if is_minute_chart:
+                # 분봉 차트 API (ka10080)
+                api_id = 'ka10080'
+                
+                # 틱범위 설정: 1:1분, 3:3분, 5:5분, 10:10분, 15:15분, 30:30분, 45:45분, 60:60분
+                if normalized in {"5M", "5MIN", "M5", "5MINUTE", "5"}:
+                    tic_scope = "5"  # 5분봉
+                elif normalized in {"1M", "M1", "1MIN"}:
+                    tic_scope = "1"  # 1분봉
+                elif normalized in {"3M", "M3", "3MIN"}:
+                    tic_scope = "3"  # 3분봉
+                elif normalized in {"10M", "M10", "10MIN"}:
+                    tic_scope = "10"  # 10분봉
+                elif normalized in {"15M", "M15", "15MIN"}:
+                    tic_scope = "15"  # 15분봉
+                elif normalized in {"30M", "M30", "30MIN"}:
+                    tic_scope = "30"  # 30분봉
+                elif normalized in {"60M", "M60", "60MIN", "1H"}:
+                    tic_scope = "60"  # 60분봉
+                else:
+                    tic_scope = "5"  # 기본값: 5분봉
+                
+                request_data = {
+                    "stk_cd": stock_code,     # 종목코드
+                    "tic_scope": tic_scope,   # 틱범위
+                    "upd_stkpc_tp": "1"       # 수정주가타입 (1: 수정주가)
+                }
+                logger.info(f"📊 [CHART_DEBUG] 분봉 API 사용: {stock_code}, period={period}, tic_scope={tic_scope}, api_id={api_id}")
+            else:
+                # 일봉 차트 API (ka10081)
+                api_id = 'ka10081'
+                from datetime import datetime
+                base_dt = datetime.now().strftime('%Y%m%d')
+                request_data = {
+                    "stk_cd": stock_code,  # 종목코드
+                    "base_dt": base_dt,    # 기준일자
+                    "upd_stkpc_tp": "1"    # 수정주가타입 (1: 수정주가)
+                }
+                logger.info(f"📊 [CHART_DEBUG] 일봉 API 사용: {stock_code}, period={period}, api_id={api_id}")
             
             # 요청 헤더
             headers = {
@@ -499,30 +539,10 @@ class KiwoomAPI:
                 'authorization': f'Bearer {self.token_manager.get_valid_token()}',
                 'cont-yn': 'N',  # 연속조회여부
                 'next-key': '',  # 연속조회키
-                'api-id': 'ka10081',  # TR명
-            }
-            
-            # 요청 데이터
-            request_data = {
-                "stk_cd": stock_code,  # 종목코드
-                "base_dt": base_dt,    # 기준일자
-                "upd_stkpc_tp": "1"    # 수정주가타입 (1: 수정주가)
+                'api-id': api_id,  # TR명
             }
 
-            # 기간/주기 설정 (분봉 지원)
-            # 예시: 5분봉("5m" 또는 "5M") → intrvl_tp=5M, 일봉("1D")는 기본
-            normalized = (period or "1D").strip().upper()
-            if normalized in {"5M", "5MIN", "M5", "5MINUTE", "5"}:
-                request_data["intrvl_tp"] = "5M"
-            elif normalized in {"1M", "M1", "1MIN"}:
-                request_data["intrvl_tp"] = "1M"
-            elif normalized in {"15M", "M15"}:
-                request_data["intrvl_tp"] = "15M"
-            elif normalized in {"30M", "M30"}:
-                request_data["intrvl_tp"] = "30M"
-            else:
-                # 기본은 일봉
-                request_data["intrvl_tp"] = "1D"
+            logger.info(f"📊 [CHART_DEBUG] 요청 데이터: {request_data}")
             
             # 지수 백오프 리트라이
             max_attempts = 3
@@ -540,7 +560,16 @@ class KiwoomAPI:
                     ) as response:
                         if response.status == 200:
                             data = await response.json()
+                            logger.info(f"📊 [CHART_DEBUG] API 응답 코드: {data.get('return_code')}")
                             if data.get('return_code') == 0:
+                                # 응답 데이터 구조 확인
+                                chart_list = data.get('stk_dt_pole_chart_qry', [])
+                                logger.info(f"📊 [CHART_DEBUG] 응답 데이터 개수: {len(chart_list)}")
+                                if chart_list and len(chart_list) > 0:
+                                    first_item = chart_list[0]
+                                    last_item = chart_list[-1]
+                                    logger.info(f"📊 [CHART_DEBUG] 첫 번째 데이터: {first_item}")
+                                    logger.info(f"📊 [CHART_DEBUG] 마지막 데이터: {last_item}")
                                 return self._parse_kiwoom_chart_data(data, stock_code)
                             else:
                                 # 응답 본문에 제한 관련 문구가 있으면 제한 처리
@@ -576,36 +605,70 @@ class KiwoomAPI:
         chart_data = []
         
         try:
-            # 키움 API 응답에서 차트 데이터 추출
-            chart_list = api_response.get('stk_dt_pole_chart_qry', [])
+            # 분봉 데이터 (ka10080)
+            minute_chart_list = api_response.get('stk_min_pole_chart_qry', [])
+            # 일봉 데이터 (ka10081)
+            daily_chart_list = api_response.get('stk_dt_pole_chart_qry', [])
             
-            for item in chart_list:
-                # 키움 API 응답 필드 매핑
-                dt = item.get('dt', '')  # 날짜 (YYYYMMDD)
-                open_price = int(item.get('open_pric', 0))  # 시가
-                high_price = int(item.get('high_pric', 0))  # 고가
-                low_price = int(item.get('low_pric', 0))   # 저가
-                close_price = int(item.get('cur_prc', 0))  # 종가
-                volume = int(item.get('trde_qty', 0))      # 거래량
+            if minute_chart_list:
+                # 분봉 데이터 파싱
+                logger.info(f"📊 [CHART_DEBUG] 분봉 데이터 파싱: {len(minute_chart_list)}개")
                 
-                # 날짜 형식 변환
-                # - 일봉: YYYYMMDD → YYYY-MM-DD 15:30:00 (장마감 기준)
-                # - 분봉: YYYYMMDDHHMM → YYYY-MM-DD HH:MM:00
-                if len(dt) == 8:
-                    formatted_date = f"{dt[:4]}-{dt[4:6]}-{dt[6:8]} 15:30:00"
-                elif len(dt) == 12:
-                    formatted_date = f"{dt[:4]}-{dt[4:6]}-{dt[6:8]} {dt[8:10]}:{dt[10:12]}:00"
-                else:
-                    formatted_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                # 원본 데이터 샘플 확인 (처음 3개)
+                logger.info(f"📊 [CHART_DEBUG] 원본 데이터 샘플:")
+                for i, sample in enumerate(minute_chart_list[:3]):
+                    logger.info(f"📊 [CHART_DEBUG] [{i+1}] {sample}")
                 
-                chart_data.append({
-                    "timestamp": formatted_date,
-                    "open": open_price,
-                    "high": high_price,
-                    "low": low_price,
-                    "close": close_price,
-                    "volume": volume
-                })
+                for item in minute_chart_list:
+                    # 분봉 API 응답 필드 매핑
+                    cntr_tm = item.get('cntr_tm', '')  # 체결시간 (YYYYMMDDHHMISS)
+                    open_price = abs(int(item.get('open_pric', 0)))  # 시가 (음수 제거)
+                    high_price = abs(int(item.get('high_pric', 0)))  # 고가 (음수 제거)
+                    low_price = abs(int(item.get('low_pric', 0)))   # 저가 (음수 제거)
+                    close_price = abs(int(item.get('cur_prc', 0)))  # 종가 (음수 제거)
+                    volume = int(item.get('trde_qty', 0))      # 거래량
+                    
+                    # 시간 형식 변환: YYYYMMDDHHMISS → YYYY-MM-DD HH:MM:00
+                    if len(cntr_tm) >= 12:
+                        formatted_date = f"{cntr_tm[:4]}-{cntr_tm[4:6]}-{cntr_tm[6:8]} {cntr_tm[8:10]}:{cntr_tm[10:12]}:00"
+                    else:
+                        formatted_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    
+                    chart_data.append({
+                        "timestamp": formatted_date,
+                        "open": open_price,
+                        "high": high_price,
+                        "low": low_price,
+                        "close": close_price,
+                        "volume": volume
+                    })
+                    
+            elif daily_chart_list:
+                # 일봉 데이터 파싱
+                logger.info(f"📊 [CHART_DEBUG] 일봉 데이터 파싱: {len(daily_chart_list)}개")
+                for item in daily_chart_list:
+                    # 일봉 API 응답 필드 매핑
+                    dt = item.get('dt', '')  # 날짜 (YYYYMMDD)
+                    open_price = int(item.get('open_pric', 0))  # 시가
+                    high_price = int(item.get('high_pric', 0))  # 고가
+                    low_price = int(item.get('low_pric', 0))   # 저가
+                    close_price = int(item.get('cur_prc', 0))  # 종가
+                    volume = int(item.get('trde_qty', 0))      # 거래량
+                    
+                    # 날짜 형식 변환: YYYYMMDD → YYYY-MM-DD 15:30:00 (장마감 기준)
+                    if len(dt) == 8:
+                        formatted_date = f"{dt[:4]}-{dt[4:6]}-{dt[6:8]} 15:30:00"
+                    else:
+                        formatted_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    
+                    chart_data.append({
+                        "timestamp": formatted_date,
+                        "open": open_price,
+                        "high": high_price,
+                        "low": low_price,
+                        "close": close_price,
+                        "volume": volume
+                    })
             
             # 날짜순으로 정렬 (오래된 것부터)
             chart_data.sort(key=lambda x: x['timestamp'])

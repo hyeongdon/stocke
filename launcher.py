@@ -2,7 +2,6 @@ import tkinter as tk
 from tkinter import messagebox
 import subprocess
 import os
-import threading
 import webbrowser
 
 class ServerLauncher:
@@ -73,6 +72,7 @@ class ServerLauncher:
                 webbrowser.open("http://localhost:8000")
             
             # 별도 스레드에서 브라우저 열기
+            import threading
             threading.Thread(target=open_browser_delayed, daemon=True).start()                                          
             
         except Exception as e:
