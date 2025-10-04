@@ -8,7 +8,6 @@ import pandas as pd
 from kiwoom_api import KiwoomAPI
 from models import PendingBuySignal, get_db, AutoTradeCondition
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
 
 # 개선된 모듈들 import
 from signal_manager import signal_manager, SignalType, SignalStatus

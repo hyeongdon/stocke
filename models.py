@@ -149,10 +149,12 @@ def init_db() -> None:
             if strategies_exist == 0:
                 # 기본 전략들 삽입
                 default_strategies = [
-                    ("모멘텀 전략", "MOMENTUM", '{"momentum_period": 10, "trend_confirmation_days": 3}'),
+                    ("모멘텀 전략", "MOMENTUM", '{"momentum_period": 24, "trend_confirmation_days": 3}'),
                     ("이격도 전략", "DISPARITY", '{"ma_period": 20, "buy_threshold": 95.0, "sell_threshold": 105.0}'),
                     ("볼린저밴드 전략", "BOLLINGER", '{"ma_period": 20, "std_multiplier": 2.0, "confirmation_days": 3}'),
-                    ("RSI 전략", "RSI", '{"rsi_period": 14, "oversold_threshold": 30.0, "overbought_threshold": 70.0}')
+                    ("RSI 전략", "RSI", '{"rsi_period": 14, "oversold_threshold": 30.0, "overbought_threshold": 70.0}'),
+                    ("일목균형표 전략", "ICHIMOKU", '{"conversion_period": 9, "base_period": 26, "span_b_period": 52, "displacement": 26}'),
+                    ("차이킨 오실레이터 전략", "CHAIKIN", '{"short_period": 3, "long_period": 10, "buy_threshold": 0.0, "sell_threshold": 0.0}')
                 ]
                 
                 for name, strategy_type, params in default_strategies:

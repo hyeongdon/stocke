@@ -301,7 +301,7 @@ class StrategyManager {
                     <div class="mb-3">
                         <label class="form-label">모멘텀 기간</label>
                         <input type="number" class="form-control" id="momentumPeriod" 
-                               value="${parameters.momentum_period || 10}" min="5" max="30">
+                               value="${parameters.momentum_period || 24}" min="5" max="50">
                     </div>
                     <div class="mb-3">
                         <label class="form-label">추세 확인 기간</label>
@@ -353,7 +353,7 @@ class StrategyManager {
                     <div class="mb-3">
                         <label class="form-label">RSI 기간</label>
                         <input type="number" class="form-control" id="rsiPeriod" 
-                               value="${parameters.rsi_period || 14}" min="5" max="30">
+                               value="${parameters.rsi_period || 7}" min="5" max="30">
                     </div>
                     <div class="mb-3">
                         <label class="form-label">과매도 임계값</label>
@@ -364,6 +364,62 @@ class StrategyManager {
                         <label class="form-label">과매수 임계값</label>
                         <input type="number" class="form-control" id="overboughtThreshold" 
                                value="${parameters.overbought_threshold || 70}" min="60" max="90" step="0.1">
+                    </div>
+                `;
+                break;
+            case 'ICHIMOKU':
+                configHtml = `
+                    <div class="mb-3">
+                        <label class="form-label">전환선 기간 (5분봉 개수)</label>
+                        <input type="number" class="form-control" id="conversionPeriod" 
+                               value="${parameters.conversion_period || 9}" min="5" max="20">
+                        <div class="form-text">기본값: 9개 봉 (45분)</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">기준선 기간 (5분봉 개수)</label>
+                        <input type="number" class="form-control" id="basePeriod" 
+                               value="${parameters.base_period || 26}" min="15" max="50">
+                        <div class="form-text">기본값: 26개 봉 (2시간 10분)</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">선행스팬B 기간 (5분봉 개수)</label>
+                        <input type="number" class="form-control" id="spanBPeriod" 
+                               value="${parameters.span_b_period || 52}" min="30" max="100">
+                        <div class="form-text">기본값: 52개 봉 (4시간 20분)</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">후행스팬 이동 기간</label>
+                        <input type="number" class="form-control" id="displacement" 
+                               value="${parameters.displacement || 26}" min="15" max="50">
+                        <div class="form-text">기본값: 26개 봉</div>
+                    </div>
+                `;
+                break;
+            case 'CHAIKIN':
+                configHtml = `
+                    <div class="mb-3">
+                        <label class="form-label">단기 이동평균 기간</label>
+                        <input type="number" class="form-control" id="shortPeriod" 
+                               value="${parameters.short_period || 3}" min="2" max="10">
+                        <div class="form-text">AD 라인의 단기 이동평균 기간</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">장기 이동평균 기간</label>
+                        <input type="number" class="form-control" id="longPeriod" 
+                               value="${parameters.long_period || 10}" min="5" max="20">
+                        <div class="form-text">AD 라인의 장기 이동평균 기간</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">매수 신호 임계값</label>
+                        <input type="number" class="form-control" id="buyThreshold" 
+                               value="${parameters.buy_threshold || 0}" min="-50" max="50" step="0.1">
+                        <div class="form-text">차이킨 오실레이터가 이 값 이상일 때 매수 신호</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">매도 신호 임계값</label>
+                        <input type="number" class="form-control" id="sellThreshold" 
+                               value="${parameters.sell_threshold || 0}" min="-50" max="50" step="0.1">
+                        <div class="form-text">차이킨 오실레이터가 이 값 이하일 때 매도 신호</div>
                     </div>
                 `;
                 break;
@@ -432,6 +488,22 @@ class StrategyManager {
                     rsi_period: parseInt(document.getElementById('rsiPeriod').value),
                     oversold_threshold: parseFloat(document.getElementById('oversoldThreshold').value),
                     overbought_threshold: parseFloat(document.getElementById('overboughtThreshold').value)
+                };
+                break;
+            case 'ICHIMOKU':
+                parameters = {
+                    conversion_period: parseInt(document.getElementById('conversionPeriod').value),
+                    base_period: parseInt(document.getElementById('basePeriod').value),
+                    span_b_period: parseInt(document.getElementById('spanBPeriod').value),
+                    displacement: parseInt(document.getElementById('displacement').value)
+                };
+                break;
+            case 'CHAIKIN':
+                parameters = {
+                    short_period: parseInt(document.getElementById('shortPeriod').value),
+                    long_period: parseInt(document.getElementById('longPeriod').value),
+                    buy_threshold: parseFloat(document.getElementById('buyThreshold').value),
+                    sell_threshold: parseFloat(document.getElementById('sellThreshold').value)
                 };
                 break;
         }

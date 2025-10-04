@@ -5,9 +5,7 @@ from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import os
 import asyncio
-# DB 관련 import는 나중에 필요시 추가
-# from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import Optional
 import logging
 from datetime import datetime
 import httpx
@@ -1376,7 +1374,7 @@ async def get_strategies():
 async def configure_strategy(strategy_type: str, req: StrategyConfigureRequest):
     """전략 파라미터 설정"""
     try:
-        valid_types = ["MOMENTUM", "DISPARITY", "BOLLINGER", "RSI"]
+        valid_types = ["MOMENTUM", "DISPARITY", "BOLLINGER", "RSI", "CHAIKIN"]
         if strategy_type not in valid_types:
             raise HTTPException(status_code=400, detail=f"유효하지 않은 전략 타입입니다: {strategy_type}")
         
@@ -1614,6 +1612,31 @@ async def get_strategy_chart(stock_code: str, strategy_type: str, period: str = 
                 mlines.Line2D([0], [0], color='blue', lw=1, linestyle='--', alpha=0.5, label='과매도(30)'),
                 mlines.Line2D([0], [0], color='gray', lw=1, linestyle=':', alpha=0.3, label='중립(50)')
             ]
+            
+        elif strategy_type.upper() == "CHAIKIN":
+            # 차이킨 오실레이터 계산
+            df['hlc3'] = (df['High'] + df['Low'] + df['Close']) / 3
+            df['clv'] = ((df['Close'] - df['Low']) - (df['High'] - df['Close'])) / (df['High'] - df['Low'])
+            df['clv'] = df['clv'].fillna(0)
+            df['ad'] = (df['clv'] * df['Volume']).cumsum()
+            
+            # 차이킨 오실레이터 (3일 MA - 10일 MA)
+            df['ad_short_ma'] = df['ad'].rolling(window=3).mean()
+            df['ad_long_ma'] = df['ad'].rolling(window=10).mean()
+            df['chaikin_oscillator'] = df['ad_short_ma'] - df['ad_long_ma']
+            
+            # 기준선 추가
+            df['zero_line'] = 0
+            
+            added_plots = [
+                mpf.make_addplot(df['chaikin_oscillator'], color='orange', alpha=0.8, width=2, secondary_y=True),
+                mpf.make_addplot(df['zero_line'], color='gray', alpha=0.5, width=1, linestyle='--', secondary_y=True)
+            ]
+            
+            legend_elements = [
+                mlines.Line2D([0], [0], color='orange', lw=2, label='차이킨 오실레이터'),
+                mlines.Line2D([0], [0], color='gray', lw=1, linestyle='--', alpha=0.5, label='기준선(0)')
+            ]
         
         else:
             raise HTTPException(status_code=400, detail=f"지원하지 않는 전략 타입입니다: {strategy_type}")
@@ -1639,7 +1662,7 @@ async def get_strategy_chart(stock_code: str, strategy_type: str, period: str = 
         buf = io.BytesIO()
         
         # 전략에 따라 secondary_y 사용 여부 결정
-        use_secondary_y = strategy_type.upper() in ["MOMENTUM", "DISPARITY", "RSI"]
+        use_secondary_y = strategy_type.upper() in ["MOMENTUM", "DISPARITY", "RSI", "CHAIKIN"]
         
         fig, axes = mpf.plot(
             data=df,
@@ -1753,6 +1776,15 @@ async def get_all_strategies_chart(stock_code: str, period: str = "1M"):
         rsi_indicator = RSIIndicator(close=df['Close'], window=14)
         df['rsi'] = rsi_indicator.rsi()
         
+        # 차이킨 오실레이터
+        df['hlc3'] = (df['High'] + df['Low'] + df['Close']) / 3
+        df['clv'] = ((df['Close'] - df['Low']) - (df['High'] - df['Close'])) / (df['High'] - df['Low'])
+        df['clv'] = df['clv'].fillna(0)
+        df['ad'] = (df['clv'] * df['Volume']).cumsum()
+        df['ad_short_ma'] = df['ad'].rolling(window=3).mean()
+        df['ad_long_ma'] = df['ad'].rolling(window=10).mean()
+        df['chaikin_oscillator'] = df['ad_short_ma'] - df['ad_long_ma']
+        
         # 6. 차트 플롯 설정
         added_plots = [
             # 볼린저밴드
@@ -1832,7 +1864,7 @@ async def get_all_strategies_chart(stock_code: str, period: str = "1M"):
             "image": f"data:image/png;base64,{image_base64}",
             "stock_code": stock_code,
             "period": period,
-            "strategies": ["MOMENTUM", "DISPARITY", "BOLLINGER", "RSI"]
+            "strategies": ["MOMENTUM", "DISPARITY", "BOLLINGER", "RSI", "CHAIKIN"]
         }
         
     except HTTPException:

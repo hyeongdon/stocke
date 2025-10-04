@@ -5,12 +5,11 @@
 
 import asyncio
 import logging
-from datetime import datetime, date, timedelta
+from datetime import datetime, timedelta, date
 from typing import Dict, List, Optional, Any
 import pandas as pd
 import numpy as np
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_
 
 from models import get_db, WatchlistStock, TradingStrategy, StrategySignal, PendingBuySignal
 from kiwoom_api import KiwoomAPI
@@ -53,6 +52,18 @@ class StrategyManager:
                 "rsi_period": 14,
                 "oversold_threshold": 30.0,
                 "overbought_threshold": 70.0
+            },
+            "ICHIMOKU": {
+                "conversion_period": 9,    # 전환선 (9개 봉)
+                "base_period": 26,         # 기준선 (26개 봉)
+                "span_b_period": 52,       # 선행스팬B (52개 봉)
+                "displacement": 26         # 후행스팬 (26개 봉 후행)
+            },
+            "CHAIKIN": {
+                "short_period": 3,         # 단기 이동평균 기간
+                "long_period": 10,         # 장기 이동평균 기간
+                "buy_threshold": 0.0,      # 매수 신호 임계값
+                "sell_threshold": 0.0      # 매도 신호 임계값
             }
         }
 
@@ -408,6 +419,10 @@ class StrategyManager:
                 return await self._calculate_bollinger_signal(df, parameters)
             elif strategy.strategy_type == "RSI":
                 return await self._calculate_rsi_signal(df, parameters)
+            elif strategy.strategy_type == "ICHIMOKU":
+                return await self._calculate_ichimoku_signal(df, parameters)
+            elif strategy.strategy_type == "CHAIKIN":
+                return await self._calculate_chaikin_signal(df, parameters)
             
         except Exception as e:
             logger.error(f"🎯 [STRATEGY_MANAGER] {stock.stock_name} 신호 계산 오류: {e}")
@@ -855,6 +870,114 @@ class StrategyManager:
             logger.error(f"🎯 [STRATEGY_MANAGER] RSI 신호 계산 오류: {e}")
             return None
     
+    async def _calculate_ichimoku_signal(self, df: pd.DataFrame, params: Dict) -> Optional[Dict]:
+        """일목균형표 전략 신호 계산"""
+        try:
+            conversion_period = params.get("conversion_period", 9)
+            base_period = params.get("base_period", 26)
+            span_b_period = params.get("span_b_period", 52)
+            displacement = params.get("displacement", 26)
+            
+            # 최소 데이터 확인
+            min_required = max(span_b_period, displacement) + 2
+            if len(df) < min_required:
+                logger.warning(f"🎯 [ICHIMOKU_DEBUG] DataFrame 데이터 부족: {len(df)}개 < {min_required}개")
+                return None
+            
+            # 일목균형표 지표 계산
+            # 전환선 (Conversion Line) = (9일 최고가 + 9일 최저가) / 2
+            df['conversion_line'] = (df['High'].rolling(window=conversion_period).max() + 
+                                   df['Low'].rolling(window=conversion_period).min()) / 2
+            
+            # 기준선 (Base Line) = (26일 최고가 + 26일 최저가) / 2
+            df['base_line'] = (df['High'].rolling(window=base_period).max() + 
+                             df['Low'].rolling(window=base_period).min()) / 2
+            
+            # 선행스팬A (Leading Span A) = (전환선 + 기준선) / 2, 26일 선행
+            df['span_a'] = ((df['conversion_line'] + df['base_line']) / 2).shift(displacement)
+            
+            # 선행스팬B (Leading Span B) = (52일 최고가 + 52일 최저가) / 2, 26일 선행
+            df['span_b'] = ((df['High'].rolling(window=span_b_period).max() + 
+                           df['Low'].rolling(window=span_b_period).min()) / 2).shift(displacement)
+            
+            # 후행스팬 (Lagging Span) = 현재 종가, 26일 후행
+            df['lagging_span'] = df['Close'].shift(-displacement)
+            
+            # 현재 데이터
+            current_price = df['Close'].iloc[-1]
+            current_conversion = df['conversion_line'].iloc[-1]
+            current_base = df['base_line'].iloc[-1]
+            current_span_a = df['span_a'].iloc[-1]
+            current_span_b = df['span_b'].iloc[-1]
+            
+            # 이전 데이터 (신호 확인용)
+            prev_conversion = df['conversion_line'].iloc[-2]
+            prev_base = df['base_line'].iloc[-2]
+            
+            # 디버깅 로그
+            logger.info(f"📊 [ICHIMOKU_DEBUG] 현재가: {current_price:.2f}")
+            logger.info(f"📊 [ICHIMOKU_DEBUG] 전환선: {current_conversion:.2f}, 기준선: {current_base:.2f}")
+            logger.info(f"📊 [ICHIMOKU_DEBUG] 선행스팬A: {current_span_a:.2f}, 선행스팬B: {current_span_b:.2f}")
+            logger.info(f"📊 [ICHIMOKU_DEBUG] 전환선>기준선: {current_conversion > current_base}")
+            logger.info(f"📊 [ICHIMOKU_DEBUG] 이전 전환선>기준선: {prev_conversion > prev_base}")
+            
+            # 구름대 위치 확인
+            cloud_top = max(current_span_a, current_span_b) if not pd.isna(current_span_a) and not pd.isna(current_span_b) else current_price
+            cloud_bottom = min(current_span_a, current_span_b) if not pd.isna(current_span_a) and not pd.isna(current_span_b) else current_price
+            
+            above_cloud = current_price > cloud_top
+            below_cloud = current_price < cloud_bottom
+            in_cloud = not above_cloud and not below_cloud
+            
+            logger.info(f"📊 [ICHIMOKU_DEBUG] 구름대 상단: {cloud_top:.2f}, 하단: {cloud_bottom:.2f}")
+            logger.info(f"📊 [ICHIMOKU_DEBUG] 구름 위: {above_cloud}, 구름 아래: {below_cloud}, 구름 안: {in_cloud}")
+            
+            # 신호 판단
+            signal_type = None
+            
+            # 매수 신호: 전환선이 기준선을 상향 돌파 + 구름 위
+            buy_condition = (current_conversion > current_base and 
+                           prev_conversion <= prev_base and 
+                           above_cloud)
+            
+            # 매도 신호: 전환선이 기준선을 하향 돌파 + 구름 아래
+            sell_condition = (current_conversion < current_base and 
+                            prev_conversion >= prev_base and 
+                            below_cloud)
+            
+            logger.info(f"📊 [ICHIMOKU_DEBUG] 매수 조건 (전환선 상향돌파 + 구름위): {buy_condition}")
+            logger.info(f"📊 [ICHIMOKU_DEBUG] 매도 조건 (전환선 하향돌파 + 구름아래): {sell_condition}")
+            
+            if buy_condition:
+                signal_type = "BUY"
+                logger.info(f"🚀 [ICHIMOKU_SIGNAL] BUY 신호 발생! 전환선: {current_conversion:.2f} > 기준선: {current_base:.2f}, 구름 위")
+            elif sell_condition:
+                signal_type = "SELL"
+                logger.info(f"📉 [ICHIMOKU_SIGNAL] SELL 신호 발생! 전환선: {current_conversion:.2f} < 기준선: {current_base:.2f}, 구름 아래")
+            
+            if signal_type:
+                return {
+                    "signal_type": signal_type,
+                    "signal_value": current_conversion - current_base,  # 전환선-기준선 차이
+                    "additional_data": {
+                        "conversion_period": conversion_period,
+                        "base_period": base_period,
+                        "current_price": current_price,
+                        "conversion_line": current_conversion,
+                        "base_line": current_base,
+                        "span_a": current_span_a,
+                        "span_b": current_span_b,
+                        "above_cloud": above_cloud,
+                        "below_cloud": below_cloud
+                    }
+                }
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"🎯 [STRATEGY_MANAGER] 일목균형표 신호 계산 오류: {e}")
+            return None
+    
     async def _create_strategy_signal(self, strategy: TradingStrategy, stock: WatchlistStock, signal_result: Dict):
         """전략 신호 생성 및 저장"""
         try:
@@ -900,6 +1023,74 @@ class StrategyManager:
                 
         except Exception as e:
             logger.error(f"🎯 [STRATEGY_MANAGER] 전략 신호 생성 오류: {e}")
+
+    async def _calculate_chaikin_signal(self, df: pd.DataFrame, params: Dict) -> Optional[Dict]:
+        """차이킨 오실레이터 전략 신호 계산"""
+        try:
+            short_period = params.get("short_period", 3)
+            long_period = params.get("long_period", 10)
+            buy_threshold = params.get("buy_threshold", 0.0)
+            sell_threshold = params.get("sell_threshold", 0.0)
+            
+            if len(df) < long_period + 1:
+                logger.warning(f"🎯 [CHAIKIN_DEBUG] DataFrame 데이터 부족: {len(df)}개 < {long_period + 1}개")
+                return None
+            
+            # AD (Accumulation/Distribution) 라인 계산
+            df['hlc3'] = (df['High'] + df['Low'] + df['Close']) / 3
+            df['clv'] = ((df['Close'] - df['Low']) - (df['High'] - df['Close'])) / (df['High'] - df['Low'])
+            df['clv'] = df['clv'].fillna(0)  # NaN 값을 0으로 처리
+            df['ad'] = (df['clv'] * df['Volume']).cumsum()
+            
+            # 차이킨 오실레이터 계산 (단기 MA - 장기 MA)
+            df['ad_short_ma'] = df['ad'].rolling(window=short_period).mean()
+            df['ad_long_ma'] = df['ad'].rolling(window=long_period).mean()
+            df['chaikin_oscillator'] = df['ad_short_ma'] - df['ad_long_ma']
+            
+            # 최근 데이터
+            current_chaikin = df['chaikin_oscillator'].iloc[-1]
+            prev_chaikin = df['chaikin_oscillator'].iloc[-2]
+            current_price = df['Close'].iloc[-1]
+            
+            # 디버깅 로그
+            logger.info(f"📊 [CHAIKIN_DEBUG] 현재가: {current_price:.0f}")
+            logger.info(f"📊 [CHAIKIN_DEBUG] 단기 기간: {short_period}일")
+            logger.info(f"📊 [CHAIKIN_DEBUG] 장기 기간: {long_period}일")
+            logger.info(f"📊 [CHAIKIN_DEBUG] 현재 차이킨 오실레이터: {current_chaikin:.2f}")
+            logger.info(f"📊 [CHAIKIN_DEBUG] 이전 차이킨 오실레이터: {prev_chaikin:.2f}")
+            logger.info(f"📊 [CHAIKIN_DEBUG] 매수 임계값: {buy_threshold}")
+            logger.info(f"📊 [CHAIKIN_DEBUG] 매도 임계값: {sell_threshold}")
+            
+            # 신호 판단
+            signal_type = None
+            if current_chaikin > buy_threshold and prev_chaikin <= buy_threshold:
+                # 차이킨 오실레이터가 매수 임계값을 상향돌파 - 매수 신호
+                signal_type = "BUY"
+                logger.info(f"🚀 [CHAIKIN_SIGNAL] BUY 신호 발생! 차이킨 오실레이터 상향돌파: {current_chaikin:.2f} (임계값: {buy_threshold})")
+            elif current_chaikin < sell_threshold and prev_chaikin >= sell_threshold:
+                # 차이킨 오실레이터가 매도 임계값을 하향돌파 - 매도 신호
+                signal_type = "SELL"
+                logger.info(f"📉 [CHAIKIN_SIGNAL] SELL 신호 발생! 차이킨 오실레이터 하향돌파: {current_chaikin:.2f} (임계값: {sell_threshold})")
+            
+            if signal_type:
+                return {
+                    "signal_type": signal_type,
+                    "signal_value": current_chaikin,
+                    "additional_data": {
+                        "short_period": short_period,
+                        "long_period": long_period,
+                        "current_price": current_price,
+                        "buy_threshold": buy_threshold,
+                        "sell_threshold": sell_threshold,
+                        "ad_value": df['ad'].iloc[-1]
+                    }
+                }
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"🎯 [STRATEGY_MANAGER] 차이킨 오실레이터 신호 계산 오류: {e}")
+            return None
 
 
 # 전역 인스턴스
