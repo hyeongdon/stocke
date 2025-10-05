@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Generator
 
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, create_engine, UniqueConstraint, Date, text, JSON, Float
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, create_engine, UniqueConstraint, Date, text, JSON, Float, Index
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from config import Config
 
@@ -73,7 +73,7 @@ class AutoTradeSettings(Base):
 
 
 class WatchlistStock(Base):
-    """관심종목 테이블"""
+    """관심종목 테이블 - 수기등록과 조건식 종목 구분"""
     __tablename__ = "watchlist_stocks"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -82,6 +82,15 @@ class WatchlistStock(Base):
     added_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
     is_active = Column(Boolean, nullable=False, default=True, index=True)
     notes = Column(String(255), nullable=True)  # 메모
+    
+    # 종목 등록 방식 구분
+    source_type = Column(String(20), nullable=False, default="MANUAL", index=True)  # MANUAL, CONDITION
+    condition_id = Column(Integer, nullable=True, index=True)  # 조건식 ID (조건식 종목인 경우)
+    condition_name = Column(String(100), nullable=True)  # 조건식 이름 (조건식 종목인 경우)
+    
+    # 조건식 종목 관련 필드
+    last_condition_check = Column(DateTime, nullable=True)  # 마지막 조건식 확인 시간
+    condition_status = Column(String(20), nullable=True, default="ACTIVE")  # ACTIVE, REMOVED, EXPIRED
 
     __table_args__ = (
         UniqueConstraint("stock_code", name="uq_watchlist_stock_code"),
@@ -124,6 +133,107 @@ class StrategySignal(Base):
     )
 
 
+class Position(Base):
+    """매수 완료 후 포지션 추적 테이블"""
+    __tablename__ = "positions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    stock_code = Column(String(20), nullable=False, index=True)
+    stock_name = Column(String(100), nullable=False)
+    
+    # 매수 정보
+    buy_price = Column(Integer, nullable=False)  # 매수 단가
+    buy_quantity = Column(Integer, nullable=False)  # 매수 수량
+    buy_amount = Column(Integer, nullable=False)  # 매수 금액
+    buy_order_id = Column(String(50), nullable=True)  # 매수 주문 ID
+    
+    # 손절/익절 설정
+    stop_loss_rate = Column(Float, nullable=False, default=5.0)  # 손절 비율 (%)
+    take_profit_rate = Column(Float, nullable=False, default=10.0)  # 익절 비율 (%)
+    stop_loss_price = Column(Integer, nullable=True)  # 손절가
+    take_profit_price = Column(Integer, nullable=True)  # 익절가
+    
+    # 상태 관리
+    status = Column(String(20), nullable=False, default="HOLDING", index=True)  # HOLDING, STOP_LOSS, TAKE_PROFIT, MANUAL_SELL
+    current_price = Column(Integer, nullable=True)  # 현재가
+    current_profit_loss = Column(Integer, nullable=True)  # 현재 손익
+    current_profit_loss_rate = Column(Float, nullable=True)  # 현재 손익률 (%)
+    
+    # 시간 정보
+    buy_time = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    sell_time = Column(DateTime, nullable=True)
+    last_monitored = Column(DateTime, nullable=True)  # 마지막 모니터링 시간
+    
+    # 추가 정보
+    condition_id = Column(Integer, nullable=True)  # 매수 신호가 발생한 조건식 ID
+    signal_id = Column(Integer, nullable=True)  # 매수 신호 ID
+    
+    __table_args__ = (
+        Index("idx_position_status_stock", "status", "stock_code"),
+        Index("idx_position_monitoring", "status", "last_monitored"),
+    )
+
+
+class SellOrder(Base):
+    """매도 주문 테이블"""
+    __tablename__ = "sell_orders"
+
+    id = Column(Integer, primary_key=True, index=True)
+    position_id = Column(Integer, nullable=False, index=True)
+    stock_code = Column(String(20), nullable=False, index=True)
+    stock_name = Column(String(100), nullable=False)
+    
+    # 매도 정보
+    sell_price = Column(Integer, nullable=False)  # 매도 단가
+    sell_quantity = Column(Integer, nullable=False)  # 매도 수량
+    sell_amount = Column(Integer, nullable=False)  # 매도 금액
+    sell_order_id = Column(String(50), nullable=True)  # 매도 주문 ID
+    
+    # 매도 사유
+    sell_reason = Column(String(50), nullable=False, index=True)  # STOP_LOSS, TAKE_PROFIT, MANUAL, INDICATOR
+    sell_reason_detail = Column(String(200), nullable=True)  # 매도 사유 상세
+    
+    # 손익 정보
+    profit_loss = Column(Integer, nullable=True)  # 손익
+    profit_loss_rate = Column(Float, nullable=True)  # 손익률 (%)
+    
+    # 상태 관리
+    status = Column(String(20), nullable=False, default="PENDING", index=True)  # PENDING, ORDERED, COMPLETED, FAILED
+    
+    # 시간 정보
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    ordered_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    
+    __table_args__ = (
+        Index("idx_sell_order_status", "status"),
+        Index("idx_sell_order_reason", "sell_reason"),
+    )
+
+
+class ConditionWatchlistSync(Base):
+    """조건식 관심종목 동기화 테이블"""
+    __tablename__ = "condition_watchlist_sync"
+
+    id = Column(Integer, primary_key=True, index=True)
+    condition_id = Column(Integer, nullable=False, index=True)
+    condition_name = Column(String(100), nullable=False)
+    stock_code = Column(String(20), nullable=False, index=True)
+    stock_name = Column(String(100), nullable=False)
+    sync_status = Column(String(20), nullable=False, default="ACTIVE", index=True)  # ACTIVE, REMOVED, EXPIRED
+    last_sync_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    added_to_watchlist = Column(Boolean, nullable=False, default=False, index=True)
+    
+    # 조건식 종목 정보
+    current_price = Column(Integer, nullable=True)
+    change_rate = Column(Float, nullable=True)
+    volume = Column(Integer, nullable=True)
+    
+    __table_args__ = (
+        UniqueConstraint("condition_id", "stock_code", name="uq_condition_stock_unique"),
+    )
+
+
 def get_db() -> Generator[Session, None, None]:
     db: Session = SessionLocal()
     try:
@@ -143,6 +253,24 @@ def init_db() -> None:
             if 'failure_reason' not in columns:
                 conn.execute(text("ALTER TABLE pending_buy_signals ADD COLUMN failure_reason VARCHAR(255)"))
                 conn.commit()
+            
+            # watchlist_stocks 테이블 마이그레이션
+            result = conn.execute(text("PRAGMA table_info('watchlist_stocks')"))
+            columns = {row[1] for row in result}
+            
+            # 새로운 컬럼들 추가
+            new_columns = [
+                ('source_type', 'VARCHAR(20) DEFAULT "MANUAL"'),
+                ('condition_id', 'INTEGER'),
+                ('condition_name', 'VARCHAR(100)'),
+                ('last_condition_check', 'DATETIME'),
+                ('condition_status', 'VARCHAR(20)')
+            ]
+            
+            for col_name, col_def in new_columns:
+                if col_name not in columns:
+                    conn.execute(text(f"ALTER TABLE watchlist_stocks ADD COLUMN {col_name} {col_def}"))
+                    conn.commit()
             
             # 기본 전략 데이터 삽입 (없는 경우만)
             strategies_exist = conn.execute(text("SELECT COUNT(*) FROM trading_strategies")).scalar()

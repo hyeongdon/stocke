@@ -41,6 +41,8 @@ from signal_manager import signal_manager, SignalType, SignalStatus
 from api_rate_limiter import api_rate_limiter
 from buy_order_executor import buy_order_executor
 from strategy_manager import strategy_manager
+from watchlist_sync_manager import watchlist_sync_manager
+from stop_loss_manager import StopLossManager
 
 config = Config()
 
@@ -62,6 +64,9 @@ if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8')
 
 logger = logging.getLogger(__name__)
+
+# 손절/익절 모니터링 매니저 인스턴스
+stop_loss_manager = StopLossManager()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -107,6 +112,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"💰 [STARTUP] 매수 주문 실행기 시작 실패: {e}")
     
+    try:
+        # 손절/익절 모니터링 시작
+        asyncio.create_task(stop_loss_manager.start_monitoring())
+        logger.info("🛡️ [STARTUP] 손절/익절 모니터링 시작")
+    except Exception as e:
+        logger.error(f"🛡️ [STARTUP] 손절/익절 모니터링 시작 실패: {e}")
+    
     yield
     
     # Shutdown
@@ -118,6 +130,12 @@ async def lifespan(app: FastAPI):
         logger.info("💰 [SHUTDOWN] 매수 주문 실행기 종료")
     except Exception as e:
         logger.error(f"💰 [SHUTDOWN] 매수 주문 실행기 종료 실패: {e}")
+    
+    try:
+        await stop_loss_manager.stop_monitoring()
+        logger.info("🛡️ [SHUTDOWN] 손절/익절 모니터링 종료")
+    except Exception as e:
+        logger.error(f"🛡️ [SHUTDOWN] 손절/익절 모니터링 종료 실패: {e}")
     
     await condition_monitor.stop_all_monitoring()
     # WebSocket 우아한 종료
@@ -246,37 +264,24 @@ async def get_pending_signals(limit: int = 100, status: str = "PENDING"):
             logger.info(f"[PENDING_API] rows fetched={len(rows)}")
             
             for i, r in enumerate(rows):
-                # 현재가격 조회
+                # 현재가격 조회 (단순화)
                 current_price = 0
                 try:
-                    # API 호출 제한을 피하기 위해 종목 간 1초 대기
-                    if i > 0:
-                        await asyncio.sleep(1)
-                    
-                    # 키움 API로 현재가 조회
-                    chart_data = await kiwoom_api.get_stock_chart_data(r.stock_code, "1D")
-                    if chart_data and len(chart_data) > 0:
-                        current_price = int(chart_data[0].get('close', 0))
+                    current_price = await kiwoom_api.get_current_price(r.stock_code)
                 except Exception as e:
                     logger.warning(f"[PENDING_API] 현재가 조회 실패 {r.stock_code}: {e}")
-                    # 429 오류인 경우 더 긴 대기 시간
-                    if "429" in str(e):
-                        await asyncio.sleep(5)
                 
-                # 매수목표금액 계산
-                if r.target_price:  # 조건식 기준봉 전략
-                    # 기준봉 기반 목표가 사용
-                    target_amount = r.target_price
-                    max_invest_amount = 100000  # 10만원 상당
-                    target_quantity = max_invest_amount // current_price if current_price > 0 else 0
-                    if target_quantity < 1:
-                        target_quantity = 1
-                    target_amount = target_quantity * current_price if current_price > 0 else r.target_price
-                else:
-                    # 일반 조건식의 경우 10만원 상당
-                    max_invest_amount = 100000
-                    target_quantity = max_invest_amount // current_price if current_price > 0 else 0
-                    target_amount = target_quantity * current_price if current_price > 0 else 0
+                # 자동매매 설정에서 최대 투자 금액 가져오기
+                auto_trade_settings = session.query(AutoTradeSettings).first()
+                max_invest_amount = auto_trade_settings.max_invest_amount if auto_trade_settings else 100000
+                
+                # 매수 수량 계산 (단순화)
+                target_quantity = max_invest_amount // current_price if current_price and current_price > 0 else 0
+                if target_quantity < 1:
+                    target_quantity = 1
+                
+                # 매수 금액 계산
+                target_amount = target_quantity * current_price if current_price and current_price > 0 else 0
                 
                 items.append({
                     "id": r.id,
@@ -381,7 +386,8 @@ async def get_conditions():
         for i, condition_data in enumerate(conditions_data):
             # 키움 API 응답 형태에 따라 조정 필요
             condition = {
-                "id": i + 1,  # 임시 ID
+                "id": i + 1,  # UI에서 사용할 순서 ID (1부터 시작)
+                "api_id": condition_data.get('condition_id', str(i)),  # 키움 API의 실제 조건식 ID
                 "condition_name": condition_data.get('condition_name', f'조건식_{i+1}'),
                 "condition_expression": condition_data.get('expression', ''),
                 "is_active": True,
@@ -390,7 +396,7 @@ async def get_conditions():
                 "updated_at": datetime.utcnow().isoformat()
             }
             conditions.append(condition)
-            logger.debug(f"조건식: {condition['condition_name']}")
+            logger.debug(f"조건식: {condition['condition_name']} (ID: {condition['id']}, API ID: {condition['api_id']})")
         
         return JSONResponse(content=conditions, media_type="application/json; charset=utf-8")
     except Exception as e:
@@ -426,6 +432,10 @@ async def get_condition_stocks(condition_id: int):
         condition_api_id = condition_info.get('condition_id', str(condition_index))
         
         logger.info(f"🌐 [API] 조건식 검색 시작: {condition_name} (API ID: {condition_api_id})")
+        logger.info(f"🌐 [API] 조건식 인덱스: {condition_index}, 요청된 ID: {condition_id}")
+        logger.info(f"🌐 [API] 전체 조건식 목록:")
+        for i, cond in enumerate(conditions_data):
+            logger.info(f"🌐 [API]   {i+1}. {cond.get('condition_name')} (API ID: {cond.get('condition_id')})")
         
         # 키움 API를 통해 조건식으로 종목 검색
         stocks_data = await kiwoom_api.search_condition_stocks(condition_api_id, condition_name)
@@ -1198,7 +1208,9 @@ async def get_buy_executor_status():
     try:
         status = {
             "is_running": buy_order_executor.is_running,
-            "max_invest_amount": buy_order_executor.max_invest_amount,
+            "auto_trade_settings_loaded": buy_order_executor.auto_trade_settings is not None,
+            "auto_trade_enabled": buy_order_executor.auto_trade_settings.is_enabled if buy_order_executor.auto_trade_settings else False,
+            "max_invest_amount": buy_order_executor.auto_trade_settings.max_invest_amount if buy_order_executor.auto_trade_settings else 0,
             "max_retry_attempts": buy_order_executor.max_retry_attempts,
             "retry_delay_seconds": buy_order_executor.retry_delay_seconds
         }
@@ -1234,7 +1246,7 @@ async def stop_buy_executor():
 
 @app.get("/watchlist/")
 async def get_watchlist():
-    """관심종목 목록 조회"""
+    """관심종목 목록 조회 (수기등록과 조건식 종목 구분)"""
     try:
         for db in get_db():
             session: Session = db
@@ -1248,7 +1260,12 @@ async def get_watchlist():
                     "stock_name": stock.stock_name,
                     "added_at": stock.added_at.isoformat(),
                     "is_active": stock.is_active,
-                    "notes": stock.notes
+                    "notes": stock.notes,
+                    "source_type": stock.source_type,
+                    "condition_id": stock.condition_id,
+                    "condition_name": stock.condition_name,
+                    "last_condition_check": stock.last_condition_check.isoformat() if stock.last_condition_check else None,
+                    "condition_status": stock.condition_status
                 })
             
             return {"watchlist": result}
@@ -1271,12 +1288,13 @@ async def add_watchlist_stock(req: WatchlistAddRequest):
             if existing:
                 raise HTTPException(status_code=400, detail=f"이미 관심종목에 등록된 종목입니다: {req.stock_code}")
             
-            # 새 관심종목 추가
+            # 새 관심종목 추가 (수기등록으로 표시)
             new_stock = WatchlistStock(
                 stock_code=req.stock_code,
                 stock_name=req.stock_name,
                 notes=req.notes,
-                is_active=True
+                is_active=True,
+                source_type="MANUAL"
             )
             
             session.add(new_stock)
@@ -1435,7 +1453,7 @@ async def toggle_strategy(strategy_id: int, req: StrategyToggleRequest):
 async def start_strategy_monitoring():
     """전략 모니터링 시작"""
     try:
-        await strategy_manager.start_strategy_monitoring()
+        await condition_monitor.start_periodic_monitoring()
         return {"message": "전략 모니터링이 시작되었습니다."}
     except Exception as e:
         logger.error(f"전략 모니터링 시작 오류: {e}")
@@ -1445,7 +1463,7 @@ async def start_strategy_monitoring():
 async def stop_strategy_monitoring():
     """전략 모니터링 중지"""
     try:
-        await strategy_manager.stop_strategy_monitoring()
+        await condition_monitor.stop_all_monitoring()
         return {"message": "전략 모니터링이 중지되었습니다."}
     except Exception as e:
         logger.error(f"전략 모니터링 중지 오류: {e}")
@@ -1455,10 +1473,9 @@ async def stop_strategy_monitoring():
 async def get_strategy_status():
     """전략 모니터링 상태 조회"""
     try:
-        return {
-            "is_running": strategy_manager.running,
-            "monitoring_task_active": strategy_manager.monitoring_task is not None and not strategy_manager.monitoring_task.done()
-        }
+        # condition_monitor에서 상태 조회
+        status = await condition_monitor.get_monitoring_status()
+        return status
     except Exception as e:
         logger.error(f"전략 모니터링 상태 조회 오류: {e}")
         raise HTTPException(status_code=500, detail="전략 모니터링 상태 조회 중 오류가 발생했습니다.")
@@ -1493,6 +1510,79 @@ async def get_strategy_signals(strategy_id: int, limit: int = 50):
     except Exception as e:
         logger.error(f"전략 신호 조회 오류: {e}")
         raise HTTPException(status_code=500, detail="전략 신호 조회 중 오류가 발생했습니다.")
+
+# ===== 관심종목 동기화 관리 API =====
+
+@app.post("/watchlist/sync/start")
+async def start_watchlist_sync():
+    """관심종목 동기화 시작"""
+    try:
+        await watchlist_sync_manager.start_auto_sync()
+        return {"message": "관심종목 동기화가 시작되었습니다."}
+    except Exception as e:
+        logger.error(f"관심종목 동기화 시작 오류: {e}")
+        raise HTTPException(status_code=500, detail="관심종목 동기화 시작 중 오류가 발생했습니다.")
+
+@app.post("/watchlist/sync/stop")
+async def stop_watchlist_sync():
+    """관심종목 동기화 중지"""
+    try:
+        await watchlist_sync_manager.stop_auto_sync()
+        return {"message": "관심종목 동기화가 중지되었습니다."}
+    except Exception as e:
+        logger.error(f"관심종목 동기화 중지 오류: {e}")
+        raise HTTPException(status_code=500, detail="관심종목 동기화 중지 중 오류가 발생했습니다.")
+
+@app.get("/watchlist/sync/status")
+async def get_watchlist_sync_status():
+    """관심종목 동기화 상태 조회"""
+    try:
+        status = await watchlist_sync_manager.get_sync_status()
+        return status
+    except Exception as e:
+        logger.error(f"관심종목 동기화 상태 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail="관심종목 동기화 상태 조회 중 오류가 발생했습니다.")
+
+@app.post("/watchlist/sync/manual")
+async def manual_watchlist_sync():
+    """관심종목 수동 동기화"""
+    try:
+        await watchlist_sync_manager.sync_all_conditions()
+        return {"message": "관심종목 수동 동기화가 완료되었습니다."}
+    except Exception as e:
+        logger.error(f"관심종목 수동 동기화 오류: {e}")
+        raise HTTPException(status_code=500, detail="관심종목 수동 동기화 중 오류가 발생했습니다.")
+
+@app.get("/watchlist/sync/config")
+async def get_watchlist_sync_config():
+    """관심종목 동기화 설정 조회"""
+    return {
+        "target_condition_names": watchlist_sync_manager.target_condition_names,
+        "sync_only_target_conditions": watchlist_sync_manager.sync_only_target_conditions,
+        "auto_sync_enabled": watchlist_sync_manager.auto_sync_enabled,
+        "remove_expired_stocks": watchlist_sync_manager.remove_expired_stocks,
+        "expired_threshold_hours": watchlist_sync_manager.expired_threshold_hours
+    }
+
+@app.post("/watchlist/sync/config")
+async def update_watchlist_sync_config(config: dict):
+    """관심종목 동기화 설정 업데이트"""
+    try:
+        if "target_condition_names" in config:
+            watchlist_sync_manager.target_condition_names = config["target_condition_names"]
+        if "sync_only_target_conditions" in config:
+            watchlist_sync_manager.sync_only_target_conditions = config["sync_only_target_conditions"]
+        if "auto_sync_enabled" in config:
+            watchlist_sync_manager.auto_sync_enabled = config["auto_sync_enabled"]
+        if "remove_expired_stocks" in config:
+            watchlist_sync_manager.remove_expired_stocks = config["remove_expired_stocks"]
+        if "expired_threshold_hours" in config:
+            watchlist_sync_manager.expired_threshold_hours = config["expired_threshold_hours"]
+        
+        return {"message": "관심종목 동기화 설정이 업데이트되었습니다."}
+    except Exception as e:
+        logger.error(f"관심종목 동기화 설정 업데이트 오류: {e}")
+        raise HTTPException(status_code=500, detail="설정 업데이트 실패")
 
 # ===== 전략별 차트 시각화 API =====
 
@@ -1872,4 +1962,145 @@ async def get_all_strategies_chart(stock_code: str, period: str = "1M"):
     except Exception as e:
         logger.error(f"종합 전략 차트 생성 오류: {e}")
         raise HTTPException(status_code=500, detail="종합 전략 차트 생성 중 오류가 발생했습니다.")
+
+
+# ===== 손절/익절 모니터링 API =====
+
+@app.get("/stop-loss/status")
+async def get_stop_loss_status():
+    """손절/익절 모니터링 상태 조회"""
+    try:
+        status = await stop_loss_manager.get_monitoring_status()
+        return status
+    except Exception as e:
+        logger.error(f"손절/익절 모니터링 상태 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail="손절/익절 모니터링 상태 조회 중 오류가 발생했습니다.")
+
+@app.get("/positions/")
+async def get_positions(status: str = "HOLDING", limit: int = 50):
+    """포지션 목록 조회"""
+    try:
+        positions = []
+        for db in get_db():
+            session: Session = db
+            from models import Position
+            query = session.query(Position)
+            if status != "ALL":
+                query = query.filter(Position.status == status)
+            positions = query.order_by(Position.buy_time.desc()).limit(limit).all()
+            break
+        
+        return {
+            "items": [
+                {
+                    "id": pos.id,
+                    "stock_code": pos.stock_code,
+                    "stock_name": pos.stock_name,
+                    "buy_price": pos.buy_price,
+                    "buy_quantity": pos.buy_quantity,
+                    "buy_amount": pos.buy_amount,
+                    "current_price": pos.current_price,
+                    "current_profit_loss": pos.current_profit_loss,
+                    "current_profit_loss_rate": pos.current_profit_loss_rate,
+                    "stop_loss_rate": pos.stop_loss_rate,
+                    "take_profit_rate": pos.take_profit_rate,
+                    "status": pos.status,
+                    "buy_time": pos.buy_time.isoformat() if pos.buy_time else None,
+                    "last_monitored": pos.last_monitored.isoformat() if pos.last_monitored else None
+                }
+                for pos in positions
+            ],
+            "total": len(positions),
+            "status": status
+        }
+    except Exception as e:
+        logger.error(f"포지션 목록 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail="포지션 목록 조회 중 오류가 발생했습니다.")
+
+@app.get("/sell-orders/")
+async def get_sell_orders(status: str = "ALL", limit: int = 50):
+    """매도 주문 목록 조회"""
+    try:
+        orders = []
+        for db in get_db():
+            session: Session = db
+            from models import SellOrder
+            query = session.query(SellOrder)
+            if status != "ALL":
+                query = query.filter(SellOrder.status == status)
+            orders = query.order_by(SellOrder.created_at.desc()).limit(limit).all()
+            break
+        
+        return {
+            "items": [
+                {
+                    "id": order.id,
+                    "position_id": order.position_id,
+                    "stock_code": order.stock_code,
+                    "stock_name": order.stock_name,
+                    "sell_price": order.sell_price,
+                    "sell_quantity": order.sell_quantity,
+                    "sell_amount": order.sell_amount,
+                    "sell_reason": order.sell_reason,
+                    "sell_reason_detail": order.sell_reason_detail,
+                    "profit_loss": order.profit_loss,
+                    "profit_loss_rate": order.profit_loss_rate,
+                    "status": order.status,
+                    "created_at": order.created_at.isoformat() if order.created_at else None,
+                    "ordered_at": order.ordered_at.isoformat() if order.ordered_at else None,
+                    "completed_at": order.completed_at.isoformat() if order.completed_at else None
+                }
+                for order in orders
+            ],
+            "total": len(orders),
+            "status": status
+        }
+    except Exception as e:
+        logger.error(f"매도 주문 목록 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail="매도 주문 목록 조회 중 오류가 발생했습니다.")
+
+@app.post("/positions/{position_id}/manual-sell")
+async def manual_sell_position(position_id: int, sell_price: int = 0):
+    """수동 매도 주문"""
+    try:
+        # 포지션 조회
+        position = None
+        for db in get_db():
+            session: Session = db
+            from models import Position
+            position = session.query(Position).filter(Position.id == position_id).first()
+            break
+        
+        if not position:
+            raise HTTPException(status_code=404, detail="포지션을 찾을 수 없습니다.")
+        
+        if position.status != "HOLDING":
+            raise HTTPException(status_code=400, detail="매도 가능한 포지션이 아닙니다.")
+        
+        # 현재가 조회 (시장가인 경우)
+        if sell_price == 0:
+            current_price = await kiwoom_api.get_current_price(position.stock_code)
+            if not current_price:
+                raise HTTPException(status_code=500, detail="현재가 조회 실패")
+            sell_price = current_price
+        
+        # 매도 주문 실행
+        await stop_loss_manager._execute_sell_order(
+            position=position,
+            sell_price=sell_price,
+            sell_reason="MANUAL",
+            sell_reason_detail="수동 매도 주문"
+        )
+        
+        return {
+            "message": f"{position.stock_name} 수동 매도 주문이 실행되었습니다.",
+            "position_id": position_id,
+            "sell_price": sell_price
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"수동 매도 주문 오류: {e}")
+        raise HTTPException(status_code=500, detail="수동 매도 주문 중 오류가 발생했습니다.")
 

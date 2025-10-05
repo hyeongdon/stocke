@@ -10,6 +10,7 @@ class StrategyManager {
         this.strategySignals = [];
         this.isMonitoring = false;
         this.monitoringStartTime = null;
+        this.syncStatusInterval = null;  // 동기화 상태 업데이트 인터벌
         
         this.init();
     }
@@ -25,6 +26,11 @@ class StrategyManager {
         await this.loadStrategies();
         await this.loadStrategySignals();
         await this.loadStrategyStatus();
+        await this.loadWatchlistSyncStatus();
+        await this.loadWatchlistSyncConfig();
+        
+        // 동기화 상태 주기적 업데이트 시작 (30초마다)
+        this.startSyncStatusUpdates();
         
         console.log('🎯 [STRATEGY_MANAGER] 초기화 완료');
     }
@@ -48,6 +54,21 @@ class StrategyManager {
         // 전략 신호 새로고침
         document.getElementById('refreshStrategySignals').addEventListener('click', () => {
             this.loadStrategySignals();
+        });
+
+        // 관심종목 동기화 토글
+        document.getElementById('watchlistSyncToggle').addEventListener('change', (e) => {
+            this.toggleWatchlistSync(e.target.checked);
+        });
+
+        // 동기화 설정 저장
+        document.getElementById('saveSyncConfig').addEventListener('click', () => {
+            this.saveWatchlistSyncConfig();
+        });
+
+        // 수동 동기화
+        document.getElementById('manualSyncBtn').addEventListener('click', () => {
+            this.manualWatchlistSync();
         });
 
         // Enter 키로 관심종목 추가
@@ -108,6 +129,8 @@ class StrategyManager {
             if (response.ok) {
                 this.watchlist = data.watchlist;
                 this.renderWatchlist();
+                // 동기화 상태도 함께 업데이트
+                await this.loadWatchlistSyncStatus();
             } else {
                 console.error('관심종목 로드 실패:', data);
             }
@@ -129,25 +152,90 @@ class StrategyManager {
             return;
         }
 
-        const watchlistHtml = this.watchlist.map(stock => `
-            <div class="d-flex justify-content-between align-items-center mb-2 p-2 border rounded">
-                <div class="flex-grow-1">
-                    <div class="fw-bold">${stock.stock_name}</div>
-                    <small class="text-muted">${stock.stock_code}</small>
+        // 수기등록과 조건식 종목 분리
+        const manualStocks = this.watchlist.filter(stock => stock.source_type === 'MANUAL');
+        const conditionStocks = this.watchlist.filter(stock => stock.source_type === 'CONDITION');
+
+        let watchlistHtml = '';
+
+        // 수기등록 종목 섹션
+        if (manualStocks.length > 0) {
+            watchlistHtml += `
+                <div class="mb-3">
+                    <h6 class="text-primary mb-2">
+                        <i class="fas fa-hand-paper me-1"></i>수기등록 종목 (${manualStocks.length}개)
+                    </h6>
+                    ${manualStocks.map(stock => `
+                        <div class="d-flex justify-content-between align-items-center mb-2 p-2 border rounded bg-light">
+                            <div class="flex-grow-1">
+                                <div class="fw-bold">${stock.stock_name}</div>
+                                <small class="text-muted">${stock.stock_code}</small>
+                            </div>
+                            <div class="d-flex gap-1">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" 
+                                           ${stock.is_active ? 'checked' : ''} 
+                                           onchange="strategyManager.toggleWatchlistStock('${stock.stock_code}', this.checked)">
+                                </div>
+                                <button class="btn btn-outline-danger btn-sm" 
+                                        onclick="strategyManager.removeFromWatchlist('${stock.stock_code}')">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+                    `).join('')}
                 </div>
-                <div class="d-flex gap-1">
-                    <div class="form-check form-switch">
-                        <input class="form-check-input" type="checkbox" 
-                               ${stock.is_active ? 'checked' : ''} 
-                               onchange="strategyManager.toggleWatchlistStock('${stock.stock_code}', this.checked)">
-                    </div>
-                    <button class="btn btn-outline-danger btn-sm" 
-                            onclick="strategyManager.removeFromWatchlist('${stock.stock_code}')">
-                        <i class="fas fa-trash"></i>
-                    </button>
+            `;
+        }
+
+        // 조건식 종목 섹션
+        if (conditionStocks.length > 0) {
+            // 조건식별로 그룹화
+            const groupedByCondition = conditionStocks.reduce((groups, stock) => {
+                const conditionName = stock.condition_name || '알 수 없는 조건식';
+                if (!groups[conditionName]) {
+                    groups[conditionName] = [];
+                }
+                groups[conditionName].push(stock);
+                return groups;
+            }, {});
+
+            watchlistHtml += `
+                <div class="mb-3">
+                    <h6 class="text-success mb-2">
+                        <i class="fas fa-robot me-1"></i>조건식 종목 (${conditionStocks.length}개)
+                    </h6>
+                    ${Object.entries(groupedByCondition).map(([conditionName, stocks]) => `
+                        <div class="mb-2">
+                            <small class="text-muted fw-bold">${conditionName}</small>
+                            ${stocks.map(stock => `
+                                <div class="d-flex justify-content-between align-items-center mb-1 p-2 border rounded bg-light">
+                                    <div class="flex-grow-1">
+                                        <div class="fw-bold">${stock.stock_name}</div>
+                                        <small class="text-muted">${stock.stock_code}</small>
+                                        ${stock.condition_status === 'REMOVED' ? 
+                                            '<small class="text-warning"><i class="fas fa-exclamation-triangle me-1"></i>조건식에서 제거됨</small>' : 
+                                            '<small class="text-success"><i class="fas fa-check-circle me-1"></i>활성</small>'
+                                        }
+                                    </div>
+                                    <div class="d-flex gap-1">
+                                        <div class="form-check form-switch">
+                                            <input class="form-check-input" type="checkbox" 
+                                                   ${stock.is_active ? 'checked' : ''} 
+                                                   onchange="strategyManager.toggleWatchlistStock('${stock.stock_code}', this.checked)">
+                                        </div>
+                                        <button class="btn btn-outline-danger btn-sm" 
+                                                onclick="strategyManager.removeFromWatchlist('${stock.stock_code}')">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    `).join('')}
                 </div>
-            </div>
-        `).join('');
+            `;
+        }
 
         container.innerHTML = watchlistHtml;
     }
@@ -579,9 +667,8 @@ class StrategyManager {
                 document.getElementById('strategyStatusText').textContent = statusText;
                 document.getElementById('strategyStatusText').className = `badge ${statusClass}`;
                 
-                if (this.isMonitoring && this.monitoringStartTime) {
-                    const runTime = Math.floor((new Date() - this.monitoringStartTime) / 1000 / 60);
-                    document.getElementById('strategyRunTime').textContent = `${runTime}분`;
+                if (this.isMonitoring && data.running_time_minutes !== undefined) {
+                    document.getElementById('strategyRunTime').textContent = `${data.running_time_minutes}분`;
                 } else {
                     document.getElementById('strategyRunTime').textContent = '-';
                 }
@@ -654,6 +741,142 @@ class StrategyManager {
         container.innerHTML = signalsHtml;
     }
 
+    async toggleWatchlistSync(isEnabled) {
+        try {
+            const endpoint = isEnabled ? '/watchlist/sync/start' : '/watchlist/sync/stop';
+            const response = await fetch(endpoint, {
+                method: 'POST'
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                this.showAlert(result.message, 'success');
+                await this.loadWatchlistSyncStatus();
+            } else {
+                this.showAlert(result.detail || '관심종목 동기화 제어에 실패했습니다.', 'danger');
+                // 토글 상태 되돌리기
+                document.getElementById('watchlistSyncToggle').checked = !isEnabled;
+            }
+        } catch (error) {
+            console.error('관심종목 동기화 제어 오류:', error);
+            this.showAlert('관심종목 동기화 제어 중 오류가 발생했습니다.', 'danger');
+            // 토글 상태 되돌리기
+            document.getElementById('watchlistSyncToggle').checked = !isEnabled;
+        }
+    }
+
+    async loadWatchlistSyncStatus() {
+        try {
+            console.log('🔄 [STRATEGY_MANAGER] 동기화 상태 로드 중...');
+            const response = await fetch('/watchlist/sync/status');
+            const data = await response.json();
+
+            if (response.ok) {
+                console.log('📊 [STRATEGY_MANAGER] 동기화 상태 데이터:', data);
+                
+                // 동기화 상태 업데이트
+                document.getElementById('watchlistSyncToggle').checked = data.is_running;
+                
+                // 통계 업데이트
+                document.getElementById('manualStocksCount').textContent = data.manual_stocks || 0;
+                document.getElementById('conditionStocksCount').textContent = data.condition_stocks || 0;
+                document.getElementById('activeConditionsCount').textContent = data.active_conditions || 0;
+                
+                // 마지막 동기화 시간 업데이트
+                if (data.last_sync_time) {
+                    const syncTime = new Date(data.last_sync_time).toLocaleString('ko-KR');
+                    document.getElementById('lastSyncTime').textContent = syncTime;
+                } else {
+                    document.getElementById('lastSyncTime').textContent = '-';
+                }
+                
+                // 실행시간 업데이트
+                if (data.is_running && data.running_time_minutes !== undefined) {
+                    console.log(`⏰ [STRATEGY_MANAGER] 실행시간 업데이트: ${data.running_time_minutes}분`);
+                    document.getElementById('runningTime').textContent = `${data.running_time_minutes}분`;
+                } else {
+                    console.log('⏰ [STRATEGY_MANAGER] 실행시간: 0분 (동기화 중지됨)');
+                    document.getElementById('runningTime').textContent = '0분';
+                }
+            } else {
+                console.error('❌ [STRATEGY_MANAGER] 동기화 상태 로드 실패:', data);
+            }
+        } catch (error) {
+            console.error('❌ [STRATEGY_MANAGER] 관심종목 동기화 상태 로드 오류:', error);
+        }
+    }
+
+    async loadWatchlistSyncConfig() {
+        try {
+            const response = await fetch('/watchlist/sync/config');
+            const config = await response.json();
+
+            if (response.ok) {
+                // 설정 값들을 UI에 반영
+                document.getElementById('syncOnlyTargetConditions').checked = config.sync_only_target_conditions;
+                document.getElementById('targetConditionNames').value = config.target_condition_names.join(', ');
+            }
+        } catch (error) {
+            console.error('관심종목 동기화 설정 로드 오류:', error);
+        }
+    }
+
+    async saveWatchlistSyncConfig() {
+        try {
+            const syncOnlyTarget = document.getElementById('syncOnlyTargetConditions').checked;
+            const targetNames = document.getElementById('targetConditionNames').value
+                .split(',')
+                .map(name => name.trim())
+                .filter(name => name.length > 0);
+
+            const config = {
+                sync_only_target_conditions: syncOnlyTarget,
+                target_condition_names: targetNames
+            };
+
+            const response = await fetch('/watchlist/sync/config', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(config)
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                this.showAlert('동기화 설정이 저장되었습니다.', 'success');
+            } else {
+                this.showAlert(result.detail || '동기화 설정 저장에 실패했습니다.', 'danger');
+            }
+        } catch (error) {
+            console.error('동기화 설정 저장 오류:', error);
+            this.showAlert('동기화 설정 저장 중 오류가 발생했습니다.', 'danger');
+        }
+    }
+
+    async manualWatchlistSync() {
+        try {
+            const response = await fetch('/watchlist/sync/manual', {
+                method: 'POST'
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                this.showAlert('수동 동기화가 완료되었습니다.', 'success');
+                await this.loadWatchlist();
+                await this.loadWatchlistSyncStatus();
+            } else {
+                this.showAlert(result.detail || '수동 동기화에 실패했습니다.', 'danger');
+            }
+        } catch (error) {
+            console.error('수동 동기화 오류:', error);
+            this.showAlert('수동 동기화 중 오류가 발생했습니다.', 'danger');
+        }
+    }
+
     showAlert(message, type = 'info') {
         // 기존 알림 제거
         const existingAlert = document.querySelector('.alert');
@@ -679,6 +902,29 @@ class StrategyManager {
                 alert.remove();
             }
         }, 3000);
+    }
+
+    startSyncStatusUpdates() {
+        // 기존 인터벌 정리
+        if (this.syncStatusInterval) {
+            clearInterval(this.syncStatusInterval);
+        }
+        
+        // 10초마다 동기화 상태 및 전략 상태 업데이트 (더 빠른 업데이트)
+        this.syncStatusInterval = setInterval(() => {
+            this.loadWatchlistSyncStatus();
+            this.loadStrategyStatus();
+        }, 10000); // 10초
+        
+        console.log('🔄 [STRATEGY_MANAGER] 동기화 상태 주기적 업데이트 시작 (10초마다)');
+    }
+
+    stopSyncStatusUpdates() {
+        if (this.syncStatusInterval) {
+            clearInterval(this.syncStatusInterval);
+            this.syncStatusInterval = null;
+            console.log('🛑 [STRATEGY_MANAGER] 동기화 상태 주기적 업데이트 중지');
+        }
     }
 }
 

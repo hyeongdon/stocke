@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from signal_manager import signal_manager, SignalType, SignalStatus
 from api_rate_limiter import api_rate_limiter
 from buy_order_executor import buy_order_executor
+from watchlist_sync_manager import watchlist_sync_manager
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ class ConditionMonitor:
         self.is_running = False
         self.loop_sleep_seconds = 600  # 10분 주기
         self._monitor_task: Optional[asyncio.Task] = None
+        self.start_time: Optional[datetime] = None  # 모니터링 시작 시간
         
         # 조건식별 기준봉 전략 관련 속성
         self.condition_reference_candles: Dict[int, Dict[str, Dict]] = {}  # {condition_id: {stock_code: candle_data}}
@@ -31,7 +33,7 @@ class ConditionMonitor:
         self._last_condition_candle_check: Dict[int, float] = {}  # 조건식별 마지막 기준봉 확인 시간
     
     async def start_monitoring(self, condition_id: int, condition_name: str) -> bool:
-        """조건식 모니터링 시작"""
+        """조건식 모니터링 시작 (신호 생성 제거)"""
         logger.info(f"🔍 [CONDITION_MONITOR] 조건식 모니터링 시작 요청 - ID: {condition_id}, 이름: {condition_name}")
         try:
             # API 제한 확인
@@ -39,7 +41,7 @@ class ConditionMonitor:
                 logger.warning(f"🔍 [CONDITION_MONITOR] API 제한 상태 - 조건식 {condition_id} 모니터링 건너뜀")
                 return False
             
-            # 조건식으로 종목 검색
+            # 조건식으로 종목 검색 (신호 생성 없이)
             logger.debug(f"🔍 [CONDITION_MONITOR] 키움 API로 종목 검색 시작 - 조건식 ID: {condition_id}")
             results = await self.kiwoom_api.search_condition_stocks(str(condition_id), condition_name)
             
@@ -47,17 +49,12 @@ class ConditionMonitor:
             api_rate_limiter.record_api_call(f"search_condition_stocks_{condition_id}")
             
             if results:
-                logger.info(f"🔍 [CONDITION_MONITOR] 종목 검색 완료 - {len(results)}개 종목 발견")
+                logger.info(f"🔍 [CONDITION_MONITOR] 종목 검색 완료 - {len(results)}개 종목 발견 (신호 생성 없음)")
                 
-                # 조건식별 기준봉 전략 적용
+                # 조건식별 기준봉 전략 적용 (신호 생성 없이)
                 await self._apply_condition_reference_strategy(condition_id, condition_name, results)
                 
-                # 조건 만족 종목들에 대해 신호 처리
-                for i, stock_data in enumerate(results, 1):
-                    logger.debug(f"🔍 [CONDITION_MONITOR] 신호 처리 중 ({i}/{len(results)}) - {stock_data.get('stock_name', 'Unknown')}")
-                    await self._process_signal(condition_id, stock_data)
-                
-                logger.info(f"🔍 [CONDITION_MONITOR] 조건식 {condition_id} 모니터링 완료 - {len(results)}개 종목 처리됨")
+                logger.info(f"🔍 [CONDITION_MONITOR] 조건식 {condition_id} 모니터링 완료 - {len(results)}개 종목 확인됨 (신호 생성 안함)")
                 return True
             else:
                 logger.info(f"🔍 [CONDITION_MONITOR] 조건식 {condition_name} (API ID: {condition_id})에 해당하는 종목이 없음")
@@ -73,34 +70,10 @@ class ConditionMonitor:
     
     
     async def _process_signal(self, condition_id: int, stock_data: Dict):
-        """신호 처리 (개선된 신호 관리 시스템 사용)"""
-        stock_code = stock_data.get("stock_code", "Unknown")
-        stock_name = stock_data.get("stock_name", "Unknown")
-        
-        logger.debug(f"🔍 [CONDITION_MONITOR] 신호 처리 시작 - {stock_name}({stock_code})")
-        
-        try:
-            # 개선된 신호 관리 시스템을 사용하여 신호 생성
-            success = await signal_manager.create_signal(
-                condition_id=condition_id,
-                stock_code=stock_code,
-                stock_name=stock_name,
-                signal_type=SignalType.CONDITION_SIGNAL,
-                additional_data={
-                    "detected_price": stock_data.get("current_price", 0),
-                    "detected_volume": stock_data.get("volume", 0)
-                }
-            )
-            
-            if success:
-                logger.info(f"🔍 [CONDITION_MONITOR] 조건 만족 신호 생성 완료: {stock_name}({stock_code}) - 조건식 ID: {condition_id}")
-            else:
-                logger.debug(f"🔍 [CONDITION_MONITOR] 신호 생성 건너뜀 (중복 또는 기타 이유): {stock_name}({stock_code})")
-                
-        except Exception as e:
-            logger.error(f"🔍 [CONDITION_MONITOR] 신호 처리 중 오류 - {stock_name}({stock_code}): {e}")
-            import traceback
-            logger.error(f"🔍 [CONDITION_MONITOR] 스택 트레이스: {traceback.format_exc()}")
+        """신호 처리 (비활성화됨)"""
+        # 신호 생성 기능이 제거되어 비활성화됨
+        logger.debug(f"🔍 [CONDITION_MONITOR] 신호 처리 비활성화됨 - {stock_data.get('stock_name', 'Unknown')}({stock_data.get('stock_code', 'Unknown')})")
+        return
     
     async def _scan_once(self):
         """활성 조건식에 대해 한 번 스캔 수행"""
@@ -171,7 +144,12 @@ class ConditionMonitor:
             logger.info("🔍 [CONDITION_MONITOR] 이미 실행 중입니다")
             return
         self.is_running = True
+        self.start_time = datetime.now()  # 모니터링 시작 시간 기록
         logger.info("🔍 [CONDITION_MONITOR] 모니터링 상태: RUNNING")
+        
+        # 관심종목 동기화는 독립적으로 제어 (별도 토글로 시작/중지)
+        # await watchlist_sync_manager.start_auto_sync()
+        
         # 백그라운드 태스크로 루프 실행
         self._monitor_task = asyncio.create_task(self._monitor_loop())
         logger.info("🔍 [CONDITION_MONITOR] 모니터링 루프가 백그라운드에서 시작되었습니다")
@@ -197,7 +175,12 @@ class ConditionMonitor:
         """모든 조건식 모니터링 중지"""
         logger.info("🔍 [CONDITION_MONITOR] 모든 조건식 모니터링 중지 요청")
         self.is_running = False
+        self.start_time = None  # 시작 시간 초기화
         logger.info("🔍 [CONDITION_MONITOR] 모니터링 상태: STOPPED")
+        
+        # 관심종목 동기화는 독립적으로 유지 (별도 토글로 제어)
+        # await watchlist_sync_manager.stop_auto_sync()
+        
         # 백그라운드 태스크가 있다면 안전하게 종료 대기/취소
         if self._monitor_task is not None:
             try:
@@ -227,13 +210,25 @@ class ConditionMonitor:
         # API 제한 상태 조회
         api_status = api_rate_limiter.get_status_info()
         
+        # 관심종목 동기화 상태 조회
+        watchlist_sync_status = await watchlist_sync_manager.get_sync_status()
+        
+        # 실행시간 계산
+        running_time_minutes = 0
+        if self.is_running and self.start_time:
+            running_time = datetime.now() - self.start_time
+            running_time_minutes = int(running_time.total_seconds() / 60)
+        
         status = {
             "is_running": self.is_running,
+            "running_time_minutes": running_time_minutes,
+            "start_time": self.start_time.isoformat() if self.start_time else None,
             "loop_sleep_seconds": self.loop_sleep_seconds,
             "signal_statistics": signal_stats,
             "api_status": api_status,
             "reference_candles_count": sum(len(candles) for candles in self.condition_reference_candles.values()),
-            "active_strategies": len(self.condition_strategies)
+            "active_strategies": len(self.condition_strategies),
+            "watchlist_sync": watchlist_sync_status
         }
         
         logger.debug(f"🔍 [CONDITION_MONITOR] 모니터링 상태: {status}")
@@ -416,34 +411,10 @@ class ConditionMonitor:
 
     async def _create_condition_reference_buy_signal(self, condition_id: int, stock_code: str, stock_name: str, 
                                                    current_price: int, target_price: int, candle: Dict):
-        """조건식 기준봉 전략 매수 신호 생성 (개선된 신호 관리 시스템 사용)"""
-        try:
-            # 개선된 신호 관리 시스템을 사용하여 신호 생성
-            success = await signal_manager.create_signal(
-                condition_id=condition_id,
-                stock_code=stock_code,
-                stock_name=stock_name,
-                signal_type=SignalType.REFERENCE_CANDLE,
-                additional_data={
-                    "detected_price": current_price,
-                    "target_price": target_price,
-                    "reference_candle_high": candle['high_price'],
-                    "reference_candle_date": candle['timestamp'],
-                    "reference_candle_close": candle['close_price'],
-                    "strategy": "reference_candle_drop"
-                }
-            )
-            
-            if success:
-                logger.info(f"🔍 [CONDITION_REF] 기준봉 매수 신호 생성 완료: {stock_name}({stock_code}) - "
-                          f"현재가: {current_price}, 목표가: {target_price}, "
-                          f"기준봉: {candle['timestamp'].strftime('%Y-%m-%d')} "
-                          f"({candle['close_price']}원)")
-            else:
-                logger.debug(f"🔍 [CONDITION_REF] 기준봉 신호 생성 건너뜀 (중복 또는 기타 이유): {stock_code}")
-                
-        except Exception as e:
-            logger.error(f"🔍 [CONDITION_REF] 기준봉 매수 신호 생성 오류 {stock_code}: {e}")
+        """조건식 기준봉 전략 매수 신호 생성 (비활성화됨)"""
+        # 신호 생성 기능이 제거되어 비활성화됨
+        logger.debug(f"🔍 [CONDITION_REF] 기준봉 신호 생성 비활성화됨 - {stock_name}({stock_code})")
+        return
 
 # 전역 인스턴스
 condition_monitor = ConditionMonitor()

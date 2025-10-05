@@ -254,7 +254,7 @@ class StockMonitorApp {
                                     <small class="text-muted">현재가: <span class="text-primary fw-bold">${currentPrice}</span></small>
                                 </div>
                                 <div class="col-6">
-                                    <small class="text-muted">목표가: <span class="text-success fw-bold">${targetAmount}</span></small>
+                                    <small class="text-muted">매수금액: <span class="text-success fw-bold">${targetAmount}</span></small>
                                 </div>
                             </div>
                             <div class="row">

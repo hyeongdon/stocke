@@ -600,6 +600,94 @@ class KiwoomAPI:
             # 오류 발생 시 빈 데이터 반환
             return []
     
+    async def get_current_price(self, stock_code: str) -> Optional[int]:
+        """종목 현재가 조회"""
+        try:
+            logger.debug(f"현재가 조회 시작: {stock_code}")
+            
+            if not self.token_manager.get_valid_token():
+                logger.error("키움 API 토큰이 없습니다")
+                return None
+            
+            # 레이트 리미터: 가용성 확인
+            if not api_rate_limiter.is_api_available():
+                logger.warning("현재가 조회 건너뜀 - API 제한 상태")
+                return None
+            
+            # 키움 API 호출 설정 - 실전/모의 분기
+            use_mock = Config.KIWOOM_USE_MOCK_ACCOUNT
+            host = Config.KIWOOM_MOCK_API_URL if use_mock else Config.KIWOOM_REAL_API_URL
+            endpoint = '/api/dostk/chart'
+            url = host + endpoint
+            
+            # 요청 헤더
+            headers = {
+                'Content-Type': 'application/json;charset=UTF-8',
+                'authorization': f'Bearer {self.token_manager.get_valid_token()}',
+                'cont-yn': 'N',
+                'next-key': '',
+                'api-id': 'ka10081',  # 일봉 차트 API 사용
+            }
+            
+            # 요청 데이터 (최근 1일 데이터만 조회)
+            from datetime import datetime, timedelta
+            
+            # 최근 거래일 계산 (주말 제외)
+            today = datetime.now()
+            if today.weekday() == 5:  # 토요일
+                base_dt = (today - timedelta(days=1)).strftime('%Y%m%d')
+            elif today.weekday() == 6:  # 일요일
+                base_dt = (today - timedelta(days=2)).strftime('%Y%m%d')
+            else:  # 평일
+                base_dt = today.strftime('%Y%m%d')
+            
+            request_data = {
+                'dmst_stex_tp': 'KRX',
+                'stk_cd': stock_code,
+                'period': '1D',
+                'limit': 1,
+                'base_dt': base_dt,  # 기준일자 추가
+                'upd_stkpc_tp': '1'  # 주가 업데이트 타입 추가
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers, json=request_data) as response:
+                    if response.status == 200:
+                        try:
+                            response_data = await response.json()
+                            
+                            # API 호출 기록
+                            api_rate_limiter.record_api_call(f"get_current_price_{stock_code}")
+                            
+                            # 응답 데이터 파싱
+                            rt_cd = response_data.get("rt_cd")
+                            return_msg = response_data.get("return_msg", "")
+                            
+                            if rt_cd == "0":  # 성공
+                                chart_list = response_data.get('stk_dt_pole_chart_qry', [])
+                                
+                                if chart_list and len(chart_list) > 0:
+                                    current_price = int(chart_list[0].get('close_price', 0))
+                                    logger.debug(f"현재가 조회 성공: {stock_code} = {current_price:,}원")
+                                    return current_price
+                                else:
+                                    logger.warning(f"현재가 데이터 없음: {stock_code}")
+                                    return None
+                            else:
+                                logger.error(f"현재가 조회 실패: {stock_code} - {return_msg}")
+                                return None
+                                
+                        except json.JSONDecodeError as e:
+                            logger.error(f"현재가 조회 응답 파싱 실패: {e}")
+                            return None
+                    else:
+                        logger.error(f"현재가 조회 API 호출 실패: {response.status}")
+                        return None
+                        
+        except Exception as e:
+            logger.error(f"현재가 조회 중 오류: {e}")
+            return None
+    
     def _parse_kiwoom_chart_data(self, api_response: dict, stock_code: str) -> list:
         """키움 API 응답을 차트 데이터로 변환"""
         chart_data = []
@@ -865,6 +953,87 @@ class KiwoomAPI:
                         
         except Exception as e:
             logger.error(f"매수 주문 중 오류: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def place_sell_order(self, stock_code: str, quantity: int, price: int = 0, order_type: str = "3") -> Dict:
+        """주식 매도 주문 (키움 API kt10000 스펙)"""
+        if not self.token_manager.get_valid_token():
+            logger.error("키움 API 토큰이 없습니다")
+            return {"success": False, "error": "토큰 없음"}
+            
+        try:
+            # 계좌 타입에 따른 도메인 설정
+            use_mock_account = Config.KIWOOM_USE_MOCK_ACCOUNT
+            if use_mock_account:
+                host = Config.KIWOOM_MOCK_API_URL
+            else:
+                host = Config.KIWOOM_REAL_API_URL
+            
+            endpoint = '/api/dostk/ordr'
+            url = host + endpoint
+            
+            # 요청 헤더 (kt10000 스펙)
+            headers = {
+                'Content-Type': 'application/json;charset=UTF-8',
+                'authorization': f'Bearer {self.token_manager.get_valid_token()}',
+                'cont-yn': 'N',  # 연속조회여부
+                'next-key': '',  # 연속조회키
+                'api-id': 'kt10000',  # TR명
+            }
+            
+            # 주문 요청 데이터 (kt10000 스펙) - 매도 주문
+            request_data = {
+                'dmst_stex_tp': 'KRX',  # 국내거래소구분 KRX,NXT,SOR
+                'stk_cd': stock_code,   # 종목코드
+                'ord_qty': str(quantity),  # 주문수량
+                'ord_uv': str(price) if price > 0 else '',  # 주문단가 (시장가면 빈 문자열)
+                'trde_tp': order_type,  # 매매구분 (3:시장가, 0:보통)
+                'cond_uv': '',  # 조건단가
+                'ord_side_cd': '2',  # 매도 주문 (1:매수, 2:매도)
+            }
+            
+            logger.info(f"매도 주문 요청: {stock_code}, 수량: {quantity}, 가격: {price}")
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers, json=request_data) as response:
+                    if response.status == 200:
+                        try:
+                            response_data = await response.json()
+                            logger.info(f"매도 주문 응답: {response_data}")
+                            
+                            # 응답 데이터 파싱
+                            if response_data.get("rt_cd") == "0":  # 성공
+                                order_id = response_data.get("ord_no", "")
+                                return {
+                                    "success": True,
+                                    "order_id": order_id,
+                                    "message": "매도 주문이 성공적으로 접수되었습니다."
+                                }
+                            else:
+                                error_msg = response_data.get("msg1", "매도 주문 실패")
+                                logger.error(f"매도 주문 실패: {error_msg}")
+                                return {
+                                    "success": False,
+                                    "error": error_msg
+                                }
+                        except json.JSONDecodeError as e:
+                            logger.error(f"매도 주문 응답 파싱 실패: {e}")
+                            return {
+                                "success": False,
+                                "error": "응답 파싱 실패"
+                            }
+                    else:
+                        logger.error(f"매도 주문 API 호출 실패: {response.status}")
+                        return {
+                            "success": False,
+                            "error": f"API 호출 실패: {response.status}"
+                        }
+                        
+        except Exception as e:
+            logger.error(f"매도 주문 중 오류: {e}")
             return {
                 "success": False,
                 "error": str(e)

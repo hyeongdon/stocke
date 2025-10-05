@@ -5,7 +5,8 @@ from typing import Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from kiwoom_api import KiwoomAPI
-from models import PendingBuySignal, get_db, AutoTradeCondition
+from models import PendingBuySignal, get_db, AutoTradeCondition, AutoTradeSettings
+from stop_loss_manager import StopLossManager
 
 logger = logging.getLogger(__name__)
 
@@ -15,9 +16,14 @@ class BuyOrderExecutor:
     def __init__(self):
         self.kiwoom_api = KiwoomAPI()
         self.is_running = False
-        self.max_invest_amount = 100000  # 기본 최대 투자 금액 (10만원)
         self.max_retry_attempts = 3  # 최대 재시도 횟수
         self.retry_delay_seconds = 30  # 재시도 간격 (초)
+        
+        # 자동매매 설정 (DB에서 동적으로 로드)
+        self.auto_trade_settings = None
+        
+        # 손절/익절 모니터링 매니저
+        self.stop_loss_manager = StopLossManager()
         
     async def start_processing(self):
         """매수 주문 처리 시작"""
@@ -26,7 +32,15 @@ class BuyOrderExecutor:
         
         try:
             while self.is_running:
-                await self._process_pending_signals()
+                # 자동매매 설정 로드
+                await self._load_auto_trade_settings()
+                
+                # 자동매매가 활성화된 경우에만 처리
+                if self.auto_trade_settings and self.auto_trade_settings.is_enabled:
+                    await self._process_pending_signals()
+                else:
+                    logger.debug("💰 [BUY_EXECUTOR] 자동매매 비활성화 상태 - 신호 처리 건너뜀")
+                
                 await asyncio.sleep(10)  # 10초마다 확인
         except Exception as e:
             logger.error(f"💰 [BUY_EXECUTOR] 처리 중 오류: {e}")
@@ -37,6 +51,21 @@ class BuyOrderExecutor:
         """매수 주문 처리 중지"""
         logger.info("💰 [BUY_EXECUTOR] 매수 주문 처리기 중지 요청")
         self.is_running = False
+    
+    async def _load_auto_trade_settings(self):
+        """자동매매 설정 로드"""
+        try:
+            for db in get_db():
+                session: Session = db
+                settings = session.query(AutoTradeSettings).first()
+                if settings:
+                    self.auto_trade_settings = settings
+                    logger.debug(f"💰 [BUY_EXECUTOR] 자동매매 설정 로드: 활성화={settings.is_enabled}, 최대투자={settings.max_invest_amount:,}원, 손절={settings.stop_loss_rate}%, 익절={settings.take_profit_rate}%")
+                else:
+                    logger.warning("💰 [BUY_EXECUTOR] 자동매매 설정이 없습니다.")
+                break
+        except Exception as e:
+            logger.error(f"💰 [BUY_EXECUTOR] 자동매매 설정 로드 오류: {e}")
     
     async def _process_pending_signals(self):
         """대기 중인 매수 신호들 처리"""
@@ -125,8 +154,9 @@ class BuyOrderExecutor:
                 return {"valid": False, "reason": "계좌 정보 조회 실패"}
             
             available_cash = account_info.get("available_cash", 0)
-            if available_cash < self.max_invest_amount:
-                return {"valid": False, "reason": f"잔고 부족: {available_cash:,}원"}
+            max_invest_amount = self.auto_trade_settings.max_invest_amount if self.auto_trade_settings else 100000
+            if available_cash < max_invest_amount:
+                return {"valid": False, "reason": f"잔고 부족: {available_cash:,}원 (필요: {max_invest_amount:,}원)"}
             
             # 3. 종목 상태 확인 (상장폐지, 거래정지 등)
             stock_status = await self._check_stock_status(signal.stock_code)
@@ -213,10 +243,15 @@ class BuyOrderExecutor:
             return None
     
     async def _calculate_buy_quantity(self, stock_code: str, current_price: int) -> int:
-        """매수 수량 계산"""
+        """매수 수량 계산 (자동매매 설정 사용)"""
         try:
-            # 최대 투자 금액 내에서 수량 계산
-            quantity = self.max_invest_amount // current_price
+            if not self.auto_trade_settings:
+                logger.error("💰 [BUY_EXECUTOR] 자동매매 설정이 없습니다.")
+                return 0
+            
+            # 자동매매 설정의 최대 투자 금액 사용
+            max_invest_amount = self.auto_trade_settings.max_invest_amount
+            quantity = max_invest_amount // current_price
             
             # 최소 수량 확인 (1주 이상)
             if quantity < 1:
@@ -226,10 +261,11 @@ class BuyOrderExecutor:
             if quantity > 1000:
                 quantity = 1000
             
+            logger.info(f"💰 [BUY_EXECUTOR] 매수 수량 계산: {quantity}주 (최대투자={max_invest_amount:,}원, 현재가={current_price:,}원)")
             return quantity
             
         except Exception as e:
-            logger.error(f"💰 [BUY_EXECUTOR] 수량 계산 오류: {e}")
+            logger.error(f"💰 [BUY_EXECUTOR] 매수 수량 계산 오류: {e}")
             return 0
     
     async def _execute_buy_order_with_retry(self, signal: PendingBuySignal, current_price: int, quantity: int):
@@ -248,7 +284,21 @@ class BuyOrderExecutor:
                 
                 if result.get("success"):
                     logger.info(f"💰 [BUY_EXECUTOR] 매수 주문 성공 - {signal.stock_name}: {quantity}주")
-                    await self._update_signal_status(signal.id, "ORDERED", result.get("order_id", ""))
+                    order_id = result.get("order_id", "")
+                    await self._update_signal_status(signal.id, "ORDERED", "", order_id)
+                    
+                    # 포지션 생성 (손절/익절 모니터링용)
+                    try:
+                        await self.stop_loss_manager.create_position_from_buy_signal(
+                            signal_id=signal.id,
+                            buy_price=current_price,
+                            buy_quantity=quantity,
+                            buy_order_id=order_id
+                        )
+                        logger.info(f"💰 [BUY_EXECUTOR] 포지션 생성 완료 - {signal.stock_name}")
+                    except Exception as e:
+                        logger.error(f"💰 [BUY_EXECUTOR] 포지션 생성 실패 - {signal.stock_name}: {e}")
+                    
                     return
                 else:
                     error_msg = result.get("error", "알 수 없는 오류")
