@@ -37,9 +37,12 @@ class KiwoomAPI:
         
     async def connect(self):
         """웹소켓 연결 및 인증"""
+        # 토큰이 없거나 만료된 경우 재인증 시도
         if not self.token_manager.get_valid_token():
-            logger.error("토큰이 없어서 WebSocket 연결을 시도할 수 없습니다")
-            return False
+            logger.warning("토큰이 없거나 만료됨 - 재인증 시도")
+            if not self.authenticate():
+                logger.error("토큰 재인증 실패 - WebSocket 연결 불가")
+                return False
             
         try:
             # 실전/모의에 따른 WebSocket 호스트 및 앱키 선택
@@ -247,6 +250,27 @@ class KiwoomAPI:
             # 로그인 응답 대기
             auth_response = await asyncio.wait_for(websocket.recv(), timeout=10.0)
             logger.info(f"LOGIN 응답 수신: {auth_response}")
+            
+            # LOGIN 응답 파싱 및 토큰 오류 확인
+            try:
+                auth_data = json.loads(auth_response)
+                if auth_data.get("return_code") == 805004:  # 토큰 인증 실패
+                    logger.error("토큰 인증 실패 - 재인증 시도")
+                    # 기존 토큰 무효화
+                    self.token_manager.access_token = None
+                    self.token_manager.token_expiry = None
+                    
+                    # 재인증 시도
+                    if self.authenticate():
+                        logger.info("토큰 재인증 성공 - WebSocket 재연결 필요")
+                        await websocket.close()
+                        return None  # 재연결 필요
+                    else:
+                        logger.error("토큰 재인증 실패")
+                        await websocket.close()
+                        return None
+            except json.JSONDecodeError:
+                logger.warning("LOGIN 응답 파싱 실패 - JSON 형식이 아님")
             
             # 조건식 목록 조회 요청 패킷 (키움증권 API 방식)
             param = {
