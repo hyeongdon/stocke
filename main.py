@@ -13,6 +13,7 @@ import re
 
 # 차트 생성 import
 import pandas as pd
+import numpy as np
 import mplfinance as mpf
 import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
@@ -1689,18 +1690,39 @@ async def get_strategy_chart(stock_code: str, strategy_type: str, period: str = 
             df['rsi_30'] = 30
             df['rsi_50'] = 50
             
+            # 가중평균거래량 계산 (RSI 전략용)
+            volume_period = 20
+            def calculate_weighted_avg_volume(volumes):
+                if len(volumes) == volume_period:
+                    weights = list(range(1, len(volumes) + 1))
+                    return sum(v * w for v, w in zip(volumes, weights)) / sum(weights)
+                else:
+                    return float('nan')
+            
+            df['weighted_avg_volume'] = df['Volume'].rolling(window=volume_period).apply(calculate_weighted_avg_volume)
+            
+            # 거래량 비율 계산
+            df['volume_ratio'] = df['Volume'] / df['weighted_avg_volume']
+            
+            # 거래량 기준선 추가
+            df['volume_threshold'] = 1.5  # 1.5배 기준선
+            
             added_plots = [
                 mpf.make_addplot(df['rsi'], color='purple', alpha=0.8, width=2, secondary_y=True),
                 mpf.make_addplot(df['rsi_70'], color='red', alpha=0.5, width=1, linestyle='--', secondary_y=True),
                 mpf.make_addplot(df['rsi_30'], color='blue', alpha=0.5, width=1, linestyle='--', secondary_y=True),
-                mpf.make_addplot(df['rsi_50'], color='gray', alpha=0.3, width=1, linestyle=':', secondary_y=True)
+                mpf.make_addplot(df['rsi_50'], color='gray', alpha=0.3, width=1, linestyle=':', secondary_y=True),
+                mpf.make_addplot(df['volume_ratio'], color='orange', alpha=0.7, width=1, secondary_y=True),
+                mpf.make_addplot(df['volume_threshold'], color='red', alpha=0.5, width=1, linestyle='--', secondary_y=True)
             ]
             
             legend_elements = [
                 mlines.Line2D([0], [0], color='purple', lw=2, label='RSI'),
                 mlines.Line2D([0], [0], color='red', lw=1, linestyle='--', alpha=0.5, label='과매수(70)'),
                 mlines.Line2D([0], [0], color='blue', lw=1, linestyle='--', alpha=0.5, label='과매도(30)'),
-                mlines.Line2D([0], [0], color='gray', lw=1, linestyle=':', alpha=0.3, label='중립(50)')
+                mlines.Line2D([0], [0], color='gray', lw=1, linestyle=':', alpha=0.3, label='중립(50)'),
+                mlines.Line2D([0], [0], color='orange', lw=1, label='거래량비율'),
+                mlines.Line2D([0], [0], color='red', lw=1, linestyle='--', alpha=0.5, label='거래량기준(1.5배)')
             ]
             
         elif strategy_type.upper() == "CHAIKIN":

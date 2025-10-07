@@ -51,7 +51,10 @@ class StrategyManager:
             "RSI": {
                 "rsi_period": 14,
                 "oversold_threshold": 30.0,
-                "overbought_threshold": 70.0
+                "overbought_threshold": 70.0,
+                "volume_period": 20,  # 가중평균거래량 계산 기간
+                "volume_threshold": 1.5,  # 거래량 배수 임계값 (1.5배 이상)
+                "use_volume_filter": True  # 거래량 필터 사용 여부
             },
             "ICHIMOKU": {
                 "conversion_period": 9,    # 전환선 (9개 봉)
@@ -568,7 +571,7 @@ class StrategyManager:
             logger.error(f"📊 [BOLLINGER_DEBUG] 볼린저밴드 디버깅 오류: {e}")
     
     def _log_rsi_debug(self, strategy, chart_data, current_price):
-        """RSI 전략 디버깅 정보"""
+        """RSI 전략 디버깅 정보 (가중평균거래량 포함)"""
         try:
             import json
             # strategy.parameters가 이미 dict인 경우와 문자열인 경우 모두 처리
@@ -581,6 +584,9 @@ class StrategyManager:
             rsi_period = parameters.get("rsi_period", 14)
             oversold_threshold = parameters.get("oversold_threshold", 30.0)
             overbought_threshold = parameters.get("overbought_threshold", 70.0)
+            volume_period = parameters.get("volume_period", 20)
+            volume_threshold = parameters.get("volume_threshold", 1.5)
+            use_volume_filter = parameters.get("use_volume_filter", True)
             
             if len(chart_data) >= rsi_period + 1:
                 # RSI 계산
@@ -606,13 +612,31 @@ class StrategyManager:
                 else:
                     rsi = 100
                 
+                # 가중평균거래량 계산
+                current_volume = chart_data[-1]['volume']
+                if len(chart_data) >= volume_period:
+                    volumes = [data['volume'] for data in chart_data[-volume_period:]]
+                    weights = list(range(1, volume_period + 1))
+                    weighted_avg_volume = sum(v * w for v, w in zip(volumes, weights)) / sum(weights)
+                    volume_ratio = current_volume / weighted_avg_volume if weighted_avg_volume > 0 else 0
+                else:
+                    weighted_avg_volume = 0
+                    volume_ratio = 0
+                
                 logger.info(f"📊 [RSI_DEBUG] RSI 기간: {rsi_period}일")
                 logger.info(f"📊 [RSI_DEBUG] 현재가: {current_price}")
                 logger.info(f"📊 [RSI_DEBUG] RSI 값: {rsi:.2f}")
                 logger.info(f"📊 [RSI_DEBUG] 과매도 임계값: {oversold_threshold}")
                 logger.info(f"📊 [RSI_DEBUG] 과매수 임계값: {overbought_threshold}")
+                logger.info(f"📊 [RSI_DEBUG] 현재 거래량: {current_volume:,.0f}")
+                logger.info(f"📊 [RSI_DEBUG] 가중평균거래량 ({volume_period}일): {weighted_avg_volume:,.0f}")
+                logger.info(f"📊 [RSI_DEBUG] 거래량 비율: {volume_ratio:.2f}배")
+                logger.info(f"📊 [RSI_DEBUG] 거래량 임계값: {volume_threshold}배")
+                logger.info(f"📊 [RSI_DEBUG] 거래량 필터 사용: {use_volume_filter}")
                 logger.info(f"📊 [RSI_DEBUG] 매수 조건 (과매도): {rsi < oversold_threshold}")
                 logger.info(f"📊 [RSI_DEBUG] 매도 조건 (과매수): {rsi > overbought_threshold}")
+                if use_volume_filter:
+                    logger.info(f"📊 [RSI_DEBUG] 거래량 조건: {volume_ratio >= volume_threshold}")
             else:
                 logger.info(f"📊 [RSI_DEBUG] 데이터 부족으로 RSI 계산 불가")
                 
@@ -805,12 +829,39 @@ class StrategyManager:
             logger.error(f"🎯 [STRATEGY_MANAGER] 볼린저밴드 신호 계산 오류: {e}")
             return None
     
+    def _calculate_weighted_average_volume(self, df: pd.DataFrame, period: int = 20) -> float:
+        """가중평균거래량 계산 (최근 데이터에 더 높은 가중치 부여)"""
+        try:
+            if len(df) < period:
+                return 0.0
+            
+            # 최근 period일의 거래량 데이터
+            volumes = df['Volume'].tail(period).values
+            
+            # 가중치 계산 (최근일수록 높은 가중치)
+            weights = np.arange(1, period + 1, dtype=float)
+            weights = weights / weights.sum()  # 정규화
+            
+            # 가중평균 계산
+            weighted_avg_volume = np.sum(volumes * weights)
+            
+            return weighted_avg_volume
+            
+        except Exception as e:
+            logger.error(f"🎯 [STRATEGY_MANAGER] 가중평균거래량 계산 오류: {e}")
+            return 0.0
+    
     async def _calculate_rsi_signal(self, df: pd.DataFrame, params: Dict) -> Optional[Dict]:
-        """RSI 전략 신호 계산"""
+        """RSI 전략 신호 계산 (가중평균거래량 조건 포함)"""
         try:
             rsi_period = params.get("rsi_period", 14)
             oversold_threshold = params.get("oversold_threshold", 30.0)
             overbought_threshold = params.get("overbought_threshold", 70.0)
+            
+            # 가중평균거래량 관련 파라미터
+            volume_period = params.get("volume_period", 20)  # 거래량 평균 계산 기간
+            volume_threshold = params.get("volume_threshold", 1.5)  # 거래량 배수 임계값
+            use_volume_filter = params.get("use_volume_filter", True)  # 거래량 필터 사용 여부
             
             if len(df) < rsi_period + 1:
                 logger.warning(f"🎯 [RSI_DEBUG] DataFrame 데이터 부족: {len(df)}개 < {rsi_period + 1}개 (RSI 기간 + 1)")
@@ -827,30 +878,52 @@ class StrategyManager:
             current_rsi = df['rsi'].iloc[-1]
             prev_rsi = df['rsi'].iloc[-2]
             current_price = df['Close'].iloc[-1]
+            current_volume = df['Volume'].iloc[-1]
+            
+            # 가중평균거래량 계산
+            weighted_avg_volume = self._calculate_weighted_average_volume(df, volume_period)
+            volume_ratio = current_volume / weighted_avg_volume if weighted_avg_volume > 0 else 0
             
             # 디버깅 로그: 현재값과 기준값 비교
             logger.info(f"📊 [RSI_DEBUG] 현재가: {current_price:.0f}")
             logger.info(f"📊 [RSI_DEBUG] RSI 기간: {rsi_period}일")
-            logger.info(f"📊 [RSI_DEBUG] 현재가: {current_price:.0f}")
             logger.info(f"📊 [RSI_DEBUG] RSI 값: {current_rsi:.2f}")
             logger.info(f"📊 [RSI_DEBUG] 이전 RSI 값: {prev_rsi:.2f}")
             logger.info(f"📊 [RSI_DEBUG] 과매도 임계값: {oversold_threshold}")
             logger.info(f"📊 [RSI_DEBUG] 과매수 임계값: {overbought_threshold}")
-            logger.info(f"📊 [RSI_DEBUG] 매수 조건1 (현재RSI>30): {current_rsi > oversold_threshold}")
-            logger.info(f"📊 [RSI_DEBUG] 매수 조건2 (이전RSI<=30): {prev_rsi <= oversold_threshold}")
-            logger.info(f"📊 [RSI_DEBUG] 매수 조건 (과매도 상향돌파): {current_rsi > oversold_threshold and prev_rsi <= oversold_threshold}")
-            logger.info(f"📊 [RSI_DEBUG] 매도 조건 (과매수 하향돌파): {current_rsi < overbought_threshold and prev_rsi >= overbought_threshold}")
+            logger.info(f"📊 [RSI_DEBUG] 현재 거래량: {current_volume:,.0f}")
+            logger.info(f"📊 [RSI_DEBUG] 가중평균거래량 ({volume_period}일): {weighted_avg_volume:,.0f}")
+            logger.info(f"📊 [RSI_DEBUG] 거래량 비율: {volume_ratio:.2f}배")
+            logger.info(f"📊 [RSI_DEBUG] 거래량 임계값: {volume_threshold}배")
+            logger.info(f"📊 [RSI_DEBUG] 거래량 필터 사용: {use_volume_filter}")
             
-            # 신호 판단
+            # RSI 신호 조건 확인
+            rsi_buy_condition = current_rsi > oversold_threshold and prev_rsi <= oversold_threshold
+            rsi_sell_condition = current_rsi < overbought_threshold and prev_rsi >= overbought_threshold
+            
+            logger.info(f"📊 [RSI_DEBUG] RSI 매수 조건 (과매도 상향돌파): {rsi_buy_condition}")
+            logger.info(f"📊 [RSI_DEBUG] RSI 매도 조건 (과매수 하향돌파): {rsi_sell_condition}")
+            
+            # 거래량 조건 확인
+            volume_condition = True
+            if use_volume_filter:
+                volume_condition = volume_ratio >= volume_threshold
+                logger.info(f"📊 [RSI_DEBUG] 거래량 조건 (현재거래량 >= 평균거래량 * {volume_threshold}): {volume_condition}")
+            
+            # 최종 신호 판단
             signal_type = None
-            if current_rsi > oversold_threshold and prev_rsi <= oversold_threshold:
-                # 과매도 구간 탈출 (상향돌파) - 매수 신호
+            if rsi_buy_condition and volume_condition:
+                # 과매도 구간 탈출 (상향돌파) + 거래량 조건 충족 - 매수 신호
                 signal_type = "BUY"
-                logger.info(f"🚀 [RSI_SIGNAL] BUY 신호 발생! RSI 상향돌파: {current_rsi:.2f} (과매도임계값: {oversold_threshold})")
-            elif current_rsi < overbought_threshold and prev_rsi >= overbought_threshold:
-                # 과매수 구간 탈출 (하향돌파) - 매도 신호
+                logger.info(f"🚀 [RSI_SIGNAL] BUY 신호 발생! RSI 상향돌파: {current_rsi:.2f} (과매도임계값: {oversold_threshold}), 거래량: {volume_ratio:.2f}배")
+            elif rsi_sell_condition and volume_condition:
+                # 과매수 구간 탈출 (하향돌파) + 거래량 조건 충족 - 매도 신호
                 signal_type = "SELL"
-                logger.info(f"📉 [RSI_SIGNAL] SELL 신호 발생! RSI 하향돌파: {current_rsi:.2f} (과매수임계값: {overbought_threshold})")
+                logger.info(f"📉 [RSI_SIGNAL] SELL 신호 발생! RSI 하향돌파: {current_rsi:.2f} (과매수임계값: {overbought_threshold}), 거래량: {volume_ratio:.2f}배")
+            elif rsi_buy_condition and not volume_condition:
+                logger.info(f"📊 [RSI_DEBUG] RSI 매수 조건 충족하지만 거래량 부족으로 신호 무시 (거래량: {volume_ratio:.2f}배 < {volume_threshold}배)")
+            elif rsi_sell_condition and not volume_condition:
+                logger.info(f"📊 [RSI_DEBUG] RSI 매도 조건 충족하지만 거래량 부족으로 신호 무시 (거래량: {volume_ratio:.2f}배 < {volume_threshold}배)")
             
             if signal_type:
                 return {
@@ -860,7 +933,12 @@ class StrategyManager:
                         "rsi_period": rsi_period,
                         "current_price": current_price,
                         "oversold_threshold": oversold_threshold,
-                        "overbought_threshold": overbought_threshold
+                        "overbought_threshold": overbought_threshold,
+                        "current_volume": current_volume,
+                        "weighted_avg_volume": weighted_avg_volume,
+                        "volume_ratio": volume_ratio,
+                        "volume_threshold": volume_threshold,
+                        "use_volume_filter": use_volume_filter
                     }
                 }
             
