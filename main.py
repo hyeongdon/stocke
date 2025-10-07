@@ -1585,6 +1585,16 @@ async def update_watchlist_sync_config(config: dict):
         logger.error(f"관심종목 동기화 설정 업데이트 오류: {e}")
         raise HTTPException(status_code=500, detail="설정 업데이트 실패")
 
+@app.post("/watchlist/sync/cleanup")
+async def cleanup_expired_watchlist_stocks():
+    """만료된 관심종목 수동 정리"""
+    try:
+        await watchlist_sync_manager._cleanup_expired_stocks()
+        return {"message": "만료된 관심종목 정리가 완료되었습니다."}
+    except Exception as e:
+        logger.error(f"만료된 관심종목 정리 오류: {e}")
+        raise HTTPException(status_code=500, detail="만료된 관심종목 정리 중 오류가 발생했습니다.")
+
 # ===== 전략별 차트 시각화 API =====
 
 @app.get("/chart/strategy/{stock_code}/{strategy_type}")

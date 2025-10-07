@@ -24,7 +24,7 @@ class WatchlistSyncManager:
         # 동기화 설정
         self.auto_sync_enabled = True
         self.remove_expired_stocks = True
-        self.expired_threshold_hours = 24  # 24시간 동안 조건식에 없으면 제거
+        self.expired_threshold_hours = 6  # 6시간 동안 조건식에 없으면 제거 (더 빠른 정리)
         
         # 특정 조건식만 동기화하는 설정
         self.target_condition_names = ["120선 돌파", "120일선돌파"]  # 동기화할 조건식 이름들
@@ -364,14 +364,24 @@ class WatchlistSyncManager:
             logger.error(f"📋 [WATCHLIST_SYNC] 조건식 종목 제거 표시 중 오류: {e}")
     
     async def _cleanup_expired_stocks(self):
-        """만료된 종목들 정리"""
+        """만료된 종목들 정리 (개선된 로직)"""
         try:
-            threshold_time = datetime.utcnow() - timedelta(hours=self.expired_threshold_hours)
+            current_time = datetime.utcnow()
+            threshold_time = current_time - timedelta(hours=self.expired_threshold_hours)
+            
+            # 일일 정리: 자정 이후 1시간이 지나면 이전 날의 종목들 정리
+            daily_cleanup_time = current_time.replace(hour=1, minute=0, second=0, microsecond=0)
+            if current_time > daily_cleanup_time:
+                yesterday_threshold = current_time - timedelta(days=1)
+            else:
+                yesterday_threshold = current_time - timedelta(days=2)
             
             for db in get_db():
                 session: Session = db
                 try:
-                    # 오래된 동기화 데이터 조회
+                    removed_count = 0
+                    
+                    # 1. REMOVED 상태인 오래된 동기화 데이터 정리
                     expired_syncs = session.query(ConditionWatchlistSync).filter(
                         ConditionWatchlistSync.sync_status == "REMOVED",
                         ConditionWatchlistSync.last_sync_at < threshold_time
@@ -387,15 +397,36 @@ class WatchlistSyncManager:
                         
                         if watchlist_item:
                             session.delete(watchlist_item)
+                            removed_count += 1
                             logger.info(f"📋 [WATCHLIST_SYNC] 만료된 조건식 종목 완전 제거: {sync_record.stock_name}")
                     
-                    # 동기화 데이터도 정리
+                    # 2. 일일 정리: 이전 날의 모든 조건식 종목들 정리
+                    old_condition_stocks = session.query(WatchlistStock).filter(
+                        WatchlistStock.source_type == "CONDITION",
+                        WatchlistStock.last_condition_check < yesterday_threshold
+                    ).all()
+                    
+                    for stock in old_condition_stocks:
+                        session.delete(stock)
+                        removed_count += 1
+                        logger.info(f"📋 [WATCHLIST_SYNC] 일일 정리로 제거된 종목: {stock.stock_name}")
+                    
+                    # 3. 동기화 데이터도 정리
                     session.query(ConditionWatchlistSync).filter(
                         ConditionWatchlistSync.sync_status == "REMOVED",
                         ConditionWatchlistSync.last_sync_at < threshold_time
                     ).delete()
                     
+                    # 4. 오래된 동기화 데이터도 정리 (2일 이상 된 데이터)
+                    session.query(ConditionWatchlistSync).filter(
+                        ConditionWatchlistSync.last_sync_at < yesterday_threshold
+                    ).delete()
+                    
                     session.commit()
+                    
+                    if removed_count > 0:
+                        logger.info(f"📋 [WATCHLIST_SYNC] 총 {removed_count}개의 만료된 종목 정리 완료")
+                    
                     break
                 except Exception as e:
                     logger.error(f"📋 [WATCHLIST_SYNC] 만료된 종목 정리 오류: {e}")
