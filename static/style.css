@@ -565,31 +565,81 @@ h1, h2, h3, h4, h5, h6 {
     
     /* 모바일에서 데스크톱 탭 숨김 */
     .nav-tabs {
-        display: none;
+        display: none !important;
+    }
+    
+    /* 모바일에서 데스크톱 탭 아이템들도 숨김 */
+    .nav-tabs .nav-item {
+        display: none !important;
     }
     
     /* 모바일 전용 컨텐츠 표시 */
     .mobile-content {
-        display: block;
+        display: block !important;
     }
     
     .desktop-content {
-        display: none;
+        display: none !important;
+    }
+    
+    /* 모바일 하단 네비게이션 강제 표시 */
+    .mobile-bottom-nav {
+        display: flex !important;
     }
 }
 
 /* 데스크톱에서 모바일 네비게이션 숨김 */
 @media (min-width: 769px) {
     .mobile-bottom-nav {
-        display: none;
+        display: none !important;
     }
     
     .mobile-content {
-        display: none;
+        display: none !important;
     }
     
     .desktop-content {
-        display: block;
+        display: block !important;
+    }
+    
+    /* 데스크톱에서 탭을 가로로 표시 */
+    .nav-tabs {
+        display: flex !important;
+        flex-direction: row !important;
+    }
+    
+    .nav-tabs .nav-item {
+        display: block !important;
+    }
+    
+    .nav-tabs .nav-link {
+        display: flex !important;
+        flex-direction: row !important;
+        align-items: center !important;
+        white-space: nowrap !important;
+    }
+    
+    /* Bootstrap 탭 기본 스타일 복원 */
+    .nav-tabs {
+        border-bottom: 1px solid #dee2e6 !important;
+        margin-bottom: 0 !important;
+    }
+    
+    .nav-tabs .nav-item {
+        margin-bottom: -1px !important;
+    }
+    
+    .nav-tabs .nav-link {
+        border: 1px solid transparent !important;
+        border-top-left-radius: 0.25rem !important;
+        border-top-right-radius: 0.25rem !important;
+        padding: 0.5rem 1rem !important;
+    }
+    
+    .nav-tabs .nav-link.active {
+        color: #495057 !important;
+        background-color: #fff !important;
+        border-color: #dee2e6 #dee2e6 #fff !important;
     }
 }
 
