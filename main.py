@@ -44,6 +44,7 @@ from buy_order_executor import buy_order_executor
 from strategy_manager import strategy_manager
 from watchlist_sync_manager import watchlist_sync_manager
 from stop_loss_manager import StopLossManager
+from scalping_strategy import scalping_manager
 
 config = Config()
 
@@ -1594,6 +1595,38 @@ async def cleanup_expired_watchlist_stocks():
     except Exception as e:
         logger.error(f"만료된 관심종목 정리 오류: {e}")
         raise HTTPException(status_code=500, detail="만료된 관심종목 정리 중 오류가 발생했습니다.")
+
+# ===== 스캘핑 전략 API =====
+
+@app.post("/scalping/start")
+async def start_scalping():
+    """스캘핑 전략 시작"""
+    try:
+        await scalping_manager.start_scalping_monitoring()
+        return {"message": "스캘핑 전략이 시작되었습니다."}
+    except Exception as e:
+        logger.error(f"스캘핑 전략 시작 오류: {e}")
+        raise HTTPException(status_code=500, detail="스캘핑 전략 시작 중 오류가 발생했습니다.")
+
+@app.post("/scalping/stop")
+async def stop_scalping():
+    """스캘핑 전략 중지"""
+    try:
+        await scalping_manager.stop_scalping_monitoring()
+        return {"message": "스캘핑 전략이 중지되었습니다."}
+    except Exception as e:
+        logger.error(f"스캘핑 전략 중지 오류: {e}")
+        raise HTTPException(status_code=500, detail="스캘핑 전략 중지 중 오류가 발생했습니다.")
+
+@app.get("/scalping/status")
+async def get_scalping_status():
+    """스캘핑 전략 상태 조회"""
+    try:
+        status = await scalping_manager.get_scalping_status()
+        return status
+    except Exception as e:
+        logger.error(f"스캘핑 전략 상태 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail="스캘핑 전략 상태 조회 중 오류가 발생했습니다.")
 
 # ===== 전략별 차트 시각화 API =====
 

@@ -6,6 +6,7 @@ class StockMonitorApp {
     init() {
         this.bindEvents();
         this.bindTabEvents();
+        this.bindMobileEvents();
         this.loadConditions();
         this.checkMonitoringStatus();
         this.startAutoRefresh();
@@ -58,6 +59,384 @@ class StockMonitorApp {
         if (saveTradingSettingsBtn) {
             saveTradingSettingsBtn.addEventListener('click', () => this.saveTradingSettings());
         }
+    }
+
+    // 모바일 이벤트 바인딩
+    bindMobileEvents() {
+        // 모바일 하단 네비게이션 이벤트
+        const mobileNavItems = document.querySelectorAll('.mobile-nav-item');
+        mobileNavItems.forEach(item => {
+            item.addEventListener('click', (e) => {
+                e.preventDefault();
+                const tabName = item.dataset.tab;
+                this.switchMobileTab(tabName);
+            });
+        });
+
+        // 모바일 전용 버튼 이벤트
+        const mobileRefreshPendingBtn = document.getElementById('mobileRefreshPending');
+        if (mobileRefreshPendingBtn) {
+            mobileRefreshPendingBtn.addEventListener('click', () => this.loadMobilePendingSignals());
+        }
+
+        const mobileRefreshSignalsBtn = document.getElementById('mobileRefreshSignals');
+        if (mobileRefreshSignalsBtn) {
+            mobileRefreshSignalsBtn.addEventListener('click', () => this.loadMobileSignals());
+        }
+
+        const mobileRefreshAccountBtn = document.getElementById('mobileRefreshAccount');
+        if (mobileRefreshAccountBtn) {
+            mobileRefreshAccountBtn.addEventListener('click', () => this.loadMobileAccountSummary());
+        }
+
+        const mobileMonitoringToggle = document.getElementById('mobileMonitoringToggle');
+        if (mobileMonitoringToggle) {
+            mobileMonitoringToggle.addEventListener('change', () => {
+                this.toggleMobileMonitoring(mobileMonitoringToggle.checked);
+            });
+        }
+
+        // 터치 제스처 지원
+        this.initTouchGestures();
+    }
+
+    // 모바일 탭 전환
+    switchMobileTab(tabName) {
+        console.log('모바일 탭 전환:', tabName);
+        
+        // 모든 모바일 네비게이션 아이템 비활성화
+        document.querySelectorAll('.mobile-nav-item').forEach(item => {
+            item.classList.remove('active');
+        });
+
+        // 선택된 아이템 활성화
+        const selectedItem = document.querySelector(`[data-tab="${tabName}"]`);
+        if (selectedItem) {
+            selectedItem.classList.add('active');
+        }
+
+        // 모든 탭 콘텐츠 숨기기
+        document.querySelectorAll('.tab-pane').forEach(pane => {
+            pane.classList.remove('show', 'active');
+        });
+
+        // 선택된 탭 콘텐츠 표시
+        let targetPane;
+        switch(tabName) {
+            case 'stocks':
+                targetPane = document.getElementById('stocks-pane');
+                break;
+            case 'strategy':
+                targetPane = document.getElementById('strategy-pane');
+                break;
+            case 'account':
+                targetPane = document.getElementById('account-pane');
+                break;
+            case 'monitoring':
+                targetPane = document.getElementById('monitoring-pane');
+                break;
+        }
+
+        if (targetPane) {
+            targetPane.classList.add('show', 'active');
+            this.currentTab = tabName;
+            
+            // 모니터링 탭으로 전환 시 데이터 로드
+            if (tabName === 'monitoring') {
+                this.loadMobileMonitoringData();
+            }
+        }
+    }
+
+    // 모바일 모니터링 데이터 로드
+    async loadMobileMonitoringData() {
+        try {
+            await Promise.all([
+                this.loadMobilePendingSignals(),
+                this.loadMobileSignals(),
+                this.loadMobileAccountSummary(),
+                this.checkMobileMonitoringStatus()
+            ]);
+        } catch (error) {
+            console.error('모바일 모니터링 데이터 로드 실패:', error);
+        }
+    }
+
+    // 모바일 매수대기 목록 로드
+    async loadMobilePendingSignals() {
+        try {
+            const container = document.getElementById('mobilePendingList');
+            if (!container) return;
+
+            container.innerHTML = `
+                <div class="text-center py-3">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">로딩 중...</span>
+                    </div>
+                </div>
+            `;
+
+            const response = await fetch('/signals/pending');
+            const data = await response.json();
+            const items = (data && Array.isArray(data.items)) ? data.items : [];
+
+            if (items.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center text-muted py-4">
+                        <i class="fas fa-inbox fa-2x mb-2"></i>
+                        <p>매수대기 종목이 없습니다.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            const html = items.map(item => {
+                const time = item.detected_at ? new Date(item.detected_at).toLocaleTimeString() : '';
+                const currentPrice = item.current_price ? item.current_price.toLocaleString() + '원' : '조회중...';
+                const targetAmount = item.target_amount ? item.target_amount.toLocaleString() + '원' : '계산중...';
+                
+                return `
+                    <div class="border-bottom py-2">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div class="flex-grow-1">
+                                <div class="fw-bold">${item.stock_name}</div>
+                                <small class="text-muted">${item.stock_code}</small>
+                                <div class="mt-1">
+                                    <small class="text-primary fw-bold">${currentPrice}</small>
+                                    <small class="text-success ms-2">${targetAmount}</small>
+                                </div>
+                                <small class="text-muted">${time}</small>
+                            </div>
+                            <span class="badge bg-secondary">${item.status}</span>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            container.innerHTML = html;
+            
+            // 매수대기 개수 업데이트
+            const pendingCountEl = document.getElementById('mobilePendingCount');
+            if (pendingCountEl) {
+                pendingCountEl.textContent = items.length;
+            }
+        } catch (error) {
+            console.error('모바일 매수대기 목록 로드 실패:', error);
+            const container = document.getElementById('mobilePendingList');
+            if (container) {
+                container.innerHTML = `<div class="text-danger">로드 실패</div>`;
+            }
+        }
+    }
+
+    // 모바일 신호 목록 로드
+    async loadMobileSignals() {
+        try {
+            const container = document.getElementById('mobileSignalsList');
+            if (!container) return;
+
+            container.innerHTML = `
+                <div class="text-center py-3">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">로딩 중...</span>
+                    </div>
+                </div>
+            `;
+
+            // 최근 신호 API 호출 (실제 구현에 따라 수정 필요)
+            const response = await fetch('/signals/recent');
+            const data = await response.json();
+            const signals = (data && Array.isArray(data.signals)) ? data.signals : [];
+
+            if (signals.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center text-muted py-4">
+                        <i class="fas fa-signal fa-2x mb-2"></i>
+                        <p>최근 신호가 없습니다.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            const html = signals.map(signal => {
+                const time = signal.created_at ? new Date(signal.created_at).toLocaleTimeString() : '';
+                const signalType = signal.signal_type === 'BUY' ? '매수' : '매도';
+                const signalClass = signal.signal_type === 'BUY' ? 'text-danger' : 'text-primary';
+                
+                return `
+                    <div class="border-bottom py-2">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div class="flex-grow-1">
+                                <div class="fw-bold">${signal.stock_name}</div>
+                                <small class="text-muted">${signal.stock_code}</small>
+                                <div class="mt-1">
+                                    <span class="badge ${signalClass}">${signalType}</span>
+                                    <small class="text-muted ms-2">${time}</small>
+                                </div>
+                            </div>
+                            <div class="text-end">
+                                <div class="fw-bold">${signal.price ? signal.price.toLocaleString() + '원' : '-'}</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            container.innerHTML = html;
+        } catch (error) {
+            console.error('모바일 신호 목록 로드 실패:', error);
+            const container = document.getElementById('mobileSignalsList');
+            if (container) {
+                container.innerHTML = `<div class="text-danger">로드 실패</div>`;
+            }
+        }
+    }
+
+    // 모바일 계좌 요약 로드
+    async loadMobileAccountSummary() {
+        try {
+            const response = await fetch('/account/balance');
+            const data = await response.json();
+
+            // 총 자산 업데이트
+            const totalAssetsEl = document.getElementById('mobileTotalAssets');
+            if (totalAssetsEl) {
+                const assets = parseInt(data.aset_evlt_amt || 0);
+                totalAssetsEl.textContent = this.formatPrice(assets) + '원';
+            }
+
+            // 평가 손익 업데이트
+            const totalProfitLossEl = document.getElementById('mobileTotalProfitLoss');
+            if (totalProfitLossEl) {
+                const profit = parseInt(data.lspft || 0);
+                totalProfitLossEl.textContent = this.formatPriceDiff(profit) + '원';
+                totalProfitLossEl.className = this.getPriceClass(profit);
+            }
+
+            // 수익률 업데이트
+            const profitRateEl = document.getElementById('mobileProfitRate');
+            if (profitRateEl) {
+                const rate = parseFloat(data.lspft_rt || 0);
+                profitRateEl.textContent = this.formatChangeRate(rate) + '%';
+                profitRateEl.className = this.getPriceClass(rate);
+            }
+
+            // 보유 종목 개수 업데이트
+            const holdingsResponse = await fetch('/account/holdings');
+            const holdingsData = await holdingsResponse.json();
+            const holdingsCountEl = document.getElementById('mobileHoldingsCount');
+            if (holdingsCountEl && holdingsData.stk_acnt_evlt_prst) {
+                holdingsCountEl.textContent = holdingsData.stk_acnt_evlt_prst.length;
+            }
+
+        } catch (error) {
+            console.error('모바일 계좌 요약 로드 실패:', error);
+        }
+    }
+
+    // 모바일 모니터링 상태 확인
+    async checkMobileMonitoringStatus() {
+        try {
+            const response = await fetch('/monitoring/status');
+            const data = await response.json();
+            const isRunning = data.monitoring?.is_running || data.is_running || data.is_monitoring;
+            
+            this.updateMobileMonitoringUI(isRunning);
+        } catch (error) {
+            console.error('모바일 모니터링 상태 확인 실패:', error);
+            this.updateMobileMonitoringUI(false);
+        }
+    }
+
+    // 모바일 모니터링 UI 업데이트
+    updateMobileMonitoringUI(isMonitoring) {
+        const statusEl = document.getElementById('mobileMonitoringStatus');
+        const toggleEl = document.getElementById('mobileMonitoringToggle');
+        
+        if (statusEl) {
+            statusEl.textContent = isMonitoring ? '실행중' : '중지';
+            statusEl.className = `badge ${isMonitoring ? 'bg-success' : 'bg-secondary'}`;
+        }
+        
+        if (toggleEl) {
+            toggleEl.checked = isMonitoring;
+        }
+    }
+
+    // 모바일 모니터링 토글
+    async toggleMobileMonitoring(enabled) {
+        try {
+            const endpoint = enabled ? '/monitoring/start' : '/monitoring/stop';
+            const response = await fetch(endpoint, { method: 'POST' });
+            
+            if (response.ok) {
+                this.updateMobileMonitoringUI(enabled);
+            } else {
+                throw new Error(`HTTP ${response.status}`);
+            }
+        } catch (error) {
+            console.error('모바일 모니터링 토글 실패:', error);
+            alert('모니터링 상태 변경에 실패했습니다.');
+        }
+    }
+
+    // 터치 제스처 초기화
+    initTouchGestures() {
+        let startX = 0;
+        let startY = 0;
+        let isScrolling = false;
+
+        document.addEventListener('touchstart', (e) => {
+            startX = e.touches[0].clientX;
+            startY = e.touches[0].clientY;
+            isScrolling = false;
+        }, { passive: true });
+
+        document.addEventListener('touchmove', (e) => {
+            if (!startX || !startY) return;
+            
+            const diffX = startX - e.touches[0].clientX;
+            const diffY = startY - e.touches[0].clientY;
+            
+            if (Math.abs(diffX) > Math.abs(diffY)) {
+                // 수평 스와이프
+                if (Math.abs(diffX) > 50) {
+                    isScrolling = true;
+                }
+            } else {
+                // 수직 스와이프
+                if (Math.abs(diffY) > 50) {
+                    isScrolling = true;
+                }
+            }
+        }, { passive: true });
+
+        document.addEventListener('touchend', (e) => {
+            if (!startX || !startY || isScrolling) return;
+            
+            const diffX = startX - e.changedTouches[0].clientX;
+            const diffY = startY - e.changedTouches[0].clientY;
+            
+            if (Math.abs(diffX) > Math.abs(diffY)) {
+                // 수평 스와이프 감지
+                if (Math.abs(diffX) > 50) {
+                    const tabs = ['stocks', 'strategy', 'account', 'monitoring'];
+                    const currentIndex = tabs.indexOf(this.currentTab);
+                    
+                    if (diffX > 0 && currentIndex < tabs.length - 1) {
+                        // 오른쪽으로 스와이프 (다음 탭)
+                        this.switchMobileTab(tabs[currentIndex + 1]);
+                    } else if (diffX < 0 && currentIndex > 0) {
+                        // 왼쪽으로 스와이프 (이전 탭)
+                        this.switchMobileTab(tabs[currentIndex - 1]);
+                    }
+                }
+            }
+            
+            startX = 0;
+            startY = 0;
+            isScrolling = false;
+        }, { passive: true });
     }
 
     // 탭 이벤트 바인딩 메서드 수정
