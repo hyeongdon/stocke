@@ -25,6 +25,7 @@ class StrategyManager:
     def __init__(self):
         self.running = False
         self.monitoring_task = None
+        self.start_time: Optional[datetime] = None  # 모니터링 시작 시간
         self.kiwoom_api = KiwoomAPI()
         self.signal_manager = SignalManager()
         
@@ -108,6 +109,7 @@ class StrategyManager:
         
         logger.info("🎯 [STRATEGY_MANAGER] 전략 모니터링 시작")
         self.running = True
+        self.start_time = datetime.now()  # 시작 시간 기록
         
         # 키움 API 연결
         await self.kiwoom_api.connect()
@@ -123,6 +125,7 @@ class StrategyManager:
         
         logger.info("🎯 [STRATEGY_MANAGER] 전략 모니터링 중지")
         self.running = False
+        self.start_time = None  # 시작 시간 초기화
         
         # 모니터링 태스크 취소
         if self.monitoring_task:
@@ -1189,8 +1192,16 @@ class StrategyManager:
                 recent_signals_count = recent_signals
                 break
             
+            # 실행 시간 계산
+            running_time_minutes = 0
+            if self.running and self.start_time:
+                running_time = datetime.now() - self.start_time
+                running_time_minutes = int(running_time.total_seconds() / 60)
+            
             return {
                 "is_running": self.running,
+                "running_time_minutes": running_time_minutes,
+                "start_time": self.start_time.isoformat() if self.start_time else None,
                 "active_strategies_count": len(active_strategies),
                 "active_strategies": [
                     {
