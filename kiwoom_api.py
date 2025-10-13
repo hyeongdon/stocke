@@ -402,24 +402,23 @@ class KiwoomAPI:
             max_attempts = 10
             for attempt in range(max_attempts):
                 response = await asyncio.wait_for(websocket.recv(), timeout=15.0)
-                logger.info(f"응답 수신 (시도 {attempt + 1}): {response}")
                 
                 try:
                     data = json.loads(response)
                     # PING 응답이면 그대로 다시 전송
                     if data.get('trnm') == 'PING':
-                        logger.info("PING 응답 수신, 응답 전송")
+                        logger.debug(f"PING 응답 수신 (시도 {attempt + 1}), 응답 전송")
                         await websocket.send(response)
                         continue
                     # 실제 응답이면 처리
                     elif data.get('trnm') == 'CNSRREQ':
-                        logger.info(f"CNSRREQ 응답 수신: {response}")
+                        logger.info(f"CNSRREQ 응답 수신 (시도 {attempt + 1}): {response}")
                         break
                     else:
-                        logger.info(f"예상치 못한 응답: {response}")
+                        logger.warning(f"예상치 못한 응답 (시도 {attempt + 1}): {data.get('trnm', 'UNKNOWN')}")
                         continue
                 except json.JSONDecodeError:
-                    logger.warning(f"JSON 파싱 실패: {response}")
+                    logger.warning(f"JSON 파싱 실패 (시도 {attempt + 1}): {response[:100]}...")
                     continue
             else:
                 logger.error("최대 시도 횟수 초과, 유효한 응답을 받지 못함")
@@ -1167,19 +1166,17 @@ class KiwoomAPI:
                     
                     # 응답 상세 로깅 추가
                     response_text = await response.text()
-                    logger.info(f"응답 상태: {response.status}")
-                    logger.info(f"응답 헤더: {dict(response.headers)}")
-                    logger.info(f"응답 내용: {response_text}")
+                    logger.debug(f"계좌 조회 응답 상태: {response.status}")
                     
                     if response.status == 200:
                         try:
                             data = json.loads(response_text)
-                            logger.info(f"파싱된 응답 데이터: {data}")
-                            logger.info(f"data.get('return_code'): {data.get('return_code')}")
+                            return_code = data.get('return_code')
+                            logger.debug(f"계좌 조회 return_code: {return_code}")
+                            
                             # 응답 확인
-                            if data.get('return_code') == 0:  # 성공 (숫자 0)
+                            if return_code == 0:  # 성공
                                 result = self._parse_account_balance_safe(data)
-                                logger.info(f"파싱 결과: {result}")
                                 return result
                             else:
                                 error_msg = data.get('msg1', '알 수 없는 오류')
@@ -1210,11 +1207,7 @@ class KiwoomAPI:
     def _parse_account_balance_safe(self, api_response: dict) -> dict:
         """키움 API 계좌 잔고 응답 파싱 - 안전한 버전"""
         try:
-            logger.info(f"응답 파싱 시작: {api_response}")
-            
-            # 키움 API 응답이 이미 평면화되어 있음 (output 키 없음)
-            # 직접 응답에서 데이터 추출
-            logger.info(f"사용 가능한 키: {list(api_response.keys())}")
+            logger.debug(f"계좌 응답 파싱 시작")
             
             # 안전한 데이터 추출
             def safe_get(data, key, default='0'):
@@ -1225,7 +1218,7 @@ class KiwoomAPI:
             stk_acnt_evlt_prst = []
             if 'stk_acnt_evlt_prst' in api_response:
                 stk_data = api_response['stk_acnt_evlt_prst']
-                logger.info(f"보유종목 원본 데이터: {stk_data}")
+                logger.debug(f"보유종목 원본 데이터 수: {len(stk_data) if isinstance(stk_data, list) else 1}")
                 
                 if isinstance(stk_data, list):
                     for item in stk_data:
@@ -1255,8 +1248,6 @@ class KiwoomAPI:
                         "avg_pr": safe_get(stk_data, 'avg_pr', '0')
                     })
             
-            logger.info(f"파싱된 보유종목 개수: {len(stk_acnt_evlt_prst)}")
-            
             result = {
                 "acnt_nm": safe_get(api_response, 'acnt_nm', ''),
                 "brch_nm": safe_get(api_response, 'brch_nm', ''),
@@ -1279,7 +1270,20 @@ class KiwoomAPI:
                 "stk_acnt_evlt_prst": stk_acnt_evlt_prst
             }
             
-            logger.info(f"파싱 완료: {result}")
+            # 요약 정보만 로깅 (금액은 숫자로 변환하여 표시)
+            try:
+                # aset_evlt_amt: 자산평가금액 (실제 보유 자산 가치)
+                # tot_est_amt: 총추정금액 (자산평가 + 예수금)
+                aset_amt = int(result['aset_evlt_amt']) if result['aset_evlt_amt'] else 0
+                tot_amt = int(result['tot_est_amt']) if result['tot_est_amt'] else 0
+                
+                if aset_amt > 0 or tot_amt > 0:
+                    logger.info(f"계좌 파싱 완료 - 보유종목: {len(stk_acnt_evlt_prst)}개, 자산평가: {aset_amt:,}원, 총추정: {tot_amt:,}원")
+                else:
+                    logger.info(f"계좌 파싱 완료 - 보유종목: {len(stk_acnt_evlt_prst)}개 (자산 없음)")
+            except (ValueError, TypeError) as e:
+                logger.warning(f"계좌 금액 파싱 오류: {e}")
+                logger.info(f"계좌 파싱 완료 - 보유종목: {len(stk_acnt_evlt_prst)}개")
             return result
             
         except Exception as e:
