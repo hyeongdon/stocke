@@ -339,6 +339,77 @@ class BuyOrderExecutor:
                 break
         except Exception as e:
             logger.error(f"💰 [BUY_EXECUTOR] 신호 상태 업데이트 오류: {e}")
+    
+    async def cleanup_expired_pending_signals(self):
+        """만료된 PENDING 신호들 정리 (자정에 실행)"""
+        try:
+            logger.info("🧹 [BUY_EXECUTOR] 만료된 PENDING 신호 정리 시작")
+            
+            # 어제 날짜 계산
+            yesterday = datetime.now().date() - timedelta(days=1)
+            
+            cleanup_count = 0
+            for db in get_db():
+                session: Session = db
+                try:
+                    # 어제 이전의 PENDING 신호들 조회
+                    expired_signals = session.query(PendingBuySignal).filter(
+                        PendingBuySignal.status == "PENDING",
+                        PendingBuySignal.detected_date < yesterday
+                    ).all()
+                    
+                    for signal in expired_signals:
+                        signal.status = "EXPIRED"
+                        signal.failure_reason = "자정 정리 - 장마감 후 미체결"
+                        cleanup_count += 1
+                        logger.info(f"🧹 [BUY_EXECUTOR] 만료 신호 정리: {signal.stock_name}({signal.stock_code}) - {signal.detected_at}")
+                    
+                    session.commit()
+                    logger.info(f"🧹 [BUY_EXECUTOR] 총 {cleanup_count}개 만료 신호 정리 완료")
+                    break
+                    
+                except Exception as e:
+                    logger.error(f"🧹 [BUY_EXECUTOR] 만료 신호 정리 중 오류: {e}")
+                    session.rollback()
+                    continue
+                    
+        except Exception as e:
+            logger.error(f"🧹 [BUY_EXECUTOR] 만료 신호 정리 중 전체 오류: {e}")
+    
+    async def manual_cleanup_pending_signals(self):
+        """수동으로 PENDING 신호들 정리"""
+        try:
+            logger.info("🧹 [BUY_EXECUTOR] 수동 PENDING 신호 정리 시작")
+            
+            cleanup_count = 0
+            for db in get_db():
+                session: Session = db
+                try:
+                    # 모든 PENDING 신호들 조회
+                    pending_signals = session.query(PendingBuySignal).filter(
+                        PendingBuySignal.status == "PENDING"
+                    ).all()
+                    
+                    for signal in pending_signals:
+                        signal.status = "MANUAL_CLEANUP"
+                        signal.failure_reason = "수동 정리 - 사용자 요청"
+                        cleanup_count += 1
+                        logger.info(f"🧹 [BUY_EXECUTOR] 수동 정리: {signal.stock_name}({signal.stock_code}) - {signal.detected_at}")
+                    
+                    session.commit()
+                    logger.info(f"🧹 [BUY_EXECUTOR] 총 {cleanup_count}개 PENDING 신호 수동 정리 완료")
+                    break
+                    
+                except Exception as e:
+                    logger.error(f"🧹 [BUY_EXECUTOR] 수동 정리 중 오류: {e}")
+                    session.rollback()
+                    continue
+                    
+            return cleanup_count
+                    
+        except Exception as e:
+            logger.error(f"🧹 [BUY_EXECUTOR] 수동 정리 중 전체 오류: {e}")
+            return 0
 
 # 전역 인스턴스
 buy_order_executor = BuyOrderExecutor()

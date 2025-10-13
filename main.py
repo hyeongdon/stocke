@@ -45,6 +45,7 @@ from strategy_manager import strategy_manager
 from watchlist_sync_manager import watchlist_sync_manager
 from stop_loss_manager import StopLossManager
 from scalping_strategy import scalping_manager
+from cleanup_scheduler import cleanup_scheduler
 
 config = Config()
 
@@ -120,6 +121,13 @@ async def lifespan(app: FastAPI):
         logger.info("🛡️ [STARTUP] 손절/익절 모니터링 시작")
     except Exception as e:
         logger.error(f"🛡️ [STARTUP] 손절/익절 모니터링 시작 실패: {e}")
+    
+    try:
+        # 자정 정리 스케줄러 시작
+        asyncio.create_task(cleanup_scheduler.start_scheduler())
+        logger.info("🕛 [STARTUP] 자정 정리 스케줄러 시작")
+    except Exception as e:
+        logger.error(f"🕛 [STARTUP] 자정 정리 스케줄러 시작 실패: {e}")
     
     yield
     
@@ -1203,6 +1211,31 @@ async def cleanup_old_signals(days: int = 7):
     except Exception as e:
         logger.error(f"신호 정리 오류: {e}")
         raise HTTPException(status_code=500, detail="신호 정리 중 오류가 발생했습니다.")
+
+@app.post("/signals/cleanup-pending")
+async def cleanup_pending_signals():
+    """매수대기 목록 수동 정리"""
+    try:
+        cleanup_count = await buy_order_executor.manual_cleanup_pending_signals()
+        return {
+            "message": f"매수대기 신호 {cleanup_count}개가 정리되었습니다.",
+            "cleanup_count": cleanup_count
+        }
+    except Exception as e:
+        logger.error(f"매수대기 정리 오류: {e}")
+        raise HTTPException(status_code=500, detail="매수대기 정리 중 오류가 발생했습니다.")
+
+@app.post("/signals/cleanup-expired")
+async def cleanup_expired_signals():
+    """만료된 매수대기 신호 정리 (자정 정리와 동일)"""
+    try:
+        await buy_order_executor.cleanup_expired_pending_signals()
+        return {
+            "message": "만료된 매수대기 신호가 정리되었습니다."
+        }
+    except Exception as e:
+        logger.error(f"만료 신호 정리 오류: {e}")
+        raise HTTPException(status_code=500, detail="만료 신호 정리 중 오류가 발생했습니다.")
 
 @app.get("/buy-executor/status")
 async def get_buy_executor_status():

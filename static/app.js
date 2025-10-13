@@ -44,6 +44,16 @@ class StockMonitorApp {
             refreshPendingBtn.addEventListener('click', () => this.loadPendingSignals());
         }
 
+        const cleanupPendingBtn = document.getElementById('cleanupPending');
+        if (cleanupPendingBtn) {
+            cleanupPendingBtn.addEventListener('click', () => this.cleanupPendingSignals());
+        }
+
+        const mobileCleanupPendingBtn = document.getElementById('mobileCleanupPending');
+        if (mobileCleanupPendingBtn) {
+            mobileCleanupPendingBtn.addEventListener('click', () => this.cleanupPendingSignals());
+        }
+
         const refreshAccountBtn = document.getElementById('refreshAccount');
         if (refreshAccountBtn) {
             refreshAccountBtn.addEventListener('click', () => this.loadAccountInfo());
@@ -512,6 +522,41 @@ class StockMonitorApp {
             
             // 종목 탭이 아닐 때는 자동 새로고침 중지
             this.stopAutoRefresh();
+        }
+    }
+
+    async cleanupPendingSignals() {
+        console.log('🧹 [CLEANUP] cleanupPendingSignals invoked');
+        
+        // 확인 대화상자
+        if (!confirm('매수대기 목록을 정리하시겠습니까?\n\n정리된 신호는 복구할 수 없습니다.')) {
+            return;
+        }
+        
+        try {
+            const response = await fetch('/signals/cleanup-pending', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
+            const result = await response.json();
+            console.log('🧹 [CLEANUP] cleanup result:', result);
+            
+            // 성공 메시지 표시
+            this.showAlert(`매수대기 신호 ${result.cleanup_count}개가 정리되었습니다.`, 'success');
+            
+            // 목록 새로고침
+            await this.loadPendingSignals();
+            
+        } catch (error) {
+            console.error('🧹 [CLEANUP] cleanup error:', error);
+            this.showAlert('매수대기 정리 중 오류가 발생했습니다.', 'danger');
         }
     }
 
