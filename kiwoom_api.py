@@ -713,7 +713,7 @@ class KiwoomAPI:
                                 
                                 if chart_list and len(chart_list) > 0:
                                     # 다양한 가격 필드명 시도
-                                    price_fields = ['close_price', 'price', 'current_price', 'close', 'last_price']
+                                    price_fields = ['cur_prc', 'close_price', 'price', 'current_price', 'close', 'last_price']
                                     current_price = None
                                     
                                     for price_field in price_fields:
@@ -1221,6 +1221,42 @@ class KiwoomAPI:
                 value = data.get(key, default)
                 return str(value) if value is not None else default
             
+            # 보유종목 데이터 추출
+            stk_acnt_evlt_prst = []
+            if 'stk_acnt_evlt_prst' in api_response:
+                stk_data = api_response['stk_acnt_evlt_prst']
+                logger.info(f"보유종목 원본 데이터: {stk_data}")
+                
+                if isinstance(stk_data, list):
+                    for item in stk_data:
+                        if isinstance(item, dict):
+                            stk_acnt_evlt_prst.append({
+                                "stk_cd": safe_get(item, 'stk_cd', ''),
+                                "stk_nm": safe_get(item, 'stk_nm', ''),
+                                "qty": safe_get(item, 'qty', '0'),
+                                "pur_amt": safe_get(item, 'pur_amt', '0'),
+                                "evlt_amt": safe_get(item, 'evlt_amt', '0'),
+                                "lspft_amt": safe_get(item, 'lspft_amt', '0'),
+                                "lspft_rt": safe_get(item, 'lspft_rt', '0'),
+                                "cur_pr": safe_get(item, 'cur_pr', '0'),
+                                "avg_pr": safe_get(item, 'avg_pr', '0')
+                            })
+                elif isinstance(stk_data, dict):
+                    # 단일 종목인 경우
+                    stk_acnt_evlt_prst.append({
+                        "stk_cd": safe_get(stk_data, 'stk_cd', ''),
+                        "stk_nm": safe_get(stk_data, 'stk_nm', ''),
+                        "qty": safe_get(stk_data, 'qty', '0'),
+                        "pur_amt": safe_get(stk_data, 'pur_amt', '0'),
+                        "evlt_amt": safe_get(stk_data, 'evlt_amt', '0'),
+                        "lspft_amt": safe_get(stk_data, 'lspft_amt', '0'),
+                        "lspft_rt": safe_get(stk_data, 'lspft_rt', '0'),
+                        "cur_pr": safe_get(stk_data, 'cur_pr', '0'),
+                        "avg_pr": safe_get(stk_data, 'avg_pr', '0')
+                    })
+            
+            logger.info(f"파싱된 보유종목 개수: {len(stk_acnt_evlt_prst)}")
+            
             result = {
                 "acnt_nm": safe_get(api_response, 'acnt_nm', ''),
                 "brch_nm": safe_get(api_response, 'brch_nm', ''),
@@ -1239,7 +1275,8 @@ class KiwoomAPI:
                 "lspft": safe_get(api_response, 'lspft'),
                 "tdy_lspft_rt": safe_get(api_response, 'tdy_lspft_rt'),
                 "lspft_ratio": safe_get(api_response, 'lspft_ratio'),
-                "lspft_rt": safe_get(api_response, 'lspft_rt')
+                "lspft_rt": safe_get(api_response, 'lspft_rt'),
+                "stk_acnt_evlt_prst": stk_acnt_evlt_prst
             }
             
             logger.info(f"파싱 완료: {result}")

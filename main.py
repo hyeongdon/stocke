@@ -1661,6 +1661,28 @@ async def get_scalping_status():
         logger.error(f"스캘핑 전략 상태 조회 오류: {e}")
         raise HTTPException(status_code=500, detail="스캘핑 전략 상태 조회 중 오류가 발생했습니다.")
 
+# ===== 매수대기 목록 정리 API =====
+
+@app.post("/cleanup/manual")
+async def manual_cleanup():
+    """매수대기 목록 수동 정리"""
+    try:
+        result = await cleanup_scheduler.manual_cleanup()
+        return result
+    except Exception as e:
+        logger.error(f"수동 정리 오류: {e}")
+        raise HTTPException(status_code=500, detail="수동 정리 중 오류가 발생했습니다.")
+
+@app.get("/cleanup/status")
+async def get_cleanup_status():
+    """정리 스케줄러 상태 조회"""
+    try:
+        status = await cleanup_scheduler.get_cleanup_status()
+        return status
+    except Exception as e:
+        logger.error(f"정리 상태 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail="정리 상태 조회 중 오류가 발생했습니다.")
+
 @app.delete("/signals/pending")
 async def clear_pending_signals():
     """매수대기 신호 목록 전체 삭제"""

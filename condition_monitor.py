@@ -48,8 +48,7 @@ class ConditionMonitor:
             if results:
                 logger.info(f"🔍 [CONDITION_MONITOR] 종목 검색 완료 - {len(results)}개 종목 발견 (신호 생성 없음)")
                 
-                # 조건식별 기준봉 전략 적용 (신호 생성 없이)
-                await self._apply_condition_reference_strategy(condition_id, condition_name, results)
+                # 기준봉 전략 제거됨 - 조건식 검색만 수행
                 
                 logger.info(f"🔍 [CONDITION_MONITOR] 조건식 {condition_id} 모니터링 완료 - {len(results)}개 종목 확인됨 (신호 생성 안함)")
                 return True

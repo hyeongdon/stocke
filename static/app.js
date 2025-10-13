@@ -534,7 +534,7 @@ class StockMonitorApp {
         }
         
         try {
-            const response = await fetch('/signals/cleanup-pending', {
+            const response = await fetch('/cleanup/manual', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -549,7 +549,7 @@ class StockMonitorApp {
             console.log('🧹 [CLEANUP] cleanup result:', result);
             
             // 성공 메시지 표시
-            this.showAlert(`매수대기 신호 ${result.cleanup_count}개가 정리되었습니다.`, 'success');
+            this.showAlert(result.message || `매수대기 신호 ${result.cleaned_count}개가 정리되었습니다.`, 'success');
             
             // 목록 새로고침
             await this.loadPendingSignals();

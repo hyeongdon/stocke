@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from kiwoom_api import KiwoomAPI
 from models import Position, SellOrder, AutoTradeSettings, get_db
+from config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -85,17 +86,43 @@ class StopLossManager:
             logger.error(f"🛡️ [STOP_LOSS] 포지션 모니터링 중 오류: {e}")
     
     async def _get_active_positions(self) -> List[Position]:
-        """활성 포지션 조회"""
+        """활성 포지션 조회 (실제 보유 종목과 대조)"""
         positions = []
         for db in get_db():
             try:
                 session: Session = db
-                positions = session.query(Position).filter(
+                db_positions = session.query(Position).filter(
                     Position.status == "HOLDING"
                 ).all()
+                
+                # 실제 계좌 보유 종목 조회
+                account_number = Config.KIWOOM_MOCK_ACCOUNT_NUMBER if Config.KIWOOM_USE_MOCK_ACCOUNT else Config.KIWOOM_ACCOUNT_NUMBER
+                account_balance = await self.kiwoom_api.get_account_balance(account_number)
+                
+                # 실제 보유 종목 코드 목록
+                actual_holdings = set()
+                if account_balance and 'stk_acnt_evlt_prst' in account_balance:
+                    for holding in account_balance['stk_acnt_evlt_prst']:
+                        actual_holdings.add(holding.get('stk_cd', ''))
+                    logger.debug(f"🛡️ [STOP_LOSS] 실제 보유 종목: {len(actual_holdings)}개 - {actual_holdings}")
+                else:
+                    logger.warning(f"🛡️ [STOP_LOSS] 실제 계좌 조회 실패 또는 보유 종목 없음")
+                
+                # DB 포지션 중 실제로 보유한 종목만 필터링
+                verified_positions = []
+                for pos in db_positions:
+                    if pos.stock_code in actual_holdings:
+                        verified_positions.append(pos)
+                        logger.debug(f"🛡️ [STOP_LOSS] 포지션 검증 완료: {pos.stock_name}({pos.stock_code})")
+                    else:
+                        logger.warning(f"🛡️ [STOP_LOSS] ⚠️ 실제 보유하지 않은 포지션 발견: {pos.stock_name}({pos.stock_code}) - 모니터링 제외")
+                
+                positions = verified_positions
                 break
             except Exception as e:
                 logger.error(f"🛡️ [STOP_LOSS] 포지션 조회 오류: {e}")
+                import traceback
+                logger.error(f"🛡️ [STOP_LOSS] 스택 트레이스: {traceback.format_exc()}")
                 continue
         
         return positions
@@ -145,10 +172,17 @@ class StopLossManager:
     async def _get_current_price(self, stock_code: str) -> Optional[int]:
         """현재가 조회"""
         try:
+            logger.debug(f"🛡️ [STOP_LOSS] 현재가 조회 시도: {stock_code}")
             current_price = await self.kiwoom_api.get_current_price(stock_code)
+            if current_price:
+                logger.debug(f"🛡️ [STOP_LOSS] 현재가 조회 성공: {stock_code} = {current_price:,}원")
+            else:
+                logger.warning(f"🛡️ [STOP_LOSS] 현재가 조회 반환값 None: {stock_code} (API 제한 또는 토큰 만료 가능성)")
             return current_price
         except Exception as e:
-            logger.error(f"🛡️ [STOP_LOSS] 현재가 조회 오류: {e}")
+            logger.error(f"🛡️ [STOP_LOSS] 현재가 조회 예외 발생: {stock_code} - {e}")
+            import traceback
+            logger.error(f"🛡️ [STOP_LOSS] 스택 트레이스: {traceback.format_exc()}")
             return None
     
     async def _update_position_price(self, position_id: int, current_price: int, profit_loss: int, profit_loss_rate: float):
