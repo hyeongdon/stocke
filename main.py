@@ -1488,7 +1488,7 @@ async def toggle_strategy(strategy_id: int, req: StrategyToggleRequest):
 async def start_strategy_monitoring():
     """전략 모니터링 시작"""
     try:
-        await condition_monitor.start_periodic_monitoring()
+        await strategy_manager.start_strategy_monitoring()
         return {"message": "전략 모니터링이 시작되었습니다."}
     except Exception as e:
         logger.error(f"전략 모니터링 시작 오류: {e}")
@@ -1498,7 +1498,7 @@ async def start_strategy_monitoring():
 async def stop_strategy_monitoring():
     """전략 모니터링 중지"""
     try:
-        await condition_monitor.stop_all_monitoring()
+        await strategy_manager.stop_strategy_monitoring()
         return {"message": "전략 모니터링이 중지되었습니다."}
     except Exception as e:
         logger.error(f"전략 모니터링 중지 오류: {e}")
@@ -1508,8 +1508,8 @@ async def stop_strategy_monitoring():
 async def get_strategy_status():
     """전략 모니터링 상태 조회"""
     try:
-        # condition_monitor에서 상태 조회
-        status = await condition_monitor.get_monitoring_status()
+        # strategy_manager에서 상태 조회
+        status = await strategy_manager.get_monitoring_status()
         return status
     except Exception as e:
         logger.error(f"전략 모니터링 상태 조회 오류: {e}")

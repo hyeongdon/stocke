@@ -1169,6 +1169,48 @@ class StrategyManager:
         except Exception as e:
             logger.error(f"🎯 [STRATEGY_MANAGER] 차이킨 오실레이터 신호 계산 오류: {e}")
             return None
+    
+    async def get_monitoring_status(self) -> Dict:
+        """전략 모니터링 상태 조회"""
+        try:
+            # 활성화된 전략 수
+            active_strategies = await self._get_active_strategies()
+            
+            # 관심종목 수
+            watchlist = await self._get_active_watchlist()
+            
+            # 최근 전략 신호 수
+            recent_signals_count = 0
+            for db in get_db():
+                session: Session = db
+                recent_signals = session.query(StrategySignal).filter(
+                    StrategySignal.detected_at >= datetime.now() - timedelta(hours=24)
+                ).count()
+                recent_signals_count = recent_signals
+                break
+            
+            return {
+                "is_running": self.running,
+                "active_strategies_count": len(active_strategies),
+                "active_strategies": [
+                    {
+                        "id": s.id,
+                        "name": s.strategy_name,
+                        "type": s.strategy_type
+                    }
+                    for s in active_strategies
+                ],
+                "watchlist_count": len(watchlist),
+                "recent_signals_24h": recent_signals_count,
+                "monitoring_interval": "60초 (1분)",
+                "chart_cache_duration": f"{self.cache_duration}초"
+            }
+        except Exception as e:
+            logger.error(f"🎯 [STRATEGY_MANAGER] 상태 조회 오류: {e}")
+            return {
+                "is_running": self.running,
+                "error": str(e)
+            }
 
 
 # 전역 인스턴스
