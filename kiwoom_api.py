@@ -683,22 +683,58 @@ class KiwoomAPI:
                             # API 호출 기록
                             api_rate_limiter.record_api_call(f"get_current_price_{stock_code}")
                             
-                            # 응답 데이터 파싱
+                            # 응답 데이터 파싱 및 디버깅
                             rt_cd = response_data.get("rt_cd")
                             return_msg = response_data.get("return_msg", "")
                             
-                            if rt_cd == "0":  # 성공
-                                chart_list = response_data.get('stk_dt_pole_chart_qry', [])
+                            # 디버깅: 전체 응답 구조 로깅
+                            logger.debug(f"현재가 조회 응답 - {stock_code}: rt_cd={rt_cd}, return_msg={return_msg}")
+                            logger.debug(f"응답 데이터 키: {list(response_data.keys())}")
+                            
+                            # 성공 조건 확인 (rt_cd가 "0"이거나 "정상적으로 처리되었습니다" 메시지)
+                            is_success = (rt_cd == "0" or rt_cd == "1" or "정상적으로 처리되었습니다" in return_msg)
+                            
+                            if is_success:
+                                # 다양한 가능한 필드명 시도
+                                chart_list = None
+                                possible_fields = [
+                                    'stk_dt_pole_chart_qry',
+                                    'output',
+                                    'data',
+                                    'chart_data',
+                                    'stock_data'
+                                ]
+                                
+                                for field in possible_fields:
+                                    if field in response_data and response_data[field]:
+                                        chart_list = response_data[field]
+                                        logger.debug(f"데이터 필드 발견: {field}")
+                                        break
                                 
                                 if chart_list and len(chart_list) > 0:
-                                    current_price = int(chart_list[0].get('close_price', 0))
-                                    logger.debug(f"현재가 조회 성공: {stock_code} = {current_price:,}원")
-                                    return current_price
+                                    # 다양한 가격 필드명 시도
+                                    price_fields = ['close_price', 'price', 'current_price', 'close', 'last_price']
+                                    current_price = None
+                                    
+                                    for price_field in price_fields:
+                                        if price_field in chart_list[0]:
+                                            current_price = int(chart_list[0].get(price_field, 0))
+                                            logger.debug(f"가격 필드 발견: {price_field} = {current_price}")
+                                            break
+                                    
+                                    if current_price and current_price > 0:
+                                        logger.info(f"현재가 조회 성공: {stock_code} = {current_price:,}원")
+                                        return current_price
+                                    else:
+                                        logger.warning(f"유효한 가격 데이터 없음: {stock_code}")
+                                        logger.debug(f"차트 데이터: {chart_list[0]}")
+                                        return None
                                 else:
-                                    logger.warning(f"현재가 데이터 없음: {stock_code}")
+                                    logger.warning(f"차트 데이터 없음: {stock_code}")
+                                    logger.debug(f"전체 응답: {response_data}")
                                     return None
                             else:
-                                logger.error(f"현재가 조회 실패: {stock_code} - {return_msg}")
+                                logger.error(f"현재가 조회 실패: {stock_code} - rt_cd={rt_cd}, return_msg={return_msg}")
                                 return None
                                 
                         except json.JSONDecodeError as e:

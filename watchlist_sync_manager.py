@@ -27,7 +27,7 @@ class WatchlistSyncManager:
         self.expired_threshold_hours = 6  # 6시간 동안 조건식에 없으면 제거 (더 빠른 정리)
         
         # 특정 조건식만 동기화하는 설정
-        self.target_condition_names = ["120선 돌파", "120일선돌파"]  # 동기화할 조건식 이름들
+        self.target_condition_names = [" 돌파", "120일선돌파"]  # 동기화할 조건식 이름들
         self.sync_only_target_conditions = True  # True면 target_condition_names만 동기화
         
     async def start_auto_sync(self):

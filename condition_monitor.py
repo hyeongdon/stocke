@@ -3,7 +3,7 @@ import asyncio
 import time
 from datetime import datetime, timedelta
 from typing import Dict, Set, List, Optional
-import pandas as pd
+# pandas 제거됨 - 기준봉 전략에서만 사용
 # DB 관련 import
 from kiwoom_api import KiwoomAPI
 from models import PendingBuySignal, get_db, AutoTradeCondition
@@ -27,10 +27,7 @@ class ConditionMonitor:
         self._monitor_task: Optional[asyncio.Task] = None
         self.start_time: Optional[datetime] = None  # 모니터링 시작 시간
         
-        # 조건식별 기준봉 전략 관련 속성
-        self.condition_reference_candles: Dict[int, Dict[str, Dict]] = {}  # {condition_id: {stock_code: candle_data}}
-        self.condition_strategies: Dict[int, Dict] = {}  # 조건식별 전략 설정
-        self._last_condition_candle_check: Dict[int, float] = {}  # 조건식별 마지막 기준봉 확인 시간
+        # 기준봉 전략 제거됨 - 현재 매매전략에 집중
     
     async def start_monitoring(self, condition_id: int, condition_name: str) -> bool:
         """조건식 모니터링 시작 (신호 생성 제거)"""
@@ -125,17 +122,7 @@ class ConditionMonitor:
 
         logger.info("🔍 [CONDITION_MONITOR] 모든 조건식 1회 모니터링 완료")
         
-        # 조건식별 기준봉 하락 확인 (5분마다 실행)
-        import time
-        current_time = time.time()
-        last_condition_check = getattr(self, '_last_condition_check', 0)
-        
-        if current_time - last_condition_check > 300:  # 5분 (300초)
-            for condition_id in self.condition_reference_candles.keys():
-                await self._check_condition_reference_drops(condition_id)
-            self._last_condition_check = current_time
-        else:
-            logger.debug("🔍 [CONDITION_REF] API 제한을 고려하여 조건식 기준봉 확인 건너뜀")
+        # 기준봉 전략 제거됨 - 현재 매매전략에 집중
 
     async def start_periodic_monitoring(self):
         """모든 조건식을 주기적으로 모니터링 (백그라운드 태스크로 실행)"""
@@ -226,8 +213,8 @@ class ConditionMonitor:
             "loop_sleep_seconds": self.loop_sleep_seconds,
             "signal_statistics": signal_stats,
             "api_status": api_status,
-            "reference_candles_count": sum(len(candles) for candles in self.condition_reference_candles.values()),
-            "active_strategies": len(self.condition_strategies),
+            "reference_candles_count": 0,  # 기준봉 전략 제거됨
+            "active_strategies": 0,  # 기준봉 전략 제거됨
             "watchlist_sync": watchlist_sync_status
         }
         
@@ -236,184 +223,10 @@ class ConditionMonitor:
 
 
 
-    async def _apply_condition_reference_strategy(self, condition_id: int, condition_name: str, stocks: List[Dict]):
-        """조건식별 기준봉 전략 적용"""
-        try:
-            logger.info(f"🔍 [CONDITION_REF] 조건식 {condition_name} 기준봉 전략 시작 - {len(stocks)}개 종목")
-            
-            # 조건식별 전략 설정 초기화 (없는 경우)
-            if condition_id not in self.condition_strategies:
-                self.condition_strategies[condition_id] = {
-                    "volume_threshold": 2.0,  # 평균 거래량의 2배 이상
-                    "gain_threshold": 3.0,    # 3% 이상 상승
-                    "target_drop_rate": 0.3,  # 30% 하락 시 매수
-                    "lookback_days": 15,      # 15일 평균 거래량
-                    "max_candle_age_days": 20 # 기준봉 최대 유효 기간
-                }
-            
-            # 조건식별 기준봉 저장소 초기화
-            if condition_id not in self.condition_reference_candles:
-                self.condition_reference_candles[condition_id] = {}
-            
-            # 각 종목에 대해 기준봉 찾기 (API 제한 고려하지 않고 진행)
-            for i, stock in enumerate(stocks):
-                try:
-                    stock_code = stock.get('stock_code', '')
-                    stock_name = stock.get('stock_name', '')
-                    
-                    if not stock_code:
-                        continue
-                    
-                    logger.debug(f"🔍 [CONDITION_REF] 종목 기준봉 분석: {stock_name}({stock_code})")
-                    await self._find_condition_reference_candle(condition_id, stock_code, stock_name)
-                    
-                    # API 호출 간격 조절 (0.5초 대기)
-                    if i < len(stocks) - 1:
-                        import asyncio
-                        await asyncio.sleep(0.5)
-                        
-                except Exception as stock_error:
-                    logger.error(f"🔍 [CONDITION_REF] 종목 {stock.get('stock_code', '')} 처리 중 오류: {stock_error}")
-                    continue
-            
-            logger.info(f"🔍 [CONDITION_REF] 조건식 {condition_name} 기준봉 전략 완료")
-            
-        except Exception as e:
-            logger.error(f"🔍 [CONDITION_REF] 조건식 기준봉 전략 오류: {e}")
-            import traceback
-            logger.error(f"🔍 [CONDITION_REF] 스택 트레이스: {traceback.format_exc()}")
+    # 기준봉 전략 제거됨 - 현재 매매전략에 집중
 
-    async def _find_condition_reference_candle(self, condition_id: int, stock_code: str, stock_name: str):
-        """조건식별 기준봉 찾기"""
-        try:
-            # 차트 데이터 조회
-            chart_data = await self.kiwoom_api.get_stock_chart_data(stock_code, "1D")
-            
-            if not chart_data or len(chart_data) < 15:
-                logger.debug(f"🔍 [CONDITION_REF] 차트 데이터 부족: {stock_name}({stock_code})")
-                return
-            
-            # DataFrame으로 변환
-            df = pd.DataFrame(chart_data)
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
-            df = df.sort_values('timestamp')
-            
-            strategy = self.condition_strategies[condition_id]
-            lookback_days = strategy['lookback_days']
-            volume_threshold = strategy['volume_threshold']
-            gain_threshold = strategy['gain_threshold']
-            
-            # 최근 데이터에서 기준봉 찾기
-            for i in range(len(df) - 1, max(0, len(df) - 30), -1):  # 최근 30일 내에서만
-                row = df.iloc[i]
-                
-                # 1. 거래량 스파이크 확인
-                recent_volume = df.iloc[max(0, i-lookback_days):i+1]['volume']
-                avg_volume = recent_volume.mean()
-                volume_ratio = row['volume'] / avg_volume if avg_volume > 0 else 0
-                
-                # 2. 상승률 확인
-                prev_close = df.iloc[i-1]['close'] if i > 0 else row['open']
-                change_rate = ((row['close'] - prev_close) / prev_close) * 100 if prev_close > 0 else 0
-                
-                # 3. 조건 확인
-                is_volume_spike = volume_ratio >= volume_threshold
-                is_high_gain = change_rate >= gain_threshold
-                
-                if is_volume_spike and is_high_gain:
-                    # 기준봉 발견
-                    candle_data = {
-                        "stock_code": stock_code,
-                        "stock_name": stock_name,
-                        "timestamp": row['timestamp'],
-                        "open_price": int(row['open']),
-                        "high_price": int(row['high']),
-                        "low_price": int(row['low']),
-                        "close_price": int(row['close']),
-                        "volume": int(row['volume']),
-                        "change_rate": change_rate,
-                        "volume_ratio": volume_ratio,
-                        "is_volume_spike": is_volume_spike,
-                        "is_high_gain": is_high_gain,
-                        "strategy": strategy
-                    }
-                    
-                    # 조건식별 기준봉 저장
-                    self.condition_reference_candles[condition_id][stock_code] = candle_data
-                    
-                    logger.info(f"🔍 [CONDITION_REF] 기준봉 발견: {stock_name}({stock_code}) - "
-                              f"{row['timestamp'].strftime('%Y-%m-%d')} "
-                              f"거래량비율: {volume_ratio:.2f}, 상승률: {change_rate:.2f}%")
-                    break
-            
-        except Exception as e:
-            logger.error(f"🔍 [CONDITION_REF] 기준봉 찾기 오류 {stock_code}: {e}")
-            # API 제한 오류인 경우 더 긴 대기 시간 설정
-            if "허용된 요청 개수를 초과" in str(e) or "429" in str(e) or "API 제한" in str(e):
-                logger.warning(f"🔍 [CONDITION_REF] API 제한 감지 - 조건식 기준봉 전략 일시 중단")
-                self._last_condition_check = time.time() + 1800  # 30분 후 재시도
 
-    async def _check_condition_reference_drops(self, condition_id: int):
-        """조건식별 기준봉 하락 확인 및 매수 신호 생성"""
-        try:
-            if condition_id not in self.condition_reference_candles:
-                return
-            
-            strategy = self.condition_strategies.get(condition_id, {})
-            target_drop_rate = strategy.get('target_drop_rate', 0.3)
-            max_candle_age_days = strategy.get('max_candle_age_days', 20)
-            
-            current_time = datetime.now()
-            candles_to_remove = []
-            
-            for stock_code, candle in self.condition_reference_candles[condition_id].items():
-                try:
-                    # 기준봉이 너무 오래된 경우 제거
-                    if (current_time - candle['timestamp']).days > max_candle_age_days:
-                        candles_to_remove.append(stock_code)
-                        logger.info(f"🔍 [CONDITION_REF] 오래된 기준봉 제거: {candle['stock_name']}({stock_code})")
-                        continue
-                    
-                    # 현재가 조회
-                    chart_data = await self.kiwoom_api.get_stock_chart_data(stock_code, "1D")
-                    if not chart_data or len(chart_data) == 0:
-                        continue
-                    
-                    current_price = int(chart_data[-1].get('close', 0))
-                    target_price = int(candle['close_price'] * (1 - target_drop_rate))
-                    
-                    if current_price <= target_price:
-                        # 목표 하락 달성 - 매수 신호 생성
-                        await self._create_condition_reference_buy_signal(
-                            condition_id, stock_code, candle['stock_name'], 
-                            current_price, target_price, candle
-                        )
-                        candles_to_remove.append(stock_code)
-                    else:
-                        logger.debug(f"🔍 [CONDITION_REF] 아직 하락 미달성: {candle['stock_name']}({stock_code}) - "
-                                   f"현재가: {current_price}, 목표가: {target_price}")
-                
-                except Exception as stock_error:
-                    logger.error(f"🔍 [CONDITION_REF] 종목 {stock_code} 확인 중 오류: {stock_error}")
-                    continue
-            
-            # 처리된 기준봉들 제거
-            for stock_code in candles_to_remove:
-                if stock_code in self.condition_reference_candles[condition_id]:
-                    del self.condition_reference_candles[condition_id][stock_code]
-            
-        except Exception as e:
-            logger.error(f"🔍 [CONDITION_REF] 기준봉 하락 확인 오류: {e}")
-            # API 제한 오류인 경우 더 긴 대기 시간 설정
-            if "허용된 요청 개수를 초과" in str(e) or "429" in str(e) or "API 제한" in str(e):
-                logger.warning(f"🔍 [CONDITION_REF] API 제한 감지 - 조건식 기준봉 하락 확인 일시 중단")
-                self._last_condition_check = time.time() + 1800  # 30분 후 재시도
 
-    async def _create_condition_reference_buy_signal(self, condition_id: int, stock_code: str, stock_name: str, 
-                                                   current_price: int, target_price: int, candle: Dict):
-        """조건식 기준봉 전략 매수 신호 생성 (비활성화됨)"""
-        # 신호 생성 기능이 제거되어 비활성화됨
-        logger.debug(f"🔍 [CONDITION_REF] 기준봉 신호 생성 비활성화됨 - {stock_name}({stock_code})")
         return
 
 # 전역 인스턴스

@@ -1628,6 +1628,64 @@ async def get_scalping_status():
         logger.error(f"스캘핑 전략 상태 조회 오류: {e}")
         raise HTTPException(status_code=500, detail="스캘핑 전략 상태 조회 중 오류가 발생했습니다.")
 
+@app.delete("/signals/pending")
+async def clear_pending_signals():
+    """매수대기 신호 목록 전체 삭제"""
+    try:
+        deleted_count = 0
+        for db in get_db():
+            session: Session = db
+            try:
+                # PENDING 상태인 모든 신호 삭제
+                pending_signals = session.query(PendingBuySignal).filter(
+                    PendingBuySignal.status == "PENDING"
+                ).all()
+                
+                for signal in pending_signals:
+                    session.delete(signal)
+                    deleted_count += 1
+                
+                session.commit()
+                logger.info(f"매수대기 신호 {deleted_count}개 삭제 완료")
+                break
+            except Exception as e:
+                logger.error(f"매수대기 신호 삭제 오류: {e}")
+                session.rollback()
+                continue
+        
+        return {"message": f"매수대기 신호 {deleted_count}개가 삭제되었습니다."}
+    except Exception as e:
+        logger.error(f"매수대기 신호 삭제 중 오류: {e}")
+        raise HTTPException(status_code=500, detail="매수대기 신호 삭제 중 오류가 발생했습니다.")
+
+@app.delete("/signals/all")
+async def clear_all_signals():
+    """모든 신호 목록 삭제 (PENDING, ORDERED, FAILED 등)"""
+    try:
+        deleted_count = 0
+        for db in get_db():
+            session: Session = db
+            try:
+                # 모든 신호 삭제
+                all_signals = session.query(PendingBuySignal).all()
+                
+                for signal in all_signals:
+                    session.delete(signal)
+                    deleted_count += 1
+                
+                session.commit()
+                logger.info(f"모든 신호 {deleted_count}개 삭제 완료")
+                break
+            except Exception as e:
+                logger.error(f"모든 신호 삭제 오류: {e}")
+                session.rollback()
+                continue
+        
+        return {"message": f"모든 신호 {deleted_count}개가 삭제되었습니다."}
+    except Exception as e:
+        logger.error(f"모든 신호 삭제 중 오류: {e}")
+        raise HTTPException(status_code=500, detail="모든 신호 삭제 중 오류가 발생했습니다.")
+
 # ===== 전략별 차트 시각화 API =====
 
 @app.get("/chart/strategy/{stock_code}/{strategy_type}")
