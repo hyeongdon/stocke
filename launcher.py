@@ -56,8 +56,14 @@ class ServerLauncher:
         
     def start_server(self):
         try:
-            # 가상환경 활성화 후 uvicorn 실행
-            cmd = "venv\\Scripts\\activate && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+            # uvicorn 실행 (가상환경 없이도 동작)
+            venv_path = os.path.join(os.getcwd(), "venv", "Scripts", "python.exe")
+            if os.path.exists(venv_path):
+                # 가상환경이 있으면 사용
+                cmd = f'"{venv_path}" -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload'
+            else:
+                # 없으면 시스템 Python 사용
+                cmd = "uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
             self.server_process = subprocess.Popen(cmd, shell=True, cwd=os.getcwd())
             
             self.start_btn.config(state="disabled")

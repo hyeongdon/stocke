@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>키움 HTS 스타일 - 샘플</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <!-- HTS 스타일 적용 -->
+    <link rel="stylesheet" href="/static/style-hts.css">
+    <style>
+        /* 폰트 렌더링 고정 */
+        html {
+            font-size: 12px !important;
+            -webkit-text-size-adjust: 100%;
+        }
+        body {
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            text-rendering: optimizeLegibility;
+            font-weight: 500;
+        }
+        .hts-grid, .hts-grid th, .hts-grid td {
+            font-weight: 500;
+        }
+        .up, .down {
+            font-weight: 600;
+        }
+        
+        /* 추가 그리드 스타일 */
+        .hts-grid {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 11px;
+        }
+        .hts-grid th {
+            background: linear-gradient(to bottom, #e0e0e0 0%, #c8c8c8 100%);
+            border: 1px solid #a0a0a0;
+            padding: 2px 3px;
+            font-weight: bold;
+            text-align: center;
+            white-space: nowrap;
+        }
+        .hts-grid td {
+            border: 1px solid #c8c8c8;
+            padding: 1px 3px;
+            white-space: nowrap;
+        }
+        .hts-grid tr:nth-child(odd) td {
+            background: #f8f8f8;
+        }
+        .hts-grid tr:nth-child(even) td {
+            background: #ffffff;
+        }
+        .hts-grid tr:hover td {
+            background: #ffffcc !important;
+        }
+        .hts-grid tr.selected td {
+            background: #fff3cd !important;
+        }
+        .hts-grid .num {
+            font-family: 'Courier New', Consolas, monospace;
+            text-align: right;
+        }
+        .hts-grid .name {
+            text-align: left;
+            max-width: 80px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .hts-grid .center {
+            text-align: center;
+        }
+        .up { color: #ff0000; font-weight: bold; }
+        .down { color: #0000ff; font-weight: bold; }
+        .chart-icon {
+            width: 14px;
+            height: 14px;
+            background: linear-gradient(to bottom, #e8e8e8, #c0c0c0);
+            border: 1px solid #888;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 8px;
+            cursor: pointer;
+        }
+        .chart-icon:hover {
+            background: #fff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid">
+        <!-- 헤더 -->
+        <header class="bg-primary text-white">
+            <div class="d-flex justify-content-between align-items-center">
+                <h1>통합 모니터링 (HTS 스타일)</h1>
+                <div class="selected-stock-info">
+                    <span style="color:#fff;">삼성전자 (005930)</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- 탭 -->
+        <ul class="nav nav-tabs">
+            <li class="nav-item">
+                <button class="nav-link active">종목/조건식</button>
+            </li>
+            <li class="nav-item">
+                <button class="nav-link">전략매매</button>
+            </li>
+            <li class="nav-item">
+                <button class="nav-link">계좌/매매</button>
+            </li>
+        </ul>
+
+        <!-- 메인 -->
+        <div class="row">
+            <!-- 조건식 -->
+            <div class="col-md-2">
+                <div class="card">
+                    <div class="card-header">
+                        <span>조건식</span>
+                        <button class="btn btn-sm btn-outline-primary" style="float:right;">새로고침</button>
+                    </div>
+                    <div class="card-body" style="padding:0 !important;">
+                        <div class="condition-item active">
+                            <h6>120일선 돌파</h6>
+                            <small>ID:1 <span class="badge bg-danger">자동</span></small>
+                        </div>
+                        <div class="condition-item">
+                            <h6>급등주 포착</h6>
+                            <small>ID:2</small>
+                        </div>
+                        <div class="condition-item">
+                            <h6>거래량 급증</h6>
+                            <small>ID:3</small>
+                        </div>
+                        <div class="condition-item">
+                            <h6>골든크로스</h6>
+                            <small>ID:4 <span class="badge bg-danger">자동</span></small>
+                        </div>
+                        <div class="condition-item">
+                            <h6>MACD 돌파</h6>
+                            <small>ID:5</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 종목 그리드 -->
+            <div class="col-md-10">
+                <div class="card">
+                    <div class="card-header">
+                        <span>종목정보 (12종목)</span>
+                        <div style="float:right;">
+                            <button class="btn btn-sm btn-outline-primary">새로고침</button>
+                            <button class="btn btn-sm btn-success">모니터링</button>
+                        </div>
+                    </div>
+                    <div class="card-body" style="padding:0 !important; overflow-x: auto;">
+                        <table class="hts-grid">
+                            <thead>
+                                <tr>
+                                    <th style="width:20px;">순</th>
+                                    <th style="width:75px;">종목명</th>
+                                    <th style="width:55px;">현재가</th>
+                                    <th style="width:50px;">전일비</th>
+                                    <th style="width:45px;">등락률</th>
+                                    <th style="width:65px;">거래량</th>
+                                    <th style="width:60px;">거래대금</th>
+                                    <th style="width:50px;">시가</th>
+                                    <th style="width:50px;">고가</th>
+                                    <th style="width:50px;">저가</th>
+                                    <th style="width:55px;">전일종가</th>
+                                    <th style="width:60px;">시가총액</th>
+                                    <th style="width:25px;">차</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr class="selected">
+                                    <td class="center">1</td>
+                                    <td class="name">삼성전자</td>
+                                    <td class="num up">71,800</td>
+                                    <td class="num up">▲1,200</td>
+                                    <td class="num up">+1.70</td>
+                                    <td class="num">12,345,678</td>
+                                    <td class="num">8,862억</td>
+                                    <td class="num">70,800</td>
+                                    <td class="num up">72,100</td>
+                                    <td class="num">70,500</td>
+                                    <td class="num">70,600</td>
+                                    <td class="num">428조</td>
+                                    <td class="center"><span class="chart-icon">▤</span></td>
+                                </tr>
+                                <tr>
+                                    <td class="center">2</td>
+                                    <td class="name">SK하이닉스</td>
+                                    <td class="num up">185,500</td>
+                                    <td class="num up">▲4,500</td>
+                                    <td class="num up">+2.49</td>
+                                    <td class="num">3,456,789</td>
+                                    <td class="num">6,412억</td>
+                                    <td class="num">182,000</td>
+                                    <td class="num up">186,500</td>
+                                    <td class="num">181,500</td>
+                                    <td class="num">181,000</td>
+                                    <td class="num">135조</td>
+                                    <td class="center"><span class="chart-icon">▤</span></td>
+                                </tr>
+                                <tr>
+                                    <td class="center">3</td>
+                                    <td class="name">LG에너지솔루션</td>
+                                    <td class="num down">385,000</td>
+                                    <td class="num down">▼8,500</td>
+                                    <td class="num down">-2.16</td>
+                                    <td class="num">567,890</td>
+                                    <td class="num">2,186억</td>
+                                    <td class="num">392,000</td>
+                                    <td class="num">393,500</td>
+                                    <td class="num down">384,000</td>
+                                    <td class="num">393,500</td>
+                                    <td class="num">90조</td>
+                                    <td class="center"><span class="chart-icon">▤</span></td>
+                                </tr>
+                                <tr>
+                                    <td class="center">4</td>
+                                    <td class="name">현대차</td>
+                                    <td class="num up">245,500</td>
+                                    <td class="num up">▲3,000</td>
+                                    <td class="num up">+1.24</td>
+                                    <td class="num">1,234,567</td>
+                                    <td class="num">3,031억</td>
+                                    <td class="num">243,000</td>
+                                    <td class="num up">246,500</td>
+                                    <td class="num">242,500</td>
+                                    <td class="num">242,500</td>
+                                    <td class="num">52조</td>
+                                    <td class="center"><span class="chart-icon">▤</span></td>
+                                </tr>
+                                <tr>
+                                    <td class="center">5</td>
+                                    <td class="name">NAVER</td>
+                                    <td class="num">192,000</td>
+                                    <td class="num">0</td>
+                                    <td class="num">0.00</td>
+                                    <td class="num">789,012</td>
+                                    <td class="num">1,515억</td>
+                                    <td class="num">192,500</td>
+                                    <td class="num">193,500</td>
+                                    <td class="num">191,000</td>
+                                    <td class="num">192,000</td>
+                                    <td class="num">31조</td>
+                                    <td class="center"><span class="chart-icon">▤</span></td>
+                                </tr>
+                                <tr>
+                                    <td class="center">6</td>
+                                    <td class="name">카카오</td>
+                                    <td class="num down">45,200</td>
+                                    <td class="num down">▼800</td>
+                                    <td class="num down">-1.74</td>
+                                    <td class="num">2,345,678</td>
+                                    <td class="num">1,060억</td>
+                                    <td class="num">46,000</td>
+                                    <td class="num">46,200</td>
+                                    <td class="num down">45,050</td>
+                                    <td class="num">46,000</td>
+                                    <td class="num">20조</td>
+                                    <td class="center"><span class="chart-icon">▤</span></td>
+                                </tr>
+                                <tr>
+                                    <td class="center">7</td>
+                                    <td class="name">포스코홀딩스</td>
+                                    <td class="num up">315,500</td>
+                                    <td class="num up">▲5,500</td>
+                                    <td class="num up">+1.77</td>
+                                    <td class="num">456,789</td>
+                                    <td class="num">1,441억</td>
+                                    <td class="num">311,000</td>
+                                    <td class="num up">316,500</td>
+                                    <td class="num">310,500</td>
+                                    <td class="num">310,000</td>
+                                    <td class="num">27조</td>
+                                    <td class="center"><span class="chart-icon">▤</span></td>
+                                </tr>
+                                <tr>
+                                    <td class="center">8</td>
+                                    <td class="name">셀트리온</td>
+                                    <td class="num up">178,500</td>
+                                    <td class="num up">▲2,500</td>
+                                    <td class="num up">+1.42</td>
+                                    <td class="num">678,901</td>
+                                    <td class="num">1,212억</td>
+                                    <td class="num">176,500</td>
+                                    <td class="num up">179,500</td>
+                                    <td class="num">176,000</td>
+                                    <td class="num">176,000</td>
+                                    <td class="num">24조</td>
+                                    <td class="center"><span class="chart-icon">▤</span></td>
+                                </tr>
+                                <tr>
+                                    <td class="center">9</td>
+                                    <td class="name">KB금융</td>
+                                    <td class="num up">78,900</td>
+                                    <td class="num up">▲1,100</td>
+                                    <td class="num up">+1.41</td>
+                                    <td class="num">345,678</td>
+                                    <td class="num">272억</td>
+                                    <td class="num">77,900</td>
+                                    <td class="num up">79,200</td>
+                                    <td class="num">77,800</td>
+                                    <td class="num">77,800</td>
+                                    <td class="num">32조</td>
+                                    <td class="center"><span class="chart-icon">▤</span></td>
+                                </tr>
+                                <tr>
+                                    <td class="center">10</td>
+                                    <td class="name">삼성SDI</td>
+                                    <td class="num down">352,000</td>
+                                    <td class="num down">▼5,000</td>
+                                    <td class="num down">-1.40</td>
+                                    <td class="num">234,567</td>
+                                    <td class="num">825억</td>
+                                    <td class="num">356,000</td>
+                                    <td class="num">358,500</td>
+                                    <td class="num down">351,000</td>
+                                    <td class="num">357,000</td>
+                                    <td class="num">24조</td>
+                                    <td class="center"><span class="chart-icon">▤</span></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 하단 -->
+        <div class="row mt-1">
+            <!-- 뉴스 -->
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <span>뉴스</span>
+                        <span class="badge bg-primary" style="float:right;">삼성전자</span>
+                    </div>
+                    <div class="card-body" style="max-height:150px; overflow-y:auto; padding:2px !important;">
+                        <div class="news-item">
+                            <div class="news-title"><a href="#">삼성전자, AI 반도체 수요 증가로 4분기 실적 기대감 상승</a></div>
+                            <div class="news-meta">2024-12-29 14:30 | 매일경제</div>
+                        </div>
+                        <div class="news-item">
+                            <div class="news-title"><a href="#">HBM 3세대 양산 본격화... 삼성, SK하이닉스와 경쟁 심화</a></div>
+                            <div class="news-meta">2024-12-29 13:15 | 한국경제</div>
+                        </div>
+                        <div class="news-item">
+                            <div class="news-title"><a href="#">외국인, 삼성전자 5거래일 연속 순매수... 수급 개선</a></div>
+                            <div class="news-meta">2024-12-29 11:00 | 이데일리</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 계좌 -->
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <span>계좌현황</span>
+                        <span class="badge bg-primary" style="float:right;">모의투자</span>
+                    </div>
+                    <div class="card-body" style="padding:2px !important;">
+                        <table class="hts-grid" style="margin-bottom:4px;">
+                            <tr>
+                                <th style="width:80px;">총자산</th>
+                                <td class="num" style="width:100px;">52,345,678</td>
+                                <th style="width:80px;">평가손익</th>
+                                <td class="num up" style="width:100px;">+2,345,678</td>
+                                <th style="width:60px;">수익률</th>
+                                <td class="num up" style="width:60px;">+4.69%</td>
+                            </tr>
+                        </table>
+                        <table class="hts-grid">
+                            <thead>
+                                <tr>
+                                    <th>종목명</th>
+                                    <th>보유수량</th>
+                                    <th>매입가</th>
+                                    <th>현재가</th>
+                                    <th>평가금액</th>
+                                    <th>손익</th>
+                                    <th>수익률</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td class="name">삼성전자</td>
+                                    <td class="num">100</td>
+                                    <td class="num">68,200</td>
+                                    <td class="num up">71,800</td>
+                                    <td class="num">7,180,000</td>
+                                    <td class="num up">+360,000</td>
+                                    <td class="num up">+5.28%</td>
+                                </tr>
+                                <tr>
+                                    <td class="name">SK하이닉스</td>
+                                    <td class="num">30</td>
+                                    <td class="num">179,300</td>
+                                    <td class="num up">185,500</td>
+                                    <td class="num">5,565,000</td>
+                                    <td class="num up">+186,000</td>
+                                    <td class="num up">+3.46%</td>
+                                </tr>
+                                <tr>
+                                    <td class="name">NAVER</td>
+                                    <td class="num">50</td>
+                                    <td class="num">194,400</td>
+                                    <td class="num down">192,000</td>
+                                    <td class="num">9,600,000</td>
+                                    <td class="num down">-120,000</td>
+                                    <td class="num down">-1.23%</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 스타일 전환 -->
+        <div style="position:fixed; bottom:10px; right:10px; z-index:9999;">
+            <a href="/static/index.html" class="btn btn-sm" style="background:#ffc107; color:#000; border:1px solid #000;">
+                기존 스타일
+            </a>
+            <a href="/static/sample-classic.html" class="btn btn-sm" style="background:#333; color:#fff; border:1px solid #000;">
+                다크 스타일
+            </a>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
+

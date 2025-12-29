@@ -19,8 +19,8 @@ class Config:
     KIWOOM_APP_SECRET = os.getenv("KIWOOM_APP_SECRET", "")
     
     # 모의투자용 키
-    KIWOOM_MOCK_APP_KEY = os.getenv("KIWOOM_MOCK_APP_KEY", "KThQv1vmgpqMoMnaIvU2sJ01M-MuU31wHah9bF49v8o")
-    KIWOOM_MOCK_APP_SECRET = os.getenv("KIWOOM_MOCK_APP_SECRET", "Pfow2kdUZTUo50mC2LzHBWdlqzIaDOkKRe4s4rQHxaA")
+    KIWOOM_MOCK_APP_KEY = os.getenv("KIWOOM_MOCK_APP_KEY", "FPGQVcPW75MwD4E-_0hm5_bL4uvt3kCxDhFdPy-VDKc")
+    KIWOOM_MOCK_APP_SECRET = os.getenv("KIWOOM_MOCK_APP_SECRET", "hZgxlIcThSg92GuxgaX_pTSmgjO7b4Hby1JJeDCQWMA")
     
     KIWOOM_BASE_URL = os.getenv("KIWOOM_BASE_URL", "https://openapi.kiwoom.com/v1")
     # WebSocket URL (실전/모의 분리)
