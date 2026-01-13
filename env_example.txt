@@ -4,8 +4,9 @@ KIWOOM_APP_KEY=your_real_app_key_here
 KIWOOM_APP_SECRET=your_real_app_secret_here
 
 # 모의투자용 키
-KIWOOM_MOCK_APP_KEY=KThQv1vmgpqMoMnaIvU2sJ01M-MuU31wHah9bF49v8o
-KIWOOM_MOCK_APP_SECRET=Pfow2kdUZTUo50mC2LzHBWdlqzIaDOkKRe4s4rQHxaA
+# 신청일: 2026-01-13, 만료일: 2026-03-29
+KIWOOM_MOCK_APP_KEY=Y-5kFGhoiKXPt5aQ-qnDoprjkuR4xh0biY9-hPkGBPI
+KIWOOM_MOCK_APP_SECRET=mUstvGMXN0HDp_qVWNeeqZydX2lMkVpaeQSB0Fy9HlQ
 
 KIWOOM_BASE_URL=https://openapi.kiwoom.com/v1
 KIWOOM_WS_URL=wss://openapi.kiwoom.com/v1/ws
