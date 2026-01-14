@@ -300,6 +300,7 @@ async def get_pending_signals(limit: int = 100, status: str = "PENDING"):
                     "stock_name": r.stock_name,
                     "detected_at": r.detected_at.isoformat() if r.detected_at else None,
                     "status": r.status,
+                    "failure_reason": getattr(r, "failure_reason", None),
                     "current_price": current_price,
                     "target_quantity": target_quantity,
                     "target_amount": target_amount,
@@ -1097,19 +1098,26 @@ class BuyOrderRequest(BaseModel):
     stock_code: str
     quantity: int
     price: int = 0  # 0이면 시장가
-    order_type: str = "01"  # 01: 시장가, 00: 지정가
+    order_type: str = "3"  # "3": 시장가, "0": 지정가(보통)  (키움 kt10000 기준)
 
 @app.post("/trading/buy")
 async def place_buy_order(req: BuyOrderRequest):
     """주식 매수 주문"""
     try:
         logger.info(f"매수 주문 요청: {req.stock_code}, 수량: {req.quantity}, 가격: {req.price}")
+
+        # UI에서 들어오는 코드(01/00) 호환: 01(시장가)->3, 00(지정가)->0
+        mapped_order_type = req.order_type
+        if mapped_order_type in ("01", "market", "MARKET"):
+            mapped_order_type = "3"
+        elif mapped_order_type in ("00", "limit", "LIMIT"):
+            mapped_order_type = "0"
         
         result = await kiwoom_api.place_buy_order(
             stock_code=req.stock_code,
             quantity=req.quantity,
             price=req.price,
-            order_type=req.order_type
+            order_type=mapped_order_type
         )
         
         if result.get("success"):

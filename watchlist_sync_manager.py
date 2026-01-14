@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from kiwoom_api import KiwoomAPI
 from models import WatchlistStock, ConditionWatchlistSync, AutoTradeCondition, get_db
 from api_rate_limiter import api_rate_limiter
+from config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -23,12 +24,12 @@ class WatchlistSyncManager:
         
         # 동기화 설정
         self.auto_sync_enabled = True
-        self.remove_expired_stocks = True
-        self.expired_threshold_hours = 6  # 6시간 동안 조건식에 없으면 제거 (더 빠른 정리)
+        self.remove_expired_stocks = Config.WATCHLIST_SYNC_REMOVE_EXPIRED_STOCKS
+        self.expired_threshold_hours = Config.WATCHLIST_SYNC_EXPIRED_THRESHOLD_HOURS
         
         # 특정 조건식만 동기화하는 설정
-        self.target_condition_names = [" 돌파", "120일선돌파"]  # 동기화할 조건식 이름들
-        self.sync_only_target_conditions = True  # True면 target_condition_names만 동기화
+        self.target_condition_names = Config.WATCHLIST_SYNC_TARGET_CONDITION_NAMES  # 동기화할 조건식 이름들
+        self.sync_only_target_conditions = Config.WATCHLIST_SYNC_ONLY_TARGET_CONDITIONS  # True면 target_condition_names만 동기화
         
     async def start_auto_sync(self):
         """자동 동기화 시작"""

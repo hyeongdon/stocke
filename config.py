@@ -29,6 +29,9 @@ class Config:
     KIWOOM_ACCOUNT_NUMBER = os.getenv("KIWOOM_ACCOUNT_NUMBER", "")  # 추가
     KIWOOM_MOCK_ACCOUNT_NUMBER = os.getenv("KIWOOM_MOCK_ACCOUNT_NUMBER", "81109058")  # 모의투자 계좌
     KIWOOM_USE_MOCK_ACCOUNT = os.getenv("KIWOOM_USE_MOCK_ACCOUNT", "true").lower() == "true"  # 모의투자 사용 여부
+    # 일부 주문 API에서 계좌 비밀번호(4자리 등)를 요구할 수 있어 옵션으로 지원
+    KIWOOM_ACCOUNT_PASSWORD = os.getenv("KIWOOM_ACCOUNT_PASSWORD", "")
+    KIWOOM_MOCK_ACCOUNT_PASSWORD = os.getenv("KIWOOM_MOCK_ACCOUNT_PASSWORD", "")
     KIWOOM_WS_RECONNECT_INTERVAL = int(os.getenv("KIWOOM_WS_RECONNECT_INTERVAL", 5))  # 초 단위
     KIWOOM_WS_PING_INTERVAL = int(os.getenv("KIWOOM_WS_PING_INTERVAL", 30))  # 초 단위
     
@@ -39,6 +42,21 @@ class Config:
     # 모니터링 설정
     CONDITION_CHECK_INTERVAL = int(os.getenv("CONDITION_CHECK_INTERVAL", 60))  # 초 단위
     SIGNAL_DEDUPLICATION_WINDOW = int(os.getenv("SIGNAL_DEDUPLICATION_WINDOW", 300))  # 초 단위 (5분)
+
+    # ===== 자동매매 안전장치 / 테스트 옵션 =====
+    # 조건식 스캔 1회당 조건식별 신호 생성 상한(폭주 방지). 기본 1개만 생성.
+    MAX_SIGNALS_PER_CONDITION_SCAN = int(os.getenv("MAX_SIGNALS_PER_CONDITION_SCAN", 1))
+    # 장시간 체크 우회(테스트용). 실계좌에서는 기본 False 권장.
+    ALLOW_OUT_OF_MARKET_TRADING = os.getenv("ALLOW_OUT_OF_MARKET_TRADING", "false").lower() == "true"
+
+    # ===== 관심종목 동기화 설정 =====
+    # 예: WATCHLIST_SYNC_TARGET_CONDITION_NAMES=돌파,120일선돌파
+    WATCHLIST_SYNC_TARGET_CONDITION_NAMES = [
+        s.strip() for s in os.getenv("WATCHLIST_SYNC_TARGET_CONDITION_NAMES", "").split(",") if s.strip()
+    ]
+    WATCHLIST_SYNC_ONLY_TARGET_CONDITIONS = os.getenv("WATCHLIST_SYNC_ONLY_TARGET_CONDITIONS", "false").lower() == "true"
+    WATCHLIST_SYNC_REMOVE_EXPIRED_STOCKS = os.getenv("WATCHLIST_SYNC_REMOVE_EXPIRED_STOCKS", "true").lower() == "true"
+    WATCHLIST_SYNC_EXPIRED_THRESHOLD_HOURS = int(os.getenv("WATCHLIST_SYNC_EXPIRED_THRESHOLD_HOURS", 6))
     
     # 서버 설정
     HOST = os.getenv("HOST", "0.0.0.0")

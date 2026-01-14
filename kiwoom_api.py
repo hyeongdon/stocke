@@ -945,25 +945,45 @@ class KiwoomAPI:
             
             endpoint = '/api/dostk/ordr'
             url = host + endpoint
+
+            # 계좌번호 (모의/실전 분기)
+            account_no = Config.KIWOOM_MOCK_ACCOUNT_NUMBER if Config.KIWOOM_USE_MOCK_ACCOUNT else Config.KIWOOM_ACCOUNT_NUMBER
+            if not account_no:
+                logger.error("매수 주문 실패 - 계좌번호가 설정되지 않았습니다")
+                return {"success": False, "error": "계좌번호 없음"}
             
+            # appkey/appsecret (실전/모의 분기) - 일부 엔드포인트에서 필수일 수 있음
+            app_key = Config.KIWOOM_MOCK_APP_KEY if use_mock_account else Config.KIWOOM_APP_KEY
+            app_secret = Config.KIWOOM_MOCK_APP_SECRET if use_mock_account else Config.KIWOOM_APP_SECRET
+
             # 요청 헤더 (kt10000 스펙)
             headers = {
                 'Content-Type': 'application/json;charset=UTF-8',
                 'authorization': f'Bearer {self.token_manager.get_valid_token()}',
+                'appkey': app_key,
+                'appsecret': app_secret,
                 'cont-yn': 'N',  # 연속조회여부
                 'next-key': '',  # 연속조회키
                 'api-id': 'kt10000',  # TR명
             }
             
             # 주문 요청 데이터 (kt10000 스펙)
+            account_pw = Config.KIWOOM_MOCK_ACCOUNT_PASSWORD if use_mock_account else Config.KIWOOM_ACCOUNT_PASSWORD
             request_data = {
                 'dmst_stex_tp': 'KRX',  # 국내거래소구분 KRX,NXT,SOR
+                'acnt_no': account_no,  # 계좌번호
                 'stk_cd': stock_code,   # 종목코드
                 'ord_qty': str(quantity),  # 주문수량
-                'ord_uv': str(price) if price > 0 else '',  # 주문단가 (시장가면 빈 문자열)
+                # 주문단가: API 구현에 따라 시장가에서도 "0"을 요구하는 경우가 있어 0으로 고정
+                'ord_uv': str(price if price > 0 else 0),
                 'trde_tp': order_type,  # 매매구분 (3:시장가, 0:보통)
-                'cond_uv': '',  # 조건단가
+                'cond_uv': '0',  # 조건단가
+                'ord_side_cd': '1',  # 매수 주문 (1:매수, 2:매도)
             }
+            # 계좌 비밀번호가 설정된 경우만 포함(필수인 환경에서 RC4058 해결 가능)
+            if account_pw:
+                request_data['acnt_pwd'] = account_pw
+                request_data['acnt_pw'] = account_pw
             
             logger.info(f"매수 주문 요청: {stock_code}, 수량: {quantity}, 가격: {price}, 타입: {order_type}")
             
@@ -981,22 +1001,30 @@ class KiwoomAPI:
                     if response.status == 200:
                         try:
                             data = json.loads(response_text)
-                            if data.get('return_code') == 0:
-                                order_no = data.get('ord_no', '')
+
+                            # 키움 응답 키가 버전에 따라 다를 수 있어 둘 다 허용
+                            return_code = data.get("return_code")
+                            rt_cd = data.get("rt_cd")
+                            success = (return_code == 0) or (rt_cd == "0")
+
+                            if success:
+                                order_no = data.get('ord_no', '') or data.get("order_no", "")
                                 logger.info(f"매수 주문 성공: {stock_code} - 주문번호: {order_no}")
                                 return {
                                     "success": True,
                                     "order_id": order_no,
                                     "order_no": order_no,
-                                    "message": data.get('return_msg', '정상적으로 처리되었습니다')
+                                    "message": data.get('return_msg') or data.get("msg1") or '정상적으로 처리되었습니다'
                                 }
-                            else:
-                                error_msg = data.get('return_msg', '알 수 없는 오류')
-                                logger.error(f"매수 주문 실패: {error_msg}")
-                                return {
-                                    "success": False,
-                                    "error": error_msg
-                                }
+
+                            error_msg = data.get('return_msg') or data.get("msg1") or '알 수 없는 오류'
+                            logger.error(f"매수 주문 실패: {error_msg}")
+                            return {
+                                "success": False,
+                                "error": error_msg,
+                                "_request": request_data,
+                                "_response": data,
+                            }
                         except json.JSONDecodeError as e:
                             logger.error(f"매수 주문 응답 파싱 실패: {e}")
                             return {
@@ -1033,26 +1061,43 @@ class KiwoomAPI:
             
             endpoint = '/api/dostk/ordr'
             url = host + endpoint
+
+            # 계좌번호 (모의/실전 분기)
+            account_no = Config.KIWOOM_MOCK_ACCOUNT_NUMBER if Config.KIWOOM_USE_MOCK_ACCOUNT else Config.KIWOOM_ACCOUNT_NUMBER
+            if not account_no:
+                logger.error("매도 주문 실패 - 계좌번호가 설정되지 않았습니다")
+                return {"success": False, "error": "계좌번호 없음"}
             
+            # appkey/appsecret (실전/모의 분기) - 일부 엔드포인트에서 필수일 수 있음
+            app_key = Config.KIWOOM_MOCK_APP_KEY if use_mock_account else Config.KIWOOM_APP_KEY
+            app_secret = Config.KIWOOM_MOCK_APP_SECRET if use_mock_account else Config.KIWOOM_APP_SECRET
+
             # 요청 헤더 (kt10000 스펙)
             headers = {
                 'Content-Type': 'application/json;charset=UTF-8',
                 'authorization': f'Bearer {self.token_manager.get_valid_token()}',
+                'appkey': app_key,
+                'appsecret': app_secret,
                 'cont-yn': 'N',  # 연속조회여부
                 'next-key': '',  # 연속조회키
                 'api-id': 'kt10000',  # TR명
             }
             
             # 주문 요청 데이터 (kt10000 스펙) - 매도 주문
+            account_pw = Config.KIWOOM_MOCK_ACCOUNT_PASSWORD if use_mock_account else Config.KIWOOM_ACCOUNT_PASSWORD
             request_data = {
                 'dmst_stex_tp': 'KRX',  # 국내거래소구분 KRX,NXT,SOR
+                'acnt_no': account_no,  # 계좌번호
                 'stk_cd': stock_code,   # 종목코드
                 'ord_qty': str(quantity),  # 주문수량
-                'ord_uv': str(price) if price > 0 else '',  # 주문단가 (시장가면 빈 문자열)
+                'ord_uv': str(price if price > 0 else 0),
                 'trde_tp': order_type,  # 매매구분 (3:시장가, 0:보통)
-                'cond_uv': '',  # 조건단가
+                'cond_uv': '0',  # 조건단가
                 'ord_side_cd': '2',  # 매도 주문 (1:매수, 2:매도)
             }
+            if account_pw:
+                request_data['acnt_pwd'] = account_pw
+                request_data['acnt_pw'] = account_pw
             
             logger.info(f"매도 주문 요청: {stock_code}, 수량: {quantity}, 가격: {price}")
             
@@ -1060,24 +1105,33 @@ class KiwoomAPI:
                 async with session.post(url, headers=headers, json=request_data) as response:
                     if response.status == 200:
                         try:
-                            response_data = await response.json()
-                            logger.info(f"매도 주문 응답: {response_data}")
-                            
-                            # 응답 데이터 파싱
-                            if response_data.get("rt_cd") == "0":  # 성공
-                                order_id = response_data.get("ord_no", "")
+                            response_text = await response.text()
+                            logger.info(f"매도 주문 응답: {response.status} - {response_text}")
+
+                            response_data = json.loads(response_text)
+
+                            # 키움 응답 키가 버전에 따라 다를 수 있어 둘 다 허용
+                            return_code = response_data.get("return_code")
+                            rt_cd = response_data.get("rt_cd")
+                            success = (return_code == 0) or (rt_cd == "0")
+
+                            if success:
+                                order_no = response_data.get("ord_no", "") or response_data.get("order_no", "")
                                 return {
                                     "success": True,
-                                    "order_id": order_id,
-                                    "message": "매도 주문이 성공적으로 접수되었습니다."
+                                    "order_id": order_no,
+                                    "order_no": order_no,
+                                    "message": response_data.get("return_msg") or response_data.get("msg1") or "매도 주문이 성공적으로 접수되었습니다."
                                 }
-                            else:
-                                error_msg = response_data.get("msg1", "매도 주문 실패")
-                                logger.error(f"매도 주문 실패: {error_msg}")
-                                return {
-                                    "success": False,
-                                    "error": error_msg
-                                }
+
+                            error_msg = response_data.get("return_msg") or response_data.get("msg1") or "매도 주문 실패"
+                            logger.error(f"매도 주문 실패: {error_msg}")
+                            return {
+                                "success": False,
+                                "error": error_msg,
+                                "_request": request_data,
+                                "_response": response_data,
+                            }
                         except json.JSONDecodeError as e:
                             logger.error(f"매도 주문 응답 파싱 실패: {e}")
                             return {
@@ -1118,7 +1172,11 @@ class KiwoomAPI:
             
             # 계좌번호 설정 (매개변수 우선, 없으면 환경변수 사용)
             if not account_number:
-                account_number = Config.KIWOOM_ACCOUNT_NUMBER or "실계좌번호"
+                account_number = Config.KIWOOM_MOCK_ACCOUNT_NUMBER if Config.KIWOOM_USE_MOCK_ACCOUNT else Config.KIWOOM_ACCOUNT_NUMBER
+
+            if not account_number:
+                logger.error("계좌번호가 설정되지 않았습니다 (KIWOOM_ACCOUNT_NUMBER / KIWOOM_MOCK_ACCOUNT_NUMBER)")
+                return {}
             
             # 계좌 타입에 따른 도메인 설정
             use_mock_account = Config.KIWOOM_USE_MOCK_ACCOUNT

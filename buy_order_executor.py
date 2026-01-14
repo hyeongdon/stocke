@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from kiwoom_api import KiwoomAPI
 from models import PendingBuySignal, get_db, AutoTradeCondition, AutoTradeSettings
 from stop_loss_manager import StopLossManager
+from config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +113,9 @@ class BuyOrderExecutor:
         logger.info(f"💰 [BUY_EXECUTOR] 신호 처리 시작 - {signal.stock_name}({signal.stock_code})")
         
         try:
+            # 처리 중 상태로 먼저 변경 (자기 자신을 '대기 주문'으로 인식하는 문제 방지)
+            await self._update_signal_status(signal.id, "PROCESSING")
+
             # 1. 매수 전 검증
             validation_result = await self._validate_buy_conditions(signal)
             if not validation_result["valid"]:
@@ -146,7 +150,11 @@ class BuyOrderExecutor:
             # 1. 시장 시간 확인
             now = datetime.now()
             if not self._is_market_open(now):
-                return {"valid": False, "reason": "시장 시간이 아님"}
+                # 모의투자(또는 옵션)에서는 테스트 목적상 장시간 체크를 우회 가능하게 함
+                allow_out_of_hours = getattr(Config, "ALLOW_OUT_OF_MARKET_TRADING", False) or Config.KIWOOM_USE_MOCK_ACCOUNT
+                if not allow_out_of_hours:
+                    return {"valid": False, "reason": "시장 시간이 아님"}
+                logger.warning("💰 [BUY_EXECUTOR] 시장 시간이 아니지만(모의투자/옵션) 테스트 목적으로 진행합니다")
             
             # 2. 계좌 잔고 확인
             account_info = await self._get_account_info()
@@ -164,7 +172,7 @@ class BuyOrderExecutor:
                 return {"valid": False, "reason": f"거래 불가 종목: {stock_status['reason']}"}
             
             # 4. 중복 주문 확인
-            if await self._has_pending_order(signal.stock_code):
+            if await self._has_pending_order(signal.stock_code, exclude_signal_id=signal.id):
                 return {"valid": False, "reason": "이미 대기 중인 주문 존재"}
             
             return {"valid": True, "reason": "검증 통과"}
@@ -186,9 +194,37 @@ class BuyOrderExecutor:
     async def _get_account_info(self) -> Optional[Dict]:
         """계좌 정보 조회"""
         try:
-            # 키움 API로 계좌 정보 조회
-            account_info = await self.kiwoom_api.get_account_balance()
-            return account_info
+            # 키움 API로 계좌 정보 조회 (실전/모의 계좌번호 자동 선택)
+            account_number = Config.KIWOOM_MOCK_ACCOUNT_NUMBER if Config.KIWOOM_USE_MOCK_ACCOUNT else Config.KIWOOM_ACCOUNT_NUMBER
+            if not account_number:
+                logger.error("💰 [BUY_EXECUTOR] 계좌번호가 설정되지 않았습니다 (KIWOOM_ACCOUNT_NUMBER / KIWOOM_MOCK_ACCOUNT_NUMBER)")
+                return None
+
+            raw = await self.kiwoom_api.get_account_balance(account_number)
+            if not raw:
+                return None
+
+            def _to_int(v) -> int:
+                try:
+                    if v is None:
+                        return 0
+                    if isinstance(v, (int, float)):
+                        return int(v)
+                    s = str(v).strip().replace(",", "")
+                    if s.startswith("+"):
+                        s = s[1:]
+                    if s == "":
+                        return 0
+                    return int(float(s))
+                except Exception:
+                    return 0
+
+            # KiwoomAPI.get_account_balance 파싱 결과는 entr / d2_entra 등을 포함
+            available_cash = _to_int(raw.get("entr") or raw.get("d2_entra") or 0)
+            return {
+                "available_cash": available_cash,
+                "raw": raw,
+            }
         except Exception as e:
             logger.error(f"💰 [BUY_EXECUTOR] 계좌 정보 조회 오류: {e}")
             return None
@@ -196,31 +232,30 @@ class BuyOrderExecutor:
     async def _check_stock_status(self, stock_code: str) -> Dict:
         """종목 상태 확인"""
         try:
-            # 키움 API로 종목 상태 조회
-            stock_info = await self.kiwoom_api.get_stock_info(stock_code)
-            
-            if not stock_info:
-                return {"tradeable": False, "reason": "종목 정보 없음"}
-            
-            # 거래정지, 상장폐지 등 확인
-            if stock_info.get("status") == "SUSPENDED":
-                return {"tradeable": False, "reason": "거래정지"}
-            
-            return {"tradeable": True, "reason": "정상"}
+            # 기존 구현은 get_stock_info()를 호출했는데 KiwoomAPI에 해당 메서드가 없어 항상 실패했음.
+            # 최소 검증으로 현재가 조회 성공 여부로 거래 가능 여부를 판단한다.
+            current_price = await self.kiwoom_api.get_current_price(stock_code)
+            if not current_price or current_price <= 0:
+                return {"tradeable": False, "reason": "현재가 조회 실패/0원"}
+            return {"tradeable": True, "reason": "정상(현재가 조회 성공)"}
             
         except Exception as e:
             logger.error(f"💰 [BUY_EXECUTOR] 종목 상태 확인 오류: {e}")
-            return {"tradeable": False, "reason": f"확인 오류: {e}"}
+            # 상태 확인 자체 오류는 거래불가로 만들면 '영원히 매수 안 됨'이 될 수 있어 보수적으로 통과 처리
+            return {"tradeable": True, "reason": f"상태 확인 스킵(오류): {e}"}
     
-    async def _has_pending_order(self, stock_code: str) -> bool:
+    async def _has_pending_order(self, stock_code: str, exclude_signal_id: Optional[int] = None) -> bool:
         """대기 중인 주문 확인"""
         try:
             for db in get_db():
                 session: Session = db
-                pending_order = session.query(PendingBuySignal).filter(
+                q = session.query(PendingBuySignal).filter(
                     PendingBuySignal.stock_code == stock_code,
                     PendingBuySignal.status.in_(["PENDING", "ORDERED"])
-                ).first()
+                )
+                if exclude_signal_id is not None:
+                    q = q.filter(PendingBuySignal.id != exclude_signal_id)
+                pending_order = q.first()
                 
                 if pending_order:
                     return True
@@ -279,7 +314,7 @@ class BuyOrderExecutor:
                     stock_code=signal.stock_code,
                     quantity=quantity,
                     price=0,  # 시장가
-                    order_type="3"  # 시장가
+                    order_type="3"  # 시장가 (kt10000 스펙)
                 )
                 
                 if result.get("success"):

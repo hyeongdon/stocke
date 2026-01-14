@@ -8,6 +8,7 @@ from typing import Dict, Set, List, Optional
 from kiwoom_api import KiwoomAPI
 from models import PendingBuySignal, get_db, AutoTradeCondition
 from sqlalchemy.orm import Session
+from config import Config
 
 # 개선된 모듈들 import
 from signal_manager import signal_manager, SignalType, SignalStatus
@@ -30,7 +31,7 @@ class ConditionMonitor:
         # 기준봉 전략 제거됨 - 현재 매매전략에 집중
     
     async def start_monitoring(self, condition_id: int, condition_name: str) -> bool:
-        """조건식 모니터링 시작 (신호 생성 제거)"""
+        """조건식 모니터링 시작 (조건식 결과 -> PendingBuySignal 신호 생성)"""
         logger.info(f"🔍 [CONDITION_MONITOR] 조건식 모니터링 시작 요청 - ID: {condition_id}, 이름: {condition_name}")
         try:
             # API 제한 확인
@@ -38,7 +39,7 @@ class ConditionMonitor:
                 logger.warning(f"🔍 [CONDITION_MONITOR] API 제한 상태 - 조건식 {condition_id} 모니터링 건너뜀")
                 return False
             
-            # 조건식으로 종목 검색 (신호 생성 없이)
+            # 조건식으로 종목 검색
             logger.debug(f"🔍 [CONDITION_MONITOR] 키움 API로 종목 검색 시작 - 조건식 ID: {condition_id}")
             results = await self.kiwoom_api.search_condition_stocks(str(condition_id), condition_name)
             
@@ -46,11 +47,41 @@ class ConditionMonitor:
             api_rate_limiter.record_api_call(f"search_condition_stocks_{condition_id}")
             
             if results:
-                logger.info(f"🔍 [CONDITION_MONITOR] 종목 검색 완료 - {len(results)}개 종목 발견 (신호 생성 없음)")
-                
-                # 기준봉 전략 제거됨 - 조건식 검색만 수행
-                
-                logger.info(f"🔍 [CONDITION_MONITOR] 조건식 {condition_id} 모니터링 완료 - {len(results)}개 종목 확인됨 (신호 생성 안함)")
+                logger.info(f"🔍 [CONDITION_MONITOR] 종목 검색 완료 - {len(results)}개 종목 발견")
+
+                # 너무 많은 종목이 한 번에 신호로 들어가 주문이 폭주하는 것을 방지
+                max_signals = int(getattr(Config, "MAX_SIGNALS_PER_CONDITION_SCAN", 1))
+                created = 0
+
+                # condition_id는 PendingBuySignal에서 int 필드이므로 안전하게 캐스팅
+                try:
+                    condition_id_int = int(condition_id)
+                except Exception:
+                    condition_id_int = abs(hash(str(condition_id))) % 1000000
+
+                for stock in results[:max_signals]:
+                    stock_code = stock.get("stock_code") or ""
+                    stock_name = stock.get("stock_name") or stock_code
+                    if not stock_code:
+                        continue
+
+                    ok = await signal_manager.create_signal(
+                        condition_id=condition_id_int,
+                        stock_code=stock_code,
+                        stock_name=stock_name,
+                        signal_type=SignalType.CONDITION_SIGNAL,
+                        additional_data={
+                            # PendingBuySignal 모델에는 없어서 저장되진 않지만, 로깅/확장 대비
+                            "current_price": stock.get("current_price"),
+                            "change_rate": stock.get("change_rate"),
+                            "volume": stock.get("volume"),
+                        },
+                    )
+                    if ok:
+                        created += 1
+
+                logger.info(f"🔍 [CONDITION_MONITOR] 조건식 {condition_name} 신호 생성: {created}/{min(len(results), max_signals)}")
+                logger.info(f"🔍 [CONDITION_MONITOR] 조건식 {condition_id} 모니터링 완료")
                 return True
             else:
                 logger.info(f"🔍 [CONDITION_MONITOR] 조건식 {condition_name} (API ID: {condition_id})에 해당하는 종목이 없음")
