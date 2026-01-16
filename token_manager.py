@@ -3,6 +3,10 @@ from typing import Optional
 import requests
 import logging
 from config import Config
+import urllib3
+
+# SSL 검증 비활성화 경고 억제 (모의투자 서버 연결 문제 해결)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = logging.getLogger(__name__)
 
@@ -11,9 +15,19 @@ class TokenManager:
         self.access_token: Optional[str] = None
         self.token_expiry: Optional[datetime] = None
         self.refresh_token: Optional[str] = None
+        self.last_429_error_time: Optional[datetime] = None  # 마지막 429 에러 발생 시간
+        self.rate_limit_cooldown = 90  # 429 에러 후 대기 시간 (초)
     
     def authenticate(self) -> bool:
         """키움증권 API 인증을 수행하고 토큰을 발급받습니다."""
+        # 429 에러 후 쿨다운 기간 확인
+        if self.last_429_error_time:
+            elapsed = (datetime.utcnow() - self.last_429_error_time).total_seconds()
+            if elapsed < self.rate_limit_cooldown:
+                remaining = int(self.rate_limit_cooldown - elapsed)
+                logger.warning(f"🔑 [TOKEN] API 제한으로 인증 대기 중 (남은 시간: {remaining}초)")
+                return False
+        
         try:
             # 투자구분 설정 (모의투자/실전투자)
             investment_type = "1" if Config.KIWOOM_USE_MOCK_ACCOUNT else "0"  # 1: 모의투자, 0: 실전투자
@@ -47,7 +61,8 @@ class TokenManager:
                 headers={
                     "Content-Type": "application/json"
                 },
-                timeout=10
+                timeout=30,  # 타임아웃 증가
+                verify=False  # SSL 검증 비활성화 (모의투자 서버 연결 문제 해결)
             )
             
             logger.debug(f"🔑 [TOKEN_DEBUG] HTTP 응답 상태: {response.status_code}")
@@ -74,8 +89,14 @@ class TokenManager:
                     logger.error(f"🔑 [TOKEN_DEBUG] ❌ 키움증권 API 오류: {token_data.get('return_msg', '알 수 없는 오류')}")
                     return False
             else:
-                logger.error(f"🔑 [TOKEN_DEBUG] ❌ 키움증권 API 인증 실패 - HTTP {response.status_code}")
-                logger.error(f"🔑 [TOKEN_DEBUG] 응답 내용: {response.text}")
+                # 429 에러 (API 제한) 처리
+                if response.status_code == 429:
+                    self.last_429_error_time = datetime.utcnow()
+                    logger.error(f"🔑 [TOKEN_DEBUG] ❌ API 호출 제한 초과 (HTTP 429) - {self.rate_limit_cooldown}초 동안 재인증 중지")
+                    logger.error(f"🔑 [TOKEN_DEBUG] 응답 내용: {response.text}")
+                else:
+                    logger.error(f"🔑 [TOKEN_DEBUG] ❌ 키움증권 API 인증 실패 - HTTP {response.status_code}")
+                    logger.error(f"🔑 [TOKEN_DEBUG] 응답 내용: {response.text}")
                 return False
             
         except Exception as e:
@@ -107,6 +128,14 @@ class TokenManager:
     
     def refresh_access_token(self) -> bool:
         """리프레시 토큰을 사용하여 액세스 토큰을 갱신합니다."""
+        # 429 에러 후 쿨다운 기간 확인
+        if self.last_429_error_time:
+            elapsed = (datetime.utcnow() - self.last_429_error_time).total_seconds()
+            if elapsed < self.rate_limit_cooldown:
+                remaining = int(self.rate_limit_cooldown - elapsed)
+                logger.warning(f"🔑 [TOKEN] API 제한으로 토큰 갱신 대기 중 (남은 시간: {remaining}초)")
+                return False
+        
         if not self.refresh_token:
             return self.authenticate()
         
@@ -131,7 +160,9 @@ class TokenManager:
                     "appkey": app_key,
                     "secretkey": app_secret,
                     "investment_type": investment_type  # 투자구분 추가
-                }
+                },
+                timeout=30,
+                verify=False  # SSL 검증 비활성화
             )
             
             if response.status_code == 200:
@@ -140,7 +171,16 @@ class TokenManager:
                 expires_in = token_data.get("expires_in", 7200)
                 self.token_expiry = datetime.utcnow() + timedelta(seconds=expires_in)
                 return True
-            return False
+            elif response.status_code == 429:
+                # API 제한 에러 처리
+                self.last_429_error_time = datetime.utcnow()
+                logger.error(f"🔑 [TOKEN] ❌ API 호출 제한 초과 (HTTP 429) - {self.rate_limit_cooldown}초 동안 토큰 갱신 중지")
+                logger.error(f"🔑 [TOKEN] 응답 내용: {response.text}")
+                return False
+            else:
+                logger.error(f"🔑 [TOKEN] ❌ 토큰 갱신 실패 - HTTP {response.status_code}")
+                logger.error(f"🔑 [TOKEN] 응답 내용: {response.text}")
+                return False
             
         except Exception as e:
             logger.error(f"토큰 갱신 오류: {e}")

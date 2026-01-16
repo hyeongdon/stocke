@@ -8,6 +8,7 @@ from kiwoom_api import KiwoomAPI
 from models import PendingBuySignal, get_db, AutoTradeCondition, AutoTradeSettings
 from stop_loss_manager import StopLossManager
 from config import Config
+from debug_tracer import debug_tracer
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ class BuyOrderExecutor:
                 else:
                     logger.debug("💰 [BUY_EXECUTOR] 자동매매 비활성화 상태 - 신호 처리 건너뜀")
                 
-                await asyncio.sleep(10)  # 10초마다 확인
+                await asyncio.sleep(60)  # 60초마다 확인 (API 제한 고려)
         except Exception as e:
             logger.error(f"💰 [BUY_EXECUTOR] 처리 중 오류: {e}")
         finally:
@@ -68,26 +69,33 @@ class BuyOrderExecutor:
         except Exception as e:
             logger.error(f"💰 [BUY_EXECUTOR] 자동매매 설정 로드 오류: {e}")
     
+    @debug_tracer.trace_async(component="BUY_EXECUTOR")
     async def _process_pending_signals(self):
         """대기 중인 매수 신호들 처리"""
         try:
+            debug_tracer.log_checkpoint("PENDING 신호 조회 시작", "BUY_EXECUTOR")
+            
             # PENDING 상태인 신호들 조회
             pending_signals = await self._get_pending_signals()
+            
+            debug_tracer.log_checkpoint(f"조회된 신호 개수: {len(pending_signals)}", "BUY_EXECUTOR")
             
             if not pending_signals:
                 return
             
             logger.info(f"💰 [BUY_EXECUTOR] 처리할 신호 {len(pending_signals)}개 발견")
             
-            for signal in pending_signals:
+            for idx, signal in enumerate(pending_signals, 1):
                 try:
+                    debug_tracer.log_checkpoint(f"[{idx}/{len(pending_signals)}] 신호 처리 시작: {signal.stock_name}({signal.stock_code})", "BUY_EXECUTOR")
                     await self._process_single_signal(signal)
                 except Exception as e:
                     logger.error(f"💰 [BUY_EXECUTOR] 신호 처리 오류 (ID: {signal.id}): {e}")
                     await self._update_signal_status(signal.id, "FAILED", str(e))
                 
-                # API 제한을 고려한 대기
-                await asyncio.sleep(1)
+                # API 제한을 고려한 대기 (키움 제한: 1분당 20회)
+                debug_tracer.log_checkpoint(f"[{idx}/{len(pending_signals)}] 신호 처리 완료, 5초 대기", "BUY_EXECUTOR")
+                await asyncio.sleep(5)
                 
         except Exception as e:
             logger.error(f"💰 [BUY_EXECUTOR] 대기 신호 처리 중 오류: {e}")
@@ -108,37 +116,50 @@ class BuyOrderExecutor:
         
         return signals
     
+    @debug_tracer.trace_async(component="BUY_EXECUTOR")
     async def _process_single_signal(self, signal: PendingBuySignal):
         """단일 신호 처리"""
         logger.info(f"💰 [BUY_EXECUTOR] 신호 처리 시작 - {signal.stock_name}({signal.stock_code})")
         
         try:
             # 처리 중 상태로 먼저 변경 (자기 자신을 '대기 주문'으로 인식하는 문제 방지)
+            debug_tracer.log_checkpoint("상태 변경: PROCESSING", "BUY_EXECUTOR")
             await self._update_signal_status(signal.id, "PROCESSING")
 
             # 1. 매수 전 검증
+            debug_tracer.log_checkpoint("1단계: 매수 전 검증 시작", "BUY_EXECUTOR")
             validation_result = await self._validate_buy_conditions(signal)
+            debug_tracer.log_checkpoint(f"1단계 결과: {validation_result}", "BUY_EXECUTOR")
+            
             if not validation_result["valid"]:
                 logger.warning(f"💰 [BUY_EXECUTOR] 매수 조건 미충족 - {signal.stock_name}: {validation_result['reason']}")
                 await self._update_signal_status(signal.id, "FAILED", validation_result["reason"])
                 return
             
             # 2. 현재가 조회
+            debug_tracer.log_checkpoint("2단계: 현재가 조회 시작", "BUY_EXECUTOR")
             current_price = await self._get_current_price(signal.stock_code)
+            debug_tracer.log_checkpoint(f"2단계 결과: 현재가={current_price:,}원" if current_price else "2단계 결과: 실패", "BUY_EXECUTOR")
+            
             if not current_price:
                 logger.error(f"💰 [BUY_EXECUTOR] 현재가 조회 실패 - {signal.stock_name}")
                 await self._update_signal_status(signal.id, "FAILED", "현재가 조회 실패")
                 return
             
             # 3. 매수 수량 계산
+            debug_tracer.log_checkpoint("3단계: 매수 수량 계산 시작", "BUY_EXECUTOR")
             quantity = await self._calculate_buy_quantity(signal.stock_code, current_price)
+            debug_tracer.log_checkpoint(f"3단계 결과: 수량={quantity}주, 총액={current_price*quantity:,}원", "BUY_EXECUTOR")
+            
             if quantity < 1:
                 logger.warning(f"💰 [BUY_EXECUTOR] 매수 수량 부족 - {signal.stock_name}: {quantity}")
                 await self._update_signal_status(signal.id, "FAILED", f"매수 수량 부족: {quantity}")
                 return
             
             # 4. 매수 주문 실행 (재시도 포함)
+            debug_tracer.log_checkpoint(f"4단계: 매수 주문 실행 (가격={current_price:,}원, 수량={quantity}주)", "BUY_EXECUTOR")
             await self._execute_buy_order_with_retry(signal, current_price, quantity)
+            debug_tracer.log_checkpoint("4단계 완료: 매수 주문 성공", "BUY_EXECUTOR")
             
         except Exception as e:
             logger.error(f"💰 [BUY_EXECUTOR] 신호 처리 중 오류 - {signal.stock_name}: {e}")

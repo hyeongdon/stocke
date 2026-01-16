@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from kiwoom_api import KiwoomAPI
 from models import Position, SellOrder, AutoTradeSettings, get_db
 from config import Config
+from debug_tracer import debug_tracer
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,7 @@ class StopLossManager:
     def __init__(self):
         self.kiwoom_api = KiwoomAPI()
         self.is_running = False
-        self.monitoring_interval = 30  # 30초마다 모니터링
+        self.monitoring_interval = 120  # 120초(2분)마다 모니터링 (API 제한 고려)
         self.auto_trade_settings = None
         
     async def start_monitoring(self):
@@ -29,11 +30,14 @@ class StopLossManager:
                 # 자동매매 설정 로드
                 await self._load_auto_trade_settings()
                 
-                # 자동매매가 활성화된 경우에만 모니터링
+                # 현재가 업데이트는 항상 수행 (자동매매 설정과 무관)
+                await self._update_all_positions_price()
+                
+                # 손절/익절 판단은 자동매매가 활성화된 경우에만 수행
                 if self.auto_trade_settings and self.auto_trade_settings.is_enabled:
                     await self._monitor_positions()
                 else:
-                    logger.debug("🛡️ [STOP_LOSS] 자동매매 비활성화 상태 - 모니터링 건너뜀")
+                    logger.debug("🛡️ [STOP_LOSS] 자동매매 비활성화 상태 - 손절/익절 판단 건너뜀 (현재가는 업데이트됨)")
                 
                 await asyncio.sleep(self.monitoring_interval)
         except Exception as e:
@@ -61,11 +65,16 @@ class StopLossManager:
         except Exception as e:
             logger.error(f"🛡️ [STOP_LOSS] 자동매매 설정 로드 오류: {e}")
     
+    @debug_tracer.trace_async(component="STOP_LOSS")
     async def _monitor_positions(self):
         """포지션 모니터링"""
         try:
+            debug_tracer.log_checkpoint("포지션 조회 시작", "STOP_LOSS")
+            
             # HOLDING 상태인 포지션들 조회
             positions = await self._get_active_positions()
+            
+            debug_tracer.log_checkpoint(f"조회된 포지션 개수: {len(positions)}", "STOP_LOSS")
             
             if not positions:
                 logger.debug("🛡️ [STOP_LOSS] 모니터링할 포지션이 없습니다.")
@@ -73,14 +82,16 @@ class StopLossManager:
             
             logger.info(f"🛡️ [STOP_LOSS] {len(positions)}개 포지션 모니터링 중...")
             
-            for position in positions:
+            for idx, position in enumerate(positions, 1):
                 try:
+                    debug_tracer.log_checkpoint(f"[{idx}/{len(positions)}] 포지션 점검: {position.stock_name}({position.stock_code})", "STOP_LOSS")
                     await self._check_position_stop_loss(position)
                 except Exception as e:
                     logger.error(f"🛡️ [STOP_LOSS] 포지션 모니터링 오류 (ID: {position.id}): {e}")
                 
-                # API 제한을 고려한 대기
-                await asyncio.sleep(1)
+                # API 제한을 고려한 대기 (키움 제한: 1분당 20회)
+                debug_tracer.log_checkpoint(f"[{idx}/{len(positions)}] 포지션 점검 완료, 5초 대기", "STOP_LOSS")
+                await asyncio.sleep(5)
                 
         except Exception as e:
             logger.error(f"🛡️ [STOP_LOSS] 포지션 모니터링 중 오류: {e}")
@@ -95,29 +106,45 @@ class StopLossManager:
                     Position.status == "HOLDING"
                 ).all()
                 
-                # 실제 계좌 보유 종목 조회
+                # 실제 계좌 보유 종목 조회 (선택적 - 실패해도 계속 진행)
                 account_number = Config.KIWOOM_MOCK_ACCOUNT_NUMBER if Config.KIWOOM_USE_MOCK_ACCOUNT else Config.KIWOOM_ACCOUNT_NUMBER
-                account_balance = await self.kiwoom_api.get_account_balance(account_number)
-                
-                # 실제 보유 종목 코드 목록
+                account_balance = None
                 actual_holdings = set()
-                if account_balance and 'stk_acnt_evlt_prst' in account_balance:
-                    for holding in account_balance['stk_acnt_evlt_prst']:
-                        actual_holdings.add(holding.get('stk_cd', ''))
-                    logger.debug(f"🛡️ [STOP_LOSS] 실제 보유 종목: {len(actual_holdings)}개 - {actual_holdings}")
-                else:
-                    logger.warning(f"🛡️ [STOP_LOSS] 실제 계좌 조회 실패 또는 보유 종목 없음")
                 
-                # DB 포지션 중 실제로 보유한 종목만 필터링
-                verified_positions = []
-                for pos in db_positions:
-                    if pos.stock_code in actual_holdings:
-                        verified_positions.append(pos)
-                        logger.debug(f"🛡️ [STOP_LOSS] 포지션 검증 완료: {pos.stock_name}({pos.stock_code})")
+                try:
+                    account_balance = await self.kiwoom_api.get_account_balance(account_number)
+                    
+                    # 실제 보유 종목 코드 목록
+                    if account_balance and 'stk_acnt_evlt_prst' in account_balance:
+                        for holding in account_balance['stk_acnt_evlt_prst']:
+                            actual_holdings.add(holding.get('stk_cd', ''))
+                        logger.debug(f"🛡️ [STOP_LOSS] 실제 보유 종목: {len(actual_holdings)}개 - {actual_holdings}")
                     else:
-                        logger.warning(f"🛡️ [STOP_LOSS] ⚠️ 실제 보유하지 않은 포지션 발견: {pos.stock_name}({pos.stock_code}) - 모니터링 제외")
+                        logger.debug(f"🛡️ [STOP_LOSS] 계좌 조회 결과 없음 (API 제한 또는 보유 종목 없음)")
+                except Exception as e:
+                    logger.debug(f"🛡️ [STOP_LOSS] 계좌 조회 실패 (계속 진행): {e}")
                 
-                positions = verified_positions
+                # 계좌 조회 성공 시에만 검증, 실패 시에는 DB의 모든 HOLDING Position 사용
+                if actual_holdings:
+                    # DB 포지션 중 실제로 보유한 종목만 필터링
+                    verified_positions = []
+                    excluded_count = 0
+                    for pos in db_positions:
+                        if pos.stock_code in actual_holdings:
+                            verified_positions.append(pos)
+                            logger.debug(f"🛡️ [STOP_LOSS] 포지션 검증 완료: {pos.stock_name}({pos.stock_code})")
+                        else:
+                            excluded_count += 1
+                    
+                    if excluded_count > 0:
+                        logger.debug(f"🛡️ [STOP_LOSS] 실제 보유하지 않은 포지션 {excluded_count}개 제외됨")
+                    
+                    positions = verified_positions
+                else:
+                    # 계좌 조회 실패 시 DB의 모든 HOLDING Position 사용 (현재가 업데이트는 계속 수행)
+                    # API 제한으로 인한 실패는 정상적인 상황이므로 WARNING 대신 DEBUG로 로그
+                    positions = db_positions
+                    logger.debug(f"🛡️ [STOP_LOSS] 계좌 조회 실패 (API 제한 가능) - DB의 모든 HOLDING Position 사용 ({len(positions)}개)")
                 break
             except Exception as e:
                 logger.error(f"🛡️ [STOP_LOSS] 포지션 조회 오류: {e}")
@@ -127,11 +154,64 @@ class StopLossManager:
         
         return positions
     
+    async def _update_all_positions_price(self):
+        """모든 HOLDING 상태 Position의 현재가만 업데이트 (손절/익절 판단 없음)"""
+        try:
+            for db in get_db():
+                session: Session = db
+                positions = session.query(Position).filter(Position.status == "HOLDING").all()
+                
+                if not positions:
+                    logger.debug("🛡️ [STOP_LOSS] 업데이트할 포지션이 없습니다.")
+                    return
+                
+                logger.info(f"🛡️ [STOP_LOSS] {len(positions)}개 포지션 현재가 업데이트 중...")
+                
+                for idx, position in enumerate(positions, 1):
+                    try:
+                        # 현재가 조회
+                        current_price = await self._get_current_price(position.stock_code)
+                        
+                        if current_price and current_price > 0:
+                            # 손익 계산
+                            profit_loss = (current_price - position.buy_price) * position.buy_quantity
+                            profit_loss_rate = (current_price - position.buy_price) / position.buy_price * 100
+                            
+                            # DB 업데이트
+                            position.current_price = current_price
+                            position.current_profit_loss = profit_loss
+                            position.current_profit_loss_rate = profit_loss_rate
+                            position.last_monitored = datetime.utcnow()
+                            
+                            logger.debug(f"🛡️ [STOP_LOSS] 현재가 업데이트 - {position.stock_name}: {current_price:,}원 ({profit_loss_rate:+.2f}%)")
+                        else:
+                            logger.warning(f"🛡️ [STOP_LOSS] 현재가 조회 실패 - {position.stock_name}")
+                        
+                        # API 제한 고려 (5초 대기)
+                        if idx < len(positions):
+                            await asyncio.sleep(5)
+                    
+                    except Exception as e:
+                        logger.error(f"🛡️ [STOP_LOSS] 포지션 현재가 업데이트 오류 (ID: {position.id}): {e}")
+                
+                session.commit()
+                logger.info(f"🛡️ [STOP_LOSS] {len(positions)}개 포지션 현재가 업데이트 완료")
+                break
+                
+        except Exception as e:
+            logger.error(f"🛡️ [STOP_LOSS] 포지션 현재가 업데이트 중 오류: {e}")
+            import traceback
+            logger.error(f"🛡️ [STOP_LOSS] 스택 트레이스: {traceback.format_exc()}")
+    
+    @debug_tracer.trace_async(component="STOP_LOSS")
     async def _check_position_stop_loss(self, position: Position):
         """개별 포지션 손절/익절 확인"""
         try:
             # 현재가 조회
+            debug_tracer.log_checkpoint(f"현재가 조회: {position.stock_code}", "STOP_LOSS")
             current_price = await self._get_current_price(position.stock_code)
+            debug_tracer.log_checkpoint(f"현재가: {current_price:,}원" if current_price else "현재가 조회 실패", "STOP_LOSS")
+            
             if not current_price:
                 logger.warning(f"🛡️ [STOP_LOSS] 현재가 조회 실패 - {position.stock_name}")
                 return
@@ -139,6 +219,7 @@ class StopLossManager:
             # 손익 계산
             profit_loss = (current_price - position.buy_price) * position.buy_quantity
             profit_loss_rate = (current_price - position.buy_price) / position.buy_price * 100
+            debug_tracer.log_checkpoint(f"손익: {profit_loss:+,}원 ({profit_loss_rate:+.2f}%), 매수가: {position.buy_price:,}원", "STOP_LOSS")
             
             # 포지션 정보 업데이트
             await self._update_position_price(position.id, current_price, profit_loss, profit_loss_rate)

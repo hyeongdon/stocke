@@ -28,8 +28,8 @@ class APIRateLimiter:
         self.call_history = []
         self.max_history_size = 100
         self.rate_limit_window = 60  # 1분 윈도우
-        self.max_calls_per_window = 40  # 1분당 최대 호출 수 (안전한 수준으로 감소)
-        self.min_call_interval = 1.5  # 최소 호출 간격 (초) - 안전한 간격으로 증가
+        self.max_calls_per_window = 12  # 1분당 최대 호출 수 (키움 제한 20회의 60%, 매우 안전)
+        self.min_call_interval = 5.0  # 최소 호출 간격 (초) - 매우 안전한 간격
         
         # 제한 복구 설정
         self.limit_duration_minutes = 10  # 제한 지속 시간 (분)
@@ -86,7 +86,7 @@ class APIRateLimiter:
                 
                 if time_since_last_call < self.min_call_interval:
                     wait_time = self.min_call_interval - time_since_last_call
-                    logger.warning(f"🚫 [API_LIMITER_DEBUG] ⚠️ 호출 간격 부족 - {wait_time:.1f}초 대기 필요 (최소 간격: {self.min_call_interval}초)")
+                    logger.debug(f"🚫 [API_LIMITER_DEBUG] ⚠️ 호출 간격 부족 - {wait_time:.1f}초 대기 필요 (최소 간격: {self.min_call_interval}초)")
                     return False
             
             # 호출 기록 추가

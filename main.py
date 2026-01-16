@@ -29,7 +29,7 @@ warnings.filterwarnings('ignore', category=FutureWarning, module='ta')
 warnings.filterwarnings('ignore', category=FutureWarning, module='pandas')
 
 # DB 연동
-from models import get_db, AutoTradeCondition, PendingBuySignal, AutoTradeSettings, WatchlistStock, TradingStrategy, StrategySignal
+from models import get_db, AutoTradeCondition, PendingBuySignal, AutoTradeSettings, WatchlistStock, TradingStrategy, StrategySignal, Position
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from condition_monitor import condition_monitor
@@ -46,6 +46,7 @@ from watchlist_sync_manager import watchlist_sync_manager
 from stop_loss_manager import StopLossManager
 from scalping_strategy import scalping_manager
 from cleanup_scheduler import cleanup_scheduler
+from debug_tracer import debug_tracer, enable_debug_mode, disable_debug_mode, is_debug_enabled
 
 config = Config()
 
@@ -255,10 +256,10 @@ async def api_info():
 
 
 @app.get("/signals/pending")
-async def get_pending_signals(limit: int = 100, status: str = "PENDING"):
-    """매수대기(PENDING) 신호 목록 조회. status=ALL 전달 시 전체 조회"""
+async def get_pending_signals(limit: int = 100, status: str = "PENDING", skip_price: bool = False):
+    """매수대기(PENDING) 신호 목록 조회. status=ALL 전달 시 전체 조회, skip_price=True면 현재가 조회 생략"""
     try:
-        logger.info(f"[PENDING_API] request: limit={limit} status={status}")
+        logger.info(f"[PENDING_API] request: limit={limit} status={status} skip_price={skip_price}")
         items = []
         for db in get_db():
             session: Session = db
@@ -273,19 +274,28 @@ async def get_pending_signals(limit: int = 100, status: str = "PENDING"):
             rows = q.order_by(PendingBuySignal.detected_at.desc()).limit(limit).all()
             logger.info(f"[PENDING_API] rows fetched={len(rows)}")
             
+            # 자동매매 설정을 미리 조회 (반복문 밖으로 이동)
+            auto_trade_settings = session.query(AutoTradeSettings).first()
+            max_invest_amount = auto_trade_settings.max_invest_amount if auto_trade_settings else 100000
+            
             for i, r in enumerate(rows):
-                # 현재가격 조회 (단순화)
-                current_price = 0
-                try:
-                    current_price = await kiwoom_api.get_current_price(r.stock_code)
-                except Exception as e:
-                    logger.warning(f"[PENDING_API] 현재가 조회 실패 {r.stock_code}: {e}")
+                # Position 조회
+                position = session.query(Position).filter(Position.signal_id == r.id).first()
                 
-                # 자동매매 설정에서 최대 투자 금액 가져오기
-                auto_trade_settings = session.query(AutoTradeSettings).first()
-                max_invest_amount = auto_trade_settings.max_invest_amount if auto_trade_settings else 100000
+                # ⚠️ API 호출 제한으로 인해 현재가 조회 기본값을 skip_price=True로 변경
+                # DB에 저장된 target_price를 우선 사용
+                current_price = getattr(r, "target_price", 0) or 0
                 
-                # 매수 수량 계산 (단순화)
+                # skip_price=False인 경우에만 API 호출 (수동 요청 시)
+                if not skip_price and current_price == 0:
+                    try:
+                        current_price = await kiwoom_api.get_current_price(r.stock_code)
+                        logger.debug(f"[PENDING_API] 현재가 조회 성공: {r.stock_code} = {current_price}")
+                    except Exception as e:
+                        logger.warning(f"[PENDING_API] 현재가 조회 실패 {r.stock_code}: {e}")
+                        current_price = 0
+                
+                # 매수 수량 계산
                 target_quantity = max_invest_amount // current_price if current_price and current_price > 0 else 0
                 if target_quantity < 1:
                     target_quantity = 1
@@ -293,18 +303,37 @@ async def get_pending_signals(limit: int = 100, status: str = "PENDING"):
                 # 매수 금액 계산
                 target_amount = target_quantity * current_price if current_price and current_price > 0 else 0
                 
-                items.append({
+                # Signal 기본 정보
+                signal_data = {
                     "id": r.id,
                     "condition_id": r.condition_id,
                     "stock_code": r.stock_code,
                     "stock_name": r.stock_name,
                     "detected_at": r.detected_at.isoformat() if r.detected_at else None,
                     "status": r.status,
+                    "signal_type": getattr(r, "signal_type", "condition"),
                     "failure_reason": getattr(r, "failure_reason", None),
+                    "target_price": getattr(r, "target_price", None),
                     "current_price": current_price,
                     "target_quantity": target_quantity,
                     "target_amount": target_amount,
-                })
+                }
+                
+                # Position 정보 추가
+                if position:
+                    signal_data["position"] = {
+                        "id": position.id,
+                        "buy_price": position.buy_price,
+                        "buy_quantity": position.buy_quantity,
+                        "buy_amount": position.buy_amount,
+                        "current_price": position.current_price or position.buy_price,
+                        "stop_loss_price": position.stop_loss_price,
+                        "take_profit_price": position.take_profit_price,
+                        "status": position.status,
+                        "buy_time": position.buy_time.isoformat() if position.buy_time else None,
+                    }
+                
+                items.append(signal_data)
         payload = {"items": items, "total": len(items), "_debug": {"db": Config.DATABASE_URL, "limit": limit, "status": status}}
         logger.info(f"[PENDING_API] response total={payload['total']}")
         return payload
@@ -552,6 +581,71 @@ async def stop_monitoring():
         logger.error(f"🌐 [API] 모니터링 중지 오류: {e}")
         raise HTTPException(status_code=500, detail="모니터링 중지 중 오류가 발생했습니다.")
 
+# ===== 디버그 모드 제어 API =====
+
+@app.post("/debug/enable")
+async def enable_debugging():
+    """디버그 모드 활성화 - 함수 호출 추적 시작"""
+    try:
+        enable_debug_mode()
+        debug_tracer.reset_statistics()
+        return {
+            "message": "디버그 모드가 활성화되었습니다",
+            "debug_enabled": True,
+            "description": "이제 모든 함수 호출이 상세하게 로깅됩니다"
+        }
+    except Exception as e:
+        logger.error(f"디버그 모드 활성화 오류: {e}")
+        raise HTTPException(status_code=500, detail=f"디버그 모드 활성화 실패: {str(e)}")
+
+@app.post("/debug/disable")
+async def disable_debugging():
+    """디버그 모드 비활성화 - 함수 호출 추적 중지"""
+    try:
+        # 통계 출력
+        debug_tracer.print_statistics()
+        
+        disable_debug_mode()
+        return {
+            "message": "디버그 모드가 비활성화되었습니다",
+            "debug_enabled": False,
+            "description": "로그 레벨이 INFO로 변경되었습니다"
+        }
+    except Exception as e:
+        logger.error(f"디버그 모드 비활성화 오류: {e}")
+        raise HTTPException(status_code=500, detail=f"디버그 모드 비활성화 실패: {str(e)}")
+
+@app.get("/debug/status")
+async def get_debug_status():
+    """디버그 모드 상태 확인"""
+    return {
+        "debug_enabled": is_debug_enabled(),
+        "call_count": len(debug_tracer.call_count),
+        "tracked_functions": list(debug_tracer.call_count.keys()),
+        "execution_times": {
+            func: {
+                "avg": sum(times) / len(times),
+                "total": sum(times),
+                "count": len(times)
+            }
+            for func, times in debug_tracer.execution_times.items()
+        }
+    }
+
+@app.post("/debug/statistics")
+async def print_debug_statistics():
+    """디버그 통계 출력"""
+    try:
+        debug_tracer.print_statistics()
+        return {
+            "message": "디버그 통계가 로그에 출력되었습니다",
+            "call_count": debug_tracer.call_count,
+            "total_functions": len(debug_tracer.call_count)
+        }
+    except Exception as e:
+        logger.error(f"디버그 통계 출력 오류: {e}")
+        raise HTTPException(status_code=500, detail=f"디버그 통계 출력 실패: {str(e)}")
+
 @app.get("/monitoring/status")
 async def get_monitoring_status():
     """모니터링 상태 조회 (개선된 상태 정보 포함)"""
@@ -569,7 +663,7 @@ async def get_monitoring_status():
         # 매수 주문 실행기 상태
         buy_executor_status = {
             "is_running": buy_order_executor.is_running,
-            "max_invest_amount": buy_order_executor.max_invest_amount,
+            "max_invest_amount": buy_order_executor.auto_trade_settings.max_invest_amount if buy_order_executor.auto_trade_settings else 0,
             "max_retry_attempts": buy_order_executor.max_retry_attempts
         }
         
@@ -1244,6 +1338,37 @@ async def cleanup_expired_signals():
     except Exception as e:
         logger.error(f"만료 신호 정리 오류: {e}")
         raise HTTPException(status_code=500, detail="만료 신호 정리 중 오류가 발생했습니다.")
+
+@app.post("/signals/cleanup-failed")
+async def cleanup_failed_signals():
+    """실패한 신호 일괄 정리"""
+    try:
+        deleted_count = 0
+        for db in get_db():
+            session: Session = db
+            # FAILED 상태인 Signal 조회
+            failed_signals = session.query(PendingBuySignal).filter(
+                PendingBuySignal.status == "FAILED"
+            ).all()
+            
+            # 관련 Position이 없는 Signal만 삭제
+            for signal in failed_signals:
+                position = session.query(Position).filter(Position.signal_id == signal.id).first()
+                if not position:  # Position이 없으면 삭제
+                    session.delete(signal)
+                    deleted_count += 1
+            
+            session.commit()
+            break
+        
+        logger.info(f"🗑️ [API] 실패한 신호 {deleted_count}개 정리 완료")
+        return {
+            "message": f"실패한 신호 {deleted_count}개가 정리되었습니다.",
+            "deleted_count": deleted_count
+        }
+    except Exception as e:
+        logger.error(f"실패 신호 정리 오류: {e}")
+        raise HTTPException(status_code=500, detail="실패 신호 정리 중 오류가 발생했습니다.")
 
 @app.get("/buy-executor/status")
 async def get_buy_executor_status():
@@ -2161,6 +2286,42 @@ async def get_stop_loss_status():
     except Exception as e:
         logger.error(f"손절/익절 모니터링 상태 조회 오류: {e}")
         raise HTTPException(status_code=500, detail="손절/익절 모니터링 상태 조회 중 오류가 발생했습니다.")
+
+@app.post("/stop-loss/start")
+async def start_stop_loss_monitoring():
+    """손절/익절 모니터링 시작"""
+    try:
+        if not stop_loss_manager.is_running:
+            asyncio.create_task(stop_loss_manager.start_monitoring())
+            logger.info("🛡️ [API] 손절/익절 모니터링 시작 요청")
+            return {"message": "손절/익절 모니터링이 시작되었습니다.", "is_running": True}
+        else:
+            return {"message": "손절/익절 모니터링이 이미 실행 중입니다.", "is_running": True}
+    except Exception as e:
+        logger.error(f"손절/익절 모니터링 시작 오류: {e}")
+        raise HTTPException(status_code=500, detail="손절/익절 모니터링 시작 중 오류가 발생했습니다.")
+
+@app.post("/stop-loss/stop")
+async def stop_stop_loss_monitoring():
+    """손절/익절 모니터링 중지"""
+    try:
+        await stop_loss_manager.stop_monitoring()
+        logger.info("🛡️ [API] 손절/익절 모니터링 중지 요청")
+        return {"message": "손절/익절 모니터링이 중지되었습니다.", "is_running": False}
+    except Exception as e:
+        logger.error(f"손절/익절 모니터링 중지 오류: {e}")
+        raise HTTPException(status_code=500, detail="손절/익절 모니터링 중지 중 오류가 발생했습니다.")
+
+@app.post("/positions/update-prices")
+async def update_positions_prices():
+    """모든 Position의 현재가만 업데이트 (손절/익절 판단 없음)"""
+    try:
+        logger.info("📊 [API] Position 현재가 업데이트 요청")
+        await stop_loss_manager._update_all_positions_price()
+        return {"message": "Position 현재가 업데이트가 완료되었습니다."}
+    except Exception as e:
+        logger.error(f"Position 현재가 업데이트 오류: {e}")
+        raise HTTPException(status_code=500, detail="Position 현재가 업데이트 중 오류가 발생했습니다.")
 
 @app.get("/positions/")
 async def get_positions(status: str = "HOLDING", limit: int = 50):

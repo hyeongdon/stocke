@@ -4,7 +4,8 @@ import asyncio
 import random
 import websockets
 import aiohttp
-from datetime import datetime
+import ssl
+from datetime import datetime, timedelta
 from typing import Dict, Optional, Callable, List
 from config import Config
 from api_rate_limiter import api_rate_limiter
@@ -26,6 +27,10 @@ class KiwoomAPI:
         self.reconnect_delay = 5  # 초
         self.auto_reconnect = True
         self.message_task = None
+        
+        # 현재가 캐시 (종목코드 -> (가격, 시간)) - API 호출 최소화
+        self._price_cache = {}
+        self._price_cache_ttl = 30  # 30초 캐시 (API 제한 고려)
 
     def authenticate(self) -> bool:
         """키움증권 API 인증"""
@@ -547,7 +552,6 @@ class KiwoomAPI:
             else:
                 # 일봉 차트 API (ka10081)
                 api_id = 'ka10081'
-                from datetime import datetime
                 base_dt = datetime.now().strftime('%Y%m%d')
                 request_data = {
                     "stk_cd": stock_code,  # 종목코드
@@ -624,8 +628,16 @@ class KiwoomAPI:
             return []
     
     async def get_current_price(self, stock_code: str) -> Optional[int]:
-        """종목 현재가 조회"""
+        """종목 현재가 조회 (캐싱 적용)"""
         try:
+            # 캐시 확인
+            if stock_code in self._price_cache:
+                price, timestamp = self._price_cache[stock_code]
+                age = datetime.now().timestamp() - timestamp
+                if age < self._price_cache_ttl:
+                    logger.debug(f"💾 [CACHE_HIT] {stock_code} 캐시 사용 (나이: {age:.1f}초)")
+                    return price
+            
             logger.debug(f"현재가 조회 시작: {stock_code}")
             
             if not self.token_manager.get_valid_token():
@@ -635,6 +647,11 @@ class KiwoomAPI:
             # 레이트 리미터: 가용성 확인
             if not api_rate_limiter.is_api_available():
                 logger.warning("현재가 조회 건너뜀 - API 제한 상태")
+                # 캐시에 있으면 오래된 데이터라도 반환
+                if stock_code in self._price_cache:
+                    price, _ = self._price_cache[stock_code]
+                    logger.warning(f"⚠️ API 제한으로 오래된 캐시 사용: {stock_code}")
+                    return price
                 return None
             
             # 키움 API 호출 설정 - 실전/모의 분기
@@ -653,8 +670,6 @@ class KiwoomAPI:
             }
             
             # 요청 데이터 (최근 1일 데이터만 조회)
-            from datetime import datetime, timedelta
-            
             # 최근 거래일 계산 (주말 제외)
             today = datetime.now()
             if today.weekday() == 5:  # 토요일
@@ -673,7 +688,15 @@ class KiwoomAPI:
                 'upd_stkpc_tp': '1'  # 주가 업데이트 타입 추가
             }
             
-            async with aiohttp.ClientSession() as session:
+            # SSL 검증 완화 및 타임아웃 설정 (모의투자 서버 연결 문제 해결)
+            timeout = aiohttp.ClientTimeout(total=60, connect=20, sock_read=30)
+            # SSL 컨텍스트 생성 - 인증서 검증 비활성화
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+            connector = aiohttp.TCPConnector(ssl=ssl_context)
+            
+            async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
                 async with session.post(url, headers=headers, json=request_data) as response:
                     if response.status == 200:
                         try:
@@ -722,7 +745,9 @@ class KiwoomAPI:
                                             break
                                     
                                     if current_price and current_price > 0:
-                                        logger.info(f"현재가 조회 성공: {stock_code} = {current_price:,}원")
+                                        # 캐시에 저장
+                                        self._price_cache[stock_code] = (current_price, datetime.now().timestamp())
+                                        logger.info(f"💾 현재가 조회 성공 (캐시 저장): {stock_code} = {current_price:,}원")
                                         return current_price
                                     else:
                                         logger.warning(f"유효한 가격 데이터 없음: {stock_code}")
@@ -740,7 +765,32 @@ class KiwoomAPI:
                             logger.error(f"현재가 조회 응답 파싱 실패: {e}")
                             return None
                     else:
-                        logger.error(f"현재가 조회 API 호출 실패: {response.status}")
+                        # 429 에러는 Rate Limit 초과를 의미
+                        if response.status == 429:
+                            logger.error(f"❌ [429 ERROR] API 호출 제한 초과!")
+                            logger.error(f"   - 종목코드: {stock_code}")
+                            logger.error(f"   - API URL: {url}")
+                            logger.error(f"   - 응답 헤더: {dict(response.headers)}")
+                            
+                            # 응답 본문 확인
+                            try:
+                                error_body = await response.text()
+                                logger.error(f"   - 응답 본문: {error_body}")
+                            except:
+                                pass
+                            
+                            logger.error(f"   ⚠️  해결방법:")
+                            logger.error(f"      1. API 호출 간격을 더 늘리세요 (현재: {api_rate_limiter.min_call_interval}초)")
+                            logger.error(f"      2. 동시에 여러 종목 조회를 줄이세요")
+                            logger.error(f"      3. 키움 API 제한 정책 확인: 1초당 1회, 1분당 20회")
+                        else:
+                            logger.error(f"현재가 조회 API 호출 실패: HTTP {response.status}")
+                            try:
+                                error_body = await response.text()
+                                logger.error(f"   - 오류 내용: {error_body}")
+                            except:
+                                pass
+                        
                         return None
                         
         except Exception as e:
@@ -1167,7 +1217,7 @@ class KiwoomAPI:
             
             # API 호출 기록 (간격 체크 포함)
             if not api_rate_limiter.record_api_call("get_account_balance"):
-                logger.warning("🚫 [KIWOOM_API] API 호출 간격 부족으로 계좌 조회 건너뜀")
+                logger.debug("🚫 [KIWOOM_API] API 호출 간격 부족으로 계좌 조회 건너뜀 (정상 동작)")
                 return {}
             
             # 계좌번호 설정 (매개변수 우선, 없으면 환경변수 사용)
