@@ -24,9 +24,9 @@ import json
 from datetime import datetime
 from typing import Any
 
-from config import Config
-from stop_loss_manager import StopLossManager
-from models import get_db, Position, AutoTradeSettings
+from core.config import Config
+from managers.stop_loss_manager import StopLossManager
+from core.models import get_db, Position, AutoTradeSettings
 
 
 def _pp(obj: Any) -> str:

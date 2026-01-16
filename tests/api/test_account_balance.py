@@ -23,8 +23,8 @@ import json
 from datetime import datetime
 from typing import Any
 
-from config import Config
-from kiwoom_api import KiwoomAPI
+from core.config import Config
+from api.kiwoom_api import KiwoomAPI
 
 
 def _pp(obj: Any) -> str:

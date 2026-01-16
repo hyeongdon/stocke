@@ -23,8 +23,8 @@ import json
 from datetime import datetime
 from typing import Any
 
-from signal_manager import signal_manager, SignalType, SignalStatus
-from models import get_db, PendingBuySignal
+from managers.signal_manager import signal_manager, SignalType, SignalStatus
+from core.models import get_db, PendingBuySignal
 
 
 def _pp(obj: Any) -> str:

@@ -24,9 +24,9 @@ import json
 from datetime import datetime
 from typing import Any
 
-from buy_order_executor import buy_order_executor
-from models import get_db, PendingBuySignal
-from signal_manager import SignalStatus
+from managers.buy_order_executor import buy_order_executor
+from core.models import get_db, PendingBuySignal
+from managers.signal_manager import SignalStatus
 
 
 def _pp(obj: Any) -> str:

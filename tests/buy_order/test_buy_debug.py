@@ -8,9 +8,9 @@ if sys.platform == 'win32':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
-from buy_order_executor import buy_order_executor
-from models import get_db, PendingBuySignal
-from signal_manager import SignalStatus
+from managers.buy_order_executor import buy_order_executor
+from core.models import get_db, PendingBuySignal
+from managers.signal_manager import SignalStatus
 
 async def main():
     print("=== 매수 주문 디버깅 ===\n")

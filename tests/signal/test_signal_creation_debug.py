@@ -10,9 +10,9 @@ from datetime import datetime
 sys.path.insert(0, '.')
 
 from condition_monitor import condition_monitor
-from signal_manager import signal_manager, SignalType
-from kiwoom_api import KiwoomAPI
-from models import get_db, PendingBuySignal, AutoTradeCondition
+from managers.signal_manager import signal_manager, SignalType
+from api.kiwoom_api import KiwoomAPI
+from core.models import get_db, PendingBuySignal, AutoTradeCondition
 from sqlalchemy.orm import Session
 
 async def test_signal_creation():

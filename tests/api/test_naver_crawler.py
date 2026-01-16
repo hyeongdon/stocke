@@ -21,7 +21,7 @@ if sys.platform == 'win32':
 import argparse
 from datetime import datetime
 
-from naver_discussion_crawler import NaverStockDiscussionCrawler
+from utils.naver_discussion_crawler import NaverStockDiscussionCrawler
 
 
 def run(args: argparse.Namespace) -> int:

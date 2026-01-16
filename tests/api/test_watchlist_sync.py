@@ -23,7 +23,7 @@ import json
 from datetime import datetime
 from typing import Any
 
-from kiwoom_api import KiwoomAPI
+from api.kiwoom_api import KiwoomAPI
 from watchlist_sync_manager import watchlist_sync_manager
 
 
