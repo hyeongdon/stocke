@@ -5,7 +5,7 @@ from typing import Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from api.kiwoom_api import KiwoomAPI
-from core.models import PendingBuySignal, get_db, AutoTradeCondition, AutoTradeSettings
+from core.models import PendingBuySignal, get_db, AutoTradeCondition, AutoTradeSettings, Position
 from managers.stop_loss_manager import StopLossManager
 from core.config import Config
 from utils.debug_tracer import debug_tracer
@@ -344,14 +344,19 @@ class BuyOrderExecutor:
                     await self._update_signal_status(signal.id, "ORDERED", "", order_id)
                     
                     # 포지션 생성 (손절/익절 모니터링용)
+                    position = None
                     try:
-                        await self.stop_loss_manager.create_position_from_buy_signal(
+                        position = await self.stop_loss_manager.create_position_from_buy_signal(
                             signal_id=signal.id,
-                            buy_price=current_price,
+                            buy_price=current_price,  # 임시로 현재가 사용 (나중에 실제 체결가로 업데이트)
                             buy_quantity=quantity,
                             buy_order_id=order_id
                         )
                         logger.info(f"💰 [BUY_EXECUTOR] 포지션 생성 완료 - {signal.stock_name}")
+                        
+                        # 주문 체결 후 실제 체결가 업데이트 (5초 후)
+                        if position:
+                            asyncio.create_task(self._update_position_with_actual_price(position.id, signal.stock_code, 5))
                     except Exception as e:
                         logger.error(f"💰 [BUY_EXECUTOR] 포지션 생성 실패 - {signal.stock_name}: {e}")
                     
@@ -373,6 +378,72 @@ class BuyOrderExecutor:
                     await asyncio.sleep(self.retry_delay_seconds)
                 else:
                     await self._update_signal_status(signal.id, "FAILED", str(e))
+    
+    async def _update_position_with_actual_price(self, position_id: int, stock_code: str, delay_seconds: int = 5):
+        """주문 체결 후 실제 체결가로 포지션 업데이트"""
+        try:
+            # 체결 대기 시간
+            await asyncio.sleep(delay_seconds)
+            
+            logger.info(f"💰 [BUY_EXECUTOR] 실제 체결가 조회 시작 - Position ID: {position_id}, 종목: {stock_code}")
+            
+            # 키움 API에서 보유종목 정보 조회
+            account_number = Config.KIWOOM_MOCK_ACCOUNT_NUMBER if Config.KIWOOM_USE_MOCK_ACCOUNT else Config.KIWOOM_ACCOUNT_NUMBER
+            balance_data = await self.kiwoom_api.get_account_balance(account_number)
+            
+            if not balance_data or 'stk_acnt_evlt_prst' not in balance_data:
+                logger.warning(f"💰 [BUY_EXECUTOR] 보유종목 정보 조회 실패 - Position ID: {position_id}")
+                return
+            
+            # 해당 종목 찾기
+            holdings = balance_data.get('stk_acnt_evlt_prst', [])
+            target_holding = None
+            for holding in holdings:
+                # 종목코드 비교 (앞에 'A'가 붙을 수 있음)
+                holding_code = holding.get('stk_cd', '').replace('A', '')
+                if holding_code == stock_code.replace('A', ''):
+                    target_holding = holding
+                    break
+            
+            if not target_holding:
+                logger.warning(f"💰 [BUY_EXECUTOR] 보유종목에서 찾을 수 없음 - 종목: {stock_code}")
+                return
+            
+            # 실제 매입평균가격 가져오기 (avg_pr 또는 pur_amt/qty 계산)
+            avg_price_str = target_holding.get('avg_pr', '0')  # 평균가격
+            qty_str = target_holding.get('qty', '0')  # 보유수량
+            pur_amt_str = target_holding.get('pur_amt', '0')  # 매입금액 (수수료 포함)
+            
+            try:
+                # avg_pr가 있으면 사용, 없으면 pur_amt/qty로 계산
+                if avg_price_str and float(avg_price_str) > 0:
+                    actual_buy_price = int(float(avg_price_str))
+                elif qty_str and float(qty_str) > 0 and pur_amt_str:
+                    actual_buy_price = int(float(pur_amt_str) / float(qty_str))
+                else:
+                    logger.warning(f"💰 [BUY_EXECUTOR] 유효한 체결가 정보 없음 - 종목: {stock_code}")
+                    return
+                
+                # 포지션 업데이트
+                for db in get_db():
+                    session: Session = db
+                    position = session.query(Position).filter(Position.id == position_id).first()
+                    if position:
+                        old_price = position.buy_price
+                        actual_buy_amount = int(float(pur_amt_str)) if pur_amt_str and float(pur_amt_str) > 0 else actual_buy_price * position.buy_quantity
+                        
+                        position.buy_price = actual_buy_price
+                        position.buy_amount = actual_buy_price * position.buy_quantity
+                        position.actual_buy_amount = actual_buy_amount  # 키움 API의 실제 매입금액 (수수료 포함)
+                        session.commit()
+                        logger.info(f"💰 [BUY_EXECUTOR] 포지션 체결가 업데이트 완료 - {position.stock_name}: {old_price:,}원 → {actual_buy_price:,}원 (실제매입금액: {actual_buy_amount:,}원)")
+                    break
+                    
+            except (ValueError, TypeError) as e:
+                logger.error(f"💰 [BUY_EXECUTOR] 체결가 파싱 오류 - 종목: {stock_code}, 오류: {e}")
+                
+        except Exception as e:
+            logger.error(f"💰 [BUY_EXECUTOR] 실제 체결가 업데이트 오류 - Position ID: {position_id}, 오류: {e}")
     
     async def _update_signal_status(self, signal_id: int, status: str, reason: str = "", order_id: str = ""):
         """신호 상태 업데이트 (실패 사유 포함)"""

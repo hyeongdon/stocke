@@ -173,17 +173,50 @@ class StopLossManager:
                         current_price = await self._get_current_price(position.stock_code)
                         
                         if current_price and current_price > 0:
-                            # 손익 계산
-                            profit_loss = (current_price - position.buy_price) * position.buy_quantity
-                            profit_loss_rate = (current_price - position.buy_price) / position.buy_price * 100
+                            # 키움 방식 수익률 계산 (매도 수수료 + 거래세 포함)
+                            # actual_buy_amount가 있으면 사용, 없으면 buy_amount 사용
+                            actual_buy_amount = getattr(position, 'actual_buy_amount', None) or position.buy_amount
+                            
+                            # 총 투자비용 (매입금액 + 매수 수수료)
+                            total_investment = actual_buy_amount
+                            
+                            # 키움 공식 적용 (모의투자/실계좌 구분)
+                            import math
+                            from core.config import Config
+                            
+                            is_mock_account = Config.KIWOOM_USE_MOCK_ACCOUNT
+                            
+                            if is_mock_account:
+                                # 모의투자 계좌: 매도 수수료 0.35%, 제세금 총 0.557% (기본 0.23% + 추가)
+                                sell_fee = math.floor(current_price * position.buy_quantity * 0.0035)  # 0.35%
+                                # 제세금: 기본 0.23% + 추가(제세금1+2+3+농특세) = 총 0.557%
+                                tax = math.floor(current_price * position.buy_quantity * 0.00557)  # 0.557%
+                            else:
+                                # 실계좌: 매도 수수료 0.015% (10원미만 절사), 제세금 0.05% + 0.15%
+                                sell_fee_base = current_price * position.buy_quantity * 0.00015
+                                sell_fee = math.floor(sell_fee_base / 10) * 10  # 10원미만 절사
+                                
+                                tax_005 = math.floor(current_price * position.buy_quantity * 0.0005)  # 0.05%, 원미만 절사
+                                tax_015 = math.floor(current_price * position.buy_quantity * 0.0015)  # 0.15%, 원미만 절사
+                                tax = tax_005 + tax_015
+                            
+                            # 평가금액 = 현재가 × 수량 - 매도 수수료 - 제세금
+                            evaluation_amount = current_price * position.buy_quantity - sell_fee - tax
+                            
+                            # 손익 = 평가금액 - 매입금액
+                            profit_loss = evaluation_amount - actual_buy_amount
+                            
+                            # 수익률 = 손익 / 매입금액 × 100
+                            profit_loss_rate = (profit_loss / actual_buy_amount) * 100 if actual_buy_amount > 0 else 0
                             
                             # DB 업데이트
                             position.current_price = current_price
-                            position.current_profit_loss = profit_loss
+                            position.current_profit_loss = int(profit_loss)
                             position.current_profit_loss_rate = profit_loss_rate
                             position.last_monitored = datetime.utcnow()
                             
-                            logger.debug(f"🛡️ [STOP_LOSS] 현재가 업데이트 - {position.stock_name}: {current_price:,}원 ({profit_loss_rate:+.2f}%)")
+                            actual_buy_price = actual_buy_amount / position.buy_quantity if position.buy_quantity > 0 else position.buy_price
+                            logger.debug(f"🛡️ [STOP_LOSS] 현재가 업데이트 - {position.stock_name}: {current_price:,}원 ({profit_loss_rate:+.2f}%, 실제매입가: {actual_buy_price:,.0f}원)")
                         else:
                             logger.warning(f"🛡️ [STOP_LOSS] 현재가 조회 실패 - {position.stock_name}")
                         
@@ -216,10 +249,44 @@ class StopLossManager:
                 logger.warning(f"🛡️ [STOP_LOSS] 현재가 조회 실패 - {position.stock_name}")
                 return
             
-            # 손익 계산
-            profit_loss = (current_price - position.buy_price) * position.buy_quantity
-            profit_loss_rate = (current_price - position.buy_price) / position.buy_price * 100
-            debug_tracer.log_checkpoint(f"손익: {profit_loss:+,}원 ({profit_loss_rate:+.2f}%), 매수가: {position.buy_price:,}원", "STOP_LOSS")
+            # 키움 방식 수익률 계산 (매도 수수료 + 거래세 포함)
+            # actual_buy_amount가 있으면 사용, 없으면 buy_amount 사용
+            actual_buy_amount = getattr(position, 'actual_buy_amount', None) or position.buy_amount
+            
+            # 총 투자비용 (매입금액 + 매수 수수료)
+            total_investment = actual_buy_amount
+            
+            # 키움 공식 적용 (모의투자/실계좌 구분)
+            import math
+            from core.config import Config
+            
+            is_mock_account = Config.KIWOOM_USE_MOCK_ACCOUNT
+            
+            if is_mock_account:
+                # 모의투자 계좌: 매도 수수료 0.35%, 제세금 총 0.557% (기본 0.23% + 추가)
+                sell_fee = math.floor(current_price * position.buy_quantity * 0.0035)  # 0.35%
+                # 제세금: 기본 0.23% + 추가(제세금1+2+3+농특세) = 총 0.557%
+                tax = math.floor(current_price * position.buy_quantity * 0.00557)  # 0.557%
+            else:
+                # 실계좌: 매도 수수료 0.015% (10원미만 절사), 제세금 0.05% + 0.15%
+                sell_fee_base = current_price * position.buy_quantity * 0.00015
+                sell_fee = math.floor(sell_fee_base / 10) * 10  # 10원미만 절사
+                
+                tax_005 = math.floor(current_price * position.buy_quantity * 0.0005)  # 0.05%, 원미만 절사
+                tax_015 = math.floor(current_price * position.buy_quantity * 0.0015)  # 0.15%, 원미만 절사
+                tax = tax_005 + tax_015
+            
+            # 평가금액 = 현재가 × 수량 - 매도 수수료 - 제세금
+            evaluation_amount = current_price * position.buy_quantity - sell_fee - tax
+            
+            # 손익 = 평가금액 - 매입금액
+            profit_loss = evaluation_amount - actual_buy_amount
+            
+            # 수익률 = 손익 / 매입금액 × 100
+            profit_loss_rate = (profit_loss / actual_buy_amount) * 100 if actual_buy_amount > 0 else 0
+            
+            actual_buy_price = actual_buy_amount / position.buy_quantity if position.buy_quantity > 0 else position.buy_price
+            debug_tracer.log_checkpoint(f"손익: {profit_loss:+,}원 ({profit_loss_rate:+.2f}%), 매수가: {position.buy_price:,}원, 실제매입가: {actual_buy_price:,.0f}원, 총투자비용: {total_investment:,}원", "STOP_LOSS")
             
             # 포지션 정보 업데이트
             await self._update_position_price(position.id, current_price, profit_loss, profit_loss_rate)

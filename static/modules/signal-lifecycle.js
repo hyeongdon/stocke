@@ -60,26 +60,29 @@ class SignalLifecycleTracker {
         icon.classList.add('rotating');
 
         try {
-            // 시그널 및 포지션 데이터 동시 로드
+            // 시그널, 포지션, 매도 주문 데이터 동시 로드
             // skip_price=true로 API 호출 최소화 (Position의 current_price 사용)
-            const [signalsResponse, positionsResponse] = await Promise.all([
+            const [signalsResponse, positionsResponse, sellOrdersResponse] = await Promise.all([
                 fetch('/signals/pending?status=ALL&skip_price=true'),
-                fetch('/positions/?status=ALL')
+                fetch('/positions/?status=ALL'),
+                fetch('/sell-orders/?status=ALL')
             ]);
 
-            if (!signalsResponse.ok || !positionsResponse.ok) {
+            if (!signalsResponse.ok || !positionsResponse.ok || !sellOrdersResponse.ok) {
                 throw new Error('API 응답 오류');
             }
 
             const signalsData = await signalsResponse.json();
             const positionsData = await positionsResponse.json();
+            const sellOrdersData = await sellOrdersResponse.json();
 
             // 응답 형식 처리 (배열 또는 객체)
             const signals = Array.isArray(signalsData) ? signalsData : (signalsData.items || []);
             const positions = Array.isArray(positionsData) ? positionsData : (positionsData.items || []);
+            const sellOrders = Array.isArray(sellOrdersData) ? sellOrdersData : (sellOrdersData.items || []);
 
             // 데이터 결합 및 라이프사이클 상태 계산
-            this.signals = this.processSignals(signals, positions);
+            this.signals = this.processSignals(signals, positions, sellOrders);
             
             this.renderSignals();
             this.updateStats();
@@ -94,7 +97,7 @@ class SignalLifecycleTracker {
         }
     }
 
-    processSignals(signals, positions) {
+    processSignals(signals, positions, sellOrders) {
         // 포지션 맵 생성 (signal_id 기준)
         const positionMap = {};
         positions.forEach(pos => {
@@ -103,19 +106,34 @@ class SignalLifecycleTracker {
             }
         });
 
+        // 매도 주문 맵 생성 (position_id 기준)
+        const sellOrderMap = {};
+        sellOrders.forEach(order => {
+            if (order.position_id) {
+                sellOrderMap[order.position_id] = order;
+            }
+        });
+
         return signals.map(signal => {
             // ✅ 우선순위: 1) signal에 이미 포함된 position, 2) positions 배열에서 찾은 것
             const position = signal.position || positionMap[signal.id];
             
+            // 포지션에 해당하는 매도 주문 찾기
+            let sellOrder = null;
+            if (position && position.id) {
+                sellOrder = sellOrderMap[position.id];
+            }
+            
             return {
                 ...signal,
-                lifecycle: this.calculateLifecycle(signal, position),
-                position: position
+                lifecycle: this.calculateLifecycle(signal, position, sellOrder),
+                position: position,
+                sellOrder: sellOrder
             };
         }).sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at));
     }
 
-    calculateLifecycle(signal, position) {
+    calculateLifecycle(signal, position, sellOrder) {
         // 기준 시간 (신호 감지 시간)
         const baseTime = new Date(signal.detected_at);
         
@@ -159,9 +177,15 @@ class SignalLifecycleTracker {
             },
             positionCreated: { 
                 status: 'unknown', 
-                time: position ? position.created_at : addSeconds(baseTime, 12),  // 포지션 생성 시간 또는 12초 후
+                time: position ? (position.buy_time || position.created_at) : addSeconds(baseTime, 12),  // 포지션 생성 시간 또는 12초 후
                 label: '포지션 생성',
                 icon: 'fa-briefcase'
+            },
+            sellCompleted: { 
+                status: 'unknown', 
+                time: null,  // 기본값은 null (청산 전이면 빈 값)
+                label: '청산',
+                icon: 'fa-chart-line'
             }
         };
 
@@ -180,9 +204,32 @@ class SignalLifecycleTracker {
             
             if (position) {
                 stages.positionCreated.status = 'completed';
-                stages.positionCreated.time = position.created_at;
+                stages.positionCreated.time = position.buy_time || position.created_at;
+                
+                // 포지션 상태 확인
+                const positionStatus = position.status ? String(position.status).toUpperCase() : null;
+                const isLiquidated = positionStatus && ['STOP_LOSS', 'TAKE_PROFIT', 'MANUAL_SELL'].includes(positionStatus);
+                
+                if (isLiquidated) {
+                    // 포지션이 청산된 경우
+                    if (sellOrder) {
+                        const sellOrderStatus = String(sellOrder.status || '').toUpperCase();
+                        stages.sellCompleted.status = sellOrderStatus === 'COMPLETED' ? 'completed' : 
+                                                      sellOrderStatus === 'ORDERED' ? 'active' : 'unknown';
+                        stages.sellCompleted.time = sellOrder.completed_at || sellOrder.ordered_at || sellOrder.created_at;
+                    } else {
+                        stages.sellCompleted.status = 'active';
+                        stages.sellCompleted.time = null;  // 청산 주문은 있지만 시간 정보가 없음
+                    }
+                } else {
+                    // 포지션이 아직 보유 중인 경우 (HOLDING)
+                    stages.sellCompleted.status = 'unknown';
+                    stages.sellCompleted.time = null;  // 청산 전이면 시간 없음
+                }
             } else {
                 stages.positionCreated.status = 'active';
+                // 포지션이 없으면 청산 단계도 표시하지 않음
+                delete stages.sellCompleted;
             }
         } else if (signal.status === 'FAILED') {
             // 실패한 단계 찾기
@@ -334,11 +381,19 @@ class SignalLifecycleTracker {
             });
         }
         
-        // 매수가 정보 (포지션이 있는 경우)
+        // 매수 정보 (포지션이 있는 경우)
         if (signal.position) {
+            // 매수가/매수금액/매수수량을 한 셀에 통합
+            const buyInfo = `
+                <div style="line-height: 1.6;">
+                    <div style="font-weight: bold; margin-bottom: 2px;">매수가: ${signal.position.buy_price.toLocaleString()}원</div>
+                    <div style="font-size: 11px; color: #666;">수량: ${signal.position.buy_quantity}주</div>
+                    <div style="font-size: 11px; color: #666;">금액: ${signal.position.buy_amount.toLocaleString()}원</div>
+                </div>
+            `;
             details.push({ 
-                label: '매수가', 
-                value: `${signal.position.buy_price.toLocaleString()}원`,
+                label: '매수 정보', 
+                value: buyInfo,
                 highlight: false
             });
             
@@ -346,9 +401,32 @@ class SignalLifecycleTracker {
             if (signal.position.current_price && signal.position.current_price > 0) {
                 const currentPrice = signal.position.current_price;
                 const buyPrice = signal.position.buy_price;
-                const pnl = ((currentPrice - buyPrice) / buyPrice) * 100;
-                const priceChange = currentPrice - buyPrice;
+                
+                // 백엔드에서 계산된 값이 있으면 우선 사용, 없으면 프론트엔드에서 계산
+                let profitLoss, pnl;
+                
+                if (signal.position.current_profit_loss !== null && signal.position.current_profit_loss !== undefined &&
+                    signal.position.current_profit_loss_rate !== null && signal.position.current_profit_loss_rate !== undefined) {
+                    // 백엔드에서 계산된 값 사용
+                    profitLoss = signal.position.current_profit_loss;
+                    pnl = signal.position.current_profit_loss_rate;
+                } else {
+                    // 프론트엔드에서 계산 (모의투자 계좌 기준)
+                    const actualBuyAmount = signal.position.actual_buy_amount;
+                    const totalInvestment = actualBuyAmount && actualBuyAmount > 0 ? actualBuyAmount : buyPrice * signal.position.buy_quantity;
+                    
+                    // 모의투자 계좌 공식 적용
+                    // 매도 수수료: 0.35%, 제세금: 총 0.557% (기본 0.23% + 추가)
+                    const sellFee = Math.floor(currentPrice * signal.position.buy_quantity * 0.0035);  // 0.35%
+                    const tax = Math.floor(currentPrice * signal.position.buy_quantity * 0.00557);  // 0.557%
+                    const evaluationAmount = currentPrice * signal.position.buy_quantity - sellFee - tax;
+                    profitLoss = evaluationAmount - totalInvestment;
+                    pnl = (profitLoss / totalInvestment) * 100;
+                }
+                
+                const priceChange = currentPrice - buyPrice;  // 현재가는 매수가 기준으로 표시
                 const priceChangeStr = priceChange >= 0 ? `+${priceChange.toLocaleString()}` : priceChange.toLocaleString();
+                const profitLossStr = profitLoss >= 0 ? `+${Math.round(profitLoss).toLocaleString()}` : Math.round(profitLoss).toLocaleString();
                 const pnlClass = pnl >= 0 ? 'text-success' : 'text-danger';
                 
                 details.push({ 
@@ -357,10 +435,10 @@ class SignalLifecycleTracker {
                     highlight: true
                 });
                 
-                // 수익률 (현재가 바로 아래)
+                // 수익률 및 평가손익 (수수료 포함 계산)
                 details.push({ 
                     label: '수익률', 
-                    value: `<span class="${pnlClass}" style="font-weight: bold;">${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}% (${priceChangeStr}원)</span>`,
+                    value: `<span class="${pnlClass}" style="font-weight: bold;">${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}% (${profitLossStr}원)</span>`,
                     highlight: true
                 });
             }
@@ -378,8 +456,70 @@ class SignalLifecycleTracker {
                 });
             }
             
-            details.push({ label: '수량', value: `${signal.position.buy_quantity}주` });
-            details.push({ label: '매수금액', value: `${signal.position.buy_amount.toLocaleString()}원` });
+            // 청산 정보 표시 (포지션이 청산된 경우)
+            const positionStatus = signal.position.status ? String(signal.position.status).toUpperCase() : null;
+            if (positionStatus && ['STOP_LOSS', 'TAKE_PROFIT', 'MANUAL_SELL'].includes(positionStatus)) {
+                if (signal.sellOrder) {
+                    const sellOrder = signal.sellOrder;
+                    const profitLoss = sellOrder.profit_loss || 0;
+                    const profitLossRate = sellOrder.profit_loss_rate || 0;
+                    const profitLossClass = profitLoss >= 0 ? 'text-success' : 'text-danger';
+                    const profitLossSign = profitLoss >= 0 ? '+' : '';
+                    
+                    // 청산 사유
+                    const sellReasonMap = {
+                        'STOP_LOSS': '손절',
+                        'TAKE_PROFIT': '익절',
+                        'MANUAL': '수동청산',
+                        'INDICATOR': '지표청산'
+                    };
+                    const sellReasonText = sellReasonMap[sellOrder.sell_reason] || sellOrder.sell_reason;
+                    
+                    // 매도 정보 (매도가/매도수량/매도금액)를 한 셀에 통합
+                    const sellInfo = `
+                        <div style="line-height: 1.6;">
+                            <div style="font-weight: bold; margin-bottom: 2px;">매도가: ${sellOrder.sell_price.toLocaleString()}원</div>
+                            <div style="font-size: 11px; color: #666;">수량: ${sellOrder.sell_quantity}주</div>
+                            <div style="font-size: 11px; color: #666;">금액: ${sellOrder.sell_amount.toLocaleString()}원</div>
+                        </div>
+                    `;
+                    details.push({ 
+                        label: '매도 정보', 
+                        value: sellInfo,
+                        highlight: true
+                    });
+                    
+                    details.push({ 
+                        label: '최종 손익', 
+                        value: `<span class="${profitLossClass}" style="font-weight: bold; font-size: 13px;">${profitLossSign}${profitLoss.toLocaleString()}원 (${profitLossSign}${profitLossRate.toFixed(2)}%)</span>`,
+                        highlight: true
+                    });
+                    
+                    details.push({ 
+                        label: '청산 사유', 
+                        value: `<span style="font-weight: bold;">${sellReasonText}</span>`
+                    });
+                    
+                    if (sellOrder.sell_reason_detail) {
+                        details.push({ 
+                            label: '상세 사유', 
+                            value: sellOrder.sell_reason_detail
+                        });
+                    }
+                    
+                    if (sellOrder.completed_at) {
+                        details.push({ 
+                            label: '청산 완료 시간', 
+                            value: this.formatTime(sellOrder.completed_at)
+                        });
+                    }
+                } else {
+                    details.push({ 
+                        label: '청산 상태', 
+                        value: '<span style="color: #ff9800; font-weight: bold;">⏳ 청산 주문 처리 중...</span>'
+                    });
+                }
+            }
         } else {
             // 포지션이 없는 경우 (아직 주문 전)
             if (signal.target_price) {

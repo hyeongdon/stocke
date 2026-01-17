@@ -146,6 +146,7 @@ class Position(Base):
     buy_quantity = Column(Integer, nullable=False)  # 매수 수량
     buy_amount = Column(Integer, nullable=False)  # 매수 금액
     buy_order_id = Column(String(50), nullable=True)  # 매수 주문 ID
+    actual_buy_amount = Column(Integer, nullable=True)  # 실제 매입금액 (수수료 포함, 키움 pur_amt)
     
     # 손절/익절 설정
     stop_loss_rate = Column(Float, nullable=False, default=5.0)  # 손절 비율 (%)

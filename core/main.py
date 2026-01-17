@@ -330,6 +330,9 @@ async def get_pending_signals(limit: int = 100, status: str = "PENDING", skip_pr
                         "stop_loss_price": position.stop_loss_price,
                         "take_profit_price": position.take_profit_price,
                         "status": position.status,
+                        "actual_buy_amount": getattr(position, 'actual_buy_amount', None),
+                        "current_profit_loss": position.current_profit_loss,
+                        "current_profit_loss_rate": position.current_profit_loss_rate,
                         "buy_time": position.buy_time.isoformat() if position.buy_time else None,
                     }
                 
@@ -2323,6 +2326,112 @@ async def update_positions_prices():
         logger.error(f"Position 현재가 업데이트 오류: {e}")
         raise HTTPException(status_code=500, detail="Position 현재가 업데이트 중 오류가 발생했습니다.")
 
+@app.post("/positions/sync-actual-buy-amount")
+async def sync_actual_buy_amount():
+    """키움 API에서 실제 매입금액(pur_amt)을 가져와서 포지션 업데이트"""
+    try:
+        from core.models import Position
+        from api.kiwoom_api import kiwoom_api
+        from core.config import Config
+        
+        account_number = Config.KIWOOM_MOCK_ACCOUNT_NUMBER if Config.KIWOOM_USE_MOCK_ACCOUNT else Config.KIWOOM_ACCOUNT_NUMBER
+        balance_data = await kiwoom_api.get_account_balance(account_number)
+        
+        if not balance_data or 'stk_acnt_evlt_prst' not in balance_data:
+            raise HTTPException(status_code=500, detail="보유종목 정보 조회 실패")
+        
+        holdings = balance_data.get('stk_acnt_evlt_prst', [])
+        holdings_map = {}
+        for holding in holdings:
+            stock_code = holding.get('stk_cd', '').replace('A', '')
+            pur_amt = int(float(holding.get('pur_amt', '0')))  # 매입금액 (수수료 포함)
+            evlt_amt = int(float(holding.get('evlt_amt', '0')))  # 평가금액 (키움 실제 값)
+            lspft_amt = int(float(holding.get('lspft_amt', '0')))  # 평가손익
+            lspft_rt = float(holding.get('lspft_rt', '0'))  # 수익률
+            if pur_amt > 0:
+                holdings_map[stock_code] = {
+                    'pur_amt': pur_amt,
+                    'evlt_amt': evlt_amt,  # 평가금액 추가
+                    'lspft_amt': lspft_amt,
+                    'lspft_rt': lspft_rt
+                }
+        
+        updated_count = 0
+        for db in get_db():
+            session: Session = db
+            positions = session.query(Position).filter(Position.status == "HOLDING").all()
+            
+            for position in positions:
+                stock_code = position.stock_code.replace('A', '')
+                if stock_code in holdings_map:
+                    holding_info = holdings_map[stock_code]
+                    actual_buy_amount = holding_info['pur_amt']
+                    evlt_amt = holding_info.get('evlt_amt', 0)  # 평가금액
+                    kiwoom_profit_loss = holding_info['lspft_amt']
+                    kiwoom_profit_rate = holding_info['lspft_rt']
+                    
+                    # actual_buy_amount 업데이트
+                    current_actual_buy_amount = getattr(position, 'actual_buy_amount', None)
+                    if current_actual_buy_amount != actual_buy_amount:
+                        position.actual_buy_amount = actual_buy_amount
+                        logger.info(f"💰 [API] 포지션 실제매입금액 업데이트 - {position.stock_name}: {actual_buy_amount:,}원")
+                    
+                    # 키움 API의 평가손익과 수익률이 있으면 우선 사용 (가장 정확함)
+                    if kiwoom_profit_loss != 0 or kiwoom_profit_rate != 0:
+                        if position.current_profit_loss != kiwoom_profit_loss or abs(position.current_profit_loss_rate - kiwoom_profit_rate) > 0.01:
+                            position.current_profit_loss = int(kiwoom_profit_loss)
+                            position.current_profit_loss_rate = kiwoom_profit_rate
+                            updated_count += 1
+                            logger.info(f"💰 [API] 포지션 평가손익 업데이트 - {position.stock_name}: {kiwoom_profit_loss:+,}원 ({kiwoom_profit_rate:+.2f}%)")
+                    # 키움 API 값이 0이면 키움 방식으로 계산 (매도 수수료 + 거래세 포함)
+                    elif position.current_price:
+                        # 키움 공식 적용 (모의투자/실계좌 구분)
+                        import math
+                        from core.config import Config
+                        
+                        is_mock_account = Config.KIWOOM_USE_MOCK_ACCOUNT
+                        
+                        if is_mock_account:
+                            # 모의투자 계좌: 매도 수수료 0.35%, 제세금 총 0.557% (기본 0.23% + 추가)
+                            sell_fee = math.floor(position.current_price * position.buy_quantity * 0.0035)  # 0.35%
+                            # 제세금: 기본 0.23% + 추가(제세금1+2+3+농특세) = 총 0.557%
+                            tax = math.floor(position.current_price * position.buy_quantity * 0.00557)  # 0.557%
+                        else:
+                            # 실계좌: 매도 수수료 0.015% (10원미만 절사), 제세금 0.05% + 0.15%
+                            sell_fee_base = position.current_price * position.buy_quantity * 0.00015
+                            sell_fee = math.floor(sell_fee_base / 10) * 10  # 10원미만 절사
+                            
+                            tax_005 = math.floor(position.current_price * position.buy_quantity * 0.0005)  # 0.05%, 원미만 절사
+                            tax_015 = math.floor(position.current_price * position.buy_quantity * 0.0015)  # 0.15%, 원미만 절사
+                            tax = tax_005 + tax_015
+                        
+                        # 평가금액 = 현재가 × 수량 - 매도 수수료 - 제세금
+                        evaluation_amount = position.current_price * position.buy_quantity - sell_fee - tax
+                        
+                        # 손익 = 평가금액 - 매입금액
+                        calculated_profit_loss = evaluation_amount - actual_buy_amount
+                        
+                        # 수익률 = 손익 / 매입금액 × 100
+                        calculated_profit_rate = (calculated_profit_loss / actual_buy_amount) * 100 if actual_buy_amount > 0 else 0
+                        
+                        if position.current_profit_loss != int(calculated_profit_loss) or abs(position.current_profit_loss_rate - calculated_profit_rate) > 0.01:
+                            position.current_profit_loss = int(calculated_profit_loss)
+                            position.current_profit_loss_rate = calculated_profit_rate
+                            updated_count += 1
+                            logger.info(f"💰 [API] 포지션 평가손익 업데이트 (계산) - {position.stock_name}: {calculated_profit_loss:+,}원 ({calculated_profit_rate:+.2f}%)")
+            
+            session.commit()
+            break
+        
+        return {
+            "message": f"포지션 실제매입금액 업데이트 완료: {updated_count}개",
+            "updated_count": updated_count,
+            "success": True
+        }
+    except Exception as e:
+        logger.error(f"포지션 실제매입금액 업데이트 오류: {e}")
+        raise HTTPException(status_code=500, detail=f"포지션 실제매입금액 업데이트 중 오류가 발생했습니다: {str(e)}")
+
 @app.get("/positions/")
 async def get_positions(status: str = "HOLDING", limit: int = 50):
     """포지션 목록 조회"""
@@ -2352,7 +2461,10 @@ async def get_positions(status: str = "HOLDING", limit: int = 50):
                     "stop_loss_rate": pos.stop_loss_rate,
                     "take_profit_rate": pos.take_profit_rate,
                     "status": pos.status,
+                    "signal_id": pos.signal_id,
+                    "actual_buy_amount": pos.actual_buy_amount,
                     "buy_time": pos.buy_time.isoformat() if pos.buy_time else None,
+                    "sell_time": pos.sell_time.isoformat() if pos.sell_time else None,
                     "last_monitored": pos.last_monitored.isoformat() if pos.last_monitored else None
                 }
                 for pos in positions
