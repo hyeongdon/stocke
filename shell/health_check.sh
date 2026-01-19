@@ -21,7 +21,7 @@ log() {
 log "=== 서버 상태 확인 시작 ==="
 
 # 1. 서버 프로세스 확인
-SERVER_PID=$(ps aux | grep "uvicorn main:app" | grep -v grep | awk '{print $2}')
+SERVER_PID=$(ps aux | grep "uvicorn core.main:app" | grep -v grep | awk '{print $2}')
 
 if [ -z "$SERVER_PID" ]; then
     log "경고: 서버 프로세스가 실행되지 않음 - 자동 복구 시작"

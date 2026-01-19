@@ -46,7 +46,7 @@ log "=== 서버 배포 상태 확인 시작 ==="
 
 # 1. 서버 프로세스 확인
 echo -e "${BLUE}1. 서버 프로세스 확인${NC}"
-SERVER_PID=$(ps aux | grep "uvicorn main:app" | grep -v grep | awk '{print $2}')
+SERVER_PID=$(ps aux | grep "uvicorn core.main:app" | grep -v grep | awk '{print $2}')
 
 if [ -z "$SERVER_PID" ]; then
     print_status "ERROR" "서버 프로세스가 실행되지 않음"

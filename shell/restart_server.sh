@@ -25,7 +25,7 @@ cd "$PROJECT_DIR"
 
 # 1. 현재 실행 중인 서버 프로세스 확인 및 종료
 log "현재 실행 중인 서버 프로세스 확인 중..."
-SERVER_PID=$(ps aux | grep "uvicorn main:app" | grep -v grep | awk '{print $2}')
+SERVER_PID=$(ps aux | grep "uvicorn core.main:app" | grep -v grep | awk '{print $2}')
 
 if [ -n "$SERVER_PID" ]; then
     log "서버 프로세스 발견 (PID: $SERVER_PID) - 종료 중..."
@@ -58,11 +58,13 @@ source venv/bin/activate
 
 # 4. 서버 재시작
 log "서버 재시작 중..."
-nohup uvicorn main:app --host 0.0.0.0 --port 8001 --reload > server.log 2>&1 &
+# PYTHONPATH 설정 및 core.main 모듈로 실행
+export PYTHONPATH="$PROJECT_DIR:$PYTHONPATH"
+nohup uvicorn core.main:app --host 0.0.0.0 --port 8001 --reload > server.log 2>&1 &
 
 # 5. 서버 시작 확인
 sleep 5
-NEW_PID=$(ps aux | grep "uvicorn main:app" | grep -v grep | awk '{print $2}')
+NEW_PID=$(ps aux | grep "uvicorn core.main:app" | grep -v grep | awk '{print $2}')
 
 if [ -n "$NEW_PID" ]; then
     log "서버 재시작 성공 (새 PID: $NEW_PID)"
