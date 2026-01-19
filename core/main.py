@@ -1317,31 +1317,6 @@ async def cleanup_old_signals(days: int = 7):
         logger.error(f"신호 정리 오류: {e}")
         raise HTTPException(status_code=500, detail="신호 정리 중 오류가 발생했습니다.")
 
-@app.post("/signals/cleanup-pending")
-async def cleanup_pending_signals():
-    """매수대기 목록 수동 정리"""
-    try:
-        cleanup_count = await buy_order_executor.manual_cleanup_pending_signals()
-        return {
-            "message": f"매수대기 신호 {cleanup_count}개가 정리되었습니다.",
-            "cleanup_count": cleanup_count
-        }
-    except Exception as e:
-        logger.error(f"매수대기 정리 오류: {e}")
-        raise HTTPException(status_code=500, detail="매수대기 정리 중 오류가 발생했습니다.")
-
-@app.post("/signals/cleanup-expired")
-async def cleanup_expired_signals():
-    """만료된 매수대기 신호 정리 (자정 정리와 동일)"""
-    try:
-        await buy_order_executor.cleanup_expired_pending_signals()
-        return {
-            "message": "만료된 매수대기 신호가 정리되었습니다."
-        }
-    except Exception as e:
-        logger.error(f"만료 신호 정리 오류: {e}")
-        raise HTTPException(status_code=500, detail="만료 신호 정리 중 오류가 발생했습니다.")
-
 @app.post("/signals/cleanup-failed")
 async def cleanup_failed_signals():
     """실패한 신호 일괄 정리"""
@@ -2462,6 +2437,7 @@ async def get_positions(status: str = "HOLDING", limit: int = 50):
                     "take_profit_rate": pos.take_profit_rate,
                     "status": pos.status,
                     "signal_id": pos.signal_id,
+                    "condition_id": pos.condition_id,
                     "actual_buy_amount": pos.actual_buy_amount,
                     "buy_time": pos.buy_time.isoformat() if pos.buy_time else None,
                     "sell_time": pos.sell_time.isoformat() if pos.sell_time else None,
@@ -2517,6 +2493,182 @@ async def get_sell_orders(status: str = "ALL", limit: int = 50):
     except Exception as e:
         logger.error(f"매도 주문 목록 조회 오류: {e}")
         raise HTTPException(status_code=500, detail="매도 주문 목록 조회 중 오류가 발생했습니다.")
+
+# ===== 급등 종목 조회 API =====
+
+@app.get("/stocks/surge")
+async def get_surge_stocks(
+    min_change_rate: float = 5.0,  # 최소 등락률 (%)
+    min_volume_ratio: float = 2.0,  # 최소 거래량 비율 (전일 대비)
+    min_price: int = 1000,  # 최소 주가 (페니주식 제외)
+    limit: int = 50,  # 최대 조회 개수
+    condition_id: Optional[str] = None,  # 조건식 ID (선택)
+    use_chart_data: bool = False  # 차트 데이터 사용 여부
+):
+    """
+    급등 종목 조회
+    
+    - min_change_rate: 최소 등락률 (%)
+    - min_volume_ratio: 최소 거래량 비율 (전일 대비, 예: 2.0 = 2배)
+    - min_price: 최소 주가 (원)
+    - limit: 최대 조회 개수
+    - condition_id: 조건식 ID (지정 시 조건식 검색 사용)
+    - use_chart_data: True면 차트 데이터 기반 조회 (관심종목 대상)
+    """
+    try:
+        logger.info(f"🚀 [SURGE] 급등 종목 조회 시작 - 등락률>={min_change_rate}%, 거래량>={min_volume_ratio}배")
+        
+        surge_stocks = []
+        
+        # 방법 1: 조건식 기반 조회 (가장 효율적)
+        if condition_id:
+            logger.info(f"🚀 [SURGE] 조건식 기반 조회: {condition_id}")
+            stocks = await kiwoom_api.search_condition_stocks(
+                condition_id=condition_id,
+                condition_name="급등종목"
+            )
+            
+            for stock in stocks:
+                try:
+                    change_rate = float(stock.get('change_rate', 0))
+                    volume = int(stock.get('volume', 0))
+                    current_price = int(stock.get('current_price', 0))
+                    
+                    # 기본 필터링
+                    if (change_rate >= min_change_rate and 
+                        current_price >= min_price):
+                        surge_stocks.append({
+                            'stock_code': stock.get('stock_code'),
+                            'stock_name': stock.get('stock_name'),
+                            'current_price': current_price,
+                            'prev_close': int(stock.get('prev_close', 0)),
+                            'change_rate': change_rate,
+                            'volume': volume,
+                            'price_diff': current_price - int(stock.get('prev_close', 0))
+                        })
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"🚀 [SURGE] 종목 데이터 파싱 오류: {e}")
+                    continue
+        
+        # 방법 2: 차트 데이터 기반 조회 (관심종목 대상)
+        elif use_chart_data:
+            logger.info(f"🚀 [SURGE] 차트 데이터 기반 조회 (관심종목)")
+            
+            # 관심종목 목록 조회
+            watchlist = []
+            for db in get_db():
+                session: Session = db
+                from core.models import WatchlistStock
+                watchlist_stocks = session.query(WatchlistStock).filter(
+                    WatchlistStock.is_active == True
+                ).limit(100).all()  # 최대 100개 종목만 조회 (API 제한 고려)
+                watchlist = [stock.stock_code for stock in watchlist_stocks]
+                break
+            
+            if not watchlist:
+                logger.warning("🚀 [SURGE] 관심종목이 없습니다")
+                return {
+                    "stocks": [],
+                    "total": 0,
+                    "message": "관심종목이 없습니다"
+                }
+            
+            logger.info(f"🚀 [SURGE] 관심종목 {len(watchlist)}개 조회 시작")
+            
+            # 각 종목의 최근 일봉 데이터 조회
+            for idx, stock_code in enumerate(watchlist, 1):
+                try:
+                    # API 제한 고려: 5초마다 1개 종목 조회
+                    if idx > 1:
+                        await asyncio.sleep(5)
+                    
+                    chart_data = await kiwoom_api.get_stock_chart_data(stock_code, "1D")
+                    
+                    if not chart_data or len(chart_data) < 2:
+                        continue
+                    
+                    # 최근 2일 데이터
+                    today = chart_data[-1]
+                    yesterday = chart_data[-2]
+                    
+                    current_price = int(today.get('close', 0))
+                    prev_close = int(yesterday.get('close', 0))
+                    today_volume = int(today.get('volume', 0))
+                    yesterday_volume = int(yesterday.get('volume', 0))
+                    
+                    if prev_close == 0:
+                        continue
+                    
+                    # 등락률 계산
+                    change_rate = ((current_price - prev_close) / prev_close) * 100
+                    
+                    # 거래량 증가율 계산
+                    volume_ratio = today_volume / yesterday_volume if yesterday_volume > 0 else 0
+                    
+                    # 급등 조건 확인
+                    if (change_rate >= min_change_rate and 
+                        volume_ratio >= min_volume_ratio and
+                        current_price >= min_price):
+                        
+                        # 종목명 조회
+                        stock_name = stock_code
+                        for db in get_db():
+                            session: Session = db
+                            from core.models import WatchlistStock
+                            watchlist_stock = session.query(WatchlistStock).filter(
+                                WatchlistStock.stock_code == stock_code
+                            ).first()
+                            if watchlist_stock:
+                                stock_name = watchlist_stock.stock_name
+                            break
+                        
+                        surge_stocks.append({
+                            'stock_code': stock_code,
+                            'stock_name': stock_name,
+                            'current_price': current_price,
+                            'prev_close': prev_close,
+                            'change_rate': round(change_rate, 2),
+                            'volume': today_volume,
+                            'volume_ratio': round(volume_ratio, 2),
+                            'price_diff': current_price - prev_close
+                        })
+                        
+                except Exception as e:
+                    logger.warning(f"🚀 [SURGE] {stock_code} 조회 오류: {e}")
+                    continue
+        
+        # 방법 3: 기본 조회 (조건식 없을 경우 빈 결과)
+        else:
+            logger.warning("🚀 [SURGE] 조건식 ID가 지정되지 않았습니다. condition_id 파라미터를 지정하거나 use_chart_data=true를 사용하세요.")
+            return {
+                "stocks": [],
+                "total": 0,
+                "message": "조건식 ID를 지정하거나 use_chart_data=true를 사용하세요"
+            }
+        
+        # 등락률 기준 내림차순 정렬
+        surge_stocks.sort(key=lambda x: x['change_rate'], reverse=True)
+        
+        # limit 적용
+        surge_stocks = surge_stocks[:limit]
+        
+        logger.info(f"🚀 [SURGE] 급등 종목 {len(surge_stocks)}개 발견")
+        
+        return {
+            "stocks": surge_stocks,
+            "total": len(surge_stocks),
+            "criteria": {
+                "min_change_rate": min_change_rate,
+                "min_volume_ratio": min_volume_ratio,
+                "min_price": min_price
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"🚀 [SURGE] 급등 종목 조회 오류: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"급등 종목 조회 중 오류가 발생했습니다: {str(e)}")
 
 @app.post("/positions/{position_id}/manual-sell")
 async def manual_sell_position(position_id: int, sell_price: int = 0):

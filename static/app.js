@@ -253,10 +253,10 @@ class StockMonitorApp {
                 </div>
             `;
 
-            // 최근 신호 API 호출 (실제 구현에 따라 수정 필요)
-            const response = await fetch('/signals/recent');
+            // 최근 신호 API 호출 - pending API 사용
+            const response = await fetch('/signals/pending?limit=20');
             const data = await response.json();
-            const signals = (data && Array.isArray(data.signals)) ? data.signals : [];
+            const signals = (data && Array.isArray(data.items)) ? data.items : [];
 
             if (signals.length === 0) {
                 container.innerHTML = `

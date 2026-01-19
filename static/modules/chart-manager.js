@@ -133,13 +133,4 @@ class ChartManager {
         }
     }
 
-    async loadNews(stockCode, stockName) {
-        // 뉴스 로딩 로직 (기존 구현 유지)
-        console.log('뉴스 로딩:', stockCode, stockName);
-    }
-
-    selectStockForNews(stockCode, stockName) {
-        // 뉴스용 종목 선택 로직 (기존 구현 유지)
-        console.log('뉴스용 종목 선택:', stockCode, stockName);
-    }
 }

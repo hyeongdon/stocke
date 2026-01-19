@@ -256,6 +256,8 @@ erDiagram
         int buy_price
         int buy_quantity
         int buy_amount
+        string buy_order_id
+        int actual_buy_amount
         float stop_loss_rate
         float take_profit_rate
         int stop_loss_price
@@ -267,6 +269,8 @@ erDiagram
         datetime buy_time
         datetime sell_time
         datetime last_monitored
+        int condition_id FK
+        int signal_id FK
     }
 
     SELL_ORDERS {
@@ -371,7 +375,17 @@ flowchart TD
     BUY_WAIT --> BUY_ORDER
     BUY_RETRY -->|불가능| BUY_FAIL[상태: FAILED]
     BUY_VALID -->|무효| BUY_PROCESS
-    BUY_UPDATE --> BUY_PROCESS
+    BUY_UPDATE --> POS_CREATE[포지션 생성<br/>HOLDING 상태<br/>actual_buy_amount 저장]
+    POS_CREATE --> POS_MONITOR[손절/익절 모니터링<br/>2분 주기]
+    POS_MONITOR --> POS_CHECK{손절/익절<br/>조건?}
+    POS_CHECK -->|손절| STOP_LOSS[매도 주문<br/>STOP_LOSS]
+    POS_CHECK -->|익절| TAKE_PROFIT[매도 주문<br/>TAKE_PROFIT]
+    POS_CHECK -->|수동| MANUAL_SELL[매도 주문<br/>MANUAL_SELL]
+    POS_CHECK -->|보유| POS_MONITOR
+    STOP_LOSS --> LIQUIDATION[청산 완료<br/>수익/손실 확정<br/>sell_order 생성]
+    TAKE_PROFIT --> LIQUIDATION
+    MANUAL_SELL --> LIQUIDATION
+    LIQUIDATION --> BUY_PROCESS
     BUY_FAIL --> BUY_PROCESS
         </div>
 
@@ -468,6 +482,8 @@ graph LR
     TRADE --> TRADE2[GET /trading/settings]
     TRADE --> TRADE3[POST /trading/settings]
     TRADE --> TRADE4[GET /positions/]
+    TRADE --> TRADE5[POST /positions/update-prices]
+    TRADE --> TRADE6[POST /positions/sync-actual-buy-amount]
 
     CHART --> CHART1[GET /chart/image/{code}]
     CHART --> CHART2[GET /chart/strategy/{code}/{type}]
@@ -548,19 +564,22 @@ sequenceDiagram
         end
     end
 
-    StopLoss->>StopLoss: 30초 주기 모니터링 루프
-    loop 30초마다
-        StopLoss->>DB: SELECT 보유 종목
+    StopLoss->>StopLoss: 2분 주기 모니터링 루프
+    loop 2분마다
+        StopLoss->>DB: SELECT 보유 종목 (HOLDING)
         DB-->>StopLoss: 포지션 목록
         loop 각 포지션
             StopLoss->>Kiwoom: 현재가 조회
             Kiwoom-->>StopLoss: 현재가
+            StopLoss->>StopLoss: 평가손익 계산<br/>(매도 수수료 + 제세금 포함)
+            StopLoss->>DB: UPDATE current_profit_loss
             StopLoss->>StopLoss: 손절/익절 조건 확인
             alt 조건 만족
                 StopLoss->>Kiwoom: 매도 주문
                 Kiwoom-->>StopLoss: 주문 성공
-                StopLoss->>DB: UPDATE 포지션 상태
+                StopLoss->>DB: UPDATE 포지션 상태<br/>(STOP_LOSS/TAKE_PROFIT/MANUAL_SELL)
                 StopLoss->>DB: INSERT sell_orders
+                StopLoss->>StopLoss: 청산 완료<br/>(수익/손실 확정)
             end
         end
     end

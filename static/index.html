@@ -32,6 +32,10 @@
             <div class="d-flex justify-content-between align-items-center">
                 <h1 class="h3 mb-0">통합 모니터링</h1>
                 <div class="d-flex align-items-center gap-3">
+                    <a href="/static/view_diagram.html" class="btn btn-outline-light btn-sm" title="시스템 아키텍처 다이어그램">
+                        <i class="fas fa-sitemap me-1"></i>
+                        <span class="d-none d-md-inline">아키텍처</span>
+                    </a>
                     <a href="/static/signal-lifecycle.html" class="btn btn-outline-light btn-sm" title="시그널 라이프사이클 추적">
                         <i class="fas fa-project-diagram me-1"></i>
                         <span class="d-none d-md-inline">라이프사이클</span>
@@ -734,7 +738,6 @@
     <!-- 모듈들을 순서대로 로드 -->
     <script src="modules/ui-utils.js"></script>
     <script src="modules/condition-manager.js"></script>
-    <script src="modules/account-manager.js"></script>
     <script src="modules/chart-manager.js"></script>
     <script src="modules/strategy-manager.js"></script>
     <script src="app.js"></script>
