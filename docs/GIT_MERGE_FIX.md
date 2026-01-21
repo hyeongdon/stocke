@@ -136,6 +136,24 @@ git pull origin main && \
 ./restart_server.sh
 ```
 
+## 빠른 Pull 스크립트 사용 (가장 간단)
+
+```bash
+cd /home/ubuntu/project/stocke
+
+# 실행 권한 부여 (최초 1회)
+chmod +x shell/quick_pull.sh
+
+# 자동으로 stash하고 pull
+./shell/quick_pull.sh
+```
+
+이 스크립트는 다음을 자동으로 수행합니다:
+1. ✅ 데이터베이스 자동 백업
+2. ✅ 로컬 변경사항 자동 stash
+3. ✅ Git pull 실행
+4. ✅ Stash 복원 여부 선택 (대화형)
+
 ## Merge 충돌이 이미 발생한 경우
 
 만약 이미 merge가 진행 중이고 충돌이 발생한 경우:

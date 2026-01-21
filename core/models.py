@@ -5,14 +5,27 @@ from sqlalchemy import Column, Integer, String, DateTime, Boolean, create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from .config import Config
 
-# SQLite DB (절대경로 사용 - config의 DATABASE_URL과 통일)
+# 데이터베이스 설정 (SQLite 또는 PostgreSQL 지원)
 DATABASE_URL = Config.DATABASE_URL
 
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False},
-    future=True,
-)
+# PostgreSQL과 SQLite를 모두 지원
+if DATABASE_URL.startswith('postgresql'):
+    # PostgreSQL용 엔진 설정
+    engine = create_engine(
+        DATABASE_URL,
+        pool_pre_ping=True,      # 연결 상태 확인
+        pool_size=10,            # 기본 연결 풀 크기
+        max_overflow=20,         # 최대 추가 연결 수
+        pool_recycle=3600,       # 1시간마다 연결 재생성
+        future=True,
+    )
+else:
+    # SQLite용 엔진 설정 (기존 코드 유지)
+    engine = create_engine(
+        DATABASE_URL,
+        connect_args={"check_same_thread": False},
+        future=True,
+    )
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
 Base = declarative_base()

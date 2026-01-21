@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>서버 상태 모니터링</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        body {
+            background-color: #f5f5f5;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .status-card {
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+            transition: transform 0.2s;
+        }
+        .status-card:hover {
+            transform: translateY(-2px);
+        }
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+        }
+        .status-online {
+            background-color: #28a745;
+            box-shadow: 0 0 10px rgba(40, 167, 69, 0.5);
+        }
+        .status-offline {
+            background-color: #dc3545;
+            box-shadow: 0 0 10px rgba(220, 53, 69, 0.5);
+        }
+        .status-warning {
+            background-color: #ffc107;
+            box-shadow: 0 0 10px rgba(255, 193, 7, 0.5);
+        }
+        .log-container {
+            background-color: #1e1e1e;
+            color: #d4d4d4;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            max-height: 400px;
+            overflow-y: auto;
+            padding: 15px;
+            border-radius: 5px;
+        }
+        .log-entry {
+            margin-bottom: 5px;
+            padding: 2px 0;
+        }
+        .log-error {
+            color: #f48771;
+        }
+        .log-warning {
+            color: #dcdcaa;
+        }
+        .log-info {
+            color: #4ec9b0;
+        }
+        .metric-value {
+            font-size: 24px;
+            font-weight: bold;
+        }
+        .refresh-btn {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 1000;
+        }
+        .auto-refresh-indicator {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid py-4">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1 class="h3 mb-0">
+                <i class="fas fa-server me-2"></i>서버 상태 모니터링
+            </h1>
+            <div>
+                <a href="/static/index.html" class="btn btn-outline-primary">
+                    <i class="fas fa-arrow-left me-2"></i>메인으로
+                </a>
+            </div>
+        </div>
+
+        <!-- 자동 새로고침 표시 -->
+        <div class="auto-refresh-indicator">
+            <div class="badge bg-info">
+                <i class="fas fa-sync-alt me-1"></i>
+                <span id="refreshCountdown">30</span>초 후 자동 새로고침
+            </div>
+        </div>
+
+        <!-- 서버 기본 상태 -->
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card status-card">
+                    <div class="card-header bg-primary text-white">
+                        <i class="fas fa-server me-2"></i>서버 상태
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <span class="status-indicator" id="serverStatus"></span>
+                            <strong>서버 응답:</strong> <span id="serverResponse">확인 중...</span>
+                        </div>
+                        <div class="mb-2">
+                            <small class="text-muted">업타임:</small>
+                            <div class="metric-value text-primary" id="uptime">-</div>
+                        </div>
+                        <div>
+                            <small class="text-muted">마지막 업데이트:</small>
+                            <div id="lastUpdate">-</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-6">
+                <div class="card status-card">
+                    <div class="card-header bg-success text-white">
+                        <i class="fas fa-plug me-2"></i>API 엔드포인트 상태
+                    </div>
+                    <div class="card-body">
+                        <div id="apiEndpoints">
+                            <div class="text-center">
+                                <div class="spinner-border spinner-border-sm" role="status">
+                                    <span class="visually-hidden">로딩 중...</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 모니터링 상태 -->
+        <div class="row">
+            <div class="col-md-4">
+                <div class="card status-card">
+                    <div class="card-header bg-info text-white">
+                        <i class="fas fa-eye me-2"></i>조건식 모니터링
+                    </div>
+                    <div class="card-body">
+                        <div id="monitoringStatus">
+                            <div class="text-center">
+                                <div class="spinner-border spinner-border-sm" role="status">
+                                    <span class="visually-hidden">로딩 중...</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-4">
+                <div class="card status-card">
+                    <div class="card-header bg-warning text-white">
+                        <i class="fas fa-chart-bar me-2"></i>전략 모니터링
+                    </div>
+                    <div class="card-body">
+                        <div id="strategyStatus">
+                            <div class="text-center">
+                                <div class="spinner-border spinner-border-sm" role="status">
+                                    <span class="visually-hidden">로딩 중...</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-4">
+                <div class="card status-card">
+                    <div class="card-header bg-danger text-white">
+                        <i class="fas fa-stop-circle me-2"></i>손절/익절 모니터링
+                    </div>
+                    <div class="card-body">
+                        <div id="stopLossStatus">
+                            <div class="text-center">
+                                <div class="spinner-border spinner-border-sm" role="status">
+                                    <span class="visually-hidden">로딩 중...</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- API 제한 및 통계 -->
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card status-card">
+                    <div class="card-header bg-secondary text-white">
+                        <i class="fas fa-tachometer-alt me-2"></i>API 제한 상태
+                    </div>
+                    <div class="card-body">
+                        <div id="apiLimitStatus">
+                            <div class="text-center">
+                                <div class="spinner-border spinner-border-sm" role="status">
+                                    <span class="visually-hidden">로딩 중...</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-6">
+                <div class="card status-card">
+                    <div class="card-header bg-dark text-white">
+                        <i class="fas fa-chart-pie me-2"></i>신호 통계
+                    </div>
+                    <div class="card-body">
+                        <div id="signalStats">
+                            <div class="text-center">
+                                <div class="spinner-border spinner-border-sm" role="status">
+                                    <span class="visually-hidden">로딩 중...</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 최근 로그 -->
+        <div class="row">
+            <div class="col-12">
+                <div class="card status-card">
+                    <div class="card-header bg-dark text-white">
+                        <i class="fas fa-file-alt me-2"></i>최근 로그
+                        <button class="btn btn-sm btn-outline-light float-end" onclick="clearLogs()">
+                            <i class="fas fa-trash me-1"></i>지우기
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div class="log-container" id="logContainer">
+                            <div class="log-entry log-info">로그를 불러오는 중...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 새로고침 버튼 -->
+    <button class="btn btn-primary btn-lg refresh-btn" onclick="refreshAll()" title="새로고침">
+        <i class="fas fa-sync-alt"></i>
+    </button>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let refreshInterval;
+        let countdownInterval;
+        let refreshCountdown = 30;
+
+        // 페이지 로드 시 초기화
+        document.addEventListener('DOMContentLoaded', function() {
+            refreshAll();
+            startAutoRefresh();
+        });
+
+        // 자동 새로고침 시작
+        function startAutoRefresh() {
+            refreshInterval = setInterval(refreshAll, 30000); // 30초마다
+            countdownInterval = setInterval(() => {
+                refreshCountdown--;
+                document.getElementById('refreshCountdown').textContent = refreshCountdown;
+                if (refreshCountdown <= 0) {
+                    refreshCountdown = 30;
+                }
+            }, 1000);
+        }
+
+        // 전체 새로고침
+        async function refreshAll() {
+            refreshCountdown = 30;
+            await Promise.all([
+                checkServerStatus(),
+                checkApiEndpoints(),
+                checkMonitoringStatus(),
+                checkStrategyStatus(),
+                checkStopLossStatus(),
+                checkApiLimitStatus(),
+                checkSignalStats()
+            ]);
+            updateLastUpdate();
+        }
+
+        // 서버 상태 확인
+        async function checkServerStatus() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                
+                const statusEl = document.getElementById('serverStatus');
+                const responseEl = document.getElementById('serverResponse');
+                
+                if (data.running && data.websocket_connected) {
+                    statusEl.className = 'status-indicator status-online';
+                    responseEl.textContent = '정상';
+                    responseEl.className = 'text-success';
+                } else {
+                    statusEl.className = 'status-indicator status-warning';
+                    responseEl.textContent = '부분 정상';
+                    responseEl.className = 'text-warning';
+                }
+                
+                document.getElementById('uptime').textContent = '실시간';
+            } catch (error) {
+                document.getElementById('serverStatus').className = 'status-indicator status-offline';
+                document.getElementById('serverResponse').textContent = '오프라인';
+                document.getElementById('serverResponse').className = 'text-danger';
+                console.error('서버 상태 확인 실패:', error);
+            }
+        }
+
+        // API 엔드포인트 확인
+        async function checkApiEndpoints() {
+            const endpoints = [
+                { name: '모니터링 상태', url: '/monitoring/status' },
+                { name: '전략 상태', url: '/strategy/status' },
+                { name: '손절/익절', url: '/stop-loss/status' },
+                { name: '관심종목 동기화', url: '/watchlist/sync/status' },
+                { name: 'API 상태', url: '/api/status' }
+            ];
+
+            const container = document.getElementById('apiEndpoints');
+            let html = '';
+
+            for (const endpoint of endpoints) {
+                try {
+                    const response = await fetch(endpoint.url);
+                    const status = response.ok ? 'status-online' : 'status-warning';
+                    const text = response.ok ? '정상' : '오류';
+                    html += `
+                        <div class="mb-2">
+                            <span class="status-indicator ${status}"></span>
+                            <small>${endpoint.name}:</small> <strong>${text}</strong>
+                        </div>
+                    `;
+                } catch (error) {
+                    html += `
+                        <div class="mb-2">
+                            <span class="status-indicator status-offline"></span>
+                            <small>${endpoint.name}:</small> <strong class="text-danger">오프라인</strong>
+                        </div>
+                    `;
+                }
+            }
+
+            container.innerHTML = html;
+        }
+
+        // 모니터링 상태
+        async function checkMonitoringStatus() {
+            try {
+                const response = await fetch('/monitoring/status');
+                const data = await response.json();
+                
+                const monitoring = data.monitoring || {};
+                const isRunning = monitoring.is_running || false;
+                
+                const html = `
+                    <div class="mb-2">
+                        <span class="status-indicator ${isRunning ? 'status-online' : 'status-offline'}"></span>
+                        <strong>상태:</strong> ${isRunning ? '실행 중' : '중지됨'}
+                    </div>
+                    <div class="mb-2">
+                        <small class="text-muted">활성 조건식:</small>
+                        <div class="metric-value text-info">${monitoring.active_conditions || 0}개</div>
+                    </div>
+                `;
+                
+                document.getElementById('monitoringStatus').innerHTML = html;
+            } catch (error) {
+                document.getElementById('monitoringStatus').innerHTML = `
+                    <div class="text-danger">
+                        <i class="fas fa-exclamation-triangle me-2"></i>상태 확인 실패
+                    </div>
+                `;
+            }
+        }
+
+        // 전략 상태
+        async function checkStrategyStatus() {
+            try {
+                const response = await fetch('/strategy/status');
+                const data = await response.json();
+                
+                const isRunning = data.is_running || false;
+                const activeStrategies = data.active_strategies || 0;
+                
+                const html = `
+                    <div class="mb-2">
+                        <span class="status-indicator ${isRunning ? 'status-online' : 'status-offline'}"></span>
+                        <strong>상태:</strong> ${isRunning ? '실행 중' : '중지됨'}
+                    </div>
+                    <div class="mb-2">
+                        <small class="text-muted">활성 전략:</small>
+                        <div class="metric-value text-warning">${activeStrategies}개</div>
+                    </div>
+                `;
+                
+                document.getElementById('strategyStatus').innerHTML = html;
+            } catch (error) {
+                document.getElementById('strategyStatus').innerHTML = `
+                    <div class="text-danger">
+                        <i class="fas fa-exclamation-triangle me-2"></i>상태 확인 실패
+                    </div>
+                `;
+            }
+        }
+
+        // 손절/익절 상태
+        async function checkStopLossStatus() {
+            try {
+                const response = await fetch('/stop-loss/status');
+                const data = await response.json();
+                
+                const isRunning = data.is_running || false;
+                const monitoredPositions = data.monitored_positions || 0;
+                
+                const html = `
+                    <div class="mb-2">
+                        <span class="status-indicator ${isRunning ? 'status-online' : 'status-offline'}"></span>
+                        <strong>상태:</strong> ${isRunning ? '실행 중' : '중지됨'}
+                    </div>
+                    <div class="mb-2">
+                        <small class="text-muted">모니터링 중인 포지션:</small>
+                        <div class="metric-value text-danger">${monitoredPositions}개</div>
+                    </div>
+                `;
+                
+                document.getElementById('stopLossStatus').innerHTML = html;
+            } catch (error) {
+                document.getElementById('stopLossStatus').innerHTML = `
+                    <div class="text-danger">
+                        <i class="fas fa-exclamation-triangle me-2"></i>상태 확인 실패
+                    </div>
+                `;
+            }
+        }
+
+        // API 제한 상태
+        async function checkApiLimitStatus() {
+            try {
+                const response = await fetch('/api/rate-limit-status');
+                const data = await response.json();
+                
+                const isAvailable = data.is_available || false;
+                const remainingCalls = data.remaining_calls || 0;
+                
+                const html = `
+                    <div class="mb-2">
+                        <span class="status-indicator ${isAvailable ? 'status-online' : 'status-warning'}"></span>
+                        <strong>상태:</strong> ${isAvailable ? '사용 가능' : '제한 중'}
+                    </div>
+                    <div class="mb-2">
+                        <small class="text-muted">남은 호출:</small>
+                        <div class="metric-value text-secondary">${remainingCalls}회</div>
+                    </div>
+                `;
+                
+                document.getElementById('apiLimitStatus').innerHTML = html;
+            } catch (error) {
+                document.getElementById('apiLimitStatus').innerHTML = `
+                    <div class="text-danger">
+                        <i class="fas fa-exclamation-triangle me-2"></i>상태 확인 실패
+                    </div>
+                `;
+            }
+        }
+
+        // 신호 통계
+        async function checkSignalStats() {
+            try {
+                const response = await fetch('/monitoring/status');
+                const data = await response.json();
+                
+                const stats = data.signals || {};
+                const total = stats.total || 0;
+                const pending = stats.pending || 0;
+                const ordered = stats.ordered || 0;
+                
+                const html = `
+                    <div class="mb-2">
+                        <small class="text-muted">전체 신호:</small>
+                        <div class="metric-value text-dark">${total}개</div>
+                    </div>
+                    <div class="mb-2">
+                        <small class="text-muted">대기 중:</small> <strong class="text-warning">${pending}개</strong>
+                    </div>
+                    <div class="mb-2">
+                        <small class="text-muted">주문 완료:</small> <strong class="text-success">${ordered}개</strong>
+                    </div>
+                `;
+                
+                document.getElementById('signalStats').innerHTML = html;
+            } catch (error) {
+                document.getElementById('signalStats').innerHTML = `
+                    <div class="text-danger">
+                        <i class="fas fa-exclamation-triangle me-2"></i>통계 확인 실패
+                    </div>
+                `;
+            }
+        }
+
+        // 마지막 업데이트 시간
+        function updateLastUpdate() {
+            const now = new Date();
+            document.getElementById('lastUpdate').textContent = now.toLocaleString('ko-KR');
+        }
+
+        // 로그 지우기
+        function clearLogs() {
+            document.getElementById('logContainer').innerHTML = '';
+        }
+
+        // 페이지 언로드 시 인터벌 정리
+        window.addEventListener('beforeunload', function() {
+            if (refreshInterval) clearInterval(refreshInterval);
+            if (countdownInterval) clearInterval(countdownInterval);
+        });
+    </script>
+</body>
+</html>
+

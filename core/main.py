@@ -240,6 +240,11 @@ async def root():
     logger.info("🌐 [STATIC] 루트 경로 접근 - /static/index.html로 리다이렉트")
     return RedirectResponse(url="/static/index.html")
 
+@app.get("/status")
+async def status_page():
+    """서버 상태 페이지로 리다이렉트"""
+    return RedirectResponse(url="/static/server_status.html")
+
 @app.get("/api")
 async def api_info():
     """API 정보 엔드포인트"""

@@ -112,3 +112,4 @@ echo "💡 다음 단계:"
 echo "   - 서버 재시작: ./restart_server.sh"
 echo "   - 상태 확인: ./check_deployment.sh"
 
+

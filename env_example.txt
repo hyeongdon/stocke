@@ -19,6 +19,10 @@ KIWOOM_MOCK_ACCOUNT_NUMBER=81109058
 KIWOOM_USE_MOCK_ACCOUNT=true
 
 # 데이터베이스 설정
+# SQLite 사용 시:
+# DATABASE_URL=sqlite:///./stock_pipeline.db
+# PostgreSQL 사용 시:
+# DATABASE_URL=postgresql://stocke_user:your_password@localhost:5432/stocke_db
 DATABASE_URL=sqlite:///./stock_pipeline.db
 
 # 서버 설정
