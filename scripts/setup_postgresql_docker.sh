@@ -185,3 +185,9 @@ echo "   # 컨테이너 + 데이터 제거"
 echo "   docker compose down -v"
 echo ""
 
+
+
+
+
+
+

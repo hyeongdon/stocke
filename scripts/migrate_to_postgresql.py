@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 SQLite에서 PostgreSQL로 데이터 마이그레이션 스크립트
 """

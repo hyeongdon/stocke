@@ -136,7 +136,7 @@ services:
       POSTGRES_USER: stocke_user
       POSTGRES_PASSWORD: your_secure_password_here
       POSTGRES_DB: stocke_db
-      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=ko_KR.UTF-8"
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
     ports:
       - "5432:5432"
     volumes:

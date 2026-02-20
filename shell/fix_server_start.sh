@@ -127,3 +127,9 @@ echo "   - 프로세스 확인: ps aux | grep uvicorn"
 echo "   - 서버 접속: http://localhost:8001/docs"
 
 
+
+
+
+
+
+

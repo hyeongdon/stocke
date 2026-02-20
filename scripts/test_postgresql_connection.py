@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 PostgreSQL 연결 테스트 스크립트
 """
