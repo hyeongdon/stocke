@@ -60,7 +60,8 @@ source venv/bin/activate
 log "서버 재시작 중..."
 # PYTHONPATH 설정 및 core.main 모듈로 실행
 export PYTHONPATH="$PROJECT_DIR:$PYTHONPATH"
-nohup uvicorn core.main:app --host 0.0.0.0 --port 8001 --reload > server.log 2>&1 &
+# 운영: --reload 제거 (메모리·CPU 부담 감소, 멀티프로세스 중복 방지)
+nohup uvicorn core.main:app --host 0.0.0.0 --port 8001 > server.log 2>&1 &
 
 # 5. 서버 시작 확인
 sleep 5

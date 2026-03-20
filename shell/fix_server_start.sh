@@ -87,7 +87,8 @@ echo ""
 
 # 8. 서버 시작
 echo "8. 서버 시작 중..."
-nohup uvicorn core.main:app --host 0.0.0.0 --port 8001 --reload > server.log 2>&1 &
+# 운영: --reload 제거 (개발 시에만 수동으로 --reload 추가)
+nohup uvicorn core.main:app --host 0.0.0.0 --port 8001 > server.log 2>&1 &
 SERVER_PID=$!
 echo "✅ 서버 시작됨 (PID: $SERVER_PID)"
 echo ""

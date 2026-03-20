@@ -56,14 +56,16 @@ class ServerLauncher:
         
     def start_server(self):
         try:
+            # UVICORN_RELOAD=1 일 때만 --reload (로컬 개발용). 운영/기본은 reload 끔.
+            reload_flag = " --reload" if os.environ.get("UVICORN_RELOAD") == "1" else ""
             # uvicorn 실행 (가상환경 없이도 동작)
             venv_path = os.path.join(os.getcwd(), "venv", "Scripts", "python.exe")
             if os.path.exists(venv_path):
                 # 가상환경이 있으면 사용
-                cmd = f'"{venv_path}" -m uvicorn core.main:app --host 0.0.0.0 --port 8000 --reload'
+                cmd = f'"{venv_path}" -m uvicorn core.main:app --host 0.0.0.0 --port 8000{reload_flag}'
             else:
                 # 없으면 시스템 Python 사용
-                cmd = "uvicorn core.main:app --host 0.0.0.0 --port 8000 --reload"
+                cmd = f"uvicorn core.main:app --host 0.0.0.0 --port 8000{reload_flag}"
             self.server_process = subprocess.Popen(cmd, shell=True, cwd=os.getcwd())
             
             self.start_btn.config(state="disabled")

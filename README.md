@@ -60,7 +60,11 @@ LOG_LEVEL=INFO
 
 ### 방법 1: 직접 실행
 ```bash
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+# 운영(권장): reload 끔
+uvicorn main:app --host 0.0.0.0 --port 8000
+
+# 로컬 개발 시에만 자동 재시작
+# uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ### 방법 2: 런처 사용 (Windows)
