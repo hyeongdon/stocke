@@ -75,6 +75,49 @@ install.bat
 
 서버 실행 후 브라우저에서 `http://localhost:8000`으로 접속하여 웹 대시보드를 사용할 수 있습니다.
 
+## Linux에서 ngrok 백그라운드 실행
+
+리눅스를 사용할 때는 애플리케이션을 먼저 실행한 뒤 ngrok를 붙여야 합니다. ngrok 프로세스만 살아 있고 앱 포트가 비어 있으면 `ERR_NGROK_8012`가 발생합니다.
+
+1. 앱 실행 (예시: 8000 포트)
+```bash
+uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+2. 앱 포트 확인
+```bash
+ss -ltnp | grep 8000
+curl -I http://127.0.0.1:8000
+```
+
+3. 기존 ngrok 세션 정리 (무료 플랜 동시 1개 제한)
+```bash
+pkill -f ngrok
+pgrep -af ngrok
+```
+
+4. ngrok 백그라운드 실행
+```bash
+nohup ngrok http 8000 > ~/ngrok.log 2>&1 &
+```
+
+5. 로그/상태 확인
+```bash
+tail -f ~/ngrok.log
+curl -s http://127.0.0.1:4040/api/tunnels
+```
+
+고정 도메인을 사용하는 경우:
+```bash
+nohup ngrok http --url=YOUR_STATIC_DOMAIN.ngrok-free.app 8000 > ~/ngrok.log 2>&1 &
+```
+
+### ngrok 에러 빠른 진단
+
+- `ERR_NGROK_8012`: 업스트림 연결 실패. 앱 포트 미기동 또는 잘못된 포트 설정.
+- `ERR_NGROK_108`: ngrok 에이전트 동시 세션 초과. 기존 ngrok 종료 후 재실행.
+- `ERR_NGROK_3200`: endpoint 오프라인. ngrok 프로세스가 내려갔거나 연결이 끊긴 상태.
+
 ## 주요 API 엔드포인트
 
 ### 모니터링 관리
