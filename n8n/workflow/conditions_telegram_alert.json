@@ -1,0 +1,156 @@
+{
+  "name": "My workflow",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "a4d89d7e-1143-41f0-b396-b3f93def99ff",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -420,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": [
+                1,
+                2,
+                3,
+                4,
+                5
+              ],
+              "triggerAtHour": 10
+            }
+          ]
+        }
+      },
+      "id": "3324e4d1-270c-4034-b4da-79e744cc0888",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -420,
+        -20
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$env.CONDITIONS_API_URL || 'http://144.24.81.83:8001/conditions/'}}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "79318790-3e42-44b4-9ab9-00bb9ea3f85b",
+      "name": "Get Conditions",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -140,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const inputItems = $input.all();\n\nlet conditions = [];\n\nif (inputItems.length > 1) {\n  conditions = inputItems.map((item) => item.json).filter(Boolean);\n} else {\n  const payload = inputItems[0]?.json;\n  if (Array.isArray(payload)) {\n    conditions = payload;\n  } else if (Array.isArray(payload?.data)) {\n    conditions = payload.data;\n  } else if (payload && typeof payload === 'object' && payload.id !== undefined) {\n    conditions = [payload];\n  }\n}\n\nif (conditions.length === 0) {\n  return [{ json: { text: '조건식 목록이 비어 있습니다.' } }];\n}\n\nconst normalizeStocks = (data) => {\n  if (Array.isArray(data)) return data;\n  if (Array.isArray(data?.data)) return data.data;\n  if (Array.isArray(data?.stocks)) return data.stocks;\n  if (Array.isArray(data?.items)) return data.items;\n  if (Array.isArray(data?.results)) return data.results;\n  return [];\n};\n\nconst getRate = (stock) => {\n  const raw = stock.change_rate ?? stock.rate ?? stock.fluctuation_rate ?? stock.percent_change ?? stock.changePercent;\n  const num = Number(raw);\n  if (!Number.isFinite(num)) return 'N/A';\n  const sign = num > 0 ? '+' : '';\n  return `${sign}${num.toFixed(2)}%`;\n};\n\nconst getVolumeInMillions = (stock) => {\n  const raw = stock.volume ?? stock.trade_volume ?? stock.acc_volume ?? stock.trading_volume;\n  const num = Number(raw);\n  if (!Number.isFinite(num)) return 'N/A';\n  return `${(num / 1000000).toFixed(1)}M`;\n};\n\nconst rawBase = $env.CONDITIONS_API_URL || 'http://144.24.81.83:8001/conditions/';\nconst baseOrigin = rawBase.replace(/\\/conditions\\/?$/i, '').replace(/\\/$/, '');\n\nconst conditionBlocks = [];\n\nfor (let i = 0; i < conditions.length; i++) {\n  const condition = conditions[i];\n  const id = condition.id ?? condition.condition_id ?? '-';\n  const apiId = condition.api_id ?? condition.apiId ?? condition.condition_api_id;\n  const name = condition.name ?? condition.condition_name ?? '이름없음';\n  const enabled = condition.enabled ?? condition.is_enabled ?? condition.is_active;\n  const status = enabled === undefined ? 'UNKNOWN' : (enabled ? 'ON' : 'OFF');\n\n  let stocks = [];\n  let queryError = '';\n\n  const candidateIds = [];\n  if (id !== '-') candidateIds.push(id);\n  if (apiId !== undefined && apiId !== null && apiId !== '' && apiId !== id) candidateIds.push(apiId);\n\n  for (const cid of candidateIds) {\n    try {\n      const url = `${baseOrigin}/conditions/${cid}/stocks`;\n      const data = await this.helpers.httpRequest({ method: 'GET', url, json: true });\n      stocks = normalizeStocks(data);\n      if (stocks.length > 0) break;\n    } catch (error) {\n      queryError = error.message;\n    }\n  }\n\n  const stockText = stocks.length === 0\n    ? `  - (해당 종목 없음${queryError ? ` / ${queryError}` : ''})`\n    : stocks.slice(0, 20).map((s) => {\n        const stockName = s.stock_name ?? s.name ?? s.stockName ?? '이름없음';\n        const rate = getRate(s);\n        const volume = getVolumeInMillions(s);\n        return `  - ${stockName} | ${rate} | ${volume}`;\n      }).join('\\n');\n\n  const moreText = stocks.length > 20 ? `\\n  - ... 외 ${stocks.length - 20}개` : '';\n\n  conditionBlocks.push(`${i + 1}. [${id}] ${name} (${status})\\n${stockText}${moreText}`);\n}\n\nconst now = new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' });\nconst text = `조건식 + 종목 목록 (${conditions.length}개 조건식)\\n기준시각: ${now}\\n\\n${conditionBlocks.join('\\n\\n')}`;\n\nreturn [{ json: { text } }];"
+      },
+      "id": "ada20b16-96d2-4ab9-bc11-c1961a93a5ba",
+      "name": "Format Telegram Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        120,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "7950452318",
+        "text": "={{$json.text}}",
+        "additionalFields": {}
+      },
+      "id": "84606661-6b0a-4a9f-8e2e-edfaa001ef0b",
+      "name": "Send Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        380,
+        -100
+      ],
+      "webhookId": "20be1c7e-ed27-4ee8-83b8-825396079499",
+      "credentials": {
+        "telegramApi": {
+          "id": "rWfmv5MnAEOctwVo",
+          "name": "Telegram account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get Conditions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get Conditions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Conditions": {
+      "main": [
+        [
+          {
+            "node": "Format Telegram Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Telegram Message": {
+      "main": [
+        [
+          {
+            "node": "Send Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "6a0aef47-319d-4049-90bb-2dcd5e0f37f5",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "9315de69fdbd9df0051251e9dfee0648a0d207f2458b8f85a7c59a894d719cff"
+  },
+  "id": "lW5gXBUMPaF1oSBS",
+  "tags": []
+}

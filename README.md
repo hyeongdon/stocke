@@ -118,6 +118,78 @@ nohup ngrok http --url=YOUR_STATIC_DOMAIN.ngrok-free.app 8000 > ~/ngrok.log 2>&1
 - `ERR_NGROK_108`: ngrok 에이전트 동시 세션 초과. 기존 ngrok 종료 후 재실행.
 - `ERR_NGROK_3200`: endpoint 오프라인. ngrok 프로세스가 내려갔거나 연결이 끊긴 상태.
 
+## n8n (Docker) + ngrok 운영 메모
+
+n8n을 Docker로 띄울 때는 호스트 포트 매핑이 반드시 필요합니다. `docker ps`의 `Ports`가 비어 있으면 `curl http://127.0.0.1:5678`가 실패하고 ngrok에서 `ERR_NGROK_8012`가 발생합니다.
+
+### 1) n8n 컨테이너 실행 (5678 매핑 + 한국 시간)
+
+스케줄 워크플로우(`Schedule Trigger`)는 **인스턴스 기본 타임존**을 따릅니다. UI에 timezone 필드가 없는 n8n 버전에서는 아래 환경변수로 맞춥니다.
+
+- `TZ=Asia/Seoul` — 컨테이너 OS 시각
+- `GENERIC_TIMEZONE=Asia/Seoul` — n8n 스케줄·크론 기준 시각
+
+```bash
+docker run -d \
+  --name n8n \
+  -p 5678:5678 \
+  -e TZ=Asia/Seoul \
+  -e GENERIC_TIMEZONE=Asia/Seoul \
+  -e N8N_HOST=0.0.0.0 \
+  -e N8N_PORT=5678 \
+  -e N8N_PROTOCOL=http \
+  -e N8N_RUNNERS_ENABLED=true \
+  docker.n8n.io/n8nio/n8n:latest
+```
+
+**이미 n8n 컨테이너가 있는 경우** 타임존만 반영하려면 컨테이너를 재생성하는 것이 가장 확실합니다.
+
+```bash
+docker stop n8n && docker rm n8n
+# 위 docker run ... 명령으로 다시 실행
+```
+
+환경변수 반영 후 **워크플로우를 비활성화 → 저장 → 다시 활성화**하면 스케줄이 새 타임존으로 다시 계산됩니다.
+
+### 1-1) 타임존 적용 확인
+
+```bash
+docker exec n8n date
+# 예: KST로 표시되는지 확인 (또는 +0900)
+
+docker inspect n8n --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -E 'TZ|GENERIC_TIMEZONE'
+```
+
+### 2) n8n 상태 확인
+```bash
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep n8n
+docker logs --tail 100 n8n
+curl -I http://127.0.0.1:5678
+```
+
+### 3) ngrok 연결
+```bash
+pkill -f ngrok
+nohup ngrok http --url=YOUR_STATIC_DOMAIN.ngrok-free.app 5678 > ~/ngrok.log 2>&1 &
+tail -n 50 ~/ngrok.log
+```
+
+### 4) 문제 발생 시 빠른 체크
+```bash
+# ngrok 세션 확인/종료
+pgrep -af ngrok
+pkill -f ngrok
+
+# n8n 컨테이너 상태
+docker inspect -f '{{.State.Status}} {{.State.Restarting}} {{.RestartCount}}' n8n
+docker logs --tail 200 n8n
+```
+
+- `curl: (7) Failed to connect`: n8n 미기동 또는 포트 매핑 누락
+- `curl: (56) Recv failure: Connection reset by peer`: n8n 부팅 중/초기화 중일 수 있음 (잠시 후 재시도)
+- `ERR_NGROK_108`: 다른 서버/세션에서 ngrok 실행 중 (대시보드 Agents에서 세션 종료 필요)
+- `ERR_NGROK_3200`: ngrok endpoint 오프라인 (ngrok 프로세스 재기동)
+
 ## 주요 API 엔드포인트
 
 ### 모니터링 관리
