@@ -796,6 +796,134 @@ class KiwoomAPI:
         except Exception as e:
             logger.error(f"현재가 조회 중 오류: {e}")
             return None
+
+    async def _request_stockinfo_tr(self, api_id: str, request_data: Dict) -> Dict:
+        """국내주식 시세/호가 TR 호출 공용 함수 (ka10006, ka10004 등)."""
+        if not self.token_manager.get_valid_token():
+            return {"success": False, "error": "토큰 없음"}
+
+        try:
+            use_mock = Config.KIWOOM_USE_MOCK_ACCOUNT
+            host = Config.KIWOOM_MOCK_API_URL if use_mock else Config.KIWOOM_REAL_API_URL
+            url = host + "/api/dostk/stkinfo"
+
+            headers = {
+                "Content-Type": "application/json;charset=UTF-8",
+                "authorization": f"Bearer {self.token_manager.get_valid_token()}",
+                "cont-yn": "N",
+                "next-key": "",
+                "api-id": api_id,
+            }
+
+            timeout = aiohttp.ClientTimeout(total=20)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(url, headers=headers, json=request_data) as response:
+                    body_text = await response.text()
+                    if response.status != 200:
+                        return {
+                            "success": False,
+                            "error": f"HTTP {response.status}",
+                            "raw_text": body_text,
+                        }
+
+                    try:
+                        data = json.loads(body_text)
+                    except json.JSONDecodeError:
+                        return {"success": False, "error": "JSON 파싱 실패", "raw_text": body_text}
+
+                    ok = (data.get("return_code") == 0) or (data.get("rt_cd") == "0")
+                    if not ok:
+                        return {
+                            "success": False,
+                            "error": data.get("return_msg") or data.get("msg1") or "TR 호출 실패",
+                            "raw": data,
+                        }
+
+                    return {"success": True, "data": data}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    @staticmethod
+    def _pick_int(row: Dict, keys: List[str], default: int = 0) -> int:
+        for key in keys:
+            if key in row and row.get(key) not in (None, ""):
+                try:
+                    return abs(int(str(row.get(key)).replace(",", "").replace("+", "")))
+                except Exception:
+                    continue
+        return default
+
+    @staticmethod
+    def _pick_str(row: Dict, keys: List[str], default: str = "") -> str:
+        for key in keys:
+            if key in row and row.get(key) not in (None, ""):
+                return str(row.get(key))
+        return default
+
+    async def get_stock_snapshot(self, stock_code: str) -> Dict:
+        """현재가(ka10006) + 10호가(ka10004) 스냅샷 조회."""
+        code = str(stock_code or "").replace("A", "").strip()
+        if not code:
+            return {"success": False, "error": "종목코드가 비어 있습니다."}
+
+        basic_resp = await self._request_stockinfo_tr("ka10006", {"stk_cd": code})
+        quote_resp = await self._request_stockinfo_tr("ka10004", {"stk_cd": code})
+
+        if not basic_resp.get("success"):
+            return {"success": False, "error": f"ka10006 실패: {basic_resp.get('error', '알 수 없는 오류')}"}
+        if not quote_resp.get("success"):
+            return {"success": False, "error": f"ka10004 실패: {quote_resp.get('error', '알 수 없는 오류')}"}
+
+        basic_data = basic_resp.get("data", {})
+        quote_data = quote_resp.get("data", {})
+
+        basic_rows = (
+            basic_data.get("stk_mkprc")
+            or basic_data.get("output")
+            or basic_data.get("data")
+            or []
+        )
+        quote_rows = (
+            quote_data.get("stk_hoga")
+            or quote_data.get("output")
+            or quote_data.get("data")
+            or []
+        )
+
+        basic_row = basic_rows[0] if isinstance(basic_rows, list) and basic_rows else {}
+        quote_row = quote_rows[0] if isinstance(quote_rows, list) and quote_rows else {}
+
+        snapshot = {
+            "stock_code": code,
+            "stock_name": self._pick_str(basic_row, ["stk_nm", "stock_name", "name", "302"], ""),
+            "current_price": self._pick_int(basic_row, ["cur_prc", "price", "10"]),
+            "price_diff": self._pick_int(basic_row, ["pred_pre", "diff", "11"]),
+            "change_rate": self._pick_str(basic_row, ["flu_rt", "change_rate", "12"], "0"),
+            "volume": self._pick_int(basic_row, ["trde_qty", "volume", "13"]),
+            "orderbook_time": self._pick_str(quote_row, ["hotime", "hoga_time", "time"], datetime.now().strftime("%H:%M:%S")),
+            "orderbook": [],
+            "raw_basic": basic_row,
+            "raw_quote": quote_row,
+        }
+
+        for level in range(1, 11):
+            ask_px = self._pick_int(quote_row, [f"askp{level}", f"offerho{level}", f"sel_prc{level}"])
+            bid_px = self._pick_int(quote_row, [f"bidp{level}", f"bidho{level}", f"buy_prc{level}"])
+            ask_qty = self._pick_int(quote_row, [f"askp_rsqn{level}", f"offerrem{level}", f"sel_qty{level}"])
+            bid_qty = self._pick_int(quote_row, [f"bidp_rsqn{level}", f"bidrem{level}", f"buy_qty{level}"])
+            if ask_px == 0 and bid_px == 0 and ask_qty == 0 and bid_qty == 0:
+                continue
+            snapshot["orderbook"].append(
+                {
+                    "level": level,
+                    "ask_price": ask_px,
+                    "ask_qty": ask_qty,
+                    "bid_price": bid_px,
+                    "bid_qty": bid_qty,
+                }
+            )
+
+        return {"success": True, "snapshot": snapshot}
     
     def _parse_kiwoom_chart_data(self, api_response: dict, stock_code: str) -> list:
         """키움 API 응답을 차트 데이터로 변환"""

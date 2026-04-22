@@ -984,6 +984,46 @@ async def get_stock_info(stock_code: str, stock_name: str = None):
             "timestamp": datetime.now().isoformat()
         }
 
+@app.get("/stocks/{stock_code}/snapshot")
+async def get_stock_snapshot(stock_code: str):
+    """현재가/전일대비/등락률/거래량 + 10호가 스냅샷 조회."""
+    try:
+        logger.info(f"🌐 [API] 종목 스냅샷 조회 시작 - 종목코드: {stock_code}")
+        result = await kiwoom_api.get_stock_snapshot(stock_code)
+        if not result.get("success"):
+            return JSONResponse(
+                status_code=502,
+                content={
+                    "success": False,
+                    "message": result.get("error", "스냅샷 조회 실패"),
+                    "stock_code": stock_code,
+                },
+            )
+
+        snapshot = result.get("snapshot", {})
+        return {
+            "success": True,
+            "stock_code": snapshot.get("stock_code", stock_code),
+            "stock_name": snapshot.get("stock_name", ""),
+            "current_price": snapshot.get("current_price", 0),
+            "price_diff": snapshot.get("price_diff", 0),
+            "change_rate": snapshot.get("change_rate", "0"),
+            "volume": snapshot.get("volume", 0),
+            "orderbook_time": snapshot.get("orderbook_time", ""),
+            "orderbook": snapshot.get("orderbook", []),
+            "timestamp": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        logger.error(f"🌐 [API] 종목 스냅샷 조회 오류: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "message": str(e),
+                "stock_code": stock_code,
+            },
+        )
+
 @app.get("/api/status")
 async def get_status():
     logger.info("🔄 [DEBUG] API 상태 체크 요청")
