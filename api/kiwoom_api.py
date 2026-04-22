@@ -880,10 +880,22 @@ class KiwoomAPI:
         # ka10006/ka10004가 환경에 따라 실패할 수 있어,
         # 이미 검증된 현재가 조회 로직(ka10081)을 fallback으로 사용한다.
         fallback_price = None
+        fallback_volume = 0
+        fallback_prev_close = 0
         if not basic_resp.get("success"):
             fallback_price = await self.get_current_price(code)
             if fallback_price is None:
                 return {"success": False, "error": f"ka10006 실패: {basic_resp.get('error', 'unknown error')}"}
+            # ka10081 일봉 데이터로 거래량/전일종가 보정 시도
+            try:
+                chart_data = await self.get_stock_chart_data(code, "1D")
+                if chart_data:
+                    last_row = chart_data[-1]
+                    fallback_volume = int(last_row.get("volume", 0) or 0)
+                    if len(chart_data) >= 2:
+                        fallback_prev_close = int(chart_data[-2].get("close", 0) or 0)
+            except Exception:
+                pass
             logger.warning(f"get_stock_snapshot: ka10006 실패, fallback 현재가 사용 - {code}")
             basic_resp = {"success": True, "data": {"stk_mkprc": [{"cur_prc": fallback_price}]}}
 
@@ -922,6 +934,16 @@ class KiwoomAPI:
         # fallback 가격이 있으면 current_price를 보정
         if fallback_price is not None and snapshot["current_price"] == 0:
             snapshot["current_price"] = fallback_price
+        if snapshot["volume"] == 0 and fallback_volume > 0:
+            snapshot["volume"] = fallback_volume
+        if snapshot["price_diff"] == 0 and fallback_prev_close > 0 and snapshot["current_price"] > 0:
+            snapshot["price_diff"] = snapshot["current_price"] - fallback_prev_close
+        if (snapshot["change_rate"] in ("", "0", "0.0", "0.00")) and fallback_prev_close > 0:
+            try:
+                diff = snapshot["current_price"] - fallback_prev_close
+                snapshot["change_rate"] = f"{(diff / fallback_prev_close) * 100:.2f}"
+            except Exception:
+                pass
 
         for level in range(1, 11):
             ask_px = self._pick_int(quote_row, [f"askp{level}", f"offerho{level}", f"sel_prc{level}"])
@@ -940,6 +962,21 @@ class KiwoomAPI:
                 }
             )
 
+        # 호가 TR 실패 시, 화면 표시는 유지할 수 있도록 3단계 기본값 생성
+        if not snapshot["orderbook"] and snapshot["current_price"] > 0:
+            tick = self._calc_tick_size(snapshot["current_price"])
+            base = snapshot["current_price"]
+            for i in range(1, 4):
+                snapshot["orderbook"].append(
+                    {
+                        "level": i,
+                        "ask_price": base + (tick * i),
+                        "ask_qty": 0,
+                        "bid_price": max(0, base - (tick * i)),
+                        "bid_qty": 0,
+                    }
+                )
+
         warnings = []
         if fallback_price is not None:
             warnings.append("ka10006 unavailable; current_price from fallback")
@@ -949,6 +986,24 @@ class KiwoomAPI:
             snapshot["warnings"] = warnings
 
         return {"success": True, "snapshot": snapshot}
+
+    @staticmethod
+    def _calc_tick_size(price: int) -> int:
+        """국내주식 호가 단위(대략) 계산."""
+        p = abs(int(price or 0))
+        if p < 2000:
+            return 1
+        if p < 5000:
+            return 5
+        if p < 20000:
+            return 10
+        if p < 50000:
+            return 50
+        if p < 200000:
+            return 100
+        if p < 500000:
+            return 500
+        return 1000
     
     def _parse_kiwoom_chart_data(self, api_response: dict, stock_code: str) -> list:
         """키움 API 응답을 차트 데이터로 변환"""

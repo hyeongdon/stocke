@@ -9,7 +9,7 @@ Option Explicit
 '    - 시간, 매도잔량, 호가, 매수잔량
 
 Private Const API_BASE_URL As String = "http://144.24.81.83:8001"
-Private Const ORDERBOOK_ROWS As Long = 10
+Private Const ORDERBOOK_ROWS As Long = 3
 
 Public Sub 현재가조회_버튼()
     Dim ws As Worksheet
