@@ -798,14 +798,18 @@ class KiwoomAPI:
             return None
 
     async def _request_stockinfo_tr(self, api_id: str, request_data: Dict) -> Dict:
-        """국내주식 시세/호가 TR 호출 공용 함수 (ka10006, ka10004 등)."""
+        """국내주식 시세/호가 TR 호출 공용 함수 (환경별 URI 차이를 자동 재시도)."""
         if not self.token_manager.get_valid_token():
             return {"success": False, "error": "토큰 없음"}
 
         try:
             use_mock = Config.KIWOOM_USE_MOCK_ACCOUNT
             host = Config.KIWOOM_MOCK_API_URL if use_mock else Config.KIWOOM_REAL_API_URL
-            url = host + "/api/dostk/stkinfo"
+            # 키움 REST 게이트웨이는 계정/버전에 따라 API ID별 허용 URI가 다를 수 있다.
+            # 1504(해당 URI에서 지원하지 않는 API ID) 발생 시 다음 URI로 재시도한다.
+            endpoint_candidates = ["/api/dostk/stkinfo", "/api/dostk/chart", "/api/dostk/iteminfo"]
+            if api_id == "ka10004":
+                endpoint_candidates = ["/api/dostk/hoga", "/api/dostk/stkinfo", "/api/dostk/chart", "/api/dostk/iteminfo"]
 
             headers = {
                 "Content-Type": "application/json;charset=UTF-8",
@@ -817,29 +821,34 @@ class KiwoomAPI:
 
             timeout = aiohttp.ClientTimeout(total=20)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(url, headers=headers, json=request_data) as response:
-                    body_text = await response.text()
-                    if response.status != 200:
-                        return {
-                            "success": False,
-                            "error": f"HTTP {response.status}",
-                            "raw_text": body_text,
-                        }
+                last_error = ""
+                for endpoint in endpoint_candidates:
+                    url = host + endpoint
+                    async with session.post(url, headers=headers, json=request_data) as response:
+                        body_text = await response.text()
+                        if response.status != 200:
+                            last_error = f"HTTP {response.status} @ {endpoint}"
+                            continue
 
-                    try:
-                        data = json.loads(body_text)
-                    except json.JSONDecodeError:
-                        return {"success": False, "error": "JSON 파싱 실패", "raw_text": body_text}
+                        try:
+                            data = json.loads(body_text)
+                        except json.JSONDecodeError:
+                            last_error = f"JSON 파싱 실패 @ {endpoint}"
+                            continue
 
-                    ok = (data.get("return_code") == 0) or (data.get("rt_cd") == "0")
-                    if not ok:
-                        return {
-                            "success": False,
-                            "error": data.get("return_msg") or data.get("msg1") or "TR 호출 실패",
-                            "raw": data,
-                        }
+                        ok = (data.get("return_code") == 0) or (data.get("rt_cd") == "0")
+                        if ok:
+                            return {"success": True, "data": data, "endpoint": endpoint}
 
-                    return {"success": True, "data": data}
+                        msg = data.get("return_msg") or data.get("msg1") or "TR 호출 실패"
+                        # URI/API-ID 매핑 오류(1504)면 다음 URI 재시도
+                        if "1504" in str(msg) or "지원하는 API ID가 아닙니다" in str(msg):
+                            last_error = f"{msg} @ {endpoint}"
+                            continue
+
+                        return {"success": False, "error": f"{msg} @ {endpoint}", "raw": data}
+
+                return {"success": False, "error": last_error or "TR 호출 실패(모든 URI 재시도 실패)"}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -868,14 +877,18 @@ class KiwoomAPI:
 
         basic_resp = await self._request_stockinfo_tr("ka10006", {"stk_cd": code})
         quote_resp = await self._request_stockinfo_tr("ka10004", {"stk_cd": code})
-
+        # ka10006/ka10004가 환경에 따라 실패할 수 있어,
+        # 이미 검증된 현재가 조회 로직(ka10081)을 fallback으로 사용한다.
+        fallback_price = None
         if not basic_resp.get("success"):
-            return {"success": False, "error": f"ka10006 실패: {basic_resp.get('error', '알 수 없는 오류')}"}
-        if not quote_resp.get("success"):
-            return {"success": False, "error": f"ka10004 실패: {quote_resp.get('error', '알 수 없는 오류')}"}
+            fallback_price = await self.get_current_price(code)
+            if fallback_price is None:
+                return {"success": False, "error": f"ka10006 실패: {basic_resp.get('error', 'unknown error')}"}
+            logger.warning(f"get_stock_snapshot: ka10006 실패, fallback 현재가 사용 - {code}")
+            basic_resp = {"success": True, "data": {"stk_mkprc": [{"cur_prc": fallback_price}]}}
 
         basic_data = basic_resp.get("data", {})
-        quote_data = quote_resp.get("data", {})
+        quote_data = quote_resp.get("data", {}) if quote_resp.get("success") else {}
 
         basic_rows = (
             basic_data.get("stk_mkprc")
@@ -906,6 +919,10 @@ class KiwoomAPI:
             "raw_quote": quote_row,
         }
 
+        # fallback 가격이 있으면 current_price를 보정
+        if fallback_price is not None and snapshot["current_price"] == 0:
+            snapshot["current_price"] = fallback_price
+
         for level in range(1, 11):
             ask_px = self._pick_int(quote_row, [f"askp{level}", f"offerho{level}", f"sel_prc{level}"])
             bid_px = self._pick_int(quote_row, [f"bidp{level}", f"bidho{level}", f"buy_prc{level}"])
@@ -922,6 +939,14 @@ class KiwoomAPI:
                     "bid_qty": bid_qty,
                 }
             )
+
+        warnings = []
+        if fallback_price is not None:
+            warnings.append("ka10006 unavailable; current_price from fallback")
+        if not quote_resp.get("success"):
+            warnings.append(f"ka10004 unavailable: {quote_resp.get('error', 'unknown error')}")
+        if warnings:
+            snapshot["warnings"] = warnings
 
         return {"success": True, "snapshot": snapshot}
     

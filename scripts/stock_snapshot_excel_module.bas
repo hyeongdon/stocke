@@ -47,7 +47,7 @@ Public Sub 현재가조회_버튼()
     http.SetRequestHeader "Accept", "application/json"
     http.Send
 
-    body = CStr(http.ResponseText)
+    body = HttpResponseBodyToUtf8Text(http)
     ok = CBoolSafe(GetJsonPrimitive(body, "success"))
 
     If http.Status <> 200 Or Not ok Then
@@ -266,4 +266,17 @@ Private Function NormalizeStockCode(ByVal codeValue As String) As String
     txt = Replace(txt, "-", "")
     txt = Replace(txt, " ", "")
     NormalizeStockCode = txt
+End Function
+
+Private Function HttpResponseBodyToUtf8Text(ByVal http As Object) As String
+    Dim stm As Object
+    Set stm = CreateObject("ADODB.Stream")
+    stm.Type = 1 ' adTypeBinary
+    stm.Open
+    stm.Write http.ResponseBody
+    stm.Position = 0
+    stm.Type = 2 ' adTypeText
+    stm.Charset = "utf-8"
+    HttpResponseBodyToUtf8Text = stm.ReadText
+    stm.Close
 End Function
