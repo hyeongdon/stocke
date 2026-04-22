@@ -819,37 +819,52 @@ class KiwoomAPI:
                 "api-id": api_id,
             }
 
+            logger.info(f"[TR_REQUEST] api_id={api_id}, stock={request_data.get('stk_cd','')}, endpoint_candidates={endpoint_candidates}")
             timeout = aiohttp.ClientTimeout(total=20)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 last_error = ""
                 for endpoint in endpoint_candidates:
                     url = host + endpoint
+                    logger.info(f"[TR_ATTEMPT] api_id={api_id}, endpoint={endpoint}, request_data={request_data}")
                     async with session.post(url, headers=headers, json=request_data) as response:
                         body_text = await response.text()
                         if response.status != 200:
                             last_error = f"HTTP {response.status} @ {endpoint}"
+                            logger.warning(f"[TR_HTTP_FAIL] api_id={api_id}, endpoint={endpoint}, status={response.status}, body={body_text[:500]}")
                             continue
 
                         try:
                             data = json.loads(body_text)
                         except json.JSONDecodeError:
                             last_error = f"JSON 파싱 실패 @ {endpoint}"
+                            logger.error(f"[TR_JSON_FAIL] api_id={api_id}, endpoint={endpoint}, body={body_text[:500]}")
                             continue
 
                         ok = (data.get("return_code") == 0) or (data.get("rt_cd") == "0")
+                        logger.info(
+                            f"[TR_RESPONSE] api_id={api_id}, endpoint={endpoint}, "
+                            f"return_code={data.get('return_code')}, rt_cd={data.get('rt_cd')}, "
+                            f"return_msg={data.get('return_msg') or data.get('msg1') or ''}"
+                        )
                         if ok:
+                            sample_keys = list(data.keys())[:20]
+                            logger.info(f"[TR_SUCCESS] api_id={api_id}, endpoint={endpoint}, keys={sample_keys}")
                             return {"success": True, "data": data, "endpoint": endpoint}
 
                         msg = data.get("return_msg") or data.get("msg1") or "TR 호출 실패"
                         # URI/API-ID 매핑 오류(1504)면 다음 URI 재시도
                         if "1504" in str(msg) or "지원하는 API ID가 아닙니다" in str(msg):
                             last_error = f"{msg} @ {endpoint}"
+                            logger.warning(f"[TR_RETRY_URI] api_id={api_id}, endpoint={endpoint}, msg={msg}")
                             continue
 
+                        logger.error(f"[TR_FAIL] api_id={api_id}, endpoint={endpoint}, msg={msg}, body_keys={list(data.keys())[:20]}")
                         return {"success": False, "error": f"{msg} @ {endpoint}", "raw": data}
 
+                logger.error(f"[TR_ALL_FAILED] api_id={api_id}, last_error={last_error}, request_data={request_data}")
                 return {"success": False, "error": last_error or "TR 호출 실패(모든 URI 재시도 실패)"}
         except Exception as e:
+            logger.exception(f"[TR_EXCEPTION] api_id={api_id}, request_data={request_data}, error={e}")
             return {"success": False, "error": str(e)}
 
     @staticmethod
@@ -875,6 +890,8 @@ class KiwoomAPI:
         if not code:
             return {"success": False, "error": "종목코드가 비어 있습니다."}
 
+        logger.info(f"[SNAPSHOT_START] stock_code={code}")
+
         basic_resp = await self._request_stockinfo_tr("ka10006", {"stk_cd": code})
         quote_resp = await self._request_stockinfo_tr("ka10004", {"stk_cd": code})
         # ka10006/ka10004가 환경에 따라 실패할 수 있어,
@@ -885,6 +902,7 @@ class KiwoomAPI:
         if not basic_resp.get("success"):
             fallback_price = await self.get_current_price(code)
             if fallback_price is None:
+                logger.error(f"[SNAPSHOT_FAIL] stock_code={code}, reason=ka10006_failed_and_no_fallback, error={basic_resp.get('error')}")
                 return {"success": False, "error": f"ka10006 실패: {basic_resp.get('error', 'unknown error')}"}
             # ka10081 일봉 데이터로 거래량/전일종가 보정 시도
             try:
@@ -917,6 +935,16 @@ class KiwoomAPI:
 
         basic_row = basic_rows[0] if isinstance(basic_rows, list) and basic_rows else {}
         quote_row = quote_rows[0] if isinstance(quote_rows, list) and quote_rows else {}
+        logger.info(
+            f"[SNAPSHOT_RAW] stock_code={code}, basic_endpoint={basic_resp.get('endpoint','')}, "
+            f"quote_endpoint={quote_resp.get('endpoint','')}, basic_keys={list(basic_data.keys())[:20]}, "
+            f"quote_keys={list(quote_data.keys())[:20]}"
+        )
+        logger.info(
+            f"[SNAPSHOT_ROW_KEYS] stock_code={code}, "
+            f"basic_row_keys={list(basic_row.keys())[:40] if isinstance(basic_row, dict) else []}, "
+            f"quote_row_keys={list(quote_row.keys())[:40] if isinstance(quote_row, dict) else []}"
+        )
 
         snapshot = {
             "stock_code": code,
@@ -976,6 +1004,7 @@ class KiwoomAPI:
                         "bid_qty": 0,
                     }
                 )
+            logger.warning(f"[SNAPSHOT_ORDERBOOK_FALLBACK] stock_code={code}, reason=empty_orderbook_from_tr")
 
         warnings = []
         if fallback_price is not None:
@@ -985,6 +1014,12 @@ class KiwoomAPI:
         if warnings:
             snapshot["warnings"] = warnings
 
+        logger.info(
+            f"[SNAPSHOT_DONE] stock_code={code}, stock_name={snapshot.get('stock_name','')}, "
+            f"current_price={snapshot.get('current_price',0)}, price_diff={snapshot.get('price_diff',0)}, "
+            f"change_rate={snapshot.get('change_rate','0')}, volume={snapshot.get('volume',0)}, "
+            f"orderbook_rows={len(snapshot.get('orderbook', []))}, warnings={snapshot.get('warnings', [])}"
+        )
         return {"success": True, "snapshot": snapshot}
 
     @staticmethod

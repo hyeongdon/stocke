@@ -985,12 +985,13 @@ async def get_stock_info(stock_code: str, stock_name: str = None):
         }
 
 @app.get("/stocks/{stock_code}/snapshot")
-async def get_stock_snapshot(stock_code: str):
+async def get_stock_snapshot(stock_code: str, include_debug: bool = False):
     """현재가/전일대비/등락률/거래량 + 10호가 스냅샷 조회."""
     try:
-        logger.info(f"🌐 [API] 종목 스냅샷 조회 시작 - 종목코드: {stock_code}")
+        logger.info(f"🌐 [API] 종목 스냅샷 조회 시작 - 종목코드: {stock_code}, include_debug={include_debug}")
         result = await kiwoom_api.get_stock_snapshot(stock_code)
         if not result.get("success"):
+            logger.warning(f"🌐 [API] 종목 스냅샷 실패 - 종목코드: {stock_code}, reason={result.get('error')}")
             return {
                 "success": False,
                 "message": result.get("error", "snapshot lookup failed"),
@@ -999,7 +1000,7 @@ async def get_stock_snapshot(stock_code: str):
             }
 
         snapshot = result.get("snapshot", {})
-        return {
+        response_payload = {
             "success": True,
             "stock_code": snapshot.get("stock_code", stock_code),
             "stock_name": snapshot.get("stock_name", ""),
@@ -1012,6 +1013,17 @@ async def get_stock_snapshot(stock_code: str):
             "warnings": snapshot.get("warnings", []),
             "timestamp": datetime.now().isoformat(),
         }
+        if include_debug:
+            response_payload["debug"] = {
+                "raw_basic": snapshot.get("raw_basic", {}),
+                "raw_quote": snapshot.get("raw_quote", {}),
+            }
+        logger.info(
+            f"🌐 [API] 종목 스냅샷 완료 - code={stock_code}, "
+            f"price={response_payload['current_price']}, volume={response_payload['volume']}, "
+            f"orderbook_rows={len(response_payload['orderbook'])}, warnings={response_payload['warnings']}"
+        )
+        return response_payload
     except Exception as e:
         logger.error(f"🌐 [API] 종목 스냅샷 조회 오류: {e}")
         return {
