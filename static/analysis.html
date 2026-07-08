@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <title>기본적분석 — 자동매매</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/dashboard.css?v=64">
+  <link rel="stylesheet" href="/static/analysis.css?v=3">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <h1>기본적분석</h1>
+        <span class="sub">네이버 시가총액 마트 · PER · PBR · ROE</span>
+      </div>
+      <nav class="tabs">
+        <a href="/dashboard" class="tab">대시보드</a>
+        <a href="/analysis" class="tab active">분석</a>
+        <a href="/verify" class="tab-link">검증 ↗</a>
+        <a href="/static/glossary.html" class="tab-link">용어정리 ↗</a>
+      </nav>
+      <div class="topbar-actions analysis-filters">
+        <input type="search" id="codeSearch" class="analysis-search" placeholder="종목코드 검색 (예: 005930)" maxlength="6" autocomplete="off">
+        <button class="btn sm primary" id="btnRefresh" type="button">새로고침</button>
+        <span class="updated">갱신: <span id="lastUpdated">-</span></span>
+      </div>
+    </div>
+  </header>
+
+  <div class="wrap analysis-wrap">
+    <section class="analysis-summary" id="summaryCards">
+      <div class="v-stat"><div class="k">총 종목</div><div class="v" id="statTotal">-</div></div>
+      <div class="v-stat"><div class="k">기준일</div><div class="v" id="statDate" style="font-size:16px;">-</div></div>
+      <div class="v-stat"><div class="k">KOSPI</div><div class="v" id="statKospi">-</div></div>
+      <div class="v-stat"><div class="k">KOSDAQ</div><div class="v" id="statKosdaq">-</div></div>
+      <div class="v-stat"><div class="k">표시 건수</div><div class="v" id="statShown">-</div></div>
+    </section>
+
+    <div class="card analysis-toolbar-card">
+      <div class="card-body analysis-toolbar">
+        <label>시장
+          <select id="fltMarket">
+            <option value="">전체</option>
+            <option value="KOSPI">KOSPI</option>
+            <option value="KOSDAQ">KOSDAQ</option>
+          </select>
+        </label>
+        <label>정렬
+          <select id="fltSortBy">
+            <option value="market_cap">시가총액</option>
+            <option value="per">PER</option>
+            <option value="pbr">PBR</option>
+            <option value="roe">ROE</option>
+            <option value="current_price">현재가</option>
+            <option value="revenue">매출</option>
+            <option value="operating_profit">영업이익</option>
+            <option value="foreign_ratio">외국인비율</option>
+            <option value="stock_code">종목코드</option>
+            <option value="stock_name">종목명</option>
+          </select>
+        </label>
+        <label>표시
+          <select id="fltLimit">
+            <option value="100">100</option>
+            <option value="200">200</option>
+            <option value="500" selected>500</option>
+            <option value="1000">1000</option>
+            <option value="2000">2000</option>
+          </select>
+        </label>
+        <label>PER ≤<input type="number" id="fltMaxPer" placeholder="예: 15" step="0.1" min="0"></label>
+        <label>PBR ≤<input type="number" id="fltMaxPbr" placeholder="예: 2" step="0.1" min="0"></label>
+        <label>ROE ≥<input type="number" id="fltMinRoe" placeholder="예: 10" step="0.1"></label>
+        <button class="btn sm" id="btnApply" type="button">필터 적용</button>
+        <button class="btn sm" id="btnReset" type="button">초기화</button>
+      </div>
+    </div>
+
+    <div id="emptyBanner" class="analysis-banner" style="display:none;"></div>
+
+    <div class="grid cols-2 analysis-main-grid" id="mainGrid">
+      <div class="card analysis-table-card">
+        <div class="card-head">
+          <h3>종목 목록 <span class="hint" id="tableHint"></span></h3>
+        </div>
+        <div class="card-body analysis-table-wrap" id="tableWrap">
+          <div class="skeleton">데이터 불러오는 중…</div>
+        </div>
+      </div>
+      <div class="card analysis-detail-card" id="detailCard">
+        <div class="card-head">
+          <h3 id="detailTitle">종목 상세</h3>
+          <span class="hint" id="detailHint">행을 클릭하거나 종목코드를 검색하세요</span>
+        </div>
+        <div class="card-body" id="detailBody">
+          <div class="empty"><span class="ico">📊</span>목록에서 종목을 선택하면 상세 지표가 표시됩니다.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <script src="/static/analysis.js?v=2"></script>
+</body>
+</html>

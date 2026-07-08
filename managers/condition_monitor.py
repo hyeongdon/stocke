@@ -24,7 +24,7 @@ class ConditionMonitor:
     def __init__(self):
         self.kiwoom_api = KiwoomAPI()
         self.is_running = False
-        self.loop_sleep_seconds = 600  # 10분 주기
+        self.loop_sleep_seconds = max(60, int(getattr(Config, "CONDITION_MONITOR_INTERVAL", 600) or 600))
         self._monitor_task: Optional[asyncio.Task] = None
         self.start_time: Optional[datetime] = None  # 모니터링 시작 시간
         
@@ -114,48 +114,48 @@ class ConditionMonitor:
                 logger.error(f"🔍 [CONDITION_MONITOR] WebSocket 재연결 실패: {conn_err}")
                 pass
 
-        # 조건식 목록 조회
-        logger.debug("🔍 [CONDITION_MONITOR] 조건식 목록 조회 시작")
-        conditions = await self.kiwoom_api.get_condition_list_websocket()
-        logger.info(f"🔍 [CONDITION_MONITOR] 키움 API에서 받은 조건식: {len(conditions)}개")
-        for i, cond in enumerate(conditions):
-            logger.info(f"🔍 [CONDITION_MONITOR]   {i+1}. {cond.get('condition_name')} (API ID: {cond.get('condition_id')})")
-
-        # 자동매매 대상만 필터링
-        enabled_set = set()
+        # DB에 저장된 활성 조건식만 사용 (CNSRLST 목록 조회 생략 — API 부하 절감)
+        enabled_rows: List[AutoTradeCondition] = []
         for db in get_db():
             session: Session = db
-            rows = session.query(AutoTradeCondition).filter(AutoTradeCondition.is_enabled == True).all()
-            enabled_set = {row.condition_name for row in rows}
+            enabled_rows = session.query(AutoTradeCondition).filter(
+                AutoTradeCondition.is_enabled == True
+            ).all()
+            break
 
-        if not conditions:
-            logger.warning("🔍 [CONDITION_MONITOR] 조건식 목록이 비어있습니다.")
-            return
-
-        # 자동매매 활성 조건이 하나도 없으면 스캔하지 않음
-        if not enabled_set:
+        if not enabled_rows:
             logger.info("🔍 [CONDITION_MONITOR] 활성화된 자동매매 조건이 없음 - 스캔 건너뜀")
             return
 
-        logger.info(f"🔍 [CONDITION_MONITOR] 조건식 {len(conditions)}개 발견 - 순차 검색 시작")
+        logger.info(f"🔍 [CONDITION_MONITOR] 활성 조건식 {len(enabled_rows)}개 — 순차 검색 시작")
 
-        # 각 조건식에 대해 즉시 한 번 검색 실행
-        for idx, cond in enumerate(conditions):
-            condition_name = cond.get("condition_name", f"조건식_{idx+1}")
-            condition_api_id = cond.get("condition_id", str(idx))
-            if condition_name not in enabled_set:
-                logger.info(f"🔍 [CONDITION_MONITOR] 비활성 조건식 스킵: {condition_name} (API ID: {condition_api_id})")
+        for row in enabled_rows:
+            condition_name = row.condition_name
+            condition_api_id = row.api_condition_id
+            if not condition_api_id:
+                logger.warning(
+                    f"🔍 [CONDITION_MONITOR] API ID 없음 — 스킵: {condition_name} "
+                    "(대시보드 조건식 '새로고침'으로 목록을 한 번 불러오세요)"
+                )
                 continue
             logger.info(f"🔍 [CONDITION_MONITOR] 조건식 실행: {condition_name} (API ID: {condition_api_id})")
-            # 키움에서 제공한 실제 조건식 ID로 조회
             await self.start_monitoring(condition_id=condition_api_id, condition_name=condition_name)
 
         logger.info("🔍 [CONDITION_MONITOR] 모든 조건식 1회 모니터링 완료")
         
         # 기준봉 전략 제거됨 - 현재 매매전략에 집중
 
-    async def start_periodic_monitoring(self):
-        """모든 조건식을 주기적으로 모니터링 (백그라운드 태스크로 실행)"""
+    async def start_periodic_monitoring(self, force: bool = False):
+        """활성 조건식을 주기적으로 검색 (백그라운드).
+        force=False(기본): Config.CONDITION_MONITOR_AUTO_ENABLED=true 일 때만 시작.
+        force=True: API /monitoring/start 등 수동 호출 시 강제 시작.
+        """
+        if not force and not Config.CONDITION_MONITOR_AUTO_ENABLED:
+            logger.info(
+                "🔍 [CONDITION_MONITOR] 조건식 주기 검색 비활성(기본) — "
+                "수동 POST /monitoring/start 또는 CONDITION_MONITOR_AUTO_ENABLED=true 필요"
+            )
+            return
         logger.info("🔍 [CONDITION_MONITOR] 주기적 모니터링 시작 요청")
         if self.is_running:
             logger.info("🔍 [CONDITION_MONITOR] 이미 실행 중입니다")

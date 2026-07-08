@@ -156,32 +156,31 @@ class WatchlistSyncManager:
                     AutoTradeCondition.is_enabled == True
                 ).all()
                 
-                # 키움 API에서 조건식 목록을 가져와서 올바른 API ID 매핑
-                conditions_data = await self.kiwoom_api.get_condition_list_websocket()
-                
                 for row in rows:
                     # 특정 조건식만 동기화하는 경우 필터링
                     if self.sync_only_target_conditions:
                         if row.condition_name not in self.target_condition_names:
                             logger.info(f"📋 [WATCHLIST_SYNC] 대상 조건식이 아니므로 스킵: {row.condition_name}")
                             continue
-                    
-                    # 조건식 이름으로 키움 API 조건식 찾기
-                    api_condition_id = None
-                    for i, cond_data in enumerate(conditions_data):
-                        if cond_data.get('condition_name') == row.condition_name:
-                            api_condition_id = cond_data.get('condition_id', str(i))
-                            break
-                    
-                    if api_condition_id:
-                        conditions.append({
-                            "condition_id": int(api_condition_id),  # 키움 API의 실제 조건식 ID
-                            "condition_name": row.condition_name,
-                            "condition_index": i  # 배열 인덱스도 저장
-                        })
-                        logger.info(f"📋 [WATCHLIST_SYNC] 활성 조건식: {row.condition_name} (API ID: {api_condition_id})")
-                    else:
-                        logger.warning(f"📋 [WATCHLIST_SYNC] 조건식 '{row.condition_name}'을 키움 API에서 찾을 수 없음")
+
+                    api_condition_id = row.api_condition_id
+                    if not api_condition_id:
+                        logger.warning(
+                            f"📋 [WATCHLIST_SYNC] API ID 없음 — 스킵: {row.condition_name} "
+                            "(조건식 목록을 수동으로 한 번 불러와 주세요)"
+                        )
+                        continue
+
+                    try:
+                        condition_id = int(api_condition_id)
+                    except (TypeError, ValueError):
+                        condition_id = api_condition_id
+
+                    conditions.append({
+                        "condition_id": condition_id,
+                        "condition_name": row.condition_name,
+                    })
+                    logger.info(f"📋 [WATCHLIST_SYNC] 활성 조건식: {row.condition_name} (API ID: {api_condition_id})")
                 
                 break
             except Exception as e:

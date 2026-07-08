@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <title>stock.daily</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/dashboard.css?v=76">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <!-- 상단 바 -->
+  <header class="topbar">
+    <div class="topbar-inner">
+    <div class="brand">
+      <h1>stock.daily</h1>
+      <span class="sub">자동매매 · 전략 · 모니터링 · 알림</span>
+    </div>
+    <nav class="tabs">
+      <a href="#" class="tab active" data-tab="auto">자동매매</a>
+      <a href="#" class="tab" data-tab="board">대시보드</a>
+      <a href="/analysis" class="tab-link">분석 ↗</a>
+      <a href="/verify" class="tab-link">검증 ↗</a>
+      <a href="/static/glossary.html" class="tab-link">용어정리 ↗</a>
+      <a href="#" class="tab" data-tab="alert">알림</a>
+    </nav>
+    <div class="topbar-actions">
+      <button class="btn auto-toggle-top is-off" id="btnToggleAutoTop" type="button" data-on="0">자동매매 시작</button>
+      <span id="connBadge" class="conn-badge warn"><span class="dot"></span><span id="connText">확인 중</span></span>
+      <span id="accountType" class="conn-badge off" style="display:none;"></span>
+      <span class="updated">갱신: <span id="lastUpdated">-</span></span>
+      <label class="updated" style="display:flex;align-items:center;gap:5px;cursor:pointer;">
+        <input type="checkbox" id="autoRefresh" checked> 자동(30s)
+      </label>
+      <a class="btn sm" href="/static/index.html">기존 화면</a>
+      <button class="btn primary sm" id="refreshAll">새로고침</button>
+    </div>
+    </div>
+  </header>
+
+  <div class="wrap">
+
+    <!-- ============ 자동매매 탭 ============ -->
+    <section class="pane active" id="pane-auto">
+      <nav class="auto-subtabs" aria-label="자동매매 하위 메뉴">
+        <button type="button" class="auto-subtab active" data-auto-sub="monitor">모니터링</button>
+        <button type="button" class="auto-subtab" data-auto-sub="settings">설정</button>
+      </nav>
+
+      <div class="auto-subpane active" id="auto-sub-monitor">
+        <div class="auto-layout">
+
+      <!-- 보유 포지션 (ATR·손절선) -->
+      <div class="card compact-card positions-card">
+        <div class="card-head">
+          <div><h3>보유 포지션 <span class="hint" id="autoHoldingCount"></span></h3>
+            <div class="hint" style="margin-top:2px;">현재가·ATR·손절선 10초 갱신 · 비중=평가금액÷주식총평가</div></div>
+          <button class="btn sm" id="autoPosRefresh">새로고침</button>
+        </div>
+        <div class="card-body scroll positions-card-body" id="autoPositionsBody"><div class="empty"><span class="ico">💼</span>로딩 중...</div></div>
+      </div>
+
+      <!-- 성과 통계 -->
+      <div class="card compact-card perf-card">
+        <div class="card-head">
+          <div><h3>성과 통계 <span class="hint">실현손익 · 청산 기준</span></h3>
+            <div class="hint" id="perfSourceHint" style="margin-top:2px;"></div></div>
+          <div class="perf-inputs">
+            <label>시드(원)<input type="number" id="pfSeed" value="10000000"></label>
+            <button class="btn primary sm" id="pfRefresh">새로고침</button>
+          </div>
+        </div>
+        <div class="card-body perf-card-body">
+          <div class="grid cols-4 perf-stat-grid" id="perfCards"><div class="skeleton">불러오는 중...</div></div>
+        </div>
+      </div>
+      <div class="grid cols-2 auto-split">
+        <div class="card compact-card">
+          <div class="card-head"><h3>누적 손익 곡선</h3><span class="hint" id="perfCurveTotal">-</span></div>
+          <div class="card-body"><div class="auto-chart"><canvas id="perfChart"></canvas></div></div>
+        </div>
+        <div class="card compact-card">
+          <div class="card-head"><h3>청산 사유별 분포</h3></div>
+          <div class="card-body scroll" id="byReasonBody"><div class="skeleton">불러오는 중...</div></div>
+        </div>
+      </div>
+      <div class="card compact-card">
+        <div class="card-head"><h3>일별 손익</h3><span class="hint">청산일(KST) 기준 · 포지션 단위</span></div>
+        <div class="card-body scroll" id="dailyBody" style="max-height:160px;"><div class="skeleton">불러오는 중...</div></div>
+      </div>
+
+      <!-- 스크리너 후보 -->
+      <div class="card compact-card screener-card">
+        <div class="card-head">
+          <div><h3>스크리너 후보 <span class="hint" id="screenerCount"></span></h3>
+            <div class="hint" style="margin-top:2px;">거래대금순 · 코스피·코스닥 개별주만 · ETF·ETN·파생상품 제외</div></div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <select id="scrMarket" class="select-dark">
+              <option value="000">전체</option><option value="001">코스피</option><option value="101">코스닥</option></select>
+            <button class="btn primary sm" id="scrRefresh">조회</button>
+          </div>
+        </div>
+        <div class="card-body scroll auto-screener-body" id="screenerBody">
+          <div class="empty"><span class="ico">🧭</span>조회 버튼을 누르면 거래대금순 상위 후보를 불러옵니다. (장중에만 데이터가 정확합니다)</div>
+        </div>
+      </div>
+
+      <!-- 체결 로그 -->
+      <div class="card compact-card">
+        <div class="card-head">
+          <div><h3>체결 로그 <span class="hint" id="logCount"></span></h3>
+            <div class="hint" style="margin-top:2px;">실제 매수·매도 체결 내역 (기간별)</div></div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <select id="logDays" class="select-dark" title="조회 기간">
+              <option value="1" selected>최근 1일</option>
+              <option value="3">최근 3일</option>
+              <option value="7">최근 7일</option>
+            </select>
+            <button class="btn sm" id="logRefresh">새로고침</button>
+          </div>
+        </div>
+        <div class="card-body scroll auto-log-body" id="logBody"><div class="skeleton">불러오는 중...</div></div>
+      </div>
+
+      <!-- 실시간 활동 로그 -->
+      <div class="card compact-card activity-card">
+        <div class="card-head">
+          <div><h3>실시간 활동 로그 <span class="hint" id="activityHint">3초마다 갱신</span></h3>
+            <div class="hint" style="margin-top:2px;">스캐너·매수·손절 실행기 동작</div></div>
+          <button class="btn sm" id="activityRefresh">새로고침</button>
+        </div>
+        <div class="card-body" style="padding-top:0;">
+          <div id="activityBanner" class="activity-banner"><div class="skeleton">상태 확인 중...</div></div>
+          <div class="activity-console" id="activityBody"><div class="activity-line info">로그 불러오는 중...</div></div>
+        </div>
+      </div>
+
+        </div><!-- /.auto-layout -->
+      </div>
+
+      <div class="auto-subpane" id="auto-sub-settings">
+        <div class="auto-layout">
+      <div class="card compact-card settings-card">
+        <div class="card-head">
+          <div><h3>자동매매 설정</h3><div class="hint" style="margin-top:2px;">종목선정(고정) · 매수·청산 · 사이징</div></div>
+          <span id="autoStateBadge" class="pill off">중지</span>
+        </div>
+        <div class="card-body settings-card-body" id="settingsForm"><div class="skeleton">불러오는 중...</div></div>
+      </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 대시보드 탭 ============ -->
+    <section class="pane" id="pane-board">
+      <div class="board-layout">
+
+      <div class="board-block">
+        <div class="section-title">계좌 요약</div>
+        <div class="grid cols-4 board-stat-grid">
+          <div class="card stat compact-stat"><div class="label">총 평가자산</div><div class="value" id="stTotalAsset">-</div><div class="delta flat" id="stAccountNo">-</div></div>
+          <div class="card stat compact-stat"><div class="label">평가손익 <span class="hint">(미실현 · 키움)</span></div><div class="value" id="stPnl">-</div><div class="delta flat" id="stPnlRate">-</div><div class="delta flat board-stat-sub" id="stUnrealizedDetail">-</div><div class="delta flat board-stat-sub" id="stRealizedPnl">실현손익: -</div></div>
+          <div class="card stat compact-stat stat-deposit"><div class="label">예수금 <span class="hint">D+0</span></div><div class="value" id="stDeposit">-</div>
+            <div class="delta-stack" id="stCashStack">
+              <div class="delta flat" id="stStockEval">주식 평가합: -</div>
+              <div class="delta flat" id="stAssetSum">자산 합산: -</div>
+              <div class="delta flat" id="stD2">D+2 추정예수금: -</div>
+              <div class="delta flat cash-sep" aria-hidden="true"></div>
+              <div class="delta flat" id="stCashReserve">현금 보유: -</div>
+              <div class="delta flat highlight" id="stInvestable">매수 가능: -</div>
+              <div class="delta flat hint-line" id="stCashFormula"></div>
+            </div>
+          </div>
+          <div class="card stat compact-stat"><div class="label">총 매입금액</div><div class="value" id="stBuyAmt">-</div><div class="delta flat" id="stHoldingCnt">키움 보유 -</div></div>
+        </div>
+      </div>
+
+      <div class="board-block">
+        <div class="section-title">가동 상태</div>
+        <div class="grid cols-2 board-split">
+          <div class="card compact-card"><div class="card-head"><h3>가동 상태</h3><span class="hint" id="statusTime"></span></div>
+            <div class="card-body board-status-body" id="statusBody"><div class="skeleton">불러오는 중...</div></div></div>
+          <div class="card compact-card"><div class="card-head"><h3>신호 통계</h3></div>
+            <div class="card-body board-status-body" id="signalStatBody"><div class="skeleton">불러오는 중...</div></div></div>
+        </div>
+      </div>
+
+      <div class="board-block">
+        <div class="section-title">최근 매매 내역</div>
+        <div class="grid cols-2 board-split">
+          <div class="card compact-card"><div class="card-head"><h3>최근 매도 체결 <span class="hint" id="sellCount"></span></h3><button class="btn sm" data-refresh="sells">새로고침</button></div>
+            <div class="card-body scroll board-scroll-body" id="sellsBody"><div class="skeleton">불러오는 중...</div></div></div>
+          <div class="card compact-card"><div class="card-head"><h3>주문 내역 <span class="hint" id="ordersCount"></span></h3>
+            <button class="btn sm" data-refresh="orders">새로고침</button></div>
+            <div class="card-body scroll board-scroll-body" id="ordersBody"><div class="skeleton">불러오는 중...</div></div></div>
+        </div>
+      </div>
+
+      <div class="board-block">
+        <div class="section-title">조건식</div>
+        <div class="grid board-cond-grid">
+          <div class="card compact-card"><div class="card-head"><h3>조건식 목록 <span class="hint" id="condCount"></span></h3><button class="btn sm" data-refresh="conditions">새로고침</button></div>
+            <div class="card-body scroll board-cond-list" id="conditionsBody"><div class="empty">「새로고침」을 눌러 조건식 목록을 불러오세요.</div></div></div>
+          <div class="card compact-card"><div class="card-head"><h3 id="condStockTitle">편입 종목</h3><span class="hint" id="condStockHint">조건식을 선택하세요</span></div>
+            <div class="card-body scroll board-cond-list" id="condStocksBody"><div class="empty"><span class="ico">🔍</span>왼쪽에서 조건식을 선택하면 편입 종목이 표시됩니다.</div></div></div>
+        </div>
+      </div>
+
+      </div><!-- /.board-layout -->
+    </section>
+
+    <!-- ============ 알림 탭 ============ -->
+    <section class="pane" id="pane-alert">
+      <div class="section-title">텔레그램 알림</div>
+      <div class="grid cols-2">
+        <div class="card"><div class="card-head"><h3>텔레그램 알림</h3><span class="hint">조건식 → 알림</span></div>
+          <div class="card-body" id="telegramBody"><div class="skeleton">불러오는 중...</div></div></div>
+      </div>
+    </section>
+
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <script src="/static/dashboard.js?v=85"></script>
+</body>
+</html>

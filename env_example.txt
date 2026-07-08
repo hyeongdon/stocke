@@ -30,11 +30,20 @@ HOST=0.0.0.0
 PORT=8000
 
 # 조건식 감시 설정
-CONDITION_CHECK_INTERVAL=1
+# CONDITION_CHECK_INTERVAL: (레거시) 신호 중복 방지 등 — 주기 검색과 별개
+CONDITION_CHECK_INTERVAL=60
+# 조건식 주기 검색(CNSRREQ) — 기본 OFF (API 절감). true 시 /monitoring/start 와 동일 효과
+CONDITION_MONITOR_AUTO_ENABLED=false
+# 주기 검색 간격(초). 최소 60초
+CONDITION_MONITOR_INTERVAL=600
 
 # 로깅 설정
 LOG_LEVEL=INFO
-LOG_FILE=stock_pipeline.log
+LOG_FILE=logs/app.log
+
+# KRX 추가 휴장일 (쉼표 구분 YYYY-MM-DD) — DB 외 env 임시 추가용
+# 대시보드 「자동매매」탭 → 거래소 휴장일 에서 DB 관리 권장
+# KRX_EXTRA_HOLIDAYS=2026-06-03
 
 # WebSocket 서버 설정
 WEBSOCKET_PING_INTERVAL=20
@@ -43,3 +52,18 @@ WEBSOCKET_PING_TIMEOUT=20
 # 데이터 내보내기 설정
 EXPORT_DIR=./exports
 MAX_EXPORT_ROWS=10000
+
+# 텔레그램 알림 설정
+# 봇 토큰(@BotFather)과 채팅 ID (필수)
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
+TELEGRAM_CHAT_ID=your_telegram_chat_id_here
+# 아침 스케줄(ensure_server_running) 서버 신규 기동 시에도 위 토큰으로 알림 전송
+# 자동매매 매수/매도 체결 시에도 동일 토큰으로 알림 전송
+# 알림 대상 조건식 이름 필터(쉼표 구분). 비우면 모든 조건식 대상.
+TELEGRAM_ALERT_CONDITION_NAMES=
+# 반복 실행 주기(초)
+TELEGRAM_ALERT_INTERVAL=600
+# 조건식별 표시 최대 종목 수
+TELEGRAM_ALERT_MAX_STOCKS=20
+# true: 조건식·매매 알림은 거래일 장중(09:00~15:30)만 (휴장·주말·장외 스킵)
+TELEGRAM_ALERT_MARKET_HOURS_ONLY=true

@@ -6,9 +6,31 @@ from sqlalchemy.orm import Session
 
 from api.kiwoom_api import KiwoomAPI
 from core.models import PendingBuySignal, get_db, AutoTradeCondition, AutoTradeSettings, Position
-from managers.stop_loss_manager import StopLossManager
+from managers.stop_loss_manager import stop_loss_manager
 from core.config import Config
 from utils.debug_tracer import debug_tracer
+from utils.auto_trade_engine import (
+    auto_trade_engines_allowed,
+    cap_buy_amount_by_cash,
+    cash_reserve_pct,
+    check_daily_limits,
+    check_entry_gate,
+    compute_buy_amount,
+    compute_investable_cash,
+    compute_quantity,
+    count_open_position_slots,
+    effective_min_change_rate,
+    has_buy_conditions,
+    allows_new_buy,
+    new_buy_block_reason,
+    is_max_concurrent_positions_reached,
+    max_concurrent_positions_limit,
+    order_params,
+    parse_signal_meta,
+    passes_buy_price_conditions,
+)
+from utils.auto_trade_activity_log import log_activity
+from notifications.trade_alert import notify_buy_async
 
 logger = logging.getLogger(__name__)
 
@@ -24,12 +46,13 @@ class BuyOrderExecutor:
         # 자동매매 설정 (DB에서 동적으로 로드)
         self.auto_trade_settings = None
         
-        # 손절/익절 모니터링 매니저
-        self.stop_loss_manager = StopLossManager()
+        # 손절/익절 모니터링 (전역 싱글톤)
+        self.stop_loss_manager = stop_loss_manager
         
     async def start_processing(self):
         """매수 주문 처리 시작"""
         logger.info("💰 [BUY_EXECUTOR] 매수 주문 처리기 시작")
+        log_activity("BUY", "매수 실행기 시작 (60초 주기)", "info")
         self.is_running = True
         
         try:
@@ -39,7 +62,11 @@ class BuyOrderExecutor:
                 
                 # 자동매매가 활성화된 경우에만 처리
                 if self.auto_trade_settings and self.auto_trade_settings.is_enabled:
-                    await self._process_pending_signals()
+                    allowed, off_reason = auto_trade_engines_allowed()
+                    if not allowed:
+                        logger.debug(f"💰 [BUY_EXECUTOR] {off_reason} — 신호 처리 건너뜀")
+                    else:
+                        await self._process_pending_signals()
                 else:
                     logger.debug("💰 [BUY_EXECUTOR] 자동매매 비활성화 상태 - 신호 처리 건너뜀")
                 
@@ -52,6 +79,7 @@ class BuyOrderExecutor:
     async def stop_processing(self):
         """매수 주문 처리 중지"""
         logger.info("💰 [BUY_EXECUTOR] 매수 주문 처리기 중지 요청")
+        log_activity("BUY", "매수 실행기 중지", "warn")
         self.is_running = False
     
     async def _load_auto_trade_settings(self):
@@ -84,6 +112,7 @@ class BuyOrderExecutor:
                 return
             
             logger.info(f"💰 [BUY_EXECUTOR] 처리할 신호 {len(pending_signals)}개 발견")
+            log_activity("BUY", f"대기 신호 {len(pending_signals)}건 처리 시작", "info")
             
             for idx, signal in enumerate(pending_signals, 1):
                 try:
@@ -132,8 +161,11 @@ class BuyOrderExecutor:
             debug_tracer.log_checkpoint(f"1단계 결과: {validation_result}", "BUY_EXECUTOR")
             
             if not validation_result["valid"]:
-                logger.warning(f"💰 [BUY_EXECUTOR] 매수 조건 미충족 - {signal.stock_name}: {validation_result['reason']}")
-                await self._update_signal_status(signal.id, "FAILED", validation_result["reason"])
+                reason = validation_result["reason"]
+                logger.warning(f"💰 [BUY_EXECUTOR] 매수 조건 미충족 - {signal.stock_name}: {reason}")
+                log_activity("BUY", f"검증 실패 {signal.stock_name}: {reason}", "warn",
+                             stock_code=signal.stock_code)
+                await self._update_signal_status(signal.id, "FAILED", reason)
                 return
             
             # 2. 현재가 조회
@@ -145,10 +177,36 @@ class BuyOrderExecutor:
                 logger.error(f"💰 [BUY_EXECUTOR] 현재가 조회 실패 - {signal.stock_name}")
                 await self._update_signal_status(signal.id, "FAILED", "현재가 조회 실패")
                 return
+
+            meta = parse_signal_meta(signal)
+            is_add_buy = bool(meta.get("is_add_buy"))
+            if self.auto_trade_settings and not is_add_buy and self.auto_trade_settings.use_entry_gate:
+                gate_ok, gate_reason = await check_entry_gate(
+                    self.kiwoom_api,
+                    self.auto_trade_settings,
+                    signal.stock_code,
+                    current_price,
+                )
+                if not gate_ok:
+                    reason = f"진입 게이트: {gate_reason}"
+                    logger.warning(f"💰 [BUY_EXECUTOR] 주문 직전 게이트 실패 - {signal.stock_name}: {reason}")
+                    log_activity(
+                        "BUY",
+                        f"게이트 실패 {signal.stock_name}: {gate_reason}",
+                        "warn",
+                        stock_code=signal.stock_code,
+                    )
+                    await self._update_signal_status(signal.id, "FAILED", reason)
+                    return
             
             # 3. 매수 수량 계산
             debug_tracer.log_checkpoint("3단계: 매수 수량 계산 시작", "BUY_EXECUTOR")
-            quantity = await self._calculate_buy_quantity(signal.stock_code, current_price)
+            quantity = await self._calculate_buy_quantity(
+                signal.stock_code,
+                current_price,
+                change_rate=meta.get("change_rate"),
+                is_add_buy=bool(meta.get("is_add_buy")),
+            )
             debug_tracer.log_checkpoint(f"3단계 결과: 수량={quantity}주, 총액={current_price*quantity:,}원", "BUY_EXECUTOR")
             
             if quantity < 1:
@@ -168,24 +226,80 @@ class BuyOrderExecutor:
     async def _validate_buy_conditions(self, signal: PendingBuySignal) -> Dict:
         """매수 전 검증"""
         try:
-            # 1. 시장 시간 확인
+            # 1. 시장 시간·장마감 청산 이후 매수 차단
             now = datetime.now()
-            if not self._is_market_open(now):
-                # 모의투자(또는 옵션)에서는 테스트 목적상 장시간 체크를 우회 가능하게 함
-                allow_out_of_hours = getattr(Config, "ALLOW_OUT_OF_MARKET_TRADING", False) or Config.KIWOOM_USE_MOCK_ACCOUNT
-                if not allow_out_of_hours:
-                    return {"valid": False, "reason": "시장 시간이 아님"}
-                logger.warning("💰 [BUY_EXECUTOR] 시장 시간이 아니지만(모의투자/옵션) 테스트 목적으로 진행합니다")
+            block = new_buy_block_reason(self.auto_trade_settings, now)
+            if block:
+                return {"valid": False, "reason": block}
+
+            # 1b. 일일 손익 한도
+            if self.auto_trade_settings:
+                halt = check_daily_limits(self.auto_trade_settings)
+                if halt:
+                    return {"valid": False, "reason": halt}
             
             # 2. 계좌 잔고 확인
             account_info = await self._get_account_info()
             if not account_info:
                 return {"valid": False, "reason": "계좌 정보 조회 실패"}
-            
-            available_cash = account_info.get("available_cash", 0)
-            max_invest_amount = self.auto_trade_settings.max_invest_amount if self.auto_trade_settings else 100000
-            if available_cash < max_invest_amount:
-                return {"valid": False, "reason": f"잔고 부족: {available_cash:,}원 (필요: {max_invest_amount:,}원)"}
+
+            meta = parse_signal_meta(signal)
+            is_add_buy = bool(meta.get("is_add_buy"))
+
+            # 1c. 최대 동시 보유 (신규 매수만 — 대기 신호 슬롯 포함)
+            if self.auto_trade_settings and not is_add_buy:
+                limit = max_concurrent_positions_limit(self.auto_trade_settings)
+                if limit > 0:
+                    for db in get_db():
+                        session: Session = db
+                        from utils.auto_trade_engine import (
+                            count_open_position_slots,
+                            prune_stale_buy_slot_reservations,
+                        )
+                        if prune_stale_buy_slot_reservations(session):
+                            session.commit()
+                        if is_max_concurrent_positions_reached(
+                            self.auto_trade_settings, session, for_new_signal=False,
+                        ):
+                            slots = count_open_position_slots(session)
+                            return {
+                                "valid": False,
+                                "reason": (
+                                    f"최대 동시 보유 {limit}종목 초과 "
+                                    f"(슬롯 {slots}: 보유+대기 신호)"
+                                ),
+                            }
+                        break
+
+            investable = account_info.get("investable_cash", 0)
+            deposit = account_info.get("deposit", 0)
+            reserve = account_info.get("cash_reserve", 0)
+            pct = cash_reserve_pct(self.auto_trade_settings) if self.auto_trade_settings else 10.0
+
+            if investable <= 0:
+                return {
+                    "valid": False,
+                    "reason": (
+                        f"현금 보유 {pct:.0f}% 유지 — 매수 가능 0원 "
+                        f"(예수금 {deposit:,}원, 보유 {reserve:,}원)"
+                    ),
+                }
+
+            if self.auto_trade_settings:
+                planned = compute_buy_amount(
+                    self.auto_trade_settings,
+                    meta.get("change_rate"),
+                    is_add_buy,
+                )
+                planned = cap_buy_amount_by_cash(planned, investable)
+                if planned <= 0:
+                    return {
+                        "valid": False,
+                        "reason": (
+                            f"현금 보유 {pct:.0f}% 적용 후 매수 가능 금액 부족 "
+                            f"(가능 {investable:,}원, 예수금 {deposit:,}원)"
+                        ),
+                    }
             
             # 3. 종목 상태 확인 (상장폐지, 거래정지 등)
             stock_status = await self._check_stock_status(signal.stock_code)
@@ -195,22 +309,51 @@ class BuyOrderExecutor:
             # 4. 중복 주문 확인
             if await self._has_pending_order(signal.stock_code, exclude_signal_id=signal.id):
                 return {"valid": False, "reason": "이미 대기 중인 주문 존재"}
-            
+
+            # 5. 대시보드 매수 조건 (가격/등락률) — 추가매수는 수익률 트리거로 이미 검증됨
+            if is_add_buy:
+                holding = False
+                for db in get_db():
+                    holding = db.query(Position).filter(
+                        Position.stock_code == signal.stock_code,
+                        Position.status == "HOLDING",
+                    ).first() is not None
+                    break
+                if not holding:
+                    return {"valid": False, "reason": "추가매수 대상 포지션 없음"}
+
+            if self.auto_trade_settings and not is_add_buy:
+                cfg = self.auto_trade_settings
+                need_price = bool(cfg.buy_below_price) or effective_min_change_rate(cfg) is not None
+                need_gate = bool(cfg.use_entry_gate)
+                if need_price or need_gate:
+                    current_price = await self._get_current_price(signal.stock_code)
+                    if not current_price:
+                        return {"valid": False, "reason": "현재가 조회 실패(매수조건 검증)"}
+                    change_rate = None
+                    if need_price:
+                        snap = await self.kiwoom_api.get_stock_snapshot(signal.stock_code)
+                        if snap.get("success"):
+                            snap_data = snap.get("snapshot") or {}
+                            try:
+                                change_rate = float(str(snap_data.get("change_rate", "0")).replace(",", ""))
+                            except (TypeError, ValueError):
+                                change_rate = None
+                        if not passes_buy_price_conditions(cfg, current_price, change_rate):
+                            return {"valid": False, "reason": "매수 조건 미충족(가격/등락률)"}
+
+                    if need_gate:
+                        gate_ok, gate_reason = await check_entry_gate(
+                            self.kiwoom_api, cfg, signal.stock_code, current_price,
+                        )
+                        if not gate_ok:
+                            return {"valid": False, "reason": f"진입 게이트: {gate_reason}"}
+
             return {"valid": True, "reason": "검증 통과"}
             
         except Exception as e:
             logger.error(f"💰 [BUY_EXECUTOR] 매수 조건 검증 오류: {e}")
             return {"valid": False, "reason": f"검증 오류: {e}"}
-    
-    def _is_market_open(self, now: datetime) -> bool:
-        """시장 시간 확인 (평일 09:00-15:30)"""
-        if now.weekday() >= 5:  # 주말
-            return False
-        
-        market_start = now.replace(hour=9, minute=0, second=0, microsecond=0)
-        market_end = now.replace(hour=15, minute=30, second=0, microsecond=0)
-        
-        return market_start <= now <= market_end
     
     async def _get_account_info(self) -> Optional[Dict]:
         """계좌 정보 조회"""
@@ -240,10 +383,19 @@ class BuyOrderExecutor:
                 except Exception:
                     return 0
 
-            # KiwoomAPI.get_account_balance 파싱 결과는 entr / d2_entra 등을 포함
-            available_cash = _to_int(raw.get("entr") or raw.get("d2_entra") or 0)
+            entr = _to_int(raw.get("entr") or 0)
+            d2 = _to_int(raw.get("d2_entra") or 0)
+            investable, reserve = compute_investable_cash(entr, self.auto_trade_settings)
+            if d2 <= 0:
+                investable = 0
+            else:
+                investable = min(investable, d2)
             return {
-                "available_cash": available_cash,
+                "deposit": entr,
+                "d2_entra": d2,
+                "available_cash": entr,
+                "investable_cash": investable,
+                "cash_reserve": reserve,
                 "raw": raw,
             }
         except Exception as e:
@@ -298,28 +450,39 @@ class BuyOrderExecutor:
             logger.error(f"💰 [BUY_EXECUTOR] 현재가 조회 오류: {e}")
             return None
     
-    async def _calculate_buy_quantity(self, stock_code: str, current_price: int) -> int:
-        """매수 수량 계산 (자동매매 설정 사용)"""
+    async def _calculate_buy_quantity(
+        self,
+        stock_code: str,
+        current_price: int,
+        change_rate: Optional[float] = None,
+        is_add_buy: bool = False,
+    ) -> int:
+        """매수 수량 계산 (FIXED / PYRAMIDING, 추가매수 포함)."""
         try:
             if not self.auto_trade_settings:
                 logger.error("💰 [BUY_EXECUTOR] 자동매매 설정이 없습니다.")
                 return 0
-            
-            # 자동매매 설정의 최대 투자 금액 사용
-            max_invest_amount = self.auto_trade_settings.max_invest_amount
-            quantity = max_invest_amount // current_price
-            
-            # 최소 수량 확인 (1주 이상)
-            if quantity < 1:
-                return 0
-            
-            # 최대 수량 제한 (1000주)
-            if quantity > 1000:
-                quantity = 1000
-            
-            logger.info(f"💰 [BUY_EXECUTOR] 매수 수량 계산: {quantity}주 (최대투자={max_invest_amount:,}원, 현재가={current_price:,}원)")
+
+            amount = compute_buy_amount(self.auto_trade_settings, change_rate, is_add_buy)
+            account_info = await self._get_account_info()
+            if account_info:
+                investable = account_info.get("investable_cash", 0)
+                capped = cap_buy_amount_by_cash(amount, investable)
+                if capped < amount:
+                    pct = cash_reserve_pct(self.auto_trade_settings)
+                    logger.info(
+                        f"💰 [BUY_EXECUTOR] 현금 보유 {pct:.0f}% 적용 — "
+                        f"매수금액 {amount:,}→{capped:,}원 (가능 {investable:,}원)"
+                    )
+                amount = capped
+            quantity = compute_quantity(amount, current_price)
+
+            logger.info(
+                f"💰 [BUY_EXECUTOR] 매수 수량: {quantity}주 "
+                f"(금액={amount:,}원, add={is_add_buy}, 등락={change_rate})"
+            )
             return quantity
-            
+
         except Exception as e:
             logger.error(f"💰 [BUY_EXECUTOR] 매수 수량 계산 오류: {e}")
             return 0
@@ -331,39 +494,68 @@ class BuyOrderExecutor:
                 logger.info(f"💰 [BUY_EXECUTOR] 매수 주문 시도 {attempt + 1}/{self.max_retry_attempts} - {signal.stock_name}")
                 
                 # 키움 API로 매수 주문
+                order_price, order_type = order_params(
+                    self.auto_trade_settings,
+                    current_price,
+                ) if self.auto_trade_settings else (0, "3")
                 result = await self.kiwoom_api.place_buy_order(
                     stock_code=signal.stock_code,
                     quantity=quantity,
-                    price=0,  # 시장가
-                    order_type="3"  # 시장가 (kt10000 스펙)
+                    price=order_price,
+                    order_type=order_type,
                 )
                 
                 if result.get("success"):
-                    logger.info(f"💰 [BUY_EXECUTOR] 매수 주문 성공 - {signal.stock_name}: {quantity}주")
+                    msg = f"매수 주문 성공 {signal.stock_name} {quantity}주 @ {current_price:,}원"
+                    logger.info(f"💰 [BUY_EXECUTOR] {msg}")
+                    log_activity("BUY", msg, "info", stock_code=signal.stock_code, quantity=quantity)
                     order_id = result.get("order_id", "")
                     await self._update_signal_status(signal.id, "ORDERED", "", order_id)
+
+                    meta = parse_signal_meta(signal)
+                    is_add = bool(meta.get("is_add_buy"))
+                    asyncio.create_task(notify_buy_async(
+                        stock_name=signal.stock_name,
+                        stock_code=signal.stock_code,
+                        quantity=quantity,
+                        price=current_price,
+                        is_add_buy=is_add,
+                        order_id=order_id,
+                    ))
                     
-                    # 포지션 생성 (손절/익절 모니터링용)
+                    # 포지션 생성 또는 추가매수 반영
                     position = None
                     try:
-                        position = await self.stop_loss_manager.create_position_from_buy_signal(
-                            signal_id=signal.id,
-                            buy_price=current_price,  # 임시로 현재가 사용 (나중에 실제 체결가로 업데이트)
-                            buy_quantity=quantity,
-                            buy_order_id=order_id
-                        )
-                        logger.info(f"💰 [BUY_EXECUTOR] 포지션 생성 완료 - {signal.stock_name}")
+                        if is_add:
+                            position = await self._add_to_existing_position(
+                                signal.stock_code, current_price, quantity, order_id,
+                            )
+                        else:
+                            position = await self.stop_loss_manager.create_position_from_buy_signal(
+                                signal_id=signal.id,
+                                buy_price=current_price,
+                                buy_quantity=quantity,
+                                buy_order_id=order_id,
+                            )
+                        logger.info(f"💰 [BUY_EXECUTOR] 포지션 {'추가' if is_add else '생성'} — {signal.stock_name}")
                         
-                        # 주문 체결 후 실제 체결가 업데이트 (5초 후)
                         if position:
+                            await self._record_buy_fill(
+                                position, signal, current_price, quantity, order_id, is_add, meta,
+                            )
+                            await self._update_signal_status(signal.id, "FILLED", "")
                             asyncio.create_task(self._update_position_with_actual_price(position.id, signal.stock_code, 5))
                     except Exception as e:
                         logger.error(f"💰 [BUY_EXECUTOR] 포지션 생성 실패 - {signal.stock_name}: {e}")
+                        log_activity("BUY", f"포지션 생성 실패 {signal.stock_name}: {e}", "error",
+                                     stock_code=signal.stock_code)
                     
                     return
                 else:
                     error_msg = result.get("error", "알 수 없는 오류")
                     logger.warning(f"💰 [BUY_EXECUTOR] 매수 주문 실패 (시도 {attempt + 1}): {error_msg}")
+                    log_activity("BUY", f"매수 실패 {signal.stock_name}: {error_msg}", "error",
+                                 stock_code=signal.stock_code)
                     
                     if attempt < self.max_retry_attempts - 1:
                         logger.info(f"💰 [BUY_EXECUTOR] {self.retry_delay_seconds}초 후 재시도")
@@ -396,55 +588,152 @@ class BuyOrderExecutor:
                 return
             
             # 해당 종목 찾기
+            from api.kiwoom_api import KiwoomAPI
+            norm_code = KiwoomAPI.normalize_stock_code(stock_code)
             holdings = balance_data.get('stk_acnt_evlt_prst', [])
             target_holding = None
             for holding in holdings:
-                # 종목코드 비교 (앞에 'A'가 붙을 수 있음)
-                holding_code = holding.get('stk_cd', '').replace('A', '')
-                if holding_code == stock_code.replace('A', ''):
+                holding_code = KiwoomAPI.normalize_stock_code(holding.get('stk_cd', ''))
+                if holding_code == norm_code:
                     target_holding = holding
                     break
             
             if not target_holding:
                 logger.warning(f"💰 [BUY_EXECUTOR] 보유종목에서 찾을 수 없음 - 종목: {stock_code}")
                 return
-            
-            # 실제 매입평균가격 가져오기 (avg_pr 또는 pur_amt/qty 계산)
-            avg_price_str = target_holding.get('avg_pr', '0')  # 평균가격
-            qty_str = target_holding.get('qty', '0')  # 보유수량
-            pur_amt_str = target_holding.get('pur_amt', '0')  # 매입금액 (수수료 포함)
-            
-            try:
-                # avg_pr가 있으면 사용, 없으면 pur_amt/qty로 계산
-                if avg_price_str and float(avg_price_str) > 0:
-                    actual_buy_price = int(float(avg_price_str))
-                elif qty_str and float(qty_str) > 0 and pur_amt_str:
-                    actual_buy_price = int(float(pur_amt_str) / float(qty_str))
-                else:
-                    logger.warning(f"💰 [BUY_EXECUTOR] 유효한 체결가 정보 없음 - 종목: {stock_code}")
-                    return
-                
-                # 포지션 업데이트
-                for db in get_db():
-                    session: Session = db
-                    position = session.query(Position).filter(Position.id == position_id).first()
-                    if position:
-                        old_price = position.buy_price
-                        actual_buy_amount = int(float(pur_amt_str)) if pur_amt_str and float(pur_amt_str) > 0 else actual_buy_price * position.buy_quantity
-                        
-                        position.buy_price = actual_buy_price
-                        position.buy_amount = actual_buy_price * position.buy_quantity
-                        position.actual_buy_amount = actual_buy_amount  # 키움 API의 실제 매입금액 (수수료 포함)
-                        session.commit()
-                        logger.info(f"💰 [BUY_EXECUTOR] 포지션 체결가 업데이트 완료 - {position.stock_name}: {old_price:,}원 → {actual_buy_price:,}원 (실제매입금액: {actual_buy_amount:,}원)")
-                    break
-                    
-            except (ValueError, TypeError) as e:
-                logger.error(f"💰 [BUY_EXECUTOR] 체결가 파싱 오류 - 종목: {stock_code}, 오류: {e}")
+
+            from utils.position_buy_fills import reconcile_position_buy_with_fills
+
+            for db in get_db():
+                session: Session = db
+                position = session.query(Position).filter(Position.id == position_id).first()
+                if position:
+                    old_price = position.buy_price
+                    old_amt = position.actual_buy_amount or position.buy_amount
+                    reconcile_position_buy_with_fills(session, position, target_holding)
+                    session.commit()
+                    logger.info(
+                        f"💰 [BUY_EXECUTOR] 키움 API 포지션 동기화 — {position.stock_name}: "
+                        f"매입가 {old_price:,}→{position.buy_price:,}원, "
+                        f"매입금액 {old_amt:,}→{position.buy_amount:,}원"
+                    )
+                break
                 
         except Exception as e:
             logger.error(f"💰 [BUY_EXECUTOR] 실제 체결가 업데이트 오류 - Position ID: {position_id}, 오류: {e}")
     
+    async def _add_to_existing_position(
+        self,
+        stock_code: str,
+        add_price: int,
+        add_quantity: int,
+        order_id: str = "",
+    ) -> Optional[Position]:
+        """기존 HOLDING 포지션에 추가매수 반영."""
+        for db in get_db():
+            session: Session = db
+            position = session.query(Position).filter(
+                Position.stock_code == stock_code,
+                Position.status == "HOLDING",
+            ).first()
+            if not position:
+                return None
+            old_qty = position.buy_quantity
+            old_amt = position.buy_amount or (position.buy_price * old_qty)
+            new_qty = old_qty + add_quantity
+            new_amt = old_amt + add_price * add_quantity
+            position.buy_quantity = new_qty
+            position.buy_price = new_amt // new_qty if new_qty else position.buy_price
+            position.buy_amount = new_amt
+            if order_id:
+                position.buy_order_id = order_id
+            session.commit()
+            logger.info(
+                f"💰 [BUY_EXECUTOR] 추가매수 주문 반영 — {position.stock_name}: "
+                f"+{add_quantity}주 @ {add_price:,}원 (키움 API 동기화 대기)"
+            )
+            asyncio.create_task(self._after_add_buy_followup(position.id, stock_code))
+            return position
+        return None
+
+    async def _after_add_buy_followup(self, position_id: int, stock_code: str):
+        """추가매수 후 키움 평균단가 동기화 → 트레일링 바닥(평균단가×시작%) 상향."""
+        await self._update_position_with_actual_price(position_id, stock_code, 5)
+        await self.stop_loss_manager.refresh_trailing_floor_for_position(position_id)
+
+    async def _record_buy_fill(
+        self,
+        position: Position,
+        signal: PendingBuySignal,
+        price: int,
+        quantity: int,
+        order_id: str,
+        is_add: bool,
+        meta: Dict,
+    ) -> None:
+        """매수 체결 이력 저장 (검증 페이지 타임라인용)."""
+        from utils.buy_condition_checks import build_buy_condition_checklist_at_buy
+        from utils.position_buy_fills import record_buy_fill
+        from utils.trade_verification import _settings_dict
+
+        try:
+            settings = self.auto_trade_settings
+            sizing = (settings.sizing_method or "FIXED") if settings else "FIXED"
+            change_rate = meta.get("change_rate")
+            if change_rate is not None:
+                change_rate = float(change_rate)
+            planned = None
+            if settings:
+                planned = compute_buy_amount(settings, change_rate, is_add)
+
+            note = None
+            if is_add:
+                trig = settings.add_buy_trigger if settings else None
+                if change_rate is not None and trig is not None:
+                    note = f"보유 수익률 {change_rate:.2f}% (추가매수 트리거 +{trig}%)"
+                else:
+                    note = "피라미딩 추가매수"
+
+            fill_amount = price * quantity
+            condition_checks = await build_buy_condition_checklist_at_buy(
+                self.kiwoom_api,
+                _settings_dict(settings),
+                signal,
+                meta,
+                price,
+                change_rate,
+                is_add,
+                fill_amount,
+            )
+
+            for db in get_db():
+                session: Session = db
+                record_buy_fill(
+                    session,
+                    position_id=position.id,
+                    stock_code=position.stock_code,
+                    stock_name=position.stock_name,
+                    fill_type="ADD" if is_add else "INITIAL",
+                    price=price,
+                    quantity=quantity,
+                    order_quantity=quantity,
+                    signal_id=signal.id,
+                    order_id=order_id,
+                    planned_amount=planned,
+                    change_rate=change_rate,
+                    sizing_method=sizing,
+                    note=note,
+                    condition_checks=condition_checks,
+                )
+                pos_row = session.query(Position).filter(Position.id == position.id).first()
+                if pos_row and not getattr(pos_row, "order_quantity", None):
+                    pos_row.order_quantity = quantity
+                session.commit()
+                logger.info(f"💰 [BUY_EXECUTOR] 매수 체결 이력 저장 — {position.stock_name} {'ADD' if is_add else 'INITIAL'}")
+                break
+        except Exception as e:
+            logger.error(f"💰 [BUY_EXECUTOR] 매수 체결 이력 저장 오류: {e}")
+
     async def _update_signal_status(self, signal_id: int, status: str, reason: str = "", order_id: str = ""):
         """신호 상태 업데이트 (실패 사유 포함)"""
         try:

@@ -16,6 +16,7 @@ class SignalType(Enum):
     CONDITION_SIGNAL = "condition"  # 조건식 신호
     REFERENCE_CANDLE = "reference"  # 기준봉 신호
     STRATEGY = "strategy"          # 전략 신호
+    AUTO_TRADE = "auto_trade"      # 대시보드 자동매매 스캐너
 
 class SignalStatus(Enum):
     """신호 상태 정의"""
@@ -144,32 +145,22 @@ class SignalManager:
                     "stock_code": stock_code,
                     "stock_name": stock_name,
                     "status": SignalStatus.PENDING.value,
-                    "detected_at": datetime.now(),
+                    "detected_at": datetime.utcnow(),
                     "detected_date": date.today(),  # 일자별 관리용
                     "signal_type": signal_type.value
                 }
                 
-                # 추가 데이터가 있으면 모델에 존재하는 필드만 포함
+                # 추가 데이터 → JSON 컬럼 저장
                 if additional_data:
-                    # PendingBuySignal 모델의 허용 필드 화이트리스트
-                    allowed_extra_fields = {
-                        # 공통/기본 필드(이미 포함되어 있으므로 굳이 추가할 필요 없음)
-                        "condition_id",
-                        "stock_code",
-                        "stock_name",
-                        "status",
-                        "detected_at",
-                        "signal_type",
-                        # 모델에 실제로 존재하는 추가 필드들만 허용
+                    allowed_scalar = {
                         "reference_candle_high",
                         "reference_candle_date",
                         "target_price",
                     }
-                    filtered = {k: v for k, v in additional_data.items() if k in allowed_extra_fields}
-                    ignored_keys = set(additional_data.keys()) - set(filtered.keys())
-                    if ignored_keys:
-                        logger.debug(f"📡 [SIGNAL_MANAGER] 모델에 없는 필드 무시: {sorted(list(ignored_keys))}")
-                    signal_data.update(filtered)
+                    for k, v in additional_data.items():
+                        if k in allowed_scalar:
+                            signal_data[k] = v
+                    signal_data["additional_data"] = additional_data
                 
                 # 신호 생성
                 pending_signal = PendingBuySignal(**signal_data)
@@ -196,20 +187,21 @@ class SignalManager:
                 session: Session = db
                 
                 # 기존 신호 업데이트
-                existing_signal.detected_at = datetime.now()
+                existing_signal.detected_at = datetime.utcnow()
                 existing_signal.signal_type = signal_type.value
                 existing_signal.status = SignalStatus.PENDING.value  # 상태를 PENDING으로 리셋
                 
-                # 추가 데이터가 있으면 업데이트
+                # 추가 데이터 → JSON 컬럼 저장
                 if additional_data:
-                    allowed_extra_fields = {
+                    allowed_scalar = {
                         "reference_candle_high",
-                        "reference_candle_date", 
+                        "reference_candle_date",
                         "target_price",
                     }
-                    for field, value in additional_data.items():
-                        if field in allowed_extra_fields and hasattr(existing_signal, field):
-                            setattr(existing_signal, field, value)
+                    for k, v in additional_data.items():
+                        if k in allowed_scalar:
+                            setattr(existing_signal, k, v)
+                    existing_signal.additional_data = additional_data
                 
                 session.commit()
                 

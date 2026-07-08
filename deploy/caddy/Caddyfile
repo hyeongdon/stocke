@@ -1,0 +1,11 @@
+# hyungdon.store — 집 LAN(hosts) + 외부 포트포워딩 80
+# HTTP만 사용 (집 Wi-Fi·외부 모두 http://hyungdon.store)
+
+{
+	admin off
+	auto_https off
+}
+
+http://hyungdon.store, http://www.hyungdon.store {
+	reverse_proxy 127.0.0.1:8000
+}

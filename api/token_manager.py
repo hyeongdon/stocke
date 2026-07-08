@@ -73,17 +73,27 @@ class TokenManager:
                 
                 # 키움증권 API 응답에서 오류 확인
                 if token_data.get("return_code") == 0:  # 성공
-                    self.access_token = token_data.get("token")  # 키움증권은 'token' 필드 사용
+                    # 키움 응답 키는 버전에 따라 달라질 수 있어 둘 다 허용
+                    self.access_token = token_data.get("access_token") or token_data.get("token")
+                    self.refresh_token = token_data.get("refresh_token") or token_data.get("refreshToken") or self.refresh_token
                     logger.info(f"🔑 [TOKEN_DEBUG] ✅ 토큰 발급 성공: {self.access_token[:20]}...")
                     
                     # expires_dt 형식: "20250809005645" -> datetime으로 변환
                     expires_dt_str = token_data.get("expires_dt")
+                    now = datetime.utcnow()
+                    expires_in = token_data.get("expires_in")
                     if expires_dt_str:
                         self.token_expiry = datetime.strptime(expires_dt_str, "%Y%m%d%H%M%S")
-                        logger.debug(f"🔑 [TOKEN_DEBUG] 토큰 만료 시간: {self.token_expiry}")
+                        logger.debug(f"🔑 [TOKEN_DEBUG] 토큰 만료 시간(expires_dt): {self.token_expiry}")
+                    elif expires_in is not None:
+                        # expires_in: 초 단위로 내려오는 경우
+                        self.token_expiry = now + timedelta(seconds=int(expires_in))
+                        logger.debug(f"🔑 [TOKEN_DEBUG] 토큰 만료 시간(expires_in): {self.token_expiry}")
                     else:
-                        self.token_expiry = datetime.utcnow() + timedelta(hours=24)  # 기본 24시간
-                        logger.debug(f"🔑 [TOKEN_DEBUG] 기본 토큰 만료 시간 설정: {self.token_expiry}")
+                        # 만료 정보를 못 받는 경우를 대비해 보수적으로 짧게 잡음
+                        # (너무 길게 잡으면 서버가 먼저 만료 처리해 8005가 발생할 수 있음)
+                        self.token_expiry = now + timedelta(minutes=55)
+                        logger.debug(f"🔑 [TOKEN_DEBUG] 기본 토큰 만료 시간(보수 설정): {self.token_expiry}")
                     return True
                 else:
                     logger.error(f"🔑 [TOKEN_DEBUG] ❌ 키움증권 API 오류: {token_data.get('return_msg', '알 수 없는 오류')}")
@@ -167,9 +177,10 @@ class TokenManager:
             
             if response.status_code == 200:
                 token_data = response.json()
-                self.access_token = token_data.get("access_token")
+                # 키움 응답 키는 버전에 따라 달라질 수 있어 둘 다 허용
+                self.access_token = token_data.get("access_token") or token_data.get("token")
                 expires_in = token_data.get("expires_in", 7200)
-                self.token_expiry = datetime.utcnow() + timedelta(seconds=expires_in)
+                self.token_expiry = datetime.utcnow() + timedelta(seconds=int(expires_in))
                 return True
             elif response.status_code == 429:
                 # API 제한 에러 처리

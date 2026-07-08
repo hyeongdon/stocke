@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>자동매매 검증</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/dashboard.css?v=64">
+  <link rel="stylesheet" href="/static/verify.css?v=13">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <h1>매매 검증</h1>
+        <span class="sub">매수·매도 시각 · 진입조건 · 계산식</span>
+      </div>
+      <nav class="tabs">
+        <a href="/dashboard" class="tab">대시보드</a>
+        <a href="/analysis" class="tab-link">분석 ↗</a>
+        <a href="/verify" class="tab active">검증</a>
+        <a href="/static/glossary.html" class="tab-link">용어정리 ↗</a>
+      </nav>
+      <div class="topbar-actions verify-filters">
+        <label class="verify-date-label" for="tradeDate">거래일</label>
+        <div class="verify-date-presets">
+          <button class="btn sm" id="btnToday" type="button" data-date-preset="today">오늘</button>
+          <button class="btn sm" id="btnYesterday" type="button" data-date-preset="yesterday">어제</button>
+          <button class="btn sm" id="btnThisWeek" type="button" data-date-preset="this_week">이번주</button>
+          <button class="btn sm" id="btnAllDates" type="button" data-date-preset="all">전체</button>
+        </div>
+        <input type="date" id="tradeDate" class="verify-date-input" title="직접 날짜 선택" />
+        <button class="btn sm primary" id="btnRefresh" type="button">새로고침</button>
+        <span class="updated">생성: <span id="genAt">-</span></span>
+      </div>
+    </div>
+  </header>
+
+  <div class="wrap verify-wrap">
+    <div id="statusBanner" class="verify-banner" style="display:none;"></div>
+
+    <section class="verify-summary" id="summaryCards">
+      <div class="v-stat"><div class="k">상태</div><div class="v" style="font-size:14px;">불러오는 중…</div></div>
+    </section>
+
+    <div class="grid cols-2 verify-guide-grid">
+      <div class="card">
+        <div class="card-head"><h3>매수 파이프라인</h3></div>
+        <div class="card-body" id="guideBuy"><div class="skeleton">로딩 중…</div></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>청산 우선순위 · 손익</h3></div>
+        <div class="card-body" id="guideExit"><div class="skeleton">로딩 중…</div></div>
+      </div>
+    </div>
+
+    <div class="section-title">매매 요약 테이블</div>
+    <div class="card">
+      <div class="card-body scroll" id="tradeTableWrap" style="max-height:420px;">
+        <div class="skeleton">데이터 로딩 중…</div>
+      </div>
+    </div>
+
+    <div class="section-title">상세 검증 (종목 클릭)</div>
+    <div id="tradeList"><div class="skeleton">불러오는 중…</div></div>
+
+    <div class="section-title">실패한 매수 신호</div>
+    <div class="card">
+      <div class="card-body scroll" id="failedList" style="max-height:280px;">
+        <div class="skeleton">로딩 중…</div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/verify.js?v=16"></script>
+</body>
+</html>

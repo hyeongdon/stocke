@@ -7,9 +7,6 @@ class StockMonitorApp {
         this.bindEvents();
         this.bindTabEvents();
         this.bindMobileEvents();
-        this.loadConditions();
-        this.checkMonitoringStatus();
-        this.startAutoRefresh();
         this.loadTradingSettings();
         console.log('🔍 [PENDING] init: scheduling initial load');
         const pendingListEl = document.getElementById('pendingList');
@@ -36,7 +33,8 @@ class StockMonitorApp {
         });
 
         document.getElementById('toggleMonitoring').addEventListener('click', () => {
-            this.toggleMonitoring();
+            alert('조건식 주기 검색은 중단되었습니다.\n대시보드(/dashboard)에서 자동매매를 시작하세요.');
+            window.location.href = '/dashboard';
         });
 
         const refreshPendingBtn = document.getElementById('refreshPending');
@@ -1056,10 +1054,11 @@ class StockMonitorApp {
         // 새로운 선택
         element.classList.add('active');
         this.selectedConditionId = conditionId;
-        
+        this.selectedConditionName = element.dataset.conditionName || null;
+
         // UI 업데이트
         document.getElementById('refreshStocks').disabled = false;
-        
+
         // 주식 정보 로딩
         this.loadStocks(conditionId);
     }
@@ -1067,7 +1066,11 @@ class StockMonitorApp {
     async loadStocks(conditionId) {
         try {
             this.showStocksLoading();
-            const response = await fetch(`/conditions/${conditionId}/stocks`);
+            let url = `/conditions/${conditionId}/stocks`;
+            if (this.selectedConditionName) {
+                url += `?condition_name=${encodeURIComponent(this.selectedConditionName)}`;
+            }
+            const response = await fetch(url);
             const data = await response.json();
             
             this.renderStocks(data);

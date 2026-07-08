@@ -1,15 +1,77 @@
 import logging
 import asyncio
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from datetime import datetime, timedelta, date
+from typing import Dict, List, Optional, Tuple
 from sqlalchemy.orm import Session
 
-from api.kiwoom_api import KiwoomAPI
+from api.kiwoom_api import KiwoomAPI, _parse_kiwoom_int
 from core.models import Position, SellOrder, AutoTradeSettings, get_db
 from core.config import Config
 from utils.debug_tracer import debug_tracer
+from utils.auto_trade_activity_log import log_activity
+from utils.market_hours import is_krx_session, is_krx_trading_day
+from notifications.trade_alert import notify_sell_filled_async, sell_fill_snapshot
 
 logger = logging.getLogger(__name__)
+
+# 청산 사유 우선순위 (낮을수록 긴급). TAKE_PROFIT > TRAILING 등 하위 주문 덮어쓰기용.
+SELL_REASON_PRIORITY = {
+    "MARKET_CLOSE": 0,
+    "TAKE_PROFIT": 1,
+    "STOP_LOSS": 2,
+    "PROFIT_LOCK": 3,
+    "TRAILING": 4,
+    "MANUAL": 5,
+}
+STALE_SELL_ORDER_MINUTES = 15
+
+
+def _holding_rows_for_code(session: Session, stock_code: str) -> List[Position]:
+    code = KiwoomAPI.normalize_stock_code(stock_code)
+    if not code:
+        return []
+    return [
+        p for p in session.query(Position).filter(Position.status == "HOLDING").all()
+        if KiwoomAPI.normalize_stock_code(p.stock_code) == code
+    ]
+
+
+def _collapse_duplicate_holdings(session: Session) -> int:
+    """같은 종목 HOLDING 중복 — 최신 buy_time 1건만 유지, 나머지는 청산 상태로 정리."""
+    from collections import defaultdict
+
+    groups: Dict[str, List[Position]] = defaultdict(list)
+    for pos in session.query(Position).filter(Position.status == "HOLDING").all():
+        code = KiwoomAPI.normalize_stock_code(pos.stock_code)
+        if code:
+            groups[code].append(pos)
+
+    collapsed = 0
+    for code, rows in groups.items():
+        if len(rows) <= 1:
+            continue
+        rows.sort(key=lambda p: p.buy_time or datetime.min, reverse=True)
+        keep = rows[0]
+        for dup in rows[1:]:
+            last_done = session.query(SellOrder).filter(
+                SellOrder.position_id == dup.id,
+                SellOrder.status == "COMPLETED",
+            ).order_by(SellOrder.completed_at.desc()).first()
+            dup.status = (last_done.sell_reason if last_done else "DUPLICATE_HOLDING")
+            dup.sell_time = (last_done.completed_at if last_done else datetime.utcnow())
+            logger.warning(
+                f"🛡️ [RECONCILE] 중복 HOLDING 정리 — {dup.stock_name} "
+                f"#{dup.id} → {dup.status} (유지 #{keep.id})"
+            )
+            collapsed += 1
+    if collapsed:
+        session.flush()
+    return collapsed
+
+
+def _sell_reason_rank(reason: Optional[str]) -> int:
+    return SELL_REASON_PRIORITY.get(reason or "", 9)
+
 
 class StopLossManager:
     """손절/익절 모니터링 매니저"""
@@ -19,35 +81,81 @@ class StopLossManager:
         self.is_running = False
         self.monitoring_interval = 120  # 120초(2분)마다 모니터링 (API 제한 고려)
         self.auto_trade_settings = None
-        
+        # 일봉 ATR — 종목당 하루 1회 계산 (장중 변동성만 반영)
+        self._atr_daily_cache: Dict[str, Tuple[float, date]] = {}
+        self._last_cycle_at: Optional[datetime] = None
+        self._last_heartbeat_msg: Optional[str] = None
+        self._loop_active = False
+        self._monitor_task: Optional[asyncio.Task] = None
+
+    def monitoring_task_running(self) -> bool:
+        return self._loop_active or (
+            self._monitor_task is not None and not self._monitor_task.done()
+        )
+
+    def schedule_monitoring(self) -> bool:
+        """모니터링 루프 1개만 예약 (동기 — create_task 전에 호출)."""
+        if self.monitoring_task_running():
+            return False
+        self.is_running = True
+        return True
+
+    def attach_monitor_task(self, task: asyncio.Task) -> None:
+        self._monitor_task = task
+
     async def start_monitoring(self):
         """손절/익절 모니터링 시작"""
+        if self._loop_active:
+            logger.debug("🛡️ [STOP_LOSS] 모니터링 루프 이미 실행 중 — 중복 시작 무시")
+            return
+        self._loop_active = True
+        if not self.is_running:
+            self.is_running = True
+
         logger.info("🛡️ [STOP_LOSS] 손절/익절 모니터링 시작")
-        self.is_running = True
+        log_activity("SELL", "손절/익절 모니터 시작 (2분 주기)", "info")
         
         try:
             while self.is_running:
                 # 자동매매 설정 로드
                 await self._load_auto_trade_settings()
+
+                # 매도 체결 확인 → DB 동기화 (주문 접수와 청산 확정 분리)
+                await self._reconcile_sell_orders_and_holdings()
                 
-                # 현재가 업데이트는 항상 수행 (자동매매 설정과 무관)
+                # kt00004 잔고 기준 평가손익 동기화 (종목별 현재가 API는 장중에만)
                 await self._update_all_positions_price()
-                
-                # 손절/익절 판단은 자동매매가 활성화된 경우에만 수행
-                if self.auto_trade_settings and self.auto_trade_settings.is_enabled:
+
+                # 장마감 전량청산 — 자동매매 ON/OFF 무관 (설정만 켜져 있으면 실행)
+                if self._is_in_liquidation_window():
+                    await self._run_market_close_liquidation()
+                    await self._log_cycle_heartbeat(mode="장마감청산")
+                    await asyncio.sleep(30)
+                    continue
+                elif (
+                    is_krx_session()
+                    and self.auto_trade_settings
+                    and self.auto_trade_settings.is_enabled
+                ):
                     await self._monitor_positions()
+                    await self._log_cycle_heartbeat(mode="손절점검")
                 else:
-                    logger.debug("🛡️ [STOP_LOSS] 자동매매 비활성화 상태 - 손절/익절 판단 건너뜀 (현재가는 업데이트됨)")
+                    logger.debug("🛡️ [STOP_LOSS] 장외/자동매매 OFF — 손절·익절 판단 건너뜀")
+                    await self._log_cycle_heartbeat(mode="동기화")
                 
                 await asyncio.sleep(self.monitoring_interval)
         except Exception as e:
             logger.error(f"🛡️ [STOP_LOSS] 모니터링 중 오류: {e}")
         finally:
+            self.is_running = False
+            self._loop_active = False
+            self._monitor_task = None
             logger.info("🛡️ [STOP_LOSS] 손절/익절 모니터링 종료")
     
     async def stop_monitoring(self):
         """손절/익절 모니터링 중지"""
         logger.info("🛡️ [STOP_LOSS] 손절/익절 모니터링 중지 요청")
+        log_activity("SELL", "손절/익절 모니터 중지", "warn")
         self.is_running = False
     
     async def _load_auto_trade_settings(self):
@@ -64,6 +172,92 @@ class StopLossManager:
                 break
         except Exception as e:
             logger.error(f"🛡️ [STOP_LOSS] 자동매매 설정 로드 오류: {e}")
+
+    @staticmethod
+    def overlay_global_exit_settings(
+        ex: Optional[dict],
+        buy_price: int,
+        settings: Optional["AutoTradeSettings"],
+    ) -> dict:
+        """exit_levels에 전역 설정 손절율·%손절가를 명시 (포지션 스냅샷과 UI 불일치 방지)."""
+        out = dict(ex or {})
+        if not settings or not buy_price:
+            return out
+        sl = StopLossManager._num(settings.stop_loss_rate)
+        if sl:
+            pct_px = int(buy_price * (1 - abs(sl) / 100.0))
+            out["stop_loss_rate"] = sl
+            out["stop_loss_price_pct"] = pct_px
+            levels = [
+                lv for lv in (out.get("levels") or [])
+                if not (lv.get("reason") == "STOP_LOSS" and lv.get("method") == "PCT")
+            ]
+            levels.append({"reason": "STOP_LOSS", "price": pct_px, "method": "PCT"})
+            out["levels"] = levels
+            if levels:
+                best = max(levels, key=lambda lv: int(lv["price"]))
+                out["effective_stop_price"] = int(best["price"])
+                out["effective_stop_reason"] = best["reason"]
+                cur = int(out.get("current_price") or 0)
+                if cur > 0:
+                    out["stop_distance_pct"] = round(
+                        (cur - int(best["price"])) / cur * 100, 2,
+                    )
+        tp = StopLossManager._num(settings.take_profit_rate)
+        if tp is not None:
+            out["take_profit_rate_setting"] = tp
+        return out
+
+    @staticmethod
+    def propagate_exit_settings_to_holdings(session: Session) -> int:
+        """설정 저장 시 보유 포지션의 손절/익절 % 스냅샷을 전역 설정과 동기화."""
+        from core.models import AutoTradeSettings, Position
+
+        settings = session.query(AutoTradeSettings).first()
+        if not settings:
+            return 0
+        updated = 0
+        for pos in session.query(Position).filter(Position.status == "HOLDING").all():
+            pos.stop_loss_rate = settings.stop_loss_rate
+            pos.take_profit_rate = settings.take_profit_rate
+            updated += 1
+        return updated
+
+    async def _log_cycle_heartbeat(self, mode: str = "동기화"):
+        """2분 주기 — 보유·손익 요약을 활동 로그에 남김 (대시보드 가시성)."""
+        try:
+            rows: List[Position] = []
+            for db in get_db():
+                rows = db.query(Position).filter(Position.status == "HOLDING").all()
+                break
+
+            pl_sum = sum(int(p.current_profit_loss or 0) for p in rows)
+            auto_on = bool(self.auto_trade_settings and self.auto_trade_settings.is_enabled)
+            session_txt = "장중" if is_krx_session() else "장외"
+            snippets = [
+                f"{p.stock_name} {float(p.current_profit_loss_rate or 0):+.1f}%"
+                for p in rows[:4]
+            ]
+            if len(rows) > 4:
+                snippets.append(f"+{len(rows) - 4}종")
+            detail = ", ".join(snippets) if snippets else "보유 없음"
+
+            msg = (
+                f"{mode} · {session_txt} · 자동매매 {'ON' if auto_on else 'OFF'} · "
+                f"HOLDING {len(rows)} · 합산 {pl_sum:+,}원 · {detail}"
+            )
+            now = datetime.now()
+            if (
+                self._last_heartbeat_msg == msg
+                and self._last_cycle_at
+                and (now - self._last_cycle_at).total_seconds() < 30
+            ):
+                return
+            log_activity("SYNC", msg, "info")
+            self._last_heartbeat_msg = msg
+            self._last_cycle_at = now
+        except Exception as e:
+            logger.debug(f"🛡️ [STOP_LOSS] heartbeat 로그 생략: {e}")
     
     @debug_tracer.trace_async(component="STOP_LOSS")
     async def _monitor_positions(self):
@@ -81,11 +275,13 @@ class StopLossManager:
                 return
             
             logger.info(f"🛡️ [STOP_LOSS] {len(positions)}개 포지션 모니터링 중...")
-            
+            holdings_map, _ = await self._fetch_balance_holdings()
+
             for idx, position in enumerate(positions, 1):
                 try:
                     debug_tracer.log_checkpoint(f"[{idx}/{len(positions)}] 포지션 점검: {position.stock_name}({position.stock_code})", "STOP_LOSS")
-                    await self._check_position_stop_loss(position)
+                    code = KiwoomAPI.normalize_stock_code(position.stock_code)
+                    await self._check_position_stop_loss(position, holdings_map.get(code))
                 except Exception as e:
                     logger.error(f"🛡️ [STOP_LOSS] 포지션 모니터링 오류 (ID: {position.id}): {e}")
                 
@@ -95,6 +291,109 @@ class StopLossManager:
                 
         except Exception as e:
             logger.error(f"🛡️ [STOP_LOSS] 포지션 모니터링 중 오류: {e}")
+
+    async def _run_market_close_liquidation(self):
+        """키움 계좌 보유 전 종목 장마감 전량청산 (자동매매 ON/OFF 무관)."""
+        s = self.auto_trade_settings
+        liq_time = getattr(s, "liquidate_time", "15:10") if s else "15:10"
+        try:
+            holdings_map, _ = await self._fetch_balance_holdings()
+            if not holdings_map:
+                logger.debug("🛡️ [STOP_LOSS] 장마감 청산 — 보유 종목 없음")
+                return
+
+            targets: List[Tuple[int, dict]] = []
+            for db in get_db():
+                session: Session = db
+                for code, holding in holdings_map.items():
+                    qty = _parse_kiwoom_int(holding.get("qty"))
+                    if qty <= 0:
+                        continue
+                    pos = None
+                    for p in _holding_rows_for_code(session, code):
+                        pos = p
+                        break
+                    if not pos:
+                        logger.warning(
+                            f"🛡️ [STOP_LOSS] 장마감 청산 — DB HOLDING 포지션 없음 ({code}), "
+                            f"키움 {holding.get('stk_nm', code)} {qty}주"
+                        )
+                        continue
+                    from utils.eval_pnl import apply_holding_to_position
+                    apply_holding_to_position(pos, holding)
+                    targets.append((int(pos.id), holding))
+                session.commit()
+                break
+
+            if not targets:
+                return
+
+            logger.warning(
+                f"🛡️ [STOP_LOSS] 장마감 전량청산 시작 ({liq_time}) — {len(targets)}종목"
+            )
+            log_activity(
+                "SELL",
+                f"장마감 전량청산 시작 — {len(targets)}종목 ({liq_time})",
+                "warn",
+            )
+
+            for idx, (position_id, holding) in enumerate(targets, 1):
+                position = None
+                stock_label = str(holding.get("stk_nm") or position_id)
+                try:
+                    for db in get_db():
+                        position = db.query(Position).filter(Position.id == position_id).first()
+                        break
+                    if not position:
+                        log_activity(
+                            "SELL",
+                            f"장마감 청산 생략 — 포지션 #{position_id} DB 없음",
+                            "warn",
+                        )
+                        continue
+                    stock_label = position.stock_name
+
+                    # 장마감 청산은 최우선 사유이므로,
+                    # 다른(하위 우선순위) 매도 주문이 있더라도 먼저 취소하고 실행합니다.
+                    if await self._has_any_pending_sell_order(position.id):
+                        await self._prepare_sell(position.id, "MARKET_CLOSE")
+
+                    if await self._has_pending_sell_order(position.id, for_reason="MARKET_CLOSE"):
+                        msg = f"장마감 청산 대기 — {position.stock_name} (매도 주문 진행 중)"
+                        logger.info(f"🛡️ [STOP_LOSS] {msg}")
+                        log_activity("SELL", msg, "info", stock_code=position.stock_code, reason="MARKET_CLOSE")
+                        continue
+
+                    cur = _parse_kiwoom_int(holding.get("cur_pr")) or position.current_price
+                    if not cur:
+                        cur = await self._get_current_price(position.stock_code)
+                    if not cur:
+                        msg = f"장마감 청산 생략 — {position.stock_name}: 현재가 없음"
+                        logger.warning(f"🛡️ [STOP_LOSS] {msg}")
+                        log_activity("SELL", msg, "warn", stock_code=position.stock_code, reason="MARKET_CLOSE")
+                        continue
+
+                    pl, rate = self._calc_profit(position, int(cur), holding)
+                    detail = (
+                        f"장마감 전량청산 ({liq_time}) | "
+                        f"{position.buy_quantity}주 | 손익 {rate:+.2f}%"
+                    )
+                    logger.warning(
+                        f"🛡️ [STOP_LOSS] 장마감 청산 — {position.stock_name}: {rate:+.2f}%"
+                    )
+                    await self._execute_sell_order(position, int(cur), "MARKET_CLOSE", detail)
+                    if idx < len(targets):
+                        await asyncio.sleep(2)
+                except Exception as e:
+                    logger.error(f"🛡️ [STOP_LOSS] 장마감 청산 오류 — {stock_label}: {e}")
+                    log_activity(
+                        "SELL",
+                        f"장마감 청산 오류 — {stock_label}: {e}",
+                        "warn",
+                        reason="MARKET_CLOSE",
+                    )
+        except Exception as e:
+            logger.error(f"🛡️ [STOP_LOSS] 장마감 전량청산 중 오류: {e}")
     
     async def _get_active_positions(self) -> List[Position]:
         """활성 포지션 조회 (실제 보유 종목과 대조)"""
@@ -117,7 +416,9 @@ class StopLossManager:
                     # 실제 보유 종목 코드 목록
                     if account_balance and 'stk_acnt_evlt_prst' in account_balance:
                         for holding in account_balance['stk_acnt_evlt_prst']:
-                            actual_holdings.add(holding.get('stk_cd', ''))
+                            actual_holdings.add(
+                                KiwoomAPI.normalize_stock_code(holding.get('stk_cd', ''))
+                            )
                         logger.debug(f"🛡️ [STOP_LOSS] 실제 보유 종목: {len(actual_holdings)}개 - {actual_holdings}")
                     else:
                         logger.debug(f"🛡️ [STOP_LOSS] 계좌 조회 결과 없음 (API 제한 또는 보유 종목 없음)")
@@ -130,7 +431,7 @@ class StopLossManager:
                     verified_positions = []
                     excluded_count = 0
                     for pos in db_positions:
-                        if pos.stock_code in actual_holdings:
+                        if KiwoomAPI.normalize_stock_code(pos.stock_code) in actual_holdings:
                             verified_positions.append(pos)
                             logger.debug(f"🛡️ [STOP_LOSS] 포지션 검증 완료: {pos.stock_name}({pos.stock_code})")
                         else:
@@ -154,178 +455,667 @@ class StopLossManager:
         
         return positions
     
+    async def _fetch_balance_holdings(self) -> Tuple[Dict[str, dict], Optional[dict]]:
+        """키움 계좌 잔고 → (종목별 보유 dict, raw balance)."""
+        from utils.eval_pnl import holdings_by_code
+
+        account_number = (
+            Config.KIWOOM_MOCK_ACCOUNT_NUMBER
+            if Config.KIWOOM_USE_MOCK_ACCOUNT
+            else Config.KIWOOM_ACCOUNT_NUMBER
+        )
+        balance = await self.kiwoom_api.get_account_balance(account_number)
+        return holdings_by_code(balance), balance
+
+    async def sync_holdings_from_api(self, force: bool = False):
+        """키움 잔고 ↔ DB 포지션 동기화 (체결 확인 + API 평가손익).
+
+        force는 하위 호환용 — 잔고(kt00004) 동기화는 장외에도 수행, 종목별 현재가 API는 장중만.
+        """
+        await self._reconcile_sell_orders_and_holdings()
+        await self._update_all_positions_price()
+
     async def _update_all_positions_price(self):
-        """모든 HOLDING 상태 Position의 현재가만 업데이트 (손절/익절 판단 없음)"""
+        """계좌 보유 종목 ↔ DB 포지션 — 키움 kt00004 API(현재가·매입·평가손익) 동기화."""
         try:
+            holdings_map, balance = await self._fetch_balance_holdings()
+            if balance and balance.get("_error"):
+                logger.debug(
+                    f"🛡️ [STOP_LOSS] 잔고 API 실패 — 가격 동기화 생략 ({balance.get('_error_msg', '')})"
+                )
+                return
+            account_codes = set(holdings_map.keys())
             for db in get_db():
                 session: Session = db
                 positions = session.query(Position).filter(Position.status == "HOLDING").all()
-                
                 if not positions:
-                    logger.debug("🛡️ [STOP_LOSS] 업데이트할 포지션이 없습니다.")
+                    logger.debug("🛡️ [STOP_LOSS] 업데이트할 HOLDING 포지션이 없습니다.")
                     return
-                
-                logger.info(f"🛡️ [STOP_LOSS] {len(positions)}개 포지션 현재가 업데이트 중...")
-                
+
+                logger.info(f"🛡️ [STOP_LOSS] {len(positions)}개 포지션 API 동기화 중...")
+                from utils.eval_pnl import apply_holding_to_position, calc_profit_for_position
+
                 for idx, position in enumerate(positions, 1):
                     try:
-                        # 현재가 조회
-                        current_price = await self._get_current_price(position.stock_code)
-                        
-                        if current_price and current_price > 0:
-                            # 키움 방식 수익률 계산 (매도 수수료 + 거래세 포함)
-                            # actual_buy_amount가 있으면 사용, 없으면 buy_amount 사용
-                            actual_buy_amount = getattr(position, 'actual_buy_amount', None) or position.buy_amount
-                            
-                            # 총 투자비용 (매입금액 + 매수 수수료)
-                            total_investment = actual_buy_amount
-                            
-                            # 키움 공식 적용 (모의투자/실계좌 구분)
-                            import math
-                            from core.config import Config
-                            
-                            is_mock_account = Config.KIWOOM_USE_MOCK_ACCOUNT
-                            
-                            if is_mock_account:
-                                # 모의투자 계좌: 매도 수수료 0.35%, 제세금 총 0.557% (기본 0.23% + 추가)
-                                sell_fee = math.floor(current_price * position.buy_quantity * 0.0035)  # 0.35%
-                                # 제세금: 기본 0.23% + 추가(제세금1+2+3+농특세) = 총 0.557%
-                                tax = math.floor(current_price * position.buy_quantity * 0.00557)  # 0.557%
-                            else:
-                                # 실계좌: 매도 수수료 0.015% (10원미만 절사), 제세금 0.05% + 0.15%
-                                sell_fee_base = current_price * position.buy_quantity * 0.00015
-                                sell_fee = math.floor(sell_fee_base / 10) * 10  # 10원미만 절사
-                                
-                                tax_005 = math.floor(current_price * position.buy_quantity * 0.0005)  # 0.05%, 원미만 절사
-                                tax_015 = math.floor(current_price * position.buy_quantity * 0.0015)  # 0.15%, 원미만 절사
-                                tax = tax_005 + tax_015
-                            
-                            # 평가금액 = 현재가 × 수량 - 매도 수수료 - 제세금
-                            evaluation_amount = current_price * position.buy_quantity - sell_fee - tax
-                            
-                            # 손익 = 평가금액 - 매입금액
-                            profit_loss = evaluation_amount - actual_buy_amount
-                            
-                            # 수익률 = 손익 / 매입금액 × 100
-                            profit_loss_rate = (profit_loss / actual_buy_amount) * 100 if actual_buy_amount > 0 else 0
-                            
-                            # DB 업데이트
-                            position.current_price = current_price
-                            position.current_profit_loss = int(profit_loss)
-                            position.current_profit_loss_rate = profit_loss_rate
+                        code = KiwoomAPI.normalize_stock_code(position.stock_code)
+                        holding = holdings_map.get(code)
+
+                        if holding:
+                            apply_holding_to_position(position, holding)
                             position.last_monitored = datetime.utcnow()
-                            
-                            actual_buy_price = actual_buy_amount / position.buy_quantity if position.buy_quantity > 0 else position.buy_price
-                            logger.debug(f"🛡️ [STOP_LOSS] 현재가 업데이트 - {position.stock_name}: {current_price:,}원 ({profit_loss_rate:+.2f}%, 실제매입가: {actual_buy_price:,.0f}원)")
+                            logger.debug(
+                                f"🛡️ [STOP_LOSS] API 동기화 — {position.stock_name}: "
+                                f"{position.current_profit_loss:+,}원 ({position.current_profit_loss_rate:+.2f}%)"
+                            )
+                        elif code not in account_codes:
+                            logger.debug(
+                                f"🛡️ [STOP_LOSS] 계좌 미보유 — DB 값 유지 ({position.stock_name}, {code})"
+                            )
+                        elif not is_krx_session():
+                            logger.debug(
+                                f"🛡️ [STOP_LOSS] 장외 — DB 값 유지 ({position.stock_name})"
+                            )
                         else:
-                            logger.warning(f"🛡️ [STOP_LOSS] 현재가 조회 실패 - {position.stock_name}")
-                        
-                        # API 제한 고려 (5초 대기)
-                        if idx < len(positions):
+                            current_price = await self._get_current_price(position.stock_code)
+                            if current_price and current_price > 0:
+                                pl, rate = calc_profit_for_position(position, current_price)
+                                position.current_price = current_price
+                                position.current_profit_loss = pl
+                                position.current_profit_loss_rate = rate
+                                position.last_monitored = datetime.utcnow()
+                            else:
+                                logger.info(
+                                    f"🛡️ [STOP_LOSS] 현재가 미확인 — DB 값 유지 ({position.stock_name})"
+                                )
+
+                        if (
+                            idx < len(positions)
+                            and not holding
+                            and is_krx_session()
+                            and code in account_codes
+                        ):
                             await asyncio.sleep(5)
-                    
                     except Exception as e:
-                        logger.error(f"🛡️ [STOP_LOSS] 포지션 현재가 업데이트 오류 (ID: {position.id}): {e}")
-                
+                        logger.error(f"🛡️ [STOP_LOSS] 포지션 동기화 오류 (ID: {position.id}): {e}")
+
                 session.commit()
-                logger.info(f"🛡️ [STOP_LOSS] {len(positions)}개 포지션 현재가 업데이트 완료")
+                logger.info(f"🛡️ [STOP_LOSS] {len(positions)}개 포지션 API 동기화 완료")
                 break
-                
         except Exception as e:
-            logger.error(f"🛡️ [STOP_LOSS] 포지션 현재가 업데이트 중 오류: {e}")
+            logger.error(f"🛡️ [STOP_LOSS] 포지션 동기화 중 오류: {e}")
             import traceback
             logger.error(f"🛡️ [STOP_LOSS] 스택 트레이스: {traceback.format_exc()}")
     
-    @debug_tracer.trace_async(component="STOP_LOSS")
-    async def _check_position_stop_loss(self, position: Position):
-        """개별 포지션 손절/익절 확인"""
+    async def compute_exit_levels(self, position: Position, live: bool = False) -> Dict:
+        """청산 레벨 스냅샷. live=False: DB값만(빠름), live=True: API로 현재가·ATR."""
+        await self._load_auto_trade_settings()
+        s = self.auto_trade_settings
+        if not s:
+            return {}
+
+        api_live = live and is_krx_session()
+        if live and not api_live:
+            logger.debug(f"장외 시간 — live=false 처리 ({position.stock_name})")
+
+        current_price = position.current_price or position.buy_price
+        holding = None
+        fetched_live = None
+        if api_live:
+            try:
+                holdings_map, _ = await self._fetch_balance_holdings()
+                holding = holdings_map.get(KiwoomAPI.normalize_stock_code(position.stock_code))
+                if holding:
+                    from utils.eval_pnl import apply_holding_to_position
+                    apply_holding_to_position(position, holding)
+                    current_price = position.current_price or current_price
+                else:
+                    fetched_live = await asyncio.wait_for(
+                        self._get_current_price(position.stock_code), timeout=6.0,
+                    )
+                    if fetched_live:
+                        current_price = fetched_live
+            except asyncio.TimeoutError:
+                logger.warning(f"현재가 조회 타임아웃 — {position.stock_name}")
+
+        buy_price = position.buy_price or current_price
+        peak = max(int(getattr(position, "peak_price", None) or buy_price), int(current_price))
+        profit_loss, profit_loss_rate = self._calc_profit(position, int(current_price), holding)
+
+        if api_live and position.id and (fetched_live or holding):
+            await self._update_position_price(
+                position.id, int(current_price), profit_loss, profit_loss_rate,
+            )
+            if holding:
+                await self._sync_position_from_api(position.id, holding)
+            stored_peak = int(getattr(position, "peak_price", None) or buy_price)
+            if peak > stored_peak:
+                await self._update_position_tracking(position.id, peak, None)
+
+        tp = self._num(s.take_profit_rate)
+        trail_start = tp if tp and tp > 0 else None
+        peak_rate = self._peak_rate_pct(buy_price, peak)
+        trailing_armed, trailing_floor = self._resolve_trailing_state(
+            position, buy_price, peak, trail_start,
+        )
+        trailing_start_price = (
+            int(buy_price * (1 + trail_start / 100.0)) if trail_start else None
+        )
+
+        atr_stop_mult = self._num(s.atr_mult_stop)
+        atr_trail_mult = self._num(s.atr_mult_trail)
+        atr_period = int(self._num(s.atr_period) or 14)
+        atr = None
+        if atr_stop_mult or atr_trail_mult:
+            atr, atr_period = await self._resolve_position_atr(
+                position, s, allow_api=bool(api_live or live),
+            )
+
+        candidates = self._build_stop_candidates(
+            s, buy_price, peak, atr,
+            trailing_armed=trailing_armed,
+            trailing_floor_price=trailing_floor,
+        )
+
+        eff_reason = None
+        eff_stop = None
+        if candidates:
+            eff_reason, eff_stop, _ = max(candidates, key=lambda x: x[1])
+
+        stored_stop = int(getattr(position, "stop_loss_price", None) or 0) or None
+        effective = int(eff_stop) if eff_stop else stored_stop
+
+        dist_pct = None
+        if effective and current_price:
+            dist_pct = (current_price - effective) / current_price * 100
+
+        level_rows = []
+        for reason, price, method in candidates:
+            level_rows.append({
+                "reason": reason,
+                "price": int(price),
+                "method": method,
+            })
+
+        sl_rate = self._num(s.stop_loss_rate)
+        stop_loss_price_pct = (
+            int(buy_price * (1 - abs(sl_rate) / 100.0)) if sl_rate and buy_price else None
+        )
+
+        return {
+            "current_price": int(current_price),
+            "peak_price": int(peak),
+            "profit_loss": profit_loss,
+            "profit_loss_rate": round(profit_loss_rate, 2),
+            "atr": round(atr, 1) if atr else None,
+            "atr_period": atr_period,
+            "atr_mult_stop": atr_stop_mult,
+            "atr_mult_trail": atr_trail_mult,
+            "trailing_start_rate": trail_start,
+            "trailing_start_price": trailing_start_price,
+            "trailing_active": trailing_armed,
+            "trailing_armed": trailing_armed,
+            "trailing_floor_price": trailing_floor,
+            "take_profit_price": trailing_start_price,
+            "take_profit_rate": tp,
+            "effective_stop_price": effective,
+            "effective_stop_reason": eff_reason,
+            "stop_loss_rate": sl_rate,
+            "stop_loss_price_pct": stop_loss_price_pct,
+            "stored_stop_loss_price": stored_stop,
+            "stop_distance_pct": round(dist_pct, 2) if dist_pct is not None else None,
+            "levels": level_rows,
+            "liquidate_time": getattr(s, "liquidate_time", None) if getattr(s, "liquidate_before_close", False) else None,
+            "levels_live": api_live,
+        }
+
+    @staticmethod
+    def _num(v) -> Optional[float]:
+        """설정값을 float로 안전 변환. None/빈문자/변환실패는 None."""
         try:
-            # 현재가 조회
-            debug_tracer.log_checkpoint(f"현재가 조회: {position.stock_code}", "STOP_LOSS")
-            current_price = await self._get_current_price(position.stock_code)
-            debug_tracer.log_checkpoint(f"현재가: {current_price:,}원" if current_price else "현재가 조회 실패", "STOP_LOSS")
-            
+            if v is None or v == "":
+                return None
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _peak_rate_pct(buy_price: int, peak: int) -> float:
+        if not buy_price:
+            return 0.0
+        return (peak - buy_price) / buy_price * 100
+
+    @staticmethod
+    def _trailing_floor_price(buy_price: int, trail_start_rate: float) -> int:
+        return int(buy_price * (1 + trail_start_rate / 100.0))
+
+    def _resolve_trailing_state(
+        self,
+        position: Position,
+        buy_price: int,
+        peak: int,
+        trail_start_rate: Optional[float],
+    ) -> Tuple[bool, Optional[int]]:
+        """패턴 B: 시작% 도달 시 armed + floor. armed 후 평균단가 상승 시 floor 상향(추가매수)."""
+        stored_armed = bool(getattr(position, "trailing_armed", False))
+        stored_floor = getattr(position, "trailing_floor_price", None)
+
+        if trail_start_rate is None or trail_start_rate <= 0:
+            return True, None
+
+        peak_rate = self._peak_rate_pct(buy_price, peak)
+        if stored_armed:
+            floor = self._trailing_floor_for_buy(
+                buy_price, trail_start_rate, stored_floor, peak,
+            )
+            return True, floor
+
+        if peak_rate >= trail_start_rate:
+            return True, self._trailing_floor_price(buy_price, trail_start_rate)
+
+        return False, None
+
+    def _trailing_floor_for_buy(
+        self,
+        buy_price: int,
+        trail_start_rate: float,
+        stored_floor: Optional[int],
+        peak: int,
+    ) -> int:
+        """평균단가×시작% 바닥 — 고점이 그 가격 이상일 때만 상향(바닥>현재가 즉시청산 방지)."""
+        target = self._trailing_floor_price(buy_price, trail_start_rate)
+        old = int(stored_floor or 0)
+        if peak < target:
+            return old if old > 0 else target
+        return max(old, target) if old > 0 else target
+
+    async def _persist_trailing_floor(
+        self,
+        position_id: int,
+        floor_price: int,
+        *,
+        arm: bool = False,
+    ) -> None:
+        """트레일링 바닥 저장 — 최초 활성화 또는 평균단가 상승 시 바닥 상향."""
+        try:
+            for db in get_db():
+                session: Session = db
+                p = session.query(Position).filter(Position.id == position_id).first()
+                if not p:
+                    break
+                new_floor = int(floor_price)
+                old_floor = int(p.trailing_floor_price or 0)
+                changed = False
+                if arm and not p.trailing_armed:
+                    p.trailing_armed = True
+                    changed = True
+                if new_floor > old_floor:
+                    p.trailing_floor_price = new_floor
+                    changed = True
+                if not changed:
+                    break
+                session.commit()
+                if arm and not old_floor:
+                    logger.info(
+                        f"🛡️ [STOP_LOSS] 트레일링 활성 — {p.stock_name} "
+                        f"바닥 {new_floor:,}원"
+                    )
+                elif new_floor > old_floor:
+                    logger.info(
+                        f"🛡️ [STOP_LOSS] 트레일링 바닥 상향 — {p.stock_name} "
+                        f"{old_floor:,}→{new_floor:,}원 (평단+시작%, 고점 확인 후)"
+                    )
+                break
+        except Exception as e:
+            logger.error(f"🛡️ [STOP_LOSS] 트레일링 바닥 저장 오류: {e}")
+
+    async def refresh_trailing_floor_for_position(self, position_id: int) -> None:
+        """추가매수 등으로 평균단가가 바뀐 뒤 트레일링 바닥 재계산."""
+        await self._load_auto_trade_settings()
+        s = self.auto_trade_settings
+        if not s:
+            return
+        trail_start = self._num(s.take_profit_rate)
+        if not trail_start or trail_start <= 0:
+            return
+        try:
+            for db in get_db():
+                session: Session = db
+                p = session.query(Position).filter(Position.id == position_id).first()
+                if not p or p.status not in ("HOLDING", "TRAILING"):
+                    return
+                buy_price = int(p.buy_price or 0)
+                if buy_price <= 0:
+                    return
+                peak = max(
+                    int(getattr(p, "peak_price", None) or buy_price),
+                    int(p.current_price or buy_price),
+                )
+                armed, floor = self._resolve_trailing_state(p, buy_price, peak, trail_start)
+                if not armed or not floor:
+                    return
+                await self._persist_trailing_floor(
+                    position_id,
+                    int(floor),
+                    arm=not bool(getattr(p, "trailing_armed", False)),
+                )
+                return
+        except Exception as e:
+            logger.error(f"🛡️ [STOP_LOSS] 트레일링 바닥 갱신 오류 position_id={position_id}: {e}")
+
+    async def _persist_trailing_armed(self, position_id: int, floor_price: int):
+        """트레일링 최초 활성화 (하위 호환)."""
+        await self._persist_trailing_floor(position_id, floor_price, arm=True)
+
+    def _build_stop_candidates(
+        self,
+        settings: AutoTradeSettings,
+        buy_price: int,
+        peak: int,
+        atr: Optional[float],
+        *,
+        trailing_armed: bool = False,
+        trailing_floor_price: Optional[int] = None,
+    ) -> List[Tuple[str, float, str]]:
+        """손절·트레일·수익잠금 후보. %·ATR을 모두 포함하고 유효선은 최고가(가장 타이트)."""
+        candidates: List[Tuple[str, float, str]] = []
+        floor = int(trailing_floor_price) if trailing_floor_price else None
+
+        def _apply_trail_floor(raw: float) -> float:
+            if floor is not None:
+                return max(raw, float(floor))
+            return raw
+
+        sl = self._num(settings.stop_loss_rate)
+        if sl:
+            candidates.append(("STOP_LOSS", buy_price * (1 - abs(sl) / 100.0), "PCT"))
+
+        atr_stop_mult = self._num(settings.atr_mult_stop)
+        if atr and atr_stop_mult:
+            candidates.append(("STOP_LOSS", buy_price - atr * atr_stop_mult, "ATR"))
+
+        lock_trigger = self._num(settings.profit_lock_trigger)
+        if lock_trigger:
+            peak_rate = self._peak_rate_pct(buy_price, peak)
+            if peak_rate >= lock_trigger:
+                lock_floor = self._num(settings.profit_lock_floor)
+                lock_floor = 0.0 if lock_floor is None else lock_floor
+                candidates.append(("PROFIT_LOCK", buy_price * (1 + lock_floor / 100.0), "PCT"))
+
+        if trailing_armed:
+            tr = self._num(settings.trailing_stop_pct)
+            if tr:
+                raw = peak * (1 - tr / 100.0)
+                candidates.append(("TRAILING", _apply_trail_floor(raw), "PCT"))
+
+            atr_trail_mult = self._num(settings.atr_mult_trail)
+            if atr and atr_trail_mult:
+                raw = peak - atr * atr_trail_mult
+                candidates.append(("TRAILING", _apply_trail_floor(raw), "ATR"))
+
+        return candidates
+
+    def _calc_profit(self, position: Position, current_price: int, holding: Optional[dict] = None):
+        """키움 API 평가손익(pl_amt) 우선."""
+        from utils.eval_pnl import calc_profit_for_position
+
+        return calc_profit_for_position(position, current_price, holding)
+
+    async def _sync_position_from_api(self, position_id: int, holding: dict):
+        """키움 잔고 → DB 포지션 (체결 이력 우선, 현재가·손익은 API)."""
+        from utils.position_buy_fills import reconcile_position_buy_with_fills
+
+        try:
+            for db in get_db():
+                session: Session = db
+                position = session.query(Position).filter(Position.id == position_id).first()
+                if position:
+                    reconcile_position_buy_with_fills(session, position, holding)
+                    position.last_monitored = datetime.utcnow()
+                    session.commit()
+                break
+        except Exception as e:
+            logger.error(f"🛡️ [STOP_LOSS] API 포지션 동기화 오류: {e}")
+
+    def _is_in_liquidation_window(self) -> bool:
+        """장 마감 전 전량청산 유효 구간 — 평일, liquidate_time(기본 15:05) ~ 15:20."""
+        s = self.auto_trade_settings
+        if not s or not getattr(s, "liquidate_before_close", False):
+            return False
+        now = datetime.now()
+        if not is_krx_trading_day(now):
+            return False
+        t = getattr(s, "liquidate_time", "") or "15:05"
+        try:
+            lh, lm = map(int, str(t).split(":"))
+            start = (lh, lm)
+            end = (15, 20)  # 장종료 리스크 감소를 위해 청산 시도 상한을 15:20으로 제한
+            now_t = (now.hour, now.minute)
+            return start <= now_t <= end
+        except Exception:
+            return False
+
+    def _is_past_liquidation_time(self) -> bool:
+        """청산 트리거 시각 경과 (장마감 윈도우 안에서만 True)."""
+        return self._is_in_liquidation_window()
+
+    async def _snapshot_buy_atr(
+        self, stock_code: str, settings: Optional[AutoTradeSettings],
+    ) -> Tuple[Optional[float], Optional[int]]:
+        """매수 시점 ATR — 포지션 생성 시 1회 조회·저장."""
+        if not settings:
+            return None, None
+        if not self._num(settings.atr_mult_stop) and not self._num(settings.atr_mult_trail):
+            return None, None
+        period = int(self._num(settings.atr_period) or 14)
+        code = KiwoomAPI.normalize_stock_code(stock_code)
+        atr = await self._get_atr_cached(code, period)
+        if atr is None:
+            atr = await self._compute_atr(code, period)
+        if atr is not None and float(atr) > 0:
+            return float(atr), period
+        return None, None
+
+    async def _resolve_position_atr(
+        self,
+        position: Position,
+        settings: AutoTradeSettings,
+        *,
+        allow_api: bool,
+    ) -> Tuple[Optional[float], int]:
+        """포지션 ATR — 매수 스냅샷 우선, 없으면(구 포지션) API."""
+        period = int(self._num(settings.atr_period) or 14)
+        stored = getattr(position, "buy_atr", None)
+        if stored is not None and float(stored) > 0:
+            return float(stored), int(getattr(position, "buy_atr_period", None) or period)
+        if not allow_api:
+            return None, period
+        if not self._num(settings.atr_mult_stop) and not self._num(settings.atr_mult_trail):
+            return None, period
+        try:
+            atr = await asyncio.wait_for(
+                self._get_atr_cached(position.stock_code, period), timeout=10.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"ATR 조회 타임아웃 — {position.stock_name}")
+            atr = None
+        return (float(atr) if atr and float(atr) > 0 else None), period
+
+    async def _get_atr_cached(self, stock_code: str, period: int = 14) -> Optional[float]:
+        """일봉 ATR — 종목·기간당 하루 1회 API 조회, 장외엔 당일 캐시 재사용."""
+        code = KiwoomAPI.normalize_stock_code(stock_code)
+        key = f"{code}:{period}"
+        today = date.today()
+        cached = self._atr_daily_cache.get(key)
+        if cached and cached[1] == today:
+            return cached[0]
+        if not is_krx_session():
+            if cached:
+                logger.debug(f"🛡️ [STOP_LOSS] 장외 — ATR 캐시 사용 ({code})")
+                return cached[0]
+            return None
+        atr = await self._compute_atr(code, period)
+        if atr is not None:
+            self._atr_daily_cache[key] = (atr, today)
+        return atr
+
+    async def _compute_atr(
+        self, stock_code: str, period: int = 14, *, allow_off_hours: bool = False,
+    ) -> Optional[float]:
+        """일봉 기반 ATR 계산. 실패 시 None(→ 고정% 폴백)."""
+        try:
+            need = period + 2
+            data = await self.kiwoom_api.get_stock_chart_data(
+                stock_code, "1D", max_bars=need, allow_off_hours=allow_off_hours,
+            )
+            if not data or len(data) < period + 1:
+                return None
+            rows = sorted(data, key=lambda x: str(x.get('timestamp', '')))
+            trs, prev_close = [], None
+            for r in rows:
+                h = abs(float(r.get('high') or 0))
+                l = abs(float(r.get('low') or 0))
+                c = abs(float(r.get('close') or 0))
+                if h <= 0 or l <= 0:
+                    if c > 0:
+                        prev_close = c
+                    continue
+                tr = (h - l) if prev_close is None else max(h - l, abs(h - prev_close), abs(l - prev_close))
+                trs.append(tr)
+                prev_close = c
+            if len(trs) < period:
+                return None
+            atr = sum(trs[-period:]) / period
+            return atr if atr > 0 else None
+        except Exception as e:
+            logger.warning(f"🛡️ [STOP_LOSS] ATR 계산 실패 {stock_code}: {e}")
+            return None
+
+    async def _update_position_tracking(self, position_id: int, peak_price: int, stop_line_price: Optional[int]):
+        """고점/유효 손절선 저장"""
+        try:
+            for db in get_db():
+                session: Session = db
+                p = session.query(Position).filter(Position.id == position_id).first()
+                if p:
+                    p.peak_price = int(peak_price)
+                    if stop_line_price is not None:
+                        p.stop_loss_price = int(stop_line_price)
+                    session.commit()
+                break
+        except Exception as e:
+            logger.error(f"🛡️ [STOP_LOSS] 포지션 추적 업데이트 오류: {e}")
+
+    @debug_tracer.trace_async(component="STOP_LOSS")
+    async def _check_position_stop_loss(self, position: Position, holding: Optional[dict] = None):
+        """개별 포지션 청산 판단.
+        패턴 B: 시작% 도달 → trailing_armed + floor 잠금, 이후 고점 따라 트레일링(바닥 이하로 선 하락 없음).
+        """
+        try:
+            if holding:
+                from utils.eval_pnl import apply_holding_to_position
+                apply_holding_to_position(position, holding)
+                current_price = position.current_price
+            else:
+                current_price = await self._get_current_price(position.stock_code)
             if not current_price:
                 logger.warning(f"🛡️ [STOP_LOSS] 현재가 조회 실패 - {position.stock_name}")
                 return
-            
-            # 키움 방식 수익률 계산 (매도 수수료 + 거래세 포함)
-            # actual_buy_amount가 있으면 사용, 없으면 buy_amount 사용
-            actual_buy_amount = getattr(position, 'actual_buy_amount', None) or position.buy_amount
-            
-            # 총 투자비용 (매입금액 + 매수 수수료)
-            total_investment = actual_buy_amount
-            
-            # 키움 공식 적용 (모의투자/실계좌 구분)
-            import math
-            from core.config import Config
-            
-            is_mock_account = Config.KIWOOM_USE_MOCK_ACCOUNT
-            
-            if is_mock_account:
-                # 모의투자 계좌: 매도 수수료 0.35%, 제세금 총 0.557% (기본 0.23% + 추가)
-                sell_fee = math.floor(current_price * position.buy_quantity * 0.0035)  # 0.35%
-                # 제세금: 기본 0.23% + 추가(제세금1+2+3+농특세) = 총 0.557%
-                tax = math.floor(current_price * position.buy_quantity * 0.00557)  # 0.557%
-            else:
-                # 실계좌: 매도 수수료 0.015% (10원미만 절사), 제세금 0.05% + 0.15%
-                sell_fee_base = current_price * position.buy_quantity * 0.00015
-                sell_fee = math.floor(sell_fee_base / 10) * 10  # 10원미만 절사
-                
-                tax_005 = math.floor(current_price * position.buy_quantity * 0.0005)  # 0.05%, 원미만 절사
-                tax_015 = math.floor(current_price * position.buy_quantity * 0.0015)  # 0.15%, 원미만 절사
-                tax = tax_005 + tax_015
-            
-            # 평가금액 = 현재가 × 수량 - 매도 수수료 - 제세금
-            evaluation_amount = current_price * position.buy_quantity - sell_fee - tax
-            
-            # 손익 = 평가금액 - 매입금액
-            profit_loss = evaluation_amount - actual_buy_amount
-            
-            # 수익률 = 손익 / 매입금액 × 100
-            profit_loss_rate = (profit_loss / actual_buy_amount) * 100 if actual_buy_amount > 0 else 0
-            
-            actual_buy_price = actual_buy_amount / position.buy_quantity if position.buy_quantity > 0 else position.buy_price
-            debug_tracer.log_checkpoint(f"손익: {profit_loss:+,}원 ({profit_loss_rate:+.2f}%), 매수가: {position.buy_price:,}원, 실제매입가: {actual_buy_price:,.0f}원, 총투자비용: {total_investment:,}원", "STOP_LOSS")
-            
-            # 포지션 정보 업데이트
+
+            s = self.auto_trade_settings
+            buy_price = position.buy_price or current_price
+
+            # 손익 — 키움 API(lspft_amt) 우선
+            profit_loss, profit_loss_rate = self._calc_profit(position, current_price, holding)
             await self._update_position_price(position.id, current_price, profit_loss, profit_loss_rate)
-            
-            # 손절/익절 확인
-            should_sell = False
-            sell_reason = ""
-            sell_reason_detail = ""
-            
-            # 손절 확인
-            if profit_loss_rate <= -self.auto_trade_settings.stop_loss_rate:
-                should_sell = True
-                sell_reason = "STOP_LOSS"
-                sell_reason_detail = f"손절: {profit_loss_rate:.2f}% (기준: -{self.auto_trade_settings.stop_loss_rate}%)"
-                logger.warning(f"🛡️ [STOP_LOSS] 손절 신호 - {position.stock_name}: {profit_loss_rate:.2f}%")
-            
-            # 익절 확인
-            elif profit_loss_rate >= self.auto_trade_settings.take_profit_rate:
-                should_sell = True
-                sell_reason = "TAKE_PROFIT"
-                sell_reason_detail = f"익절: {profit_loss_rate:.2f}% (기준: {self.auto_trade_settings.take_profit_rate}%)"
-                logger.info(f"🛡️ [STOP_LOSS] 익절 신호 - {position.stock_name}: {profit_loss_rate:.2f}%")
-            
+            if holding:
+                await self._sync_position_from_api(position.id, holding)
+
+            # 고점 갱신
+            peak = max(int(getattr(position, 'peak_price', None) or buy_price), int(current_price))
+
+            trail_start = self._num(s.take_profit_rate)
+            trail_start_val = trail_start if trail_start and trail_start > 0 else None
+            trailing_armed, trailing_floor = self._resolve_trailing_state(
+                position, buy_price, peak, trail_start_val,
+            )
+            if trailing_armed and trailing_floor:
+                old_floor = int(getattr(position, "trailing_floor_price", None) or 0)
+                need_arm = not getattr(position, "trailing_armed", False)
+                need_raise = int(trailing_floor) > old_floor
+                if need_arm or need_raise:
+                    await self._persist_trailing_floor(
+                        position.id, int(trailing_floor), arm=need_arm,
+                    )
+                    position.trailing_armed = True
+                    position.trailing_floor_price = int(trailing_floor)
+
+            sell_reason = None
+            detail = ""
+
+            # 0) 장 마감 전 전량청산 (최우선)
+            if self._is_past_liquidation_time():
+                sell_reason = "MARKET_CLOSE"
+                detail = f"장마감 전 전량청산 ({getattr(s, 'liquidate_time', '15:10')}) | 손익 {profit_loss_rate:+.2f}%"
+                logger.warning(f"🛡️ [STOP_LOSS] 장마감 청산 - {position.stock_name}: {profit_loss_rate:+.2f}%")
+
+            # 1) 위로만 올라가는 손절선 (손절/수익잠금/트레일링 통합)
+            eff_stop = None
+            if not sell_reason:
+                atr_stop_mult = self._num(s.atr_mult_stop)
+                atr_trail_mult = self._num(s.atr_mult_trail)
+                atr = None
+                if atr_stop_mult or atr_trail_mult:
+                    atr, _ = await self._resolve_position_atr(
+                        position, s, allow_api=True,
+                    )
+
+                candidates = self._build_stop_candidates(
+                    s, buy_price, peak, atr,
+                    trailing_armed=trailing_armed,
+                    trailing_floor_price=trailing_floor,
+                )
+
+                if candidates:
+                    reason_eff, eff_stop, _ = max(candidates, key=lambda x: x[1])
+                    if current_price <= eff_stop:
+                        sell_reason = reason_eff
+                        detail = (f"{reason_eff} 청산: 현재가 {current_price:,} ≤ 손절선 {eff_stop:,.0f} "
+                                  f"(고점 {peak:,}, 손익 {profit_loss_rate:+.2f}%)")
+                        logger.warning(f"🛡️ [STOP_LOSS] {reason_eff} - {position.stock_name}: {profit_loss_rate:+.2f}%")
+
+            # 고점/손절선 저장 (매도 안 해도 추적 유지)
+            await self._update_position_tracking(position.id, peak, int(eff_stop) if eff_stop else None)
+
             # 매도 실행
-            if should_sell:
-                await self._execute_sell_order(position, current_price, sell_reason, sell_reason_detail)
-            
+            if sell_reason:
+                # PENDING/ORDERED 매도 주문이 이미 있으면,
+                # 현재 sell_reason의 우선순위가 더 높더라도 먼저 '하위 사유 주문'을 취소해
+                # 중복/불일치 sell_orders가 쌓이지 않게 합니다.
+                if await self._has_any_pending_sell_order(position.id):
+                    await self._prepare_sell(position.id, sell_reason)
+
+                if await self._has_pending_sell_order(position.id, for_reason=sell_reason):
+                    logger.debug(f"🛡️ [STOP_LOSS] 매도 대기 중 — {position.stock_name}, 추가 주문 생략")
+                    return
+                await self._execute_sell_order(position, current_price, sell_reason, detail)
+
         except Exception as e:
             logger.error(f"🛡️ [STOP_LOSS] 포지션 확인 오류 - {position.stock_name}: {e}")
     
     async def _get_current_price(self, stock_code: str) -> Optional[int]:
         """현재가 조회"""
         try:
+            if not is_krx_session():
+                logger.debug(f"🛡️ [STOP_LOSS] 장외 — 현재가 조회 생략: {stock_code}")
+                return None
             logger.debug(f"🛡️ [STOP_LOSS] 현재가 조회 시도: {stock_code}")
             current_price = await self.kiwoom_api.get_current_price(stock_code)
             if current_price:
                 logger.debug(f"🛡️ [STOP_LOSS] 현재가 조회 성공: {stock_code} = {current_price:,}원")
             else:
-                logger.warning(f"🛡️ [STOP_LOSS] 현재가 조회 반환값 None: {stock_code} (API 제한 또는 토큰 만료 가능성)")
+                logger.debug(
+                    f"🛡️ [STOP_LOSS] 현재가 없음 — {stock_code} (API 제한·장외·토큰)"
+                )
             return current_price
         except Exception as e:
             logger.error(f"🛡️ [STOP_LOSS] 현재가 조회 예외 발생: {stock_code} - {e}")
@@ -350,13 +1140,457 @@ class StopLossManager:
         except Exception as e:
             logger.error(f"🛡️ [STOP_LOSS] 포지션 업데이트 오류: {e}")
     
-    async def _execute_sell_order(self, position: Position, sell_price: int, sell_reason: str, sell_reason_detail: str):
-        """매도 주문 실행"""
+    @staticmethod
+    def _holdings_qty_map(balance: Optional[dict]) -> Dict[str, int]:
+        """계좌 잔고 → {정규화 종목코드: 수량}."""
+        out: Dict[str, int] = {}
+        if not balance or balance.get("_error"):
+            return out
+        for h in balance.get("stk_acnt_evlt_prst") or []:
+            code = KiwoomAPI.normalize_stock_code(h.get("stk_cd", ""))
+            try:
+                qty = int(str(h.get("qty", "0")).replace(",", "") or "0")
+            except (TypeError, ValueError):
+                qty = 0
+            if code and qty > 0:
+                out[code] = qty
+        return out
+
+    async def _has_pending_sell_order(self, position_id: int, for_reason: Optional[str] = None) -> bool:
+        """미체결/체결대기 매도 주문 존재 여부. for_reason보다 높은 우선순위 주문만 차단."""
+        block_rank = _sell_reason_rank(for_reason) if for_reason else 9
+        for db in get_db():
+            session: Session = db
+            rows = session.query(SellOrder).filter(
+                SellOrder.position_id == position_id,
+                SellOrder.status.in_(("PENDING", "ORDERED")),
+            ).all()
+            for row in rows:
+                if _sell_reason_rank(row.sell_reason) <= block_rank:
+                    return True
+            return False
+        return False
+
+    async def _has_any_pending_sell_order(self, position_id: int) -> bool:
+        """PENDING/ORDERED 매도 주문이 하나라도 존재하는지(우선순위 무관)."""
+        for db in get_db():
+            session: Session = db
+            row = session.query(SellOrder).filter(
+                SellOrder.position_id == position_id,
+                SellOrder.status.in_(("PENDING", "ORDERED")),
+            ).first()
+            return row is not None
+        return False
+
+    @staticmethod
+    def _sell_order_age_minutes(sell: SellOrder) -> float:
+        ref = sell.ordered_at or sell.created_at
+        if not ref:
+            return 9999.0
+        return (datetime.utcnow() - ref).total_seconds() / 60.0
+
+    def _reconcile_sell_order_hygiene(self, session: Session, holdings: Dict[str, int]) -> int:
+        """중복·만료 매도 주문 정리 → 익절 등 신규 주문 가능하게."""
+        changed = 0
+        open_sells = session.query(SellOrder).filter(
+            SellOrder.status.in_(("PENDING", "ORDERED")),
+        ).order_by(SellOrder.created_at.asc()).all()
+
+        by_pos: Dict[int, List[SellOrder]] = {}
+        for sell in open_sells:
+            by_pos.setdefault(sell.position_id, []).append(sell)
+        for sells in by_pos.values():
+            if len(sells) <= 1:
+                continue
+            for sell in sells[:-1]:
+                sell.status = "CANCELLED"
+                changed += 1
+                logger.info(f"🛡️ [RECONCILE] 중복 매도 취소 — {sell.stock_name} #{sell.id}")
+
+        for sell in session.query(SellOrder).filter(
+            SellOrder.status.in_(("PENDING", "ORDERED")),
+        ).all():
+            code = KiwoomAPI.normalize_stock_code(sell.stock_code)
+            acct_qty = holdings.get(code, 0)
+            age = self._sell_order_age_minutes(sell)
+
+            # 오래된 PENDING (미접수)
+            if sell.status == "PENDING" and age >= STALE_SELL_ORDER_MINUTES:
+                sell.status = "CANCELLED"
+                changed += 1
+                logger.warning(f"🛡️ [RECONCILE] 만료 PENDING 취소 — {sell.stock_name} #{sell.id}")
+                continue
+
+            # ORDERED인데 계좌에 전량 잔존 + 오래됨 → 미체결로 간주하고 취소
+            if (
+                sell.status == "ORDERED"
+                and acct_qty >= sell.sell_quantity
+                and age >= STALE_SELL_ORDER_MINUTES
+            ):
+                sell.status = "CANCELLED"
+                changed += 1
+                log_activity(
+                    "SELL",
+                    f"만료 매도 주문 취소 — {sell.stock_name} ({sell.sell_reason}, {age:.0f}분 경과)",
+                    "warn",
+                    stock_code=sell.stock_code,
+                    reason=sell.sell_reason,
+                )
+                logger.warning(
+                    f"🛡️ [RECONCILE] stale ORDERED 취소 — {sell.stock_name} "
+                    f"#{sell.id} ({sell.sell_reason}, {age:.0f}분)"
+                )
+        return changed
+
+    def _cancel_inferior_sell_orders(self, session: Session, position_id: int, new_reason: str) -> int:
+        """새 청산 사유가 더 긴급하면 기존 하위 PENDING/ORDERED 취소."""
+        new_rank = _sell_reason_rank(new_reason)
+        n = 0
+        for sell in session.query(SellOrder).filter(
+            SellOrder.position_id == position_id,
+            SellOrder.status.in_(("PENDING", "ORDERED")),
+        ).all():
+            if _sell_reason_rank(sell.sell_reason) > new_rank:
+                sell.status = "CANCELLED"
+                n += 1
+                logger.info(
+                    f"🛡️ [STOP_LOSS] 하위 매도 취소 — {sell.stock_name} "
+                    f"{sell.sell_reason} → {new_reason}"
+                )
+        return n
+
+    def _cancel_all_open_sell_orders(self, session: Session, position_id: int) -> int:
+        """포지션의 모든 미완료 매도 주문 DB 취소 (수동 강제청산용)."""
+        n = 0
+        for sell in session.query(SellOrder).filter(
+            SellOrder.position_id == position_id,
+            SellOrder.status.in_(("PENDING", "ORDERED")),
+        ).all():
+            sell.status = "CANCELLED"
+            n += 1
+            logger.info(
+                f"🛡️ [STOP_LOSS] 매도 취소(수동청산) — {sell.stock_name} "
+                f"#{sell.id} ({sell.sell_reason})"
+            )
+        return n
+
+    async def execute_manual_liquidation(self, position_id: int) -> Dict:
+        """대시보드 수동 청산 — 기존 매도 주문 정리 후 전량 시장가 매도."""
+        position = None
+        cancelled = 0
+        for db in get_db():
+            session: Session = db
+            position = session.query(Position).filter(Position.id == position_id).first()
+            if not position:
+                return {"success": False, "error": "포지션을 찾을 수 없습니다."}
+            if position.status != "HOLDING":
+                return {"success": False, "error": "매도 가능한 포지션이 아닙니다."}
+            cancelled = self._cancel_all_open_sell_orders(session, position_id)
+            session.commit()
+            break
+
+        sell_price = await self._get_current_price(position.stock_code) or position.current_price
+        if not sell_price:
+            return {"success": False, "error": "현재가 조회 실패"}
+
+        await self._execute_sell_order(
+            position,
+            int(sell_price),
+            "MANUAL",
+            "대시보드 수동 청산",
+        )
+
+        latest = None
+        for db in get_db():
+            session: Session = db
+            latest = (
+                session.query(SellOrder)
+                .filter(SellOrder.position_id == position_id)
+                .order_by(SellOrder.created_at.desc())
+                .first()
+            )
+            break
+
+        if latest and latest.sell_reason == "MANUAL":
+            if latest.status in ("PENDING", "ORDERED"):
+                log_activity(
+                    "SELL",
+                    f"수동 청산 주문 — {position.stock_name} {position.buy_quantity}주 @ 시장가",
+                    "warn",
+                    stock_code=position.stock_code,
+                    reason="MANUAL",
+                )
+                await self.reconcile_after_manual_sell()
+                return {
+                    "success": True,
+                    "message": f"{position.stock_name} 시장가 청산 주문을 접수했습니다.",
+                    "position_id": position_id,
+                    "sell_price": int(sell_price),
+                    "cancelled_orders": cancelled,
+                }
+            if latest.status == "FAILED":
+                return {"success": False, "error": "매도 주문이 거부되었습니다. 키움 계좌·장 시간을 확인하세요."}
+
+        if await self._has_pending_sell_order(position_id, for_reason="MANUAL"):
+            return {"success": False, "error": "매도 주문이 이미 진행 중입니다."}
+
+        return {"success": False, "error": "매도 주문을 접수하지 못했습니다."}
+
+    async def reconcile_after_manual_sell(self) -> None:
+        """수동 청산 직후 계좌·포지션·매수슬롯 동기화."""
         try:
+            await self._reconcile_sell_orders_and_holdings()
+            from utils.auto_trade_engine import prune_stale_buy_slot_reservations
+            for db in get_db():
+                n = prune_stale_buy_slot_reservations(db)
+                if n:
+                    db.commit()
+                    logger.info(f"🛡️ [STOP_LOSS] 수동청산 후 만료 매수 신호 {n}건 정리")
+                break
+            await self.sync_holdings_from_api(force=True)
+        except Exception as e:
+            logger.warning(f"🛡️ [STOP_LOSS] 수동청산 후 동기화 실패: {e}")
+
+    async def _prepare_sell(self, position_id: int, sell_reason: str) -> None:
+        """매도 전 hygiene + 하위 주문 취소."""
+        for db in get_db():
+            session: Session = db
+            account_number = (
+                Config.KIWOOM_MOCK_ACCOUNT_NUMBER
+                if Config.KIWOOM_USE_MOCK_ACCOUNT
+                else Config.KIWOOM_ACCOUNT_NUMBER
+            )
+            balance = await self.kiwoom_api.get_account_balance(account_number)
+            holdings = self._holdings_qty_map(balance)
+            self._reconcile_sell_order_hygiene(session, holdings)
+            self._cancel_inferior_sell_orders(session, position_id, sell_reason)
+            session.commit()
+            break
+
+    async def _reconcile_sell_orders_and_holdings(self):
+        """키움 계좌 잔고 기준으로 매도 체결 확정 및 포지션 DB 동기화."""
+        try:
+            account_number = (
+                Config.KIWOOM_MOCK_ACCOUNT_NUMBER
+                if Config.KIWOOM_USE_MOCK_ACCOUNT
+                else Config.KIWOOM_ACCOUNT_NUMBER
+            )
+            balance = await self.kiwoom_api.get_account_balance(account_number)
+            from utils.eval_pnl import apply_holding_to_position, holdings_by_code
+
+            holdings_map = holdings_by_code(balance)
+            holdings = {
+                code: _parse_kiwoom_int(h.get("qty"))
+                for code, h in holdings_map.items()
+            }
+            if balance.get("_error"):
+                logger.debug(f"🛡️ [RECONCILE] 계좌 조회 실패 — 동기화 생략 ({balance.get('_error_msg', '')})")
+                return
+
+            for db in get_db():
+                session: Session = db
+                hygiene = self._reconcile_sell_order_hygiene(session, holdings)
+                if hygiene:
+                    logger.info(f"🛡️ [RECONCILE] 매도 주문 정리 {hygiene}건")
+
+                dup_cleared = _collapse_duplicate_holdings(session)
+                if dup_cleared:
+                    logger.info(f"🛡️ [RECONCILE] 중복 HOLDING 정리 {dup_cleared}건")
+
+                ordered_sells = session.query(SellOrder).filter(
+                    SellOrder.status == "ORDERED",
+                ).order_by(SellOrder.ordered_at.asc()).all()
+
+                for sell in ordered_sells:
+                    pos = session.query(Position).filter(Position.id == sell.position_id).first()
+                    if not pos:
+                        continue
+                    code = KiwoomAPI.normalize_stock_code(sell.stock_code)
+                    acct_qty = holdings.get(code, 0)
+
+                    if acct_qty <= 0:
+                        self._finalize_sell_in_session(session, sell, pos)
+                        log_activity(
+                            "SELL",
+                            f"매도 체결 확정 — {pos.stock_name} {sell.sell_quantity}주 ({sell.sell_reason})",
+                            "info",
+                            stock_code=pos.stock_code,
+                            reason=sell.sell_reason,
+                        )
+                        logger.info(f"🛡️ [RECONCILE] 매도 확정 — {pos.stock_name} ({code})")
+                        snap = sell_fill_snapshot(sell, pos)
+                        asyncio.create_task(notify_sell_filled_async(snap, remaining_qty=None))
+                    elif acct_qty < pos.buy_quantity:
+                        sold_qty = pos.buy_quantity - acct_qty
+                        sell.sell_quantity = sold_qty
+                        sell.sell_amount = int((sell.sell_price or pos.current_price or pos.buy_price) * sold_qty)
+                        self._finalize_sell_in_session(session, sell, pos)
+                        pos.status = "HOLDING"
+                        pos.sell_time = None
+                        h = holdings_map.get(code)
+                        if h:
+                            apply_holding_to_position(pos, h)
+                        else:
+                            pos.buy_quantity = acct_qty
+                        log_activity(
+                            "SELL",
+                            f"부분 매도 확정 — {pos.stock_name} {sold_qty}주 체결, 잔량 {acct_qty}주",
+                            "info",
+                            stock_code=pos.stock_code,
+                        )
+                        logger.info(f"🛡️ [RECONCILE] 부분 매도 — {pos.stock_name} 잔량 {acct_qty}주")
+                        snap = sell_fill_snapshot(sell, pos)
+                        asyncio.create_task(notify_sell_filled_async(snap, remaining_qty=acct_qty))
+                    else:
+                        # 계좌에 아직 전량 보유 → 체결 대기, 포지션 HOLDING 유지
+                        if pos.status != "HOLDING":
+                            pos.status = "HOLDING"
+                            pos.sell_time = None
+                            logger.info(f"🛡️ [RECONCILE] 매도 대기 — {pos.stock_name} HOLDING 복구 ({acct_qty}주)")
+
+                # 계좌 보유 ↔ DB HOLDING 동기화 (청산된 옛 포지션은 복구하지 않음)
+                for code, acct_qty in holdings.items():
+                    holding_rows = _holding_rows_for_code(session, code)
+                    if holding_rows:
+                        h = holdings_map.get(code)
+                        for pos in holding_rows:
+                            if h:
+                                apply_holding_to_position(pos, h)
+                            elif pos.buy_quantity != acct_qty:
+                                pos.buy_quantity = acct_qty
+                        continue
+
+                    pending_for_code = [
+                        s for s in session.query(SellOrder).filter(
+                            SellOrder.status == "ORDERED",
+                        ).all()
+                        if KiwoomAPI.normalize_stock_code(s.stock_code) == code
+                    ]
+                    if not pending_for_code:
+                        continue
+
+                    target = session.query(Position).filter(
+                        Position.id == pending_for_code[-1].position_id,
+                    ).first()
+                    if not target or target.status == "HOLDING":
+                        continue
+
+                    target.status = "HOLDING"
+                    target.sell_time = None
+                    h = holdings_map.get(code)
+                    if h:
+                        apply_holding_to_position(target, h)
+                    else:
+                        target.buy_quantity = acct_qty
+                    log_activity(
+                        "SELL",
+                        f"매도 대기 포지션 복구 — {target.stock_name} {acct_qty}주 (ORDERED 매도 미체결)",
+                        "warn",
+                        stock_code=target.stock_code,
+                    )
+                    logger.warning(
+                        f"🛡️ [RECONCILE] 매도 대기 포지션 복구 — {target.stock_name} ({code}) {acct_qty}주"
+                    )
+
+                cleared = self._reconcile_account_cleared_holdings(session, holdings)
+                if cleared:
+                    logger.info(f"🛡️ [RECONCILE] 계좌 미보유 포지션 정리 {cleared}건")
+
+                session.commit()
+                break
+        except Exception as e:
+            logger.error(f"🛡️ [RECONCILE] 매도/잔고 동기화 오류: {e}")
+
+    def _reconcile_account_cleared_holdings(
+        self, session: Session, holdings: Dict[str, int],
+    ) -> int:
+        """DB HOLDING인데 키움 계좌에 없음 → 청산 상태로 정리."""
+        closed = 0
+        for pos in session.query(Position).filter(Position.status == "HOLDING").all():
+            code = KiwoomAPI.normalize_stock_code(pos.stock_code)
+            if holdings.get(code, 0) > 0:
+                continue
+
+            open_sells = session.query(SellOrder).filter(
+                SellOrder.position_id == pos.id,
+                SellOrder.status.in_(("PENDING", "ORDERED")),
+            ).order_by(SellOrder.created_at.asc()).all()
+
+            finalized = False
+            for sell in open_sells:
+                if sell.status == "ORDERED":
+                    self._finalize_sell_in_session(session, sell, pos)
+                    log_activity(
+                        "SELL",
+                        f"매도 체결 확정 — {pos.stock_name} {sell.sell_quantity}주 ({sell.sell_reason})",
+                        "info",
+                        stock_code=pos.stock_code,
+                        reason=sell.sell_reason,
+                    )
+                    logger.info(f"🛡️ [RECONCILE] 계좌 청산 확정 — {pos.stock_name} ({code})")
+                    snap = sell_fill_snapshot(sell, pos)
+                    asyncio.create_task(notify_sell_filled_async(snap))
+                    closed += 1
+                    finalized = True
+                    break
+                sell.status = "CANCELLED"
+                logger.info(f"🛡️ [RECONCILE] 미체결 PENDING 취소 — {pos.stock_name} #{sell.id}")
+
+            if finalized:
+                continue
+
+            last_done = session.query(SellOrder).filter(
+                SellOrder.position_id == pos.id,
+                SellOrder.status == "COMPLETED",
+            ).order_by(SellOrder.completed_at.desc()).first()
+
+            if last_done:
+                pos.status = last_done.sell_reason or "MANUAL_SELL"
+                pos.sell_time = last_done.completed_at or datetime.utcnow()
+                detail = f"계좌 미보유 — DB 정리 ({pos.stock_name} → {pos.status})"
+            else:
+                pos.status = "MANUAL_SELL"
+                pos.sell_time = datetime.utcnow()
+                detail = f"계좌 청산 확인 — {pos.stock_name} (앱 매도 기록 없음)"
+
+            log_activity("SELL", detail, "info", stock_code=pos.stock_code)
+            logger.info(f"🛡️ [RECONCILE] {detail}")
+            closed += 1
+
+        return closed
+
+    @staticmethod
+    def _finalize_sell_in_session(session: Session, sell: SellOrder, pos: Position):
+        """매도 체결 확정 — SellOrder COMPLETED, Position 청산 상태."""
+        if sell.status != "COMPLETED":
+            sell.status = "COMPLETED"
+            sell.completed_at = datetime.utcnow()
+        pos.status = sell.sell_reason or "MANUAL_SELL"
+        pos.sell_time = sell.completed_at or datetime.utcnow()
+        if sell.profit_loss is None and pos.buy_price and sell.sell_price:
+            sell.profit_loss = (sell.sell_price - pos.buy_price) * sell.sell_quantity
+        session.flush()
+
+    async def _execute_sell_order(self, position: Position, sell_price: int, sell_reason: str, sell_reason_detail: str):
+        """매도 주문 실행 (체결 확정은 _reconcile_sell_orders_and_holdings에서 처리)."""
+        try:
+            if await self._has_pending_sell_order(position.id, for_reason=sell_reason):
+                logger.info(f"🛡️ [STOP_LOSS] 매도 주문 생략 — {position.stock_name}: 동일/상위 우선순위 대기 중")
+                log_activity(
+                    "SELL",
+                    f"매도 생략 — {position.stock_name} ({sell_reason}): 동일/상위 주문 대기 중",
+                    "info",
+                    stock_code=position.stock_code,
+                    reason=sell_reason,
+                )
+                return
+
             logger.info(f"🛡️ [STOP_LOSS] 매도 주문 실행 - {position.stock_name}: {sell_reason}")
             
             # 매도 주문 생성
-            sell_order = await self._create_sell_order(position, sell_price, sell_reason, sell_reason_detail)
+            sell_order_id = await self._create_sell_order(position, sell_price, sell_reason, sell_reason_detail)
+            if not sell_order_id:
+                return
             
             # 키움 API로 매도 주문
             result = await self.kiwoom_api.place_sell_order(
@@ -367,26 +1601,26 @@ class StopLossManager:
             )
             
             if result.get("success"):
+                msg = f"매도 주문 {sell_reason} — {position.stock_name} {position.buy_quantity}주 @ {sell_price:,}원"
                 logger.info(f"🛡️ [STOP_LOSS] 매도 주문 성공 - {position.stock_name}: {position.buy_quantity}주")
+                log_activity("SELL", msg, "info", stock_code=position.stock_code, reason=sell_reason)
                 
-                # 매도 주문 상태 업데이트
-                await self._update_sell_order_status(sell_order.id, "ORDERED", result.get("order_id", ""))
-                
-                # 포지션 상태 업데이트
-                await self._update_position_status(position.id, sell_reason, sell_price)
+                # 매도 주문 접수 — 포지션 청산은 계좌 체결 확인 후 reconcile에서 처리
+                await self._update_sell_order_status(sell_order_id, "ORDERED", result.get("order_id", ""))
                 
             else:
                 error_msg = result.get("error", "알 수 없는 오류")
                 logger.error(f"🛡️ [STOP_LOSS] 매도 주문 실패 - {position.stock_name}: {error_msg}")
-                await self._update_sell_order_status(sell_order.id, "FAILED", error_msg)
+                log_activity("SELL", f"매도 실패 {position.stock_name}: {error_msg}", "warn", stock_code=position.stock_code, reason=sell_reason)
+                await self._update_sell_order_status(sell_order_id, "FAILED", error_msg)
                 
         except Exception as e:
             logger.error(f"🛡️ [STOP_LOSS] 매도 주문 실행 오류 - {position.stock_name}: {e}")
     
-    async def _create_sell_order(self, position: Position, sell_price: int, sell_reason: str, sell_reason_detail: str) -> SellOrder:
-        """매도 주문 생성"""
+    async def _create_sell_order(self, position: Position, sell_price: int, sell_reason: str, sell_reason_detail: str) -> Optional[int]:
+        """매도 주문 생성 — DB id 반환 (세션 분리 안전)."""
         try:
-            sell_order = None
+            sell_order_id = None
             for db in get_db():
                 session: Session = db
                 sell_order = SellOrder(
@@ -399,29 +1633,32 @@ class StopLossManager:
                     sell_reason=sell_reason,
                     sell_reason_detail=sell_reason_detail,
                     profit_loss=(sell_price - position.buy_price) * position.buy_quantity,
-                    profit_loss_rate=(sell_price - position.buy_price) / position.buy_price * 100,
+                    profit_loss_rate=(sell_price - position.buy_price) / position.buy_price * 100 if position.buy_price else 0,
                     status="PENDING"
                 )
                 session.add(sell_order)
                 session.commit()
+                sell_order_id = sell_order.id
                 break
             
-            return sell_order
+            return sell_order_id
         except Exception as e:
             logger.error(f"🛡️ [STOP_LOSS] 매도 주문 생성 오류: {e}")
             raise
     
-    async def _update_sell_order_status(self, sell_order_id: int, status: str, order_id: str = ""):
-        """매도 주문 상태 업데이트"""
+    async def _update_sell_order_status(self, sell_order_id: int, status: str, order_id_or_error: str = ""):
+        """매도 주문 상태 업데이트. FAILED 시 order_id_or_error → sell_reason_detail 저장."""
         try:
             for db in get_db():
                 session: Session = db
                 sell_order = session.query(SellOrder).filter(SellOrder.id == sell_order_id).first()
                 if sell_order:
                     sell_order.status = status
-                    if order_id:
-                        sell_order.sell_order_id = order_id
-                    if status == "ORDERED":
+                    if status == "FAILED":
+                        if order_id_or_error:
+                            sell_order.sell_reason_detail = str(order_id_or_error)[:200]
+                    elif status == "ORDERED" and order_id_or_error:
+                        sell_order.sell_order_id = order_id_or_error
                         sell_order.ordered_at = datetime.utcnow()
                     elif status == "COMPLETED":
                         sell_order.completed_at = datetime.utcnow()
@@ -430,51 +1667,81 @@ class StopLossManager:
         except Exception as e:
             logger.error(f"🛡️ [STOP_LOSS] 매도 주문 상태 업데이트 오류: {e}")
     
-    async def _update_position_status(self, position_id: int, status: str, sell_price: int):
-        """포지션 상태 업데이트"""
-        try:
-            for db in get_db():
-                session: Session = db
-                position = session.query(Position).filter(Position.id == position_id).first()
-                if position:
-                    position.status = status
-                    position.sell_time = datetime.utcnow()
-                    session.commit()
-                    logger.info(f"🛡️ [STOP_LOSS] 포지션 상태 업데이트 - {position.stock_name}: {status}")
-                break
-        except Exception as e:
-            logger.error(f"🛡️ [STOP_LOSS] 포지션 상태 업데이트 오류: {e}")
-    
     async def create_position_from_buy_signal(self, signal_id: int, buy_price: int, buy_quantity: int, buy_order_id: str = ""):
         """매수 신호로부터 포지션 생성"""
+        from core.models import PendingBuySignal
+        from api.kiwoom_api import KiwoomAPI
+
+        position = None
         try:
-            # 매수 신호 정보 조회
+            await self._load_auto_trade_settings()
+            s = self.auto_trade_settings
             signal = None
             for db in get_db():
                 session: Session = db
-                from models import PendingBuySignal
                 signal = session.query(PendingBuySignal).filter(PendingBuySignal.id == signal_id).first()
-                if signal:
-                    # 포지션 생성
-                    position = Position(
-                        stock_code=signal.stock_code,
-                        stock_name=signal.stock_name,
-                        buy_price=buy_price,
-                        buy_quantity=buy_quantity,
-                        buy_amount=buy_price * buy_quantity,
-                        buy_order_id=buy_order_id,
-                        stop_loss_rate=self.auto_trade_settings.stop_loss_rate if self.auto_trade_settings else 5.0,
-                        take_profit_rate=self.auto_trade_settings.take_profit_rate if self.auto_trade_settings else 10.0,
-                        condition_id=signal.condition_id,
-                        signal_id=signal.id,
-                        status="HOLDING"
-                    )
-                    session.add(position)
+                break
+            if not signal:
+                logger.error(f"🛡️ [STOP_LOSS] 포지션 생성 — 신호 없음 id={signal_id}")
+                return None
+
+            code = KiwoomAPI.normalize_stock_code(signal.stock_code)
+            buy_atr, buy_atr_period = await self._snapshot_buy_atr(code, s)
+
+            for db in get_db():
+                session: Session = db
+                existing = session.query(Position).filter(
+                    Position.stock_code == code,
+                    Position.status == "HOLDING",
+                ).first()
+                if existing:
+                    old_qty = existing.buy_quantity or 0
+                    old_amt = existing.buy_amount or (existing.buy_price * old_qty)
+                    new_qty = old_qty + buy_quantity
+                    new_amt = old_amt + buy_price * buy_quantity
+                    existing.buy_quantity = new_qty
+                    existing.buy_price = new_amt // new_qty if new_qty else existing.buy_price
+                    existing.buy_amount = new_amt
+                    if buy_order_id:
+                        existing.buy_order_id = buy_order_id
+                    if signal.id and not existing.signal_id:
+                        existing.signal_id = signal.id
                     session.commit()
-                    
+                    session.refresh(existing)
+                    logger.info(
+                        f"🛡️ [STOP_LOSS] 기존 HOLDING에 매수 반영 — {signal.stock_name}: "
+                        f"+{buy_quantity}주 @ {buy_price:,}원 (포지션 #{existing.id})"
+                    )
+                    return existing
+
+                position = Position(
+                    stock_code=code,
+                    stock_name=signal.stock_name,
+                    buy_price=buy_price,
+                    buy_quantity=buy_quantity,
+                    order_quantity=buy_quantity,
+                    buy_amount=buy_price * buy_quantity,
+                    buy_order_id=buy_order_id,
+                    stop_loss_rate=s.stop_loss_rate if s else 5.0,
+                    take_profit_rate=s.take_profit_rate if s else 10.0,
+                    condition_id=signal.condition_id,
+                    signal_id=signal.id,
+                    status="HOLDING",
+                    peak_price=buy_price,
+                    buy_atr=buy_atr,
+                    buy_atr_period=buy_atr_period,
+                )
+                session.add(position)
+                session.commit()
+                session.refresh(position)
+                if buy_atr:
+                    logger.info(
+                        f"🛡️ [STOP_LOSS] 포지션 생성 - {signal.stock_name}: "
+                        f"{buy_quantity}주 @ {buy_price:,}원 · ATR {buy_atr:,.0f}({buy_atr_period}일)"
+                    )
+                else:
                     logger.info(f"🛡️ [STOP_LOSS] 포지션 생성 - {signal.stock_name}: {buy_quantity}주 @ {buy_price:,}원")
-                    break
-            
+                break
             return position
         except Exception as e:
             logger.error(f"🛡️ [STOP_LOSS] 포지션 생성 오류: {e}")
@@ -520,3 +1787,6 @@ class StopLossManager:
         except Exception as e:
             logger.error(f"🛡️ [STOP_LOSS] 모니터링 상태 조회 오류: {e}")
             return {"error": str(e)}
+
+
+stop_loss_manager = StopLossManager()
