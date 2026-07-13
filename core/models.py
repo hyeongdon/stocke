@@ -81,6 +81,7 @@ class AutoTradeSettings(Base):
 
     # ===== 관심종목 (자동매매 대상) =====
     watchlist_codes = Column(Text, nullable=True)  # 쉼표 구분 종목코드 (예: "005930, 000660")
+    screener_condition_names = Column(Text, nullable=True)  # 스크리너에 포함할 조건식명 (쉼표 구분)
 
     # ===== 스크리너 상품 종류 (종목선정 모드) =====
     include_leverage = Column(Boolean, nullable=False, default=True)        # 레버리지(+2X) 포함
@@ -438,6 +439,156 @@ class ConditionWatchlistSync(Base):
     )
 
 
+class ThemeTag(Base):
+    """테마/키워드 매핑용 태그."""
+    __tablename__ = "theme_tags"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tag_key = Column(String(120), nullable=False, unique=True, index=True)
+    name_ko = Column(String(120), nullable=False, index=True)
+    tag_type = Column(String(30), nullable=False, default="theme", index=True)  # theme, keyword, sector, manual
+    source = Column(String(30), nullable=False, default="naver_theme")
+    meta_json = Column(JSON, nullable=True)  # naver_theme_no, valid_from, valid_to
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        UniqueConstraint("tag_key", name="uq_theme_tag_key"),
+        Index("idx_theme_tag_type_name", "tag_type", "name_ko"),
+    )
+
+
+class ThemeTagEdge(Base):
+    """종목 ↔ 태그 매핑(다대다)."""
+    __tablename__ = "theme_tag_edges"
+
+    id = Column(Integer, primary_key=True, index=True)
+    stock_code = Column(String(20), nullable=False, index=True)
+    stock_name = Column(String(100), nullable=False)
+    tag_id = Column(Integer, nullable=False, index=True)
+    source = Column(String(30), nullable=False, default="naver_theme", index=True)
+    role = Column(String(20), nullable=True, default="member")
+    weight = Column(Float, nullable=False, default=1.0)
+    biz_date = Column(Date, nullable=True, index=True)
+    rank = Column(Integer, nullable=True)
+    inclusion_flag = Column(Boolean, nullable=False, default=True)
+    reason_text = Column(String(500), nullable=True)
+    observed_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    meta_json = Column(JSON, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("stock_code", "tag_id", "source", "observed_at", name="uq_theme_edge_snapshot"),
+        Index("idx_theme_edge_tag_stock", "tag_id", "stock_code"),
+    )
+
+
+class TagArticle(Base):
+    """종목별(또는 키워드/태그 기반) 네이버 뉴스 기사 저장소."""
+    __tablename__ = "tag_articles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    source = Column(String(30), nullable=False, default="naver_news", index=True)
+
+    # 수집 시점/기준일(오늘 키워드 정규화용)
+    biz_date = Column(Date, nullable=False, index=True)
+    collected_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    # 기사 메타
+    title = Column(String(1000), nullable=False, index=True)
+    url = Column(String(2000), nullable=False, unique=True, index=True)
+    published_at = Column(DateTime, nullable=True, index=True)
+
+    # 종목별 검색 쿼리 기반 연결(종목-기사 direct mapping)
+    stock_code = Column(String(20), nullable=True, index=True)
+    stock_name = Column(String(100), nullable=True)
+
+    meta_json = Column(JSON, nullable=True)
+
+
+class TagArticleKeywordEdge(Base):
+    """기사(타이틀) -> 키워드(news_keyword) 태그 연결 edge."""
+    __tablename__ = "tag_article_keyword_edges"
+
+    id = Column(Integer, primary_key=True, index=True)
+    article_id = Column(Integer, nullable=False, index=True)
+    tag_id = Column(Integer, nullable=False, index=True)
+    source = Column(String(30), nullable=False, default="news_title", index=True)
+    weight = Column(Float, nullable=False, default=1.0)
+    observed_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    meta_json = Column(JSON, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("article_id", "tag_id", "source", "observed_at", name="uq_article_kw_snapshot"),
+        Index("idx_article_kw_tag_obs", "tag_id", "observed_at"),
+    )
+
+
+class KeywordDailyStat(Base):
+    """오늘의 키워드 집계."""
+    __tablename__ = "keyword_daily_stats"
+
+    id = Column(Integer, primary_key=True, index=True)
+    keyword = Column(String(100), nullable=False, index=True)
+    biz_date = Column(Date, nullable=False, index=True)
+    mention_count = Column(Integer, nullable=False, default=0)
+    stock_count = Column(Integer, nullable=False, default=0)
+    delta_vs_prev = Column(Integer, nullable=False, default=0)
+    trend_label = Column(String(20), nullable=False, default="flat")  # new, up, flat, down
+    source = Column(String(30), nullable=False, default="theme_name")
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        UniqueConstraint("keyword", "biz_date", name="uq_keyword_daily"),
+        Index("idx_keyword_daily_date_count", "biz_date", "mention_count"),
+    )
+
+
+class ThemeEvidence(Base):
+    """종목-테마 연관 근거 (정적·뉴스·시장동조 등)."""
+    __tablename__ = "theme_evidence"
+
+    id = Column(Integer, primary_key=True, index=True)
+    biz_date = Column(Date, nullable=False, index=True)
+    stock_code = Column(String(20), nullable=False, index=True)
+    tag_id = Column(Integer, nullable=False, index=True)
+    evidence_type = Column(String(30), nullable=False, index=True)  # static, news, comove, supply
+    evidence_score = Column(Float, nullable=False, default=0.0)
+    raw_ref_type = Column(String(30), nullable=True)  # edge, article, batch
+    raw_ref_id = Column(Integer, nullable=True)
+    meta_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "biz_date", "stock_code", "tag_id", "evidence_type",
+            name="uq_theme_evidence_daily",
+        ),
+        Index("idx_theme_evidence_tag_date", "tag_id", "biz_date"),
+    )
+
+
+class ThemeScoreDaily(Base):
+    """종목×테마 일별 연관도 점수."""
+    __tablename__ = "theme_score_daily"
+
+    id = Column(Integer, primary_key=True, index=True)
+    biz_date = Column(Date, nullable=False, index=True)
+    stock_code = Column(String(20), nullable=False, index=True)
+    tag_id = Column(Integer, nullable=False, index=True)
+    static_score = Column(Float, nullable=False, default=0.0)
+    news_score = Column(Float, nullable=False, default=0.0)
+    market_score = Column(Float, nullable=False, default=0.0)
+    supply_score = Column(Float, nullable=False, default=0.0)
+    final_score = Column(Float, nullable=False, default=0.0)
+    tier = Column(String(20), nullable=False, default="none")  # core, related, event, none
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        UniqueConstraint("biz_date", "stock_code", "tag_id", name="uq_theme_score_daily"),
+        Index("idx_theme_score_stock_date", "stock_code", "biz_date", "final_score"),
+    )
+
+
 def get_db() -> Generator[Session, None, None]:
     db: Session = SessionLocal()
     try:
@@ -579,6 +730,7 @@ def init_db() -> None:
             ats_columns = {row[1] for row in result}
             ats_new_columns = [
                 ('watchlist_codes', 'TEXT'),
+                ('screener_condition_names', 'TEXT'),
                 ('include_leverage', 'BOOLEAN DEFAULT 1'),
                 ('include_inverse', 'BOOLEAN DEFAULT 1'),
                 ('include_double_inverse', 'BOOLEAN DEFAULT 0'),
@@ -639,6 +791,32 @@ def init_db() -> None:
                 for col_name, col_def in fs_new_columns:
                     if col_name not in fs_cols:
                         conn.execute(text(f"ALTER TABLE fundamental_snapshots ADD COLUMN {col_name} {col_def}"))
+                        conn.commit()
+
+            # theme_tags / theme_tag_edges 확장 (연관도 v2)
+            result = conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name='theme_tags'")
+            ).fetchone()
+            if result:
+                result = conn.execute(text("PRAGMA table_info('theme_tags')"))
+                tt_cols = {row[1] for row in result}
+                if "meta_json" not in tt_cols:
+                    conn.execute(text("ALTER TABLE theme_tags ADD COLUMN meta_json TEXT"))
+                    conn.commit()
+            result = conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name='theme_tag_edges'")
+            ).fetchone()
+            if result:
+                result = conn.execute(text("PRAGMA table_info('theme_tag_edges')"))
+                te_cols = {row[1] for row in result}
+                for col_name, col_def in [
+                    ("biz_date", "DATE"),
+                    ("rank", "INTEGER"),
+                    ("inclusion_flag", "BOOLEAN DEFAULT 1"),
+                    ("reason_text", "VARCHAR(500)"),
+                ]:
+                    if col_name not in te_cols:
+                        conn.execute(text(f"ALTER TABLE theme_tag_edges ADD COLUMN {col_name} {col_def}"))
                         conn.commit()
             
             # 기본 전략 데이터 삽입 (없는 경우만)

@@ -13,6 +13,7 @@ from typing import Optional
 from notifications.telegram_notifier import TelegramNotifier
 
 from core.config import Config
+from utils.datetime_kst import now_kst
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,7 @@ def build_buy_message(
     is_add_buy: bool = False,
     order_id: str = "",
 ) -> str:
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = now_kst().strftime("%Y-%m-%d %H:%M:%S")
     buy_type = "추가매수" if is_add_buy else "신규매수"
     total = price * quantity
     lines = [
@@ -81,7 +82,7 @@ def build_sell_message(
     profit_loss: Optional[int] = None,
     remaining_qty: Optional[int] = None,
 ) -> str:
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = now_kst().strftime("%Y-%m-%d %H:%M:%S")
     reason_ko = SELL_REASON_KO.get(sell_reason, sell_reason)
     total = sell_price * quantity
 

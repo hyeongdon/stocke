@@ -17,7 +17,7 @@ stop_loss = data.get('stop_loss', {})
 print(f"손절 모니터링: {'✅ 실행 중' if stop_loss.get('is_running') else '❌ 중지'}")
 
 if stop_loss.get('is_running'):
-    print(f"모니터링 주기: 2분 (120초)")
+    print(f"모니터링 주기: {stop_loss_manager.monitoring_interval}초")
     print(f"실시간 현재가 업데이트: ✅ 활성화")
     print()
     print("💡 2분마다 키움 API에서 현재가를 가져와서 DB에 업데이트합니다.")

@@ -1,0 +1,65 @@
+.replay-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.replay-code-input {
+  width: 88px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  background: var(--card);
+  color: inherit;
+  font-family: ui-monospace, monospace;
+}
+.replay-select {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  background: var(--card);
+  color: inherit;
+}
+.replay-days-label {
+  font-size: 12px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.replay-wrap .replay-guide-grid {
+  margin-bottom: 16px;
+}
+.replay-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px 12px;
+  font-size: 12px;
+}
+.replay-settings-grid dt {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.replay-settings-grid dd {
+  margin: 0 0 6px;
+  font-weight: 600;
+}
+.replay-assumptions {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.replay-assumptions li { margin-bottom: 4px; }
+.tbl.replay-timeline .num { text-align: right; font-variant-numeric: tabular-nums; }
+.tbl.replay-timeline tr.exit-row td {
+  background: rgba(124, 108, 240, 0.08);
+  font-weight: 600;
+}
+.tbl.replay-timeline .armed-yes { color: var(--up); }
+.tbl.replay-timeline .armed-no { color: var(--muted); }

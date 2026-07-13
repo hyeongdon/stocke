@@ -16,6 +16,7 @@ from utils.position_buy_fills import (
     order_and_filled_totals,
     serialize_buy_fill,
 )
+from utils.datetime_kst import kst_today, now_kst
 
 KST = timezone(timedelta(hours=9))
 
@@ -70,7 +71,7 @@ def _fmt_dt_kst(v: Any) -> Optional[str]:
 
 def _utc_from_db(v: Any, *, stored_as: str = "utc") -> Optional[datetime]:
     """DB naive datetime → UTC naive (비교용).
-    stored_as: 'utc' | 'kst' — 신호 detected_at은 datetime.now()로 KST wall clock 저장.
+    stored_as: 'utc' | 'kst' — 레거시 detected_at(KST naive) 보정용.
     """
     if not v:
         return None
@@ -108,10 +109,10 @@ def _fmt_dt_signal(v: Any) -> Optional[str]:
         return v.astimezone(KST).strftime("%Y-%m-%d %H:%M:%S")
 
     # naive 혼재(UTC/KST) 자동 보정
-    now_kst = datetime.now(KST)
+    ref_kst = now_kst()
     as_utc = v.replace(tzinfo=timezone.utc).astimezone(KST)
     as_kst = v.replace(tzinfo=KST)
-    pick = as_utc if abs((as_utc - now_kst).total_seconds()) <= abs((as_kst - now_kst).total_seconds()) else as_kst
+    pick = as_utc if abs((as_utc - ref_kst).total_seconds()) <= abs((as_kst - ref_kst).total_seconds()) else as_kst
     return pick.strftime("%Y-%m-%d %H:%M:%S")
 
 
@@ -184,7 +185,7 @@ def _parse_trade_date(s: Optional[str]) -> Optional[date]:
 
 
 def _kst_today() -> date:
-    return datetime.now(KST).date()
+    return kst_today()
 
 
 def _kst_this_week_range(ref: Optional[date] = None) -> Tuple[date, date]:
@@ -1188,7 +1189,7 @@ async def build_verification_report(
 
     return {
         "success": True,
-        "generated_at": datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S"),
+        "generated_at": now_kst().strftime("%Y-%m-%d %H:%M:%S"),
         "filter": {
             "trade_date": date_filter.raw or (
                 str(date_filter.day) if date_filter.mode == "day" else None

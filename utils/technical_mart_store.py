@@ -7,6 +7,7 @@ from typing import Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from core.models import TechnicalSnapshot, get_db
+from utils.datetime_kst import kst_today, utc_now_naive
 
 
 def _row_to_dict(row: TechnicalSnapshot) -> dict:
@@ -58,7 +59,7 @@ def upsert_snapshot(db: Session, data: dict, as_of_date: date, timeframe: str = 
         )
         .first()
     )
-    now = datetime.utcnow()
+    now = utc_now_naive()
     fields = {
         "stock_name": data.get("stock_name") or "",
         "market": data.get("market"),
@@ -101,7 +102,7 @@ def upsert_snapshot(db: Session, data: dict, as_of_date: date, timeframe: str = 
 def upsert_many(rows: List[dict], as_of_date: Optional[date] = None, timeframe: str = "1D") -> int:
     """배치 upsert. 반환: 처리 건수."""
     if as_of_date is None:
-        as_of_date = date.today()
+        as_of_date = kst_today()
     count = 0
     for db in get_db():
         for data in rows:
@@ -220,4 +221,39 @@ def list_latest(
             "items": [_row_to_dict(r) for r in rows],
         }
     return {"as_of_date": None, "timeframe": tf, "count": 0, "items": []}
+
+
+def get_daily_bars_for_code(
+    stock_code: str,
+    *,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    timeframe: str = "1D",
+) -> List[dict]:
+    """종목별 일봉 OHLCV — as_of_date 오름차순."""
+    code = str(stock_code or "").strip().zfill(6)
+    if not code:
+        return []
+    tf = (timeframe or "1D").upper()
+    for db in get_db():
+        q = db.query(TechnicalSnapshot).filter(
+            TechnicalSnapshot.stock_code == code,
+            TechnicalSnapshot.timeframe == tf,
+        )
+        if start_date is not None:
+            q = q.filter(TechnicalSnapshot.as_of_date >= start_date)
+        if end_date is not None:
+            q = q.filter(TechnicalSnapshot.as_of_date <= end_date)
+        rows = q.order_by(TechnicalSnapshot.as_of_date.asc()).all()
+        out: List[dict] = []
+        for row in rows:
+            d = _row_to_dict(row)
+            d["date"] = row.as_of_date.isoformat()
+            d["open"] = row.open_price
+            d["high"] = row.high_price
+            d["low"] = row.low_price
+            d["close"] = row.close_price
+            out.append(d)
+        return out
+    return []
 

@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 import requests
 import logging
+import threading
 from core.config import Config
 import urllib3
 
@@ -10,6 +11,20 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = logging.getLogger(__name__)
 
+_shared_token_manager: Optional["TokenManager"] = None
+_shared_token_lock = threading.Lock()
+
+
+def get_token_manager() -> "TokenManager":
+    """프로세스 전역 단일 TokenManager (중복 발급·토큰 무효화 방지)."""
+    global _shared_token_manager
+    if _shared_token_manager is None:
+        with _shared_token_lock:
+            if _shared_token_manager is None:
+                _shared_token_manager = TokenManager()
+    return _shared_token_manager
+
+
 class TokenManager:
     def __init__(self):
         self.access_token: Optional[str] = None
@@ -17,9 +32,14 @@ class TokenManager:
         self.refresh_token: Optional[str] = None
         self.last_429_error_time: Optional[datetime] = None  # 마지막 429 에러 발생 시간
         self.rate_limit_cooldown = 90  # 429 에러 후 대기 시간 (초)
+        self._auth_lock = threading.Lock()
     
     def authenticate(self) -> bool:
         """키움증권 API 인증을 수행하고 토큰을 발급받습니다."""
+        with self._auth_lock:
+            return self._authenticate_unlocked()
+
+    def _authenticate_unlocked(self) -> bool:
         # 429 에러 후 쿨다운 기간 확인
         if self.last_429_error_time:
             elapsed = (datetime.utcnow() - self.last_429_error_time).total_seconds()
@@ -138,6 +158,10 @@ class TokenManager:
     
     def refresh_access_token(self) -> bool:
         """리프레시 토큰을 사용하여 액세스 토큰을 갱신합니다."""
+        with self._auth_lock:
+            return self._refresh_access_token_unlocked()
+
+    def _refresh_access_token_unlocked(self) -> bool:
         # 429 에러 후 쿨다운 기간 확인
         if self.last_429_error_time:
             elapsed = (datetime.utcnow() - self.last_429_error_time).total_seconds()
@@ -147,7 +171,7 @@ class TokenManager:
                 return False
         
         if not self.refresh_token:
-            return self.authenticate()
+            return self._authenticate_unlocked()
         
         try:
             # 투자구분 설정 (모의투자/실전투자)
@@ -201,19 +225,25 @@ class TokenManager:
         """유효한 액세스 토큰을 반환합니다."""
         logger.debug(f"🔑 [TOKEN_DEBUG] 유효한 토큰 요청")
         
-        if not self.is_token_valid():
-            logger.debug(f"🔑 [TOKEN_DEBUG] 토큰이 유효하지 않음 - 갱신 시도")
-            if not self.refresh_access_token():
-                logger.debug(f"🔑 [TOKEN_DEBUG] 토큰 갱신 실패 - 재인증 시도")
-                if not self.authenticate():
-                    logger.error(f"🔑 [TOKEN_DEBUG] ❌ 재인증 실패 - 토큰 없음")
-                    return None
-                else:
-                    logger.info(f"🔑 [TOKEN_DEBUG] ✅ 재인증 성공")
-            else:
-                logger.info(f"🔑 [TOKEN_DEBUG] ✅ 토큰 갱신 성공")
-        else:
+        if self.is_token_valid():
             logger.debug(f"🔑 [TOKEN_DEBUG] ✅ 기존 토큰 유효")
+            return self.access_token
+
+        had_token = bool(self.access_token)
+        expiry = self.token_expiry
+
+        logger.debug(f"🔑 [TOKEN_DEBUG] 토큰이 유효하지 않음 - 갱신 시도")
+        if not self.refresh_access_token():
+            logger.debug(f"🔑 [TOKEN_DEBUG] 토큰 갱신 실패 - 재인증 시도")
+            if not self.authenticate():
+                if had_token and expiry and datetime.utcnow() < expiry:
+                    logger.warning("🔑 [TOKEN] 갱신/재인증 실패 — 만료 전 기존 토큰 유지")
+                    return self.access_token
+                logger.error(f"🔑 [TOKEN_DEBUG] ❌ 재인증 실패 - 토큰 없음")
+                return None
+            logger.info(f"🔑 [TOKEN_DEBUG] ✅ 재인증 성공")
+        else:
+            logger.info(f"🔑 [TOKEN_DEBUG] ✅ 토큰 갱신 성공")
         
         logger.debug(f"🔑 [TOKEN_DEBUG] 반환할 토큰: {self.access_token[:20] if self.access_token else 'None'}...")
         return self.access_token

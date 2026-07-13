@@ -200,15 +200,19 @@ def build_buy_condition_checklist(
             required=f"+{settings.get('add_buy_trigger')}% 이상",
             key="pyramiding_add",
         ))
-    elif cid in (0, 99999) or source in ("screener", "watchlist"):
-        src_label = "거래대금순 스크리너" if source == "screener" else (
-            "관심종목" if source == "watchlist" else "자동매매 스캐너"
-        )
+    elif cid in (0, 99999) or source in ("screener", "watchlist", "condition", "both"):
+        src_map = {
+            "screener": "거래대금순 스크리너",
+            "condition": "조건식 스크리너",
+            "both": "거래대금+조건식",
+            "watchlist": "관심종목",
+        }
+        src_label = src_map.get(source) or "자동매매 스캐너"
         items.append(_chk(
             "매수 경로", "후보 종목",
             passed=infer,
             actual=src_label,
-            required="관심종목 또는 스크리너(개별주·ETF 제외)",
+            required="관심종목·스크리너(거래대금/조건식)·ETF 제외",
             key="candidate_source",
         ))
     elif signal:

@@ -174,7 +174,36 @@
   letter-spacing: 0.4px;
   margin-bottom: 10px;
 }
+.analysis-detail-card .detail-section-title .hint {
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+  margin-left: 6px;
+  font-size: 10px;
+  color: var(--accent-bright);
+}
 
+.analysis-chart-wrap {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.15);
+  min-height: 200px;
+  overflow: hidden;
+}
+.analysis-chart-status {
+  padding: 24px 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+.analysis-chart-status.err { color: var(--down); }
+.analysis-chart-status.warn { color: var(--accent-bright); }
+.analysis-chart-canvas {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+}
 .toast {
   position: fixed;
   bottom: 24px;

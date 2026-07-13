@@ -1,0 +1,25 @@
+{
+  "conditions": [
+    {
+      "name": "추세전환(월봉)",
+      "api_id": "0"
+    },
+    {
+      "name": "엔벨로프 하단터치",
+      "api_id": "1"
+    },
+    {
+      "name": "종가베팅(정오)",
+      "api_id": "2"
+    },
+    {
+      "name": "역매공파(new)",
+      "api_id": "3"
+    },
+    {
+      "name": "이격도 스캔",
+      "api_id": "4"
+    }
+  ],
+  "screener_condition_names": null
+}

@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 
 from core.models import PendingBuySignal, get_db
 from api.api_rate_limiter import api_rate_limiter
+from utils.datetime_kst import kst_today, now_kst, utc_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -34,54 +35,68 @@ class SignalManager:
         self.signal_ttl_minutes = 5  # 신호 중복 방지 TTL (분)
         self.duplicate_check_window = 10  # 중복 확인 윈도우 (분)
         
-    async def create_signal(self, 
-                          condition_id: int, 
-                          stock_code: str, 
-                          stock_name: str, 
-                          signal_type: SignalType,
-                          additional_data: Optional[Dict] = None) -> bool:
-        """신호 생성 (중복 방지 포함)"""
+    async def create_signal(
+        self,
+        condition_id: int,
+        stock_code: str,
+        stock_name: str,
+        signal_type: SignalType,
+        additional_data: Optional[Dict] = None,
+    ) -> bool:
+        ok, _ = await self.create_signal_detail(
+            condition_id, stock_code, stock_name, signal_type, additional_data,
+        )
+        return ok
+
+    async def create_signal_detail(
+        self,
+        condition_id: int,
+        stock_code: str,
+        stock_name: str,
+        signal_type: SignalType,
+        additional_data: Optional[Dict] = None,
+    ) -> tuple[bool, str]:
+        """신호 생성. (성공 여부, 사유/결과 메시지)"""
         try:
-            logger.info(f"📡 [SIGNAL_MANAGER] 신호 생성 요청 - {stock_name}({stock_code}), 타입: {signal_type.value}")
-            
-            # 1. 중복 신호 확인
+            logger.info(
+                f"📡 [SIGNAL_MANAGER] 신호 생성 요청 - {stock_name}({stock_code}), 타입: {signal_type.value}",
+            )
+
             if await self._is_duplicate_signal(condition_id, stock_code, signal_type):
                 logger.debug(f"📡 [SIGNAL_MANAGER] 중복 신호 감지 - {stock_name}({stock_code})")
-                return False
-            
-            # 2. 기존 신호 상태 확인 (일자별 관리)
-            current_date = date.today()
+                return False, "중복 신호(TTL 내)"
+
+            current_date = kst_today()
             existing_signal = await self._get_existing_signal(stock_code, condition_id, current_date)
             if existing_signal:
-                # 같은 일자의 같은 종목이 이미 있으면 업데이트
                 logger.info(f"📡 [SIGNAL_MANAGER] 같은 일자 신호 존재 - 업데이트: {stock_name}({stock_code})")
-                return await self._update_existing_signal(existing_signal, signal_type, additional_data)
-            
-            # 3. 신호 생성
+                ok = await self._update_existing_signal(existing_signal, signal_type, additional_data)
+                return (True, "기존 신호 갱신") if ok else (False, "기존 신호 갱신 실패")
+
             signal_id = await self._save_signal_to_db(
-                condition_id, stock_code, stock_name, signal_type, additional_data
+                condition_id, stock_code, stock_name, signal_type, additional_data,
             )
-            
+
             if signal_id:
-                # 4. 중복 방지용 신호 등록
                 signal_key = f"{condition_id}_{stock_code}_{signal_type.value}"
-                self.processed_signals[signal_key] = datetime.now()
-                
-                logger.info(f"📡 [SIGNAL_MANAGER] 신호 생성 완료 - ID: {signal_id}, {stock_name}({stock_code})")
-                return True
-            else:
-                logger.error(f"📡 [SIGNAL_MANAGER] 신호 생성 실패 - {stock_name}({stock_code})")
-                return False
-                
+                self.processed_signals[signal_key] = now_kst()
+                logger.info(
+                    f"📡 [SIGNAL_MANAGER] 신호 생성 완료 - ID: {signal_id}, {stock_name}({stock_code})",
+                )
+                return True, "신호 생성"
+
+            logger.error(f"📡 [SIGNAL_MANAGER] 신호 생성 실패 - {stock_name}({stock_code})")
+            return False, "DB 저장 실패"
+
         except Exception as e:
             logger.error(f"📡 [SIGNAL_MANAGER] 신호 생성 오류 - {stock_name}({stock_code}): {e}")
-            return False
+            return False, f"오류: {e}"
     
     async def _is_duplicate_signal(self, condition_id: int, stock_code: str, signal_type: SignalType) -> bool:
         """중복 신호 확인"""
         try:
             signal_key = f"{condition_id}_{stock_code}_{signal_type.value}"
-            current_time = datetime.now()
+            current_time = now_kst()
             
             # 만료된 신호 정리
             self._cleanup_expired_signals()
@@ -108,7 +123,7 @@ class SignalManager:
         """기존 신호 조회 (일자별 관리)"""
         try:
             if target_date is None:
-                target_date = date.today()
+                target_date = kst_today()
                 
             for db in get_db():
                 session: Session = db
@@ -145,8 +160,8 @@ class SignalManager:
                     "stock_code": stock_code,
                     "stock_name": stock_name,
                     "status": SignalStatus.PENDING.value,
-                    "detected_at": datetime.utcnow(),
-                    "detected_date": date.today(),  # 일자별 관리용
+                    "detected_at": utc_now_naive(),
+                    "detected_date": kst_today(),  # KST 일자
                     "signal_type": signal_type.value
                 }
                 
@@ -187,7 +202,7 @@ class SignalManager:
                 session: Session = db
                 
                 # 기존 신호 업데이트
-                existing_signal.detected_at = datetime.utcnow()
+                existing_signal.detected_at = utc_now_naive()
                 existing_signal.signal_type = signal_type.value
                 existing_signal.status = SignalStatus.PENDING.value  # 상태를 PENDING으로 리셋
                 
@@ -215,7 +230,7 @@ class SignalManager:
     def _cleanup_expired_signals(self):
         """만료된 신호 정리"""
         try:
-            current_time = datetime.now()
+            current_time = now_kst()
             expired_keys = [
                 key for key, timestamp in self.processed_signals.items()
                 if current_time - timestamp > timedelta(minutes=self.signal_ttl_minutes)
@@ -349,7 +364,7 @@ class SignalManager:
     async def cleanup_old_signals(self, days: int = 7):
         """오래된 신호 정리 (기본 7일)"""
         try:
-            cutoff_date = datetime.now() - timedelta(days=days)
+            cutoff_date = utc_now_naive() - timedelta(days=days)
             deleted_count = 0
             
             for db in get_db():

@@ -94,6 +94,13 @@ class Config:
     TELEGRAM_ALERT_MAX_STOCKS = int(os.getenv("TELEGRAM_ALERT_MAX_STOCKS", 20))
     # true: 조건식·정기 알림은 거래일 장중(09:00~15:30)만 / 매매 체결 알림도 동일
     TELEGRAM_ALERT_MARKET_HOURS_ONLY = os.getenv("TELEGRAM_ALERT_MARKET_HOURS_ONLY", "true").lower() == "true"
+
+    # ===== 뉴스 키워드 추출 (KeyBERT) =====
+    KEYWORD_USE_KEYBERT = os.getenv("KEYWORD_USE_KEYBERT", "true").lower() == "true"
+    KEYBERT_MODEL = os.getenv("KEYBERT_MODEL", "jhgan/ko-sroberta-multitask")
+    KEYBERT_USE_MMR = os.getenv("KEYBERT_USE_MMR", "true").lower() == "true"
+    KEYBERT_DIVERSITY = float(os.getenv("KEYBERT_DIVERSITY", "0.5"))
+    KEYBERT_USE_KIWI = os.getenv("KEYBERT_USE_KIWI", "true").lower() == "true"
     
     # 로그 디렉토리 생성
     Path(LOG_FILE).parent.mkdir(parents=True, exist_ok=True)

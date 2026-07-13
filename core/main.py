@@ -69,9 +69,29 @@ from utils.auto_trade_engine import (
     in_trade_hours,
     new_buy_block_reason,
 )
-from utils.market_hours import is_krx_trading_day, trading_day_block_reason
+from utils.market_hours import (
+    in_linked_trading_session,
+    is_krx_trading_day,
+    linked_trading_session_window_str,
+    trading_day_block_reason,
+)
 from utils.auto_trade_activity_log import activity_log, log_activity
-from utils.datetime_kst import utc_naive_to_api_iso
+from utils.datetime_kst import kst_today, kst_now_iso, utc_naive_to_api_iso
+from utils.stock_news_progress import get_stock_news_progress
+from utils.theme_map_store import (
+    add_manual_stock_mapping,
+    get_theme_batch_status,
+    get_keywords_today,
+    get_latest_map_by_codes as get_theme_map_by_codes,
+    get_stocks_by_keyword,
+    get_stocks_by_tag,
+    get_tags_by_stock,
+    get_theme_tags,
+    get_theme_universe_coverage,
+    list_articles_by_keyword,
+    list_articles_by_stock,
+    refresh_theme_mapping_snapshot,
+)
 
 config = Config()
 
@@ -107,10 +127,9 @@ def _schedule_stop_loss_monitoring():
 
 
 async def apply_auto_trade_state(enabled: bool):
-    """UI의 자동매매 ON/OFF에 따라 실행 서브시스템을 일괄 시작/중지한다.
-    - ON  : 종목 스캐너 + 매수 실행기 + 손절/익절 모니터링
-    - OFF : 위 3가지 + (혹시 돌고 있으면) 조건식 주기 검색 중지
-    조건식 실시간 검색(CNSRREQ)은 사용하지 않음 — 대시보드 설정(관심종목/스크리너) 기반.
+    """UI의 자동매매 ON/OFF에 따라 스캐너·매수 실행기를 제어한다.
+    - ON  : 종목 스캐너 + 매수 실행기 + (미기동 시) 손절/동기화 루프
+    - OFF : 스캐너·매수만 중지. 손절/동기화 루프는 유지(장마감 청산·kt00004 동기화).
     """
     try:
         if enabled:
@@ -124,6 +143,8 @@ async def apply_auto_trade_state(enabled: bool):
                     f"자동매매 ON — {off_reason}, 스캐너·매수 대기",
                     "warn",
                 )
+                if not stop_loss_manager.monitoring_task_running():
+                    _schedule_stop_loss_monitoring()
                 return
             if not auto_trade_scanner.is_running:
                 asyncio.create_task(auto_trade_scanner.start())
@@ -142,16 +163,15 @@ async def apply_auto_trade_state(enabled: bool):
                 await buy_order_executor.stop_processing()
             except Exception as e:
                 logger.warning(f"[AUTO_TRADE] 매수 실행기 중지 경고: {e}")
-            try:
-                await stop_loss_manager.stop_monitoring()
-            except Exception as e:
-                logger.warning(f"[AUTO_TRADE] 포지션 동기화 루프 중지 경고: {e}")
+            # 장마감 청산·포지션 동기화는 자동매매 OFF와 무관하게 유지
+            if not stop_loss_manager.monitoring_task_running():
+                _schedule_stop_loss_monitoring()
             try:
                 await condition_monitor.stop_all_monitoring()
             except Exception as e:
                 logger.warning(f"[AUTO_TRADE] 조건 모니터링 중지 경고: {e}")
-            logger.info("🛑 [AUTO_TRADE] 자동매매 OFF → 스캔/매수/동기화 중지")
-            log_activity("SYSTEM", "자동매매 OFF — 스캔·매수·동기화 중지", "warn")
+            logger.info("🛑 [AUTO_TRADE] 자동매매 OFF → 스캔·매수 중지 (동기화·장마감청산 루프 유지)")
+            log_activity("SYSTEM", "자동매매 OFF — 스캔·매수 중지 (청산 루프 유지)", "warn")
     except Exception as e:
             logger.error(f"[AUTO_TRADE] 상태 적용 실패(enabled={enabled}): {e}")
 
@@ -201,6 +221,15 @@ async def lifespan(app: FastAPI):
                 break
         except Exception as _e:
             logger.warning(f"🔧 [STARTUP] 포지션 체결 이력 보정 스킵: {_e}")
+        try:
+            from utils.position_sell_backfill import repair_missing_sell_orders
+            for _db in get_db():
+                sell_repaired = repair_missing_sell_orders(_db)
+                if sell_repaired:
+                    logger.info(f"🔧 [STARTUP] 누락 매도 체결 이력 {sell_repaired}건 보정")
+                break
+        except Exception as _e:
+            logger.warning(f"🔧 [STARTUP] 매도 체결 이력 보정 스킵: {_e}")
     except Exception as e:
         logger.error(f"🗄️ [STARTUP] DB 초기화 실패: {e}")
 
@@ -275,8 +304,8 @@ async def lifespan(app: FastAPI):
                 logger.info("🔄 [STARTUP] 포지션 동기화 루프 — 이미 기동됨 (중복 스킵)")
             else:
                 _schedule_stop_loss_monitoring()
-                logger.info("🔄 [STARTUP] 보유종목·포지션 동기화 루프 시작 (2분 주기)")
-                log_activity("SYSTEM", "포지션 동기화 루프 시작 (2분 주기)", "info")
+                logger.info(f"🔄 [STARTUP] 보유종목·포지션 동기화 루프 시작 ({stop_loss_manager.monitoring_interval}초 주기)")
+                log_activity("SYSTEM", f"포지션 동기화 루프 시작 ({stop_loss_manager.monitoring_interval}초 주기)", "info")
         else:
             logger.info(f"🔄 [STARTUP] {off_reason} — 포지션 동기화 루프 미기동")
             log_activity("SYSTEM", f"{off_reason} — 포지션 동기화 루프 미기동", "warn")
@@ -397,6 +426,7 @@ class TradingSettingsRequest(BaseModel):
     take_profit_rate: float
     # 고급 설정 (모두 선택적 — 미전달 시 기존값 유지)
     watchlist_codes: Optional[str] = None
+    screener_condition_names: Optional[str] = None
     include_leverage: Optional[bool] = None
     include_inverse: Optional[bool] = None
     include_double_inverse: Optional[bool] = None
@@ -436,7 +466,7 @@ class TradingSettingsRequest(BaseModel):
 # 자동매매 설정에서 프론트와 주고받는 전체 필드 목록
 AUTO_TRADE_FIELDS = [
     "is_enabled", "max_invest_amount", "stop_loss_rate", "take_profit_rate",
-    "watchlist_codes",
+    "watchlist_codes", "screener_condition_names",
     "include_leverage", "include_inverse", "include_double_inverse",
     "buy_below_price", "min_change_rate_buy",
     "trailing_stop_pct", "atr_mult_stop", "atr_mult_trail", "atr_period",
@@ -647,7 +677,7 @@ async def favicon_ico():
 @app.get("/health")
 async def health_check():
     """서버 생존 확인 — 키움 API 호출 없이 즉시 응답."""
-    return {"ok": True, "ts": datetime.now().isoformat()}
+    return {"ok": True, "ts": kst_now_iso()}
 
 @app.get("/")
 async def root():
@@ -674,10 +704,55 @@ async def analysis_page():
     """기본적분석 마트 조회 페이지"""
     return RedirectResponse(url="/static/analysis.html")
 
+@app.get("/theme-map")
+async def theme_map_page():
+    """테마/키워드 ↔ 종목 매핑 스파이크 페이지."""
+    return RedirectResponse(url="/static/theme_map.html")
+
 @app.get("/verify")
 async def verify_page():
     """자동매매 검증 페이지"""
     return RedirectResponse(url="/static/verify.html")
+
+@app.get("/exit-replay")
+async def exit_replay_page():
+    """단일 종목 청산 규칙 역사 시뮬레이션 페이지"""
+    return RedirectResponse(url="/static/exit_replay.html")
+
+@app.get("/api/stock-exit-replay")
+async def api_stock_exit_replay(
+    code: str,
+    entry_date: str,
+    entry_price_mode: str = "close",
+    days: int = 120,
+    force_exit: bool = True,
+):
+    """현재 AutoTradeSettings로 단일 종목·진입일 청산 시뮬레이션 (일봉)."""
+    import re
+    from utils.stock_exit_replay import run_stock_exit_replay_async
+
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", (entry_date or "").strip()[:10]):
+        raise HTTPException(status_code=400, detail="entry_date는 YYYY-MM-DD 형식이어야 합니다.")
+    mode = (entry_price_mode or "close").strip().lower()
+    if mode not in ("close", "next_open"):
+        raise HTTPException(status_code=400, detail="entry_price_mode는 close 또는 next_open")
+
+    try:
+        result = await run_stock_exit_replay_async(
+            code,
+            entry_date.strip()[:10],
+            entry_price_mode=mode,
+            days=min(max(int(days), 10), 365),
+            force_exit=bool(force_exit),
+        )
+        if not result.get("success"):
+            raise HTTPException(status_code=404, detail=result.get("error") or "시뮬레이션 실패")
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"청산 시뮬레이션 오류: {e}")
+        raise HTTPException(status_code=500, detail="청산 시뮬레이션 중 오류가 발생했습니다.")
 
 @app.get("/verification/trades")
 async def get_verification_trades(limit: int = 100, date: Optional[str] = None):
@@ -986,9 +1061,12 @@ async def get_trading_readiness():
             "allows_new_buy": allows_new_buy(settings) if settings else False,
             "new_buy_block_reason": new_buy_block_reason(settings) if settings else None,
             "daily_limit_ok": daily_halt is None,
-            "scanner_running": auto_trade_scanner.is_running,
-            "buy_executor_running": buy_order_executor.is_running,
-            "stop_loss_running": stop_loss_manager.is_running,
+            "scanner_running": auto_trade_scanner.is_session_active(),
+            "scanner_loop_alive": auto_trade_scanner.is_running,
+            "buy_executor_running": buy_order_executor.is_session_active(),
+            "buy_loop_alive": buy_order_executor.is_running,
+            "stop_loss_running": stop_loss_manager.is_monitoring_active(),
+            "stop_loss_loop_alive": stop_loss_manager.monitoring_task_running(),
         }
         phase2 = {
             "entry_gate": bool(settings and settings.use_entry_gate),
@@ -1010,7 +1088,7 @@ async def get_trading_readiness():
             "today_realized_pnl": get_today_realized_pnl(),
             "daily_halt_reason": daily_halt,
             "mock_mode": mock,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": kst_now_iso(),
         }
     except Exception as e:
         logger.error(f"자동매매 readiness 조회 오류: {e}")
@@ -1027,16 +1105,26 @@ async def get_trading_activity_log(limit: int = 80):
 
         scan = auto_trade_scanner.get_status()
         daily_halt = check_daily_limits(settings) if settings else None
+        session_window = (
+            linked_trading_session_window_str(settings) if settings else None
+        )
         runtime = {
             "auto_trade_enabled": bool(settings and settings.is_enabled),
             "in_trade_hours": in_trade_hours(settings) if settings else False,
+            "in_linked_session": in_linked_trading_session(settings) if settings else False,
+            "linked_session_window": session_window,
+            "trade_start_time": settings.trade_start_time if settings else None,
+            "trade_end_time": settings.trade_end_time if settings else None,
             "is_trading_day": is_krx_trading_day(),
             "trading_day_block_reason": trading_day_block_reason(),
             "allows_new_buy": allows_new_buy(settings) if settings else False,
             "new_buy_block_reason": new_buy_block_reason(settings) if settings else None,
-            "scanner_running": auto_trade_scanner.is_running,
-            "buy_executor_running": buy_order_executor.is_running,
-            "stop_loss_running": stop_loss_manager.is_running,
+            "scanner_running": auto_trade_scanner.is_session_active(),
+            "scanner_loop_alive": auto_trade_scanner.is_running,
+            "buy_executor_running": buy_order_executor.is_session_active(),
+            "buy_loop_alive": buy_order_executor.is_running,
+            "stop_loss_running": stop_loss_manager.is_monitoring_active(),
+            "stop_loss_loop_alive": stop_loss_manager.monitoring_task_running(),
             "last_sync_at": (
                 stop_loss_manager._last_cycle_at.isoformat()
                 if getattr(stop_loss_manager, "_last_cycle_at", None)
@@ -1054,7 +1142,7 @@ async def get_trading_activity_log(limit: int = 80):
         return {
             "runtime": runtime,
             "events": activity_log.get_recent(min(max(limit, 1), 200)),
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": kst_now_iso(),
         }
     except Exception as e:
         logger.error(f"활동 로그 조회 오류: {e}")
@@ -1073,11 +1161,19 @@ async def save_trading_settings(req: TradingSettingsRequest):
 
             # 전달된 값만 반영 (None은 기존값 유지, 수익잠금은 요청에 포함된 null로 비활성화)
             fields_set = getattr(req, "model_fields_set", None) or set()
+            text_fields = {"watchlist_codes", "screener_condition_names"}
+            bool_fields = {"is_enabled", "liquidate_before_close", "use_entry_gate",
+                           "require_above_open", "require_above_vwap",
+                           "include_leverage", "include_inverse", "include_double_inverse"}
             for f in AUTO_TRADE_FIELDS:
                 if not hasattr(req, f):
                     continue
                 val = getattr(req, f)
-                if val is not None:
+                if f in text_fields and f in fields_set:
+                    setattr(settings, f, val if val else None)
+                elif f in bool_fields and f in fields_set:
+                    setattr(settings, f, bool(val))
+                elif val is not None:
                     setattr(settings, f, val)
                 elif f in ("profit_lock_trigger", "profit_lock_floor") and f in fields_set:
                     setattr(settings, f, None)
@@ -1091,8 +1187,11 @@ async def save_trading_settings(req: TradingSettingsRequest):
             settings.updated_at = datetime.utcnow()
 
             from managers.stop_loss_manager import stop_loss_manager
+            from managers.buy_order_executor import buy_order_executor
             synced = stop_loss_manager.propagate_exit_settings_to_holdings(session)
             session.commit()
+            stop_loss_manager.invalidate_settings_cache()
+            buy_order_executor.invalidate_settings_cache()
 
             result = {f: getattr(settings, f, None) for f in AUTO_TRADE_FIELDS}
             if synced:
@@ -1122,7 +1221,7 @@ async def get_trading_holidays(year: Optional[int] = None):
     """KRX 휴장일 목록 (DB). year 생략 시 전체."""
     try:
         from utils.krx_holiday_store import list_holidays
-        y = year if year is not None else datetime.now().year
+        y = year if year is not None else kst_today().year
         rows = list_holidays(y)
         return {"year": y, "holidays": rows, "count": len(rows)}
     except Exception as e:
@@ -1230,6 +1329,446 @@ async def get_fundamental_by_code(stock_code: str):
     except Exception as e:
         logger.error(f"기본적분석 조회 오류 ({stock_code}): {e}")
         raise HTTPException(status_code=500, detail="기본적분석 조회 실패")
+
+
+def _recent_trading_days(count: int) -> List[str]:
+    """최근 N개 KRX 거래일 (YYYY-MM-DD, 오늘 포함·주말 제외)."""
+    from datetime import timedelta
+
+    days: List[str] = []
+    cur = kst_today()
+    while len(days) < max(int(count or 1), 1):
+        if cur.weekday() < 5:
+            days.append(cur.strftime("%Y-%m-%d"))
+        cur -= timedelta(days=1)
+    days.reverse()
+    return days
+
+
+def _normalize_chart_interval(interval: str) -> str:
+    raw = (interval or "5M").strip().upper()
+    if raw in {"1D", "D", "DAY", "DAILY"}:
+        return "1D"
+    if raw in {"15M", "M15", "15MIN"}:
+        return "15M"
+    return "5M"
+
+
+@app.get("/fundamentals/{stock_code}/chart")
+async def get_fundamental_chart(
+    stock_code: str,
+    interval: str = "5M",
+):
+    """분석 화면용 차트 — 기본 5분봉(이평선 없음)."""
+    try:
+        norm_interval = _normalize_chart_interval(interval)
+
+        if norm_interval == "1D":
+            cap = min(max(int(bars or 60), 30), 120)
+            chart_data = await kiwoom_api.get_stock_chart_data(
+                stock_code,
+                "1D",
+                max_bars=cap + 25,
+                allow_off_hours=True,
+            )
+            if not chart_data:
+                raise HTTPException(status_code=404, detail="차트 데이터를 찾을 수 없습니다")
+
+            rows = []
+            for item in chart_data[-cap:]:
+                try:
+                    rows.append({
+                        "timestamp": item.get("timestamp"),
+                        "open": int(float(item.get("open") or 0)),
+                        "high": int(float(item.get("high") or 0)),
+                        "low": int(float(item.get("low") or 0)),
+                        "close": int(float(item.get("close") or 0)),
+                        "volume": int(float(item.get("volume") or 0)),
+                    })
+                except (TypeError, ValueError):
+                    continue
+            if not rows:
+                raise HTTPException(status_code=404, detail="차트 데이터를 파싱하지 못했습니다")
+
+            return {
+                "stock_code": stock_code,
+                "interval": "1D",
+                "bars": rows,
+            }
+
+        # 분석 화면 체감속도를 위해 기본은 최근 1거래일만 조회하고,
+        # 데이터가 없을 때만 직전 거래일로 1회 폴백한다.
+        tic_scope = "15" if norm_interval == "15M" else "5"
+        fetch_dates = _recent_trading_days(2)
+
+        all_bars: List[Dict[str, Any]] = []
+        warnings: List[str] = []
+        last_error = ""
+        used_dates: List[str] = []
+        for fd in reversed(fetch_dates):
+            result = await kiwoom_api.get_intraday_chart_for_date(
+                stock_code, fd, tic_scope=tic_scope, max_pages=1,
+            )
+            if result.get("warning"):
+                warnings.append(str(result["warning"]))
+            if result.get("error") and not result.get("bars"):
+                last_error = str(result["error"])
+            bars = result.get("bars") or []
+            if bars:
+                all_bars = bars
+                used_dates = [fd]
+                break
+
+        seen: set = set()
+        minute_rows: List[Dict[str, Any]] = []
+        for b in sorted(all_bars, key=lambda x: x.get("timestamp", "")):
+            ts = b.get("timestamp")
+            if not ts or ts in seen:
+                continue
+            seen.add(ts)
+            try:
+                minute_rows.append({
+                    "timestamp": ts,
+                    "open": int(float(b.get("open") or 0)),
+                    "high": int(float(b.get("high") or 0)),
+                    "low": int(float(b.get("low") or 0)),
+                    "close": int(float(b.get("close") or 0)),
+                    "volume": int(float(b.get("volume") or 0)),
+                })
+            except (TypeError, ValueError):
+                continue
+
+        if not minute_rows:
+            raise HTTPException(
+                status_code=404,
+                detail=last_error or "분봉 데이터를 찾을 수 없습니다",
+            )
+
+        date_range = [used_dates[0], used_dates[0]] if used_dates else []
+        return {
+            "stock_code": stock_code,
+            "interval": norm_interval,
+            "date_range": date_range,
+            "bars": minute_rows,
+            "warning": " · ".join(dict.fromkeys(warnings)) if warnings else None,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"분석 차트 조회 오류 ({stock_code}): {e}")
+        raise HTTPException(status_code=500, detail="분석 차트 조회 실패")
+
+
+class ThemeManualMappingRequest(BaseModel):
+    stock_code: str
+    tag_name: str
+    tag_type: str = "theme"
+    stock_name: Optional[str] = None
+
+
+@app.post("/theme-map/refresh")
+async def refresh_theme_map(top_n: int = 0, include_news_keywords: bool = True):
+    """스파이크: 네이버 테마 크롤링 후 종목↔태그 매핑 스냅샷 갱신."""
+    try:
+        for db in get_db():
+            session: Session = db
+            capped = top_n if top_n > 0 else 0
+            if capped > 0:
+                capped = min(max(capped, 5), 200)
+            return refresh_theme_mapping_snapshot(
+                session,
+                top_n=capped,
+                include_news_keywords=bool(include_news_keywords),
+            )
+        raise HTTPException(status_code=500, detail="DB 연결 실패")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"theme-map refresh 오류: {e}")
+        raise HTTPException(status_code=500, detail=f"theme-map refresh 실패: {e}")
+
+
+@app.post("/theme-map/manual")
+async def theme_map_manual_mapping(body: ThemeManualMappingRequest):
+    """종목 ↔ 테마/키워드 수동 매핑 (source=manual)."""
+    try:
+        for db in get_db():
+            session: Session = db
+            result = add_manual_stock_mapping(
+                session,
+                stock_code=body.stock_code,
+                tag_name=body.tag_name,
+                tag_type=body.tag_type,
+                stock_name=body.stock_name,
+            )
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error") or "수동 매핑 실패")
+            return result
+        raise HTTPException(status_code=500, detail="DB 연결 실패")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"theme-map manual 매핑 오류: {e}")
+        raise HTTPException(status_code=500, detail="theme-map manual 매핑 실패")
+
+
+@app.get("/theme-map/tags")
+async def list_theme_map_tags(limit: int = 100):
+    """스파이크: 태그(테마) 목록."""
+    try:
+        for db in get_db():
+            session: Session = db
+            return {"items": get_theme_tags(session, limit=limit)}
+        raise HTTPException(status_code=500, detail="DB 연결 실패")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"theme-map tags 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail="theme-map tags 조회 실패")
+
+
+@app.get("/theme-map/stocks/{stock_code}/tags")
+async def list_tags_by_stock(stock_code: str, limit: int = 50):
+    """스파이크: 종목 → 태그."""
+    try:
+        for db in get_db():
+            session: Session = db
+            return {"stock_code": stock_code, "items": get_tags_by_stock(session, stock_code, limit=limit)}
+        raise HTTPException(status_code=500, detail="DB 연결 실패")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"theme-map stock->tags 조회 오류 ({stock_code}): {e}")
+        raise HTTPException(status_code=500, detail="theme-map stock->tags 조회 실패")
+
+
+@app.get("/theme-map/stocks/{stock_code}/articles")
+async def list_articles_by_stock_api(
+    stock_code: str,
+    limit: int = 50,
+    biz_date: Optional[str] = None,
+):
+    """스파이크: 종목 → 근거 기사(tag_articles)."""
+    try:
+        from datetime import datetime as dt
+
+        parsed_biz = None
+        if biz_date:
+            parsed_biz = dt.strptime(biz_date.strip()[:10], "%Y-%m-%d").date()
+
+        for db in get_db():
+            session: Session = db
+            items = list_articles_by_stock(session, stock_code, biz_date=parsed_biz, limit=limit)
+            return {"stock_code": stock_code, "items": items}
+        raise HTTPException(status_code=500, detail="DB 연결 실패")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"theme-map stock->articles 조회 오류 ({stock_code}): {e}")
+        raise HTTPException(status_code=500, detail="theme-map stock->articles 조회 실패")
+
+
+@app.get("/theme-map/tags/{tag_id}/stocks")
+async def list_stocks_by_tag_id(tag_id: int, limit: int = 200):
+    """스파이크: 태그 → 종목."""
+    try:
+        for db in get_db():
+            session: Session = db
+            return {"tag_id": tag_id, "items": get_stocks_by_tag(session, tag_id, limit=limit)}
+        raise HTTPException(status_code=500, detail="DB 연결 실패")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"theme-map tag->stocks 조회 오류 ({tag_id}): {e}")
+        raise HTTPException(status_code=500, detail="theme-map tag->stocks 조회 실패")
+
+
+@app.get("/theme-map/keywords/today")
+async def list_keywords_today(limit: int = 20):
+    """스파이크: 오늘의 키워드 TOP."""
+    try:
+        for db in get_db():
+            session: Session = db
+            return {"items": get_keywords_today(session, limit=limit)}
+        raise HTTPException(status_code=500, detail="DB 연결 실패")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"theme-map keywords 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail="theme-map keywords 조회 실패")
+
+
+@app.get("/theme-map/coverage")
+async def theme_map_coverage(
+    market: str = "all",
+    gap: str = "any",
+    q: str = "",
+    limit: int = 200,
+    offset: int = 0,
+):
+    """코스피/코스닥 전체 종목 대비 테마·키워드 매핑 커버리지."""
+    try:
+        for db in get_db():
+            session: Session = db
+            return get_theme_universe_coverage(
+                session,
+                market=market,
+                gap=gap,
+                q=q,
+                limit=min(max(limit, 1), 500),
+                offset=max(offset, 0),
+            )
+        raise HTTPException(status_code=500, detail="DB 연결 실패")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"theme-map coverage 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail="theme-map coverage 조회 실패")
+
+
+@app.get("/theme-map/batch-status")
+async def theme_map_batch_status():
+    """테마/뉴스 배치 현황 요약."""
+    try:
+        def _fetch():
+            for db in get_db():
+                session: Session = db
+                return get_theme_batch_status(session)
+            return None
+
+        result = await asyncio.to_thread(_fetch)
+        if result is None:
+            raise HTTPException(status_code=500, detail="DB 연결 실패")
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"theme-map batch-status 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail="theme-map batch-status 조회 실패")
+
+
+@app.get("/theme-map/keywords/{keyword}/stocks")
+async def list_stocks_by_keyword(keyword: str, limit: int = 200):
+    """스파이크: 키워드 → 종목."""
+    try:
+        for db in get_db():
+            session: Session = db
+            return {"keyword": keyword, "items": get_stocks_by_keyword(session, keyword, limit=limit)}
+        raise HTTPException(status_code=500, detail="DB 연결 실패")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"theme-map keyword->stocks 조회 오류 ({keyword}): {e}")
+        raise HTTPException(status_code=500, detail="theme-map keyword->stocks 조회 실패")
+
+
+@app.get("/theme-map/keywords/{keyword}/articles")
+async def list_articles_by_keyword_api(
+    keyword: str,
+    limit: int = 50,
+    biz_date: Optional[str] = None,
+):
+    """스파이크: 키워드 → 근거 기사(tag_articles)."""
+    try:
+        from datetime import datetime as dt
+
+        parsed_biz = None
+        if biz_date:
+            parsed_biz = dt.strptime(biz_date.strip()[:10], "%Y-%m-%d").date()
+
+        for db in get_db():
+            session: Session = db
+            items = list_articles_by_keyword(session, keyword, biz_date=parsed_biz, limit=limit)
+            return {"keyword": keyword, "items": items}
+        raise HTTPException(status_code=500, detail="DB 연결 실패")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"theme-map keyword->articles 조회 오류 ({keyword}): {e}")
+        raise HTTPException(status_code=500, detail="theme-map keyword->articles 조회 실패")
+
+
+@app.get("/tags")
+async def list_tags_api(limit: int = 100):
+    """Phase 1: 태그 목록 API."""
+    return await list_theme_map_tags(limit=limit)
+
+
+@app.get("/tags/{tag_id}/stocks")
+async def list_tag_stocks_api(tag_id: int, limit: int = 200):
+    """Phase 1: 태그 → 종목 API."""
+    return await list_stocks_by_tag_id(tag_id=tag_id, limit=limit)
+
+
+@app.get("/stocks/{stock_code}/tags")
+async def list_stock_tags_api(stock_code: str, limit: int = 50):
+    """Phase 1: 종목 → 태그 API."""
+    return await list_tags_by_stock(stock_code=stock_code, limit=limit)
+
+
+@app.get("/keywords/today")
+async def list_keywords_today_api(limit: int = 20):
+    """Phase 1: 오늘의 키워드 API."""
+    return await list_keywords_today(limit=limit)
+
+
+@app.get("/market/indices")
+async def market_indices_api(force: bool = False):
+    """주요 지수(코스피·코스닥·나스닥·다우) 스냅샷."""
+    try:
+        from utils.market_indices import fetch_market_indices
+
+        return fetch_market_indices(force=force)
+    except Exception as e:
+        logger.error(f"market indices 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail="market indices 조회 실패")
+
+
+@app.get("/batch-status/stock-news-progress")
+async def stock_news_progress_api():
+    """전체 종목 뉴스/키워드 배치 진행률 (경량 폴링용)."""
+    try:
+        for db in get_db():
+            session: Session = db
+            return get_stock_news_progress(session)
+        raise HTTPException(status_code=500, detail="DB 연결 실패")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"stock-news-progress 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail="stock-news-progress 조회 실패")
+
+
+@app.get("/batch-status")
+async def batch_status_api():
+    """Phase 1.6: 테마/뉴스 배치 현황 API."""
+    return await theme_map_batch_status()
+
+
+@app.get("/keywords/{keyword}/stocks")
+async def list_keyword_stocks_api(keyword: str, limit: int = 200):
+    """Phase 1: 키워드 → 종목 API."""
+    return await list_stocks_by_keyword(keyword=keyword, limit=limit)
+
+
+@app.get("/stocks/{stock_code}/articles")
+async def list_stock_articles_api(
+    stock_code: str,
+    limit: int = 50,
+    biz_date: Optional[str] = None,
+):
+    """Phase 1.6: 종목 → 근거 기사 API."""
+    return await list_articles_by_stock_api(stock_code=stock_code, limit=limit, biz_date=biz_date)
+
+
+@app.get("/keywords/{keyword}/articles")
+async def list_keyword_articles_api(
+    keyword: str,
+    limit: int = 50,
+    biz_date: Optional[str] = None,
+):
+    """Phase 1.6: 키워드 → 근거 기사 API."""
+    return await list_articles_by_keyword_api(keyword=keyword, limit=limit, biz_date=biz_date)
 
 
 @app.get("/conditions/")
@@ -1497,14 +2036,18 @@ async def get_monitoring_status():
         api_status = api_rate_limiter.get_status_info()
         
         # 매수 주문 실행기 상태
-        buy_executor_status = {
-            "is_running": buy_order_executor.is_running,
-            "max_invest_amount": buy_order_executor.auto_trade_settings.max_invest_amount if buy_order_executor.auto_trade_settings else 0,
-            "max_retry_attempts": buy_order_executor.max_retry_attempts
-        }
+        buy_executor_status = buy_order_executor.get_status()
 
         # 자동매매 스캐너 상태
         scanner_status = auto_trade_scanner.get_status()
+
+        settings_row = None
+        for db in get_db():
+            settings_row = db.query(AutoTradeSettings).first()
+            break
+        session_window = (
+            linked_trading_session_window_str(settings_row) if settings_row else None
+        )
         
         # 통합 상태 정보
         status = {
@@ -1513,7 +2056,11 @@ async def get_monitoring_status():
             "signals": signal_stats,
             "api_limiter": api_status,
             "buy_executor": buy_executor_status,
-            "timestamp": datetime.now().isoformat()
+            "linked_session_window": session_window,
+            "trade_start_time": settings_row.trade_start_time if settings_row else None,
+            "trade_end_time": settings_row.trade_end_time if settings_row else None,
+            "in_linked_session": in_linked_trading_session(settings_row) if settings_row else False,
+            "timestamp": kst_now_iso()
         }
         
         logger.info(f"🌐 [API] 모니터링 상태 조회 성공")
@@ -1798,7 +2345,7 @@ async def get_stock_info(stock_code: str, stock_name: str = None):
             "stock_name": stock_name,
             "news": news_data,
             "discussions": discussions_data,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": kst_now_iso()
         }
         
         logger.info(f"🌐 [API] 종목 정보 조회 완료 - 뉴스: {len(news_data.get('items', []))}개, 토론: {len(discussions_data.get('discussions', []))}개")
@@ -1813,7 +2360,7 @@ async def get_stock_info(stock_code: str, stock_name: str = None):
             "news": {"items": [], "total": 0, "start": 1, "display": 0},
             "discussions": {"discussions": [], "total_count": 0},
             "error": str(e),
-            "timestamp": datetime.now().isoformat()
+            "timestamp": kst_now_iso()
         }
 
 @app.get("/stocks/{stock_code}/snapshot")
@@ -1828,7 +2375,7 @@ async def get_stock_snapshot(stock_code: str, include_debug: bool = False):
                 "success": False,
                 "message": result.get("error", "snapshot lookup failed"),
                 "stock_code": stock_code,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": kst_now_iso(),
             }
 
         snapshot = result.get("snapshot", {})
@@ -1843,7 +2390,7 @@ async def get_stock_snapshot(stock_code: str, include_debug: bool = False):
             "orderbook_time": snapshot.get("orderbook_time", ""),
             "orderbook": snapshot.get("orderbook", []),
             "warnings": snapshot.get("warnings", []),
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": kst_now_iso(),
         }
         if include_debug:
             response_payload["debug"] = {
@@ -1862,7 +2409,7 @@ async def get_stock_snapshot(stock_code: str, include_debug: bool = False):
             "success": False,
             "message": f"snapshot endpoint error: {str(e)}",
             "stock_code": stock_code,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": kst_now_iso(),
         }
 
 @app.get("/api/status")
@@ -3297,7 +3844,7 @@ async def get_positions(status: str = "HOLDING", limit: int = 50, with_levels: b
                 "amount_source": "kiwoom_api" if pos.actual_buy_amount else "db",
                 "buy_time": utc_naive_to_api_iso(pos.buy_time),
                 "sell_time": utc_naive_to_api_iso(pos.sell_time),
-                "last_monitored": pos.last_monitored.isoformat() if pos.last_monitored else None,
+                "last_monitored": utc_naive_to_api_iso(pos.last_monitored),
                 "pending_sell": pos.id in pending_sell_ids,
             }
             if with_levels and pos.status == "HOLDING":
@@ -3309,6 +3856,8 @@ async def get_positions(status: str = "HOLDING", limit: int = 50, with_levels: b
                     ex = row["exit_levels"]
                     if ex.get("current_price"):
                         row["current_price"] = ex["current_price"]
+                    if ex.get("peak_price"):
+                        row["peak_price"] = ex["peak_price"]
                     # live=false일 때 exit_levels가 잘못된 재계산값으로 DB PnL을 덮어쓰지 않음
                     if live:
                         if ex.get("profit_loss") is not None:
@@ -3321,12 +3870,15 @@ async def get_positions(status: str = "HOLDING", limit: int = 50, with_levels: b
             items.append(row)
 
         # 하위 호환: 기존 클라이언트가 positions 키를 기대하는 경우를 위해 동일 데이터 제공
-        return {
-            "items": items,
-            "positions": items,
-            "total": len(items),
-            "status": status,
-        }
+        return JSONResponse(
+            content={
+                "items": items,
+                "positions": items,
+                "total": len(items),
+                "status": status,
+            },
+            headers={"Cache-Control": "no-store"},
+        )
     except Exception as e:
         logger.error(f"포지션 목록 조회 오류: {e}")
         raise HTTPException(status_code=500, detail="포지션 목록 조회 중 오류가 발생했습니다.")
@@ -3446,7 +3998,7 @@ async def get_performance_stats(
             raise HTTPException(status_code=400, detail="source는 auto 또는 db 여야 합니다.")
 
         KIWOOM_PNL_MAX_DAYS = 90
-        end_dt = (end_date or datetime.now().strftime("%Y%m%d")).replace("-", "")
+        end_dt = (end_date or kst_today().strftime("%Y%m%d")).replace("-", "")
         end_base = datetime.strptime(end_dt, "%Y%m%d")
         strt_dt = (start_date.replace("-", "") if start_date
                    else (end_base - timedelta(days=KIWOOM_PNL_MAX_DAYS)).strftime("%Y%m%d"))
@@ -3533,10 +4085,24 @@ async def get_screener_candidates(
     exclude_etf: bool = True,
 ):
     """스크리너 후보 종목 조회.
-    당일거래대금순(ka10030, sort_tp=3) 상위를 받아 **개별 주식(STOCK)** 만 후보로 반환한다.
-    ETF/ETN/레버리지/인버스/곱버스는 API·후처리 단계에서 제외된다.
+    당일거래대금순(ka10030, sort_tp=3) 상위 + 설정된 조건식 편입 종목을 반환한다.
+  ETF/ETN/레버리지/인버스/곱버스는 API·후처리 단계에서 제외된다.
     """
     try:
+        from utils.screener_targets import (
+            fetch_condition_target_items,
+            merge_target_maps,
+            parse_condition_names,
+        )
+
+        settings = None
+        for db in get_db():
+            settings = db.query(AutoTradeSettings).first()
+            break
+        condition_names = parse_condition_names(
+            settings.screener_condition_names if settings else None
+        )
+
         res = await kiwoom_api.get_volume_rank(market=market, sort_tp="3", limit=limit, screener_filters=True)
         if not res.get("success"):
             return {
@@ -3555,17 +4121,36 @@ async def get_screener_candidates(
         raw_count = int(res.get("raw_count") or 0)
         excluded_etf_count = int(res.get("excluded_etf_count") or 0) + extra_excluded
 
+        condition_items: List[Dict] = []
+        condition_errors: List[str] = []
+        if condition_names:
+            condition_items, condition_errors = await fetch_condition_target_items(
+                kiwoom_api, condition_names, pause_sec=0.5,
+            )
+            condition_items, cond_excl = KiwoomAPI._post_filter_screener_items(condition_items)
+            excluded_etf_count += cond_excl
+
+        merged = merge_target_maps(filtered, condition_items)
+
         from utils.fundamental_mart_store import get_latest_map_by_codes as get_fundamental_map
 
-        codes = [str(it.get("stock_code", "")).strip().zfill(6) for it in filtered if it.get("stock_code")]
+        codes = list(merged.keys())
         fundamental_map = get_fundamental_map(codes)
+        try:
+            theme_map = get_theme_map_by_codes(codes)
+        except Exception as theme_err:
+            logger.warning(f"스크리너 테마 enrichment 스킵: {theme_err}")
+            theme_map = {}
 
         candidates = []
         selected = []
         excluded_per_count = 0
-        for it in filtered:
+        for code in sorted(merged.keys(), key=lambda c: (
+            0 if merged[c].get("source") == "screener" else (1 if merged[c].get("source") == "both" else 2),
+            -(merged[c].get("trade_amount") or 0),
+        )):
+            it = merged[code]
             row = dict(it)
-            code = str(row.get("stock_code", "")).strip().zfill(6)
             fundamental = fundamental_map.get(code) or {}
             per = fundamental.get("per")
             per_ok = KiwoomAPI._is_screener_per_eligible(per)
@@ -3574,6 +4159,13 @@ async def get_screener_candidates(
             row["per"] = per
             row["pbr"] = fundamental.get("pbr")
             row["roe"] = fundamental.get("roe")
+            tags = theme_map.get(code) or {}
+            row["themes"] = tags.get("themes") or []
+            row["theme_items"] = tags.get("theme_items") or []
+            row["keywords"] = tags.get("keywords") or []
+            row["theme_text"] = tags.get("theme_text") or ""
+            row["keyword_text"] = tags.get("keyword_text") or ""
+            row["tag_freshness"] = tags.get("tag_freshness")
             candidates.append(row)
             if per_ok:
                 selected.append(row)
@@ -3589,6 +4181,9 @@ async def get_screener_candidates(
             "raw_count": raw_count,
             "excluded_etf_count": excluded_etf_count,
             "excluded_per_count": excluded_per_count,
+            "condition_names": condition_names,
+            "condition_count": len(condition_items),
+            "condition_errors": condition_errors,
             "filter": {
                 "stocks_only": True,
                 "exclude_etf_family": True,

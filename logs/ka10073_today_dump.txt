@@ -1,0 +1,242 @@
+﻿period 20260402~20260701
+total ka10073 rows: 51
+today (20260701) rows: 13
+
+--- [1] ---
+{
+  "dt": "20260701",
+  "tdy_htssel_cmsn": "현금",
+  "stk_nm": "대원전선",
+  "cntr_qty": "10",
+  "buy_uv": "11550.81",
+  "cntr_pric": "11730",
+  "tdy_sel_pl": "748.86",
+  "pl_rt": "+0.65",
+  "stk_cd": "006340",
+  "tdy_trde_cmsn": "810",
+  "tdy_trde_tax": "233",
+  "wthd_alowa": "0",
+  "loan_dt": "",
+  "crd_tp": "현금잔고"
+}
+
+--- [2] ---
+{
+  "dt": "20260701",
+  "tdy_htssel_cmsn": "현금",
+  "stk_nm": "대원전선",
+  "cntr_qty": "100",
+  "buy_uv": "11550.81",
+  "cntr_pric": "11730",
+  "tdy_sel_pl": "7433.6",
+  "pl_rt": "+0.64",
+  "stk_cd": "006340",
+  "tdy_trde_cmsn": "8140",
+  "tdy_trde_tax": "2345",
+  "wthd_alowa": "0",
+  "loan_dt": "",
+  "crd_tp": "현금잔고"
+}
+
+--- [3] ---
+{
+  "dt": "20260701",
+  "tdy_htssel_cmsn": "현금",
+  "stk_nm": "대원전선",
+  "cntr_qty": "1",
+  "buy_uv": "11550.81",
+  "cntr_pric": "11730",
+  "tdy_sel_pl": "77.19",
+  "pl_rt": "+0.67",
+  "stk_cd": "006340",
+  "tdy_trde_cmsn": "80",
+  "tdy_trde_tax": "22",
+  "wthd_alowa": "0",
+  "loan_dt": "",
+  "crd_tp": "현금잔고"
+}
+
+--- [4] ---
+{
+  "dt": "20260701",
+  "tdy_htssel_cmsn": "현금",
+  "stk_nm": "대원전선",
+  "cntr_qty": "6",
+  "buy_uv": "11550.81",
+  "cntr_pric": "11730",
+  "tdy_sel_pl": "455.12",
+  "pl_rt": "+0.66",
+  "stk_cd": "006340",
+  "tdy_trde_cmsn": "480",
+  "tdy_trde_tax": "140",
+  "wthd_alowa": "0",
+  "loan_dt": "",
+  "crd_tp": "현금잔고"
+}
+
+--- [5] ---
+{
+  "dt": "20260701",
+  "tdy_htssel_cmsn": "현금",
+  "stk_nm": "대원전선",
+  "cntr_qty": "69",
+  "buy_uv": "11550.81",
+  "cntr_pric": "11730",
+  "tdy_sel_pl": "5125.84",
+  "pl_rt": "+0.64",
+  "stk_cd": "006340",
+  "tdy_trde_cmsn": "5620",
+  "tdy_trde_tax": "1618",
+  "wthd_alowa": "0",
+  "loan_dt": "",
+  "crd_tp": "현금잔고"
+}
+
+--- [6] ---
+{
+  "dt": "20260701",
+  "tdy_htssel_cmsn": "현금",
+  "stk_nm": "대원전선",
+  "cntr_qty": "72",
+  "buy_uv": "11550.81",
+  "cntr_pric": "11730",
+  "tdy_sel_pl": "5353.4",
+  "pl_rt": "+0.64",
+  "stk_cd": "006340",
+  "tdy_trde_cmsn": "5860",
+  "tdy_trde_tax": "1688",
+  "wthd_alowa": "0",
+  "loan_dt": "",
+  "crd_tp": "현금잔고"
+}
+
+--- [7] ---
+{
+  "dt": "20260701",
+  "tdy_htssel_cmsn": "현금",
+  "stk_nm": "LS ELECTRIC",
+  "cntr_qty": "2",
+  "buy_uv": "268000",
+  "cntr_pric": "259000",
+  "tdy_sel_pl": "-22716",
+  "pl_rt": "-4.24",
+  "stk_cd": "010120",
+  "tdy_trde_cmsn": "3680",
+  "tdy_trde_tax": "1036",
+  "wthd_alowa": "0",
+  "loan_dt": "",
+  "crd_tp": "현금잔고"
+}
+
+--- [8] ---
+{
+  "dt": "20260701",
+  "tdy_htssel_cmsn": "현금",
+  "stk_nm": "LS ELECTRIC",
+  "cntr_qty": "5",
+  "buy_uv": "268000",
+  "cntr_pric": "258500",
+  "tdy_sel_pl": "-59294",
+  "pl_rt": "-4.42",
+  "stk_cd": "010120",
+  "tdy_trde_cmsn": "9210",
+  "tdy_trde_tax": "2584",
+  "wthd_alowa": "0",
+  "loan_dt": "",
+  "crd_tp": "현금잔고"
+}
+
+--- [9] ---
+{
+  "dt": "20260701",
+  "tdy_htssel_cmsn": "현금",
+  "stk_nm": "LS ELECTRIC",
+  "cntr_qty": "4",
+  "buy_uv": "268000",
+  "cntr_pric": "259000",
+  "tdy_sel_pl": "-45442",
+  "pl_rt": "-4.24",
+  "stk_cd": "010120",
+  "tdy_trde_cmsn": "7370",
+  "tdy_trde_tax": "2072",
+  "wthd_alowa": "0",
+  "loan_dt": "",
+  "crd_tp": "현금잔고"
+}
+
+--- [10] ---
+{
+  "dt": "20260701",
+  "tdy_htssel_cmsn": "현금",
+  "stk_nm": "져스텍",
+  "cntr_qty": "26",
+  "buy_uv": "18048.85",
+  "cntr_pric": "17240",
+  "tdy_sel_pl": "-25136.06",
+  "pl_rt": "-5.36",
+  "stk_cd": "153890",
+  "tdy_trde_cmsn": "3210",
+  "tdy_trde_tax": "896",
+  "wthd_alowa": "0",
+  "loan_dt": "",
+  "crd_tp": "현금잔고"
+}
+
+--- [11] ---
+{
+  "dt": "20260701",
+  "tdy_htssel_cmsn": "현금",
+  "stk_nm": "져스텍",
+  "cntr_qty": "100",
+  "buy_uv": "18048.85",
+  "cntr_pric": "17270",
+  "tdy_sel_pl": "-93698.85",
+  "pl_rt": "-5.19",
+  "stk_cd": "153890",
+  "tdy_trde_cmsn": "12360",
+  "tdy_trde_tax": "3454",
+  "wthd_alowa": "0",
+  "loan_dt": "",
+  "crd_tp": "현금잔고"
+}
+
+--- [12] ---
+{
+  "dt": "20260701",
+  "tdy_htssel_cmsn": "현금",
+  "stk_nm": "져스텍",
+  "cntr_qty": "1",
+  "buy_uv": "18048.85",
+  "cntr_pric": "17270",
+  "tdy_sel_pl": "-932.85",
+  "pl_rt": "-5.17",
+  "stk_cd": "153890",
+  "tdy_trde_cmsn": "120",
+  "tdy_trde_tax": "34",
+  "wthd_alowa": "0",
+  "loan_dt": "",
+  "crd_tp": "현금잔고"
+}
+
+--- [13] ---
+{
+  "dt": "20260701",
+  "tdy_htssel_cmsn": "현금",
+  "stk_nm": "져스텍",
+  "cntr_qty": "38",
+  "buy_uv": "18048.85",
+  "cntr_pric": "17270",
+  "tdy_sel_pl": "-35598.24",
+  "pl_rt": "-5.19",
+  "stk_cd": "153890",
+  "tdy_trde_cmsn": "4690",
+  "tdy_trde_tax": "1312",
+  "wthd_alowa": "0",
+  "loan_dt": "",
+  "crd_tp": "현금잔고"
+}
+
+=== 종목별 행 수 ===
+  대원전선 (006340): 6 rows
+  져스텍 (153890): 4 rows
+  LS ELECTRIC (010120): 3 rows

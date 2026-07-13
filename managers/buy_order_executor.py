@@ -20,6 +20,7 @@ from utils.auto_trade_engine import (
     compute_quantity,
     count_open_position_slots,
     effective_min_change_rate,
+    get_auto_trade_settings_sync,
     has_buy_conditions,
     allows_new_buy,
     new_buy_block_reason,
@@ -27,9 +28,12 @@ from utils.auto_trade_engine import (
     max_concurrent_positions_limit,
     order_params,
     parse_signal_meta,
+    buy_price_skip_reason,
     passes_buy_price_conditions,
 )
+from utils.market_hours import linked_trading_session_window_str
 from utils.auto_trade_activity_log import log_activity
+from utils.datetime_kst import as_kst
 from notifications.trade_alert import notify_buy_async
 
 logger = logging.getLogger(__name__)
@@ -48,6 +52,34 @@ class BuyOrderExecutor:
         
         # 손절/익절 모니터링 (전역 싱글톤)
         self.stop_loss_manager = stop_loss_manager
+
+    def invalidate_settings_cache(self) -> None:
+        self.auto_trade_settings = None
+
+    def is_session_active(self) -> bool:
+        if not self.is_running:
+            return False
+        settings = get_auto_trade_settings_sync()
+        if not settings or not settings.is_enabled:
+            return False
+        allowed, _ = auto_trade_engines_allowed()
+        return allowed
+
+    def get_status(self) -> Dict:
+        active = self.is_session_active()
+        settings = get_auto_trade_settings_sync()
+        window = linked_trading_session_window_str(settings) if settings else None
+        return {
+            "is_running": self.is_running,
+            "is_active": active,
+            "session_window": window,
+            "trade_start_time": settings.trade_start_time if settings else None,
+            "trade_end_time": settings.trade_end_time if settings else None,
+            "max_invest_amount": (
+                settings.max_invest_amount if settings else 0
+            ),
+            "max_retry_attempts": self.max_retry_attempts,
+        }
         
     async def start_processing(self):
         """매수 주문 처리 시작"""
@@ -175,6 +207,12 @@ class BuyOrderExecutor:
             
             if not current_price:
                 logger.error(f"💰 [BUY_EXECUTOR] 현재가 조회 실패 - {signal.stock_name}")
+                log_activity(
+                    "BUY",
+                    f"현재가 조회 실패 {signal.stock_name}({signal.stock_code})",
+                    "warn",
+                    stock_code=signal.stock_code,
+                )
                 await self._update_signal_status(signal.id, "FAILED", "현재가 조회 실패")
                 return
 
@@ -210,8 +248,15 @@ class BuyOrderExecutor:
             debug_tracer.log_checkpoint(f"3단계 결과: 수량={quantity}주, 총액={current_price*quantity:,}원", "BUY_EXECUTOR")
             
             if quantity < 1:
+                reason = f"매수 수량 부족: {quantity}"
                 logger.warning(f"💰 [BUY_EXECUTOR] 매수 수량 부족 - {signal.stock_name}: {quantity}")
-                await self._update_signal_status(signal.id, "FAILED", f"매수 수량 부족: {quantity}")
+                log_activity(
+                    "BUY",
+                    f"수량 부족 {signal.stock_name}({signal.stock_code}): {reason}",
+                    "warn",
+                    stock_code=signal.stock_code,
+                )
+                await self._update_signal_status(signal.id, "FAILED", reason)
                 return
             
             # 4. 매수 주문 실행 (재시도 포함)
@@ -227,7 +272,7 @@ class BuyOrderExecutor:
         """매수 전 검증"""
         try:
             # 1. 시장 시간·장마감 청산 이후 매수 차단
-            now = datetime.now()
+            now = as_kst()
             block = new_buy_block_reason(self.auto_trade_settings, now)
             if block:
                 return {"valid": False, "reason": block}
@@ -340,7 +385,8 @@ class BuyOrderExecutor:
                             except (TypeError, ValueError):
                                 change_rate = None
                         if not passes_buy_price_conditions(cfg, current_price, change_rate):
-                            return {"valid": False, "reason": "매수 조건 미충족(가격/등락률)"}
+                            skip = buy_price_skip_reason(cfg, current_price, change_rate) or "매수 조건 미충족(가격/등락률)"
+                            return {"valid": False, "reason": skip}
 
                     if need_gate:
                         gate_ok, gate_reason = await check_entry_gate(
@@ -498,6 +544,7 @@ class BuyOrderExecutor:
                     self.auto_trade_settings,
                     current_price,
                 ) if self.auto_trade_settings else (0, "3")
+                order_kind = "시장가" if order_type == "3" else "지정가"
                 result = await self.kiwoom_api.place_buy_order(
                     stock_code=signal.stock_code,
                     quantity=quantity,
@@ -506,7 +553,10 @@ class BuyOrderExecutor:
                 )
                 
                 if result.get("success"):
-                    msg = f"매수 주문 성공 {signal.stock_name} {quantity}주 @ {current_price:,}원"
+                    msg = (
+                        f"매수 주문 성공({order_kind}) {signal.stock_name} "
+                        f"{quantity}주 @ {current_price:,}원"
+                    )
                     logger.info(f"💰 [BUY_EXECUTOR] {msg}")
                     log_activity("BUY", msg, "info", stock_code=signal.stock_code, quantity=quantity)
                     order_id = result.get("order_id", "")
@@ -554,8 +604,12 @@ class BuyOrderExecutor:
                 else:
                     error_msg = result.get("error", "알 수 없는 오류")
                     logger.warning(f"💰 [BUY_EXECUTOR] 매수 주문 실패 (시도 {attempt + 1}): {error_msg}")
-                    log_activity("BUY", f"매수 실패 {signal.stock_name}: {error_msg}", "error",
-                                 stock_code=signal.stock_code)
+                    log_activity(
+                        "BUY",
+                        f"매수 실패({order_kind}) {signal.stock_name}: {error_msg}",
+                        "error",
+                        stock_code=signal.stock_code,
+                    )
                     
                     if attempt < self.max_retry_attempts - 1:
                         logger.info(f"💰 [BUY_EXECUTOR] {self.retry_delay_seconds}초 후 재시도")

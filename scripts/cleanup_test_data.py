@@ -10,9 +10,10 @@ if sys.platform == 'win32':
 
 from datetime import date
 from core.models import get_db, PendingBuySignal, Position, SellOrder
+from utils.datetime_kst import kst_today
 
 def cleanup_test_data():
-    today = date.today()
+    today = kst_today()
     print(f"=== 테스트 데이터 정리 시작 ===")
     print(f"기준일: {today}")
     print(f"삭제 대상: {today} 이전 데이터\n")

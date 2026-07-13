@@ -7,6 +7,7 @@ from typing import Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from core.models import FundamentalSnapshot, get_db
+from utils.datetime_kst import kst_today, utc_now_naive
 
 _PRESERVE_ON_NULL = {
     "current_price", "market_cap", "volume", "per", "pbr", "roe", "eps",
@@ -53,7 +54,7 @@ def upsert_snapshot(db: Session, data: dict, as_of_date: date) -> FundamentalSna
         )
         .first()
     )
-    now = datetime.utcnow()
+    now = utc_now_naive()
     fields = {
         "stock_name": data.get("stock_name") or "",
         "market": data.get("market"),
@@ -89,7 +90,7 @@ def upsert_snapshot(db: Session, data: dict, as_of_date: date) -> FundamentalSna
 def upsert_many(rows: List[dict], as_of_date: Optional[date] = None) -> int:
     """배치 upsert. 반환: 처리 건수."""
     if as_of_date is None:
-        as_of_date = date.today()
+        as_of_date = kst_today()
     count = 0
     for db in get_db():
         for data in rows:

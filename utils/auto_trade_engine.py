@@ -10,7 +10,18 @@ from sqlalchemy.orm import Session
 from core.config import Config
 from core.models import AutoTradeSettings, SellOrder, get_db
 from api.api_rate_limiter import api_rate_limiter
-from utils.market_hours import is_krx_trading_day, trading_day_block_reason
+from utils.market_hours import (
+    auto_trade_engine_block_reason,
+    is_krx_trading_day,
+    trading_day_block_reason,
+)
+from utils.datetime_kst import (
+    as_kst,
+    kst_date_str,
+    kst_day_start_utc_naive,
+    kst_today,
+    utc_now_naive,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,13 +42,13 @@ def has_buy_conditions(settings: AutoTradeSettings) -> bool:
 
 
 def in_trade_hours(settings: AutoTradeSettings, now: Optional[datetime] = None) -> bool:
-    now = now or datetime.now()
-    if not is_krx_trading_day(now):
+    kst = as_kst(now)
+    if not is_krx_trading_day(kst):
         return False
     try:
         sh, sm = map(int, (settings.trade_start_time or "10:00").split(":"))
         eh, em = map(int, (settings.trade_end_time or "15:20").split(":"))
-        in_window = dt_time(sh, sm) <= now.time() <= dt_time(eh, em)
+        in_window = dt_time(sh, sm) <= kst.time() <= dt_time(eh, em)
     except Exception:
         in_window = True
     if in_window:
@@ -52,7 +63,7 @@ def new_buy_block_reason(
     """신규 매수가 막힌 이유. None이면 매수 허용."""
     if not settings:
         return "자동매매 설정 없음"
-    now = now or datetime.now()
+    now = as_kst(now)
 
     off_day = trading_day_block_reason(now)
     if off_day:
@@ -81,10 +92,32 @@ def allows_new_buy(settings: Optional[AutoTradeSettings], now: Optional[datetime
     return new_buy_block_reason(settings, now) is None
 
 
+def get_auto_trade_settings_sync() -> Optional[AutoTradeSettings]:
+    """세션 판단용 — 캐시 없이 DB 최신 설정."""
+    for db in get_db():
+        return db.query(AutoTradeSettings).first()
+    return None
+
+
 def auto_trade_engines_allowed(now: Optional[datetime] = None) -> tuple[bool, Optional[str]]:
-    """스캐너·매수 실행기 기동/스캔 허용 여부. (허용, 휴장 사유)"""
-    off = trading_day_block_reason(now)
-    return (off is None, off)
+    """스캐너·매수 실행기 기동/스캔 허용 여부. (허용, 차단 사유)"""
+    settings = get_auto_trade_settings_sync()
+    block = auto_trade_engine_block_reason(settings, now)
+    return (block is None, block)
+
+
+def buy_price_skip_reason(
+    settings: AutoTradeSettings,
+    price: int,
+    change_rate: Optional[float],
+) -> Optional[str]:
+    if settings.buy_below_price and price > int(settings.buy_below_price):
+        return f"매수가 상한 초과 ({price:,} > {int(settings.buy_below_price):,})"
+    min_rate = effective_min_change_rate(settings)
+    if min_rate is not None and float(change_rate or 0) < min_rate:
+        cr = float(change_rate or 0)
+        return f"등락률 미달 ({cr:.2f}% < {min_rate:g}%)"
+    return None
 
 
 def passes_buy_price_conditions(
@@ -92,13 +125,7 @@ def passes_buy_price_conditions(
     price: int,
     change_rate: Optional[float],
 ) -> bool:
-    checks: List[bool] = []
-    if settings.buy_below_price:
-        checks.append(price <= int(settings.buy_below_price))
-    min_rate = effective_min_change_rate(settings)
-    if min_rate is not None:
-        checks.append(float(change_rate or 0) >= min_rate)
-    return bool(checks) and all(checks)
+    return buy_price_skip_reason(settings, price, change_rate) is None
 
 
 def cash_reserve_pct(settings: AutoTradeSettings) -> float:
@@ -195,13 +222,15 @@ def order_params(settings: AutoTradeSettings, current_price: int) -> Tuple[int, 
 
 
 def get_today_realized_pnl() -> int:
-    today = datetime.now().date()
+    start = kst_day_start_utc_naive()
+    end = kst_day_start_utc_naive(kst_today() + timedelta(days=1))
     total = 0
     for db in get_db():
         session: Session = db
         rows = session.query(SellOrder).filter(
             SellOrder.status == "COMPLETED",
-            SellOrder.completed_at >= datetime.combine(today, dt_time.min),
+            SellOrder.completed_at >= start,
+            SellOrder.completed_at < end,
         ).all()
         total = sum(int(r.profit_loss or 0) for r in rows)
         break
@@ -226,7 +255,7 @@ def disable_auto_trade(reason: str) -> None:
         settings = session.query(AutoTradeSettings).first()
         if settings and settings.is_enabled:
             settings.is_enabled = False
-            settings.updated_at = datetime.utcnow()
+            settings.updated_at = utc_now_naive()
             session.commit()
             logger.warning(f"🛑 [AUTO_TRADE] 자동매매 OFF — {reason}")
         break
@@ -252,7 +281,7 @@ async def check_entry_gate(
             return False, "API 호출 제한(일봉)"
         return False, "일봉 데이터 없음(게이트)"
 
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    today_str = kst_date_str()
     today_bar = None
     prev_bar = None
     for bar in reversed(daily_bars):
@@ -316,7 +345,7 @@ async def fetch_entry_gate_context(
     today_str: Optional[str] = None,
 ) -> Dict[str, Any]:
     """진입 게이트 평가용 당일 컨텍스트."""
-    today_str = today_str or datetime.now().strftime("%Y-%m-%d")
+    today_str = today_str or kst_date_str()
     code = getattr(kiwoom_api, "normalize_stock_code", lambda c: c)(stock_code)
     ctx: Dict[str, Any] = {}
     daily_bars = await kiwoom_api.get_stock_chart_data(code, "1D")
@@ -389,7 +418,7 @@ def prune_stale_buy_slot_reservations(session: Session) -> int:
     """미체결·만료 매수 신호 정리 — 동시보유 슬롯 누수 방지."""
     from core.models import PendingBuySignal, Position
 
-    now = datetime.utcnow()
+    now = utc_now_naive()
     stale_cutoff = now - timedelta(minutes=STALE_BUY_ORDERED_MINUTES)
     holding_codes = {
         (c or "").strip()
@@ -430,7 +459,7 @@ def describe_open_position_slots(session: Session) -> Dict[str, int]:
         for (c,) in session.query(Position.stock_code).filter(Position.status == "HOLDING").all()
         if c
     }
-    in_flight_cutoff = datetime.utcnow() - timedelta(minutes=IN_FLIGHT_BUY_ORDERED_MINUTES)
+    in_flight_cutoff = utc_now_naive() - timedelta(minutes=IN_FLIGHT_BUY_ORDERED_MINUTES)
     reserved: set = set()
     for sig in session.query(PendingBuySignal).filter(
         PendingBuySignal.status.in_(["PENDING", "PROCESSING", "ORDERED"]),

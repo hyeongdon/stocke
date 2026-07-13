@@ -4,6 +4,8 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 from typing import List, Dict, Optional
 
+from utils.datetime_kst import now_kst
+
 class NaverStockDiscussionCrawler:
     """
     네이버 금융 종목토론방 크롤링 클래스
@@ -29,7 +31,7 @@ class NaverStockDiscussionCrawler:
             List[Dict]: 토론방 글 정보 리스트 (제목, 작성자, 날짜)
         """
         all_posts = []
-        today_str = datetime.now().strftime('%m.%d')  # 오늘 날짜 (MM.DD 형식)
+        today_str = now_kst().strftime('%m.%d')  # 오늘 날짜 (MM.DD 형식, KST)
         print(f"오늘 날짜 형식: {today_str}")
         
         for current_page in range(page, page + max_pages):
@@ -85,7 +87,7 @@ class NaverStockDiscussionCrawler:
                                 if re.match(r'\d{4}\.\d{2}\.\d{2}', date_text):
                                      # 당일 글 필터링 (yyyy.mm.dd 형식으로 비교)
                                      if today_only:
-                                         today_full = datetime.now().strftime('%Y.%m.%d')
+                                         today_full = now_kst().strftime('%Y.%m.%d')
                                          if today_full not in date_text:
                                              continue
                                     

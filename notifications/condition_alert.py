@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from core.config import Config
+from utils.datetime_kst import now_kst
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ def format_volume(stock: Dict) -> str:
 
 def build_message(condition_results: List[Tuple[Dict, List[Dict]]], max_stocks: int) -> str:
     """조건식별 종목 결과를 텔레그램 메시지 텍스트로 조립."""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = now_kst().strftime("%Y-%m-%d %H:%M:%S")
     blocks = []
 
     for idx, (cond, stocks) in enumerate(condition_results, 1):

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections import deque
-from datetime import datetime
+from utils.datetime_kst import kst_now_iso
 from threading import Lock
 from typing import Any, Dict, List, Optional
 
@@ -20,7 +20,7 @@ class AutoTradeActivityLog:
         **extra: Any,
     ) -> None:
         entry = {
-            "ts": datetime.now().isoformat(timespec="seconds"),
+            "ts": kst_now_iso(),
             "source": source,
             "level": level,
             "message": message,

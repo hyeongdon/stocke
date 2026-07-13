@@ -1,12 +1,12 @@
 """
 장 시작 시 자동매매 엔진 자동 기동 스케줄러.
-거래일 08:50~매매 종료(trade_end_time) 구간에 스캐너·매수 실행기를 자동 기동한다.
-실제 매수는 trade_start_time 이후 in_trade_hours()에서만 수행된다.
+거래일 trade_start_time~trade_end_time 구간에 스캐너·매수 실행기를 자동 기동한다.
+손절/익절 모니터도 동일 매매 시간에 연동된다.
 """
 
 import asyncio
 import logging
-from datetime import date, datetime, time as dt_time
+from datetime import date, datetime
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -15,12 +15,10 @@ from core.models import AutoTradeSettings, get_db
 from managers.auto_trade_scanner import auto_trade_scanner
 from managers.buy_order_executor import buy_order_executor
 from utils.auto_trade_activity_log import log_activity
-from utils.market_hours import is_krx_trading_day
+from utils.datetime_kst import as_kst, kst_today, utc_now_naive
+from utils.market_hours import in_auto_trade_engine_session, is_krx_trading_day
 
 logger = logging.getLogger(__name__)
-
-# 엔진 자동 기동 하한(내부 고정). 사용자 설정 없음 — 매매 시작과 별개.
-_ENGINE_SESSION_START = dt_time(8, 50)
 
 
 def is_weekday(now: Optional[datetime] = None) -> bool:
@@ -29,24 +27,15 @@ def is_weekday(now: Optional[datetime] = None) -> bool:
 
 
 def in_engine_session(settings: AutoTradeSettings, now: Optional[datetime] = None) -> bool:
-    """거래일 08:50 ~ 매매 종료 시각 — 엔진(스캐너·매수기) 가동 구간."""
-    now = now or datetime.now()
-    if not is_krx_trading_day(now):
-        return False
-    if now.time() < _ENGINE_SESSION_START:
-        return False
-    try:
-        eh, em = map(int, (settings.trade_end_time or "15:20").split(":"))
-        return now.time() <= dt_time(eh, em)
-    except Exception:
-        return True
+    """거래일 trade_start ~ trade_end — 엔진(스캐너·매수기) 가동 구간."""
+    return in_auto_trade_engine_session(settings, now)
 
 
 def should_auto_start_now(settings: Optional[AutoTradeSettings], now: Optional[datetime] = None) -> bool:
     """서버 기동 시 거래일·엔진 세션 안이면 자동매매 실행기를 올린다."""
     if not settings:
         return False
-    now = now or datetime.now()
+    now = as_kst(now)
     return in_engine_session(settings, now)
 
 
@@ -103,21 +92,18 @@ class MarketOpenScheduler:
         if not is_weekday():
             return
 
-        now = datetime.now()
+        now = as_kst()
         today = now.date()
 
         if not in_engine_session(settings, now):
-            if (
-                settings.is_enabled
-                and engines_running()
-                and self._last_auto_stop_date != today
-            ):
+            if engines_running():
                 from core.main import apply_auto_trade_state
 
                 await apply_auto_trade_state(False)
+                if self._last_auto_stop_date != today:
+                    log_activity("SYSTEM", "매매 종료 시각 이후 자동매매 루프 자동 중지", "warn")
+                    logger.info("🕗 [MARKET_OPEN] 매매 종료 이후 자동매매 루프 중지")
                 self._last_auto_stop_date = today
-                log_activity("SYSTEM", "매매 종료 시각 이후 자동매매 루프 자동 중지", "warn")
-                logger.info("🕗 [MARKET_OPEN] 매매 종료 이후 자동매매 루프 중지")
             return
 
         if self._last_auto_start_date != today:
@@ -144,7 +130,7 @@ class MarketOpenScheduler:
                 break
             if not row.is_enabled:
                 row.is_enabled = True
-                row.updated_at = datetime.utcnow()
+                row.updated_at = utc_now_naive()
                 session.commit()
                 changed = True
             settings = row
@@ -162,7 +148,7 @@ class MarketOpenScheduler:
 
     def mark_started_today(self):
         """서버 기동 시 이미 자동시작한 경우 당일 중복 기동 방지."""
-        self._last_auto_start_date = datetime.now().date()
+        self._last_auto_start_date = kst_today()
 
 
 market_open_scheduler = MarketOpenScheduler()

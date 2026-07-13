@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <title>테마/키워드 매핑 스파이크</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/dashboard.css?v=85">
+  <link rel="stylesheet" href="/static/theme_map.css?v=5">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <h1>Theme Map</h1>
+        <span class="sub">종목 ↔ 테마/키워드 매핑 스파이크</span>
+      </div>
+      <nav class="tabs">
+        <a href="/dashboard" class="tab">대시보드</a>
+        <a href="/analysis" class="tab-link">분석 ↗</a>
+        <a href="/theme-map" class="tab active">테마맵</a>
+      </nav>
+      <div class="topbar-actions">
+        <button id="btnRefreshSnapshot" class="btn primary sm">스냅샷 갱신</button>
+        <span class="updated">갱신: <span id="lastUpdated">-</span></span>
+      </div>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="grid cols-3 theme-grid">
+      <section class="card compact-card">
+        <div class="card-head">
+          <h3>오늘의 키워드</h3>
+          <span class="hint" id="kwHint">-</span>
+        </div>
+        <div class="card-body scroll theme-body" id="keywordBody">불러오는 중...</div>
+      </section>
+
+      <section class="card compact-card">
+        <div class="card-head">
+          <h3>테마 목록</h3>
+          <span class="hint" id="tagHint">-</span>
+        </div>
+        <div class="card-body scroll theme-body" id="tagBody">불러오는 중...</div>
+      </section>
+
+      <section class="card compact-card">
+        <div class="card-head">
+          <h3>태그 → 종목</h3>
+          <span class="hint" id="stockHint">태그를 선택하세요</span>
+        </div>
+        <div class="card-body scroll theme-body" id="stocksByTagBody">-</div>
+      </section>
+    </div>
+
+    <section class="card compact-card stock-search-card">
+      <div class="card-head">
+        <h3>종목 → 태그 조회</h3>
+        <div class="topbar-actions">
+          <input id="stockCodeInput" class="theme-input" maxlength="6" placeholder="종목코드 (예: 005930)">
+          <button id="btnStockLookup" class="btn sm">조회</button>
+        </div>
+      </div>
+      <div class="card-body theme-lookup-grid">
+        <div class="scroll theme-body" id="tagsByStockBody">-</div>
+        <div class="scroll theme-body" id="stockArticleBody"><div class="empty"><span class="ico">📰</span>종목을 조회하면 근거 기사가 표시됩니다.</div></div>
+      </div>
+    </section>
+
+    <section class="card compact-card manual-map-card">
+      <div class="card-head">
+        <h3>수동 매핑</h3>
+        <span class="hint">네이버 배치에 지워지지 않음</span>
+      </div>
+      <div class="card-body manual-map-body">
+        <div class="manual-map-form">
+          <input id="manualStockCode" class="theme-input" maxlength="6" placeholder="종목코드">
+          <input id="manualStockName" class="theme-input manual-name" placeholder="종목명 (선택)">
+          <select id="manualTagType" class="theme-select">
+            <option value="theme">테마</option>
+            <option value="keyword">키워드</option>
+          </select>
+          <input id="manualTagName" class="theme-input manual-tag" placeholder="테마/키워드명">
+          <button id="btnManualMap" class="btn sm primary">추가</button>
+        </div>
+        <p class="manual-map-hint">커버리지 종목 <b>더블클릭</b> 시 코드·종목명이 채워집니다. 테마명만 입력 후 추가하세요.</p>
+      </div>
+    </section>
+
+    <section class="card compact-card coverage-card">
+      <div class="card-head">
+        <h3>유니버스 커버리지</h3>
+        <span class="hint" id="coverageHint">-</span>
+      </div>
+      <div class="card-body coverage-body">
+        <div class="coverage-stats" id="coverageStats">불러오는 중...</div>
+        <div class="coverage-toolbar">
+          <div class="coverage-filters">
+            <label>시장
+              <select id="coverageMarket" class="theme-select">
+                <option value="all">전체</option>
+                <option value="kospi">코스피</option>
+                <option value="kosdaq">코스닥</option>
+              </select>
+            </label>
+            <label>표시
+              <select id="coverageGap" class="theme-select">
+                <option value="any">미매핑 (테마 또는 키워드)</option>
+                <option value="theme">테마 없음</option>
+                <option value="keyword">키워드 없음</option>
+                <option value="both">둘 다 없음</option>
+                <option value="all">전체 종목</option>
+              </select>
+            </label>
+            <input id="coverageSearch" class="theme-input coverage-search" placeholder="종목명·코드 검색">
+            <button id="btnCoverageReload" class="btn sm">조회</button>
+          </div>
+          <div class="coverage-pager">
+            <button id="btnCoveragePrev" class="btn sm" disabled>이전</button>
+            <span id="coveragePageInfo" class="hint">-</span>
+            <button id="btnCoverageNext" class="btn sm" disabled>다음</button>
+          </div>
+        </div>
+        <div class="scroll coverage-table-wrap" id="coverageTable">-</div>
+      </div>
+    </section>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <script src="/static/theme_map.js?v=9"></script>
+</body>
+</html>

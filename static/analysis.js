@@ -233,9 +233,214 @@ function renderDetail(row) {
   ].join('');
   $('detailBody').innerHTML = `
     <div class="detail-grid">${priceBlock}</div>
+    <div class="detail-section analysis-chart-section">
+      <div class="detail-section-title">5분봉 차트 <span class="hint">최근 거래일</span></div>
+      <div class="analysis-chart-wrap" id="analysisChartWrap">
+        <div class="analysis-chart-status" id="analysisChartStatus">차트 불러오는 중…</div>
+        <canvas class="analysis-chart-canvas" id="analysisChartCanvas" aria-label="5분봉 차트"></canvas>
+      </div>
+    </div>
     <div class="detail-section"><div class="detail-section-title">밸류에이션</div><div class="detail-grid">${valBlock}</div></div>
     <div class="detail-section"><div class="detail-section-title">재무</div><div class="detail-grid">${finBlock}</div></div>
     <div class="detail-section"><div class="detail-section-title">메타</div><div class="detail-grid">${metaBlock}</div></div>`;
+  loadAnalysisChart(row.stock_code);
+}
+
+let chartPayload = null;
+let chartResizeTimer = null;
+
+function barDate(ts) {
+  return String(ts || '').slice(0, 10);
+}
+
+function barTimeLabel(ts) {
+  const s = String(ts || '');
+  if (s.length >= 16) return s.slice(11, 16);
+  if (s.length >= 5) return s.slice(5, 10);
+  return s;
+}
+
+function renderAnalysisChart(canvas, payload) {
+  const bars = payload.bars || [];
+  const statusEl = $('analysisChartStatus');
+  const wrap = $('analysisChartWrap');
+  if (!canvas || !bars.length) {
+    if (statusEl) {
+      statusEl.textContent = '차트 데이터가 없습니다';
+      statusEl.classList.add('err');
+      statusEl.style.display = 'block';
+    }
+    canvas.style.display = 'none';
+    return;
+  }
+
+  const W = Math.max((wrap && wrap.clientWidth) || 360, 280);
+  const H = 240;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  canvas.style.width = `${W}px`;
+  canvas.style.height = `${H}px`;
+  canvas.style.display = 'block';
+
+  if (statusEl) {
+    const parts = [];
+    const dr = payload.date_range;
+    if (dr && dr.length === 2) {
+      parts.push(dr[0] === dr[1] ? dr[0] : `${dr[0]} ~ ${dr[1]}`);
+    }
+    if (payload.warning) parts.push(payload.warning);
+    if (parts.length) {
+      statusEl.textContent = parts.join(' · ');
+      statusEl.classList.remove('err');
+      statusEl.classList.add('warn');
+      statusEl.style.display = 'block';
+    } else {
+      statusEl.style.display = 'none';
+      statusEl.classList.remove('warn', 'err');
+    }
+  }
+
+  const padL = 48;
+  const padR = 8;
+  const padT = 14;
+  const padB = 24;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+
+  let lo = Infinity;
+  let hi = -Infinity;
+  bars.forEach((b) => {
+    lo = Math.min(lo, b.low, b.open, b.close);
+    hi = Math.max(hi, b.high, b.open, b.close);
+  });
+
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo === hi) {
+    lo = lo || 0;
+    hi = hi || lo + 1;
+  }
+  const padY = (hi - lo) * 0.05 || 1;
+  lo -= padY;
+  hi += padY;
+
+  const yOf = (p) => padT + plotH - ((p - lo) / (hi - lo)) * plotH;
+  const slotW = plotW / bars.length;
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const bg = getComputedStyle(document.documentElement).getPropertyValue('--card').trim() || '#1a1d24';
+  const grid = getComputedStyle(document.documentElement).getPropertyValue('--border').trim() || '#333';
+  const text = getComputedStyle(document.documentElement).getPropertyValue('--muted').trim() || '#888';
+  const up = getComputedStyle(document.documentElement).getPropertyValue('--up').trim() || '#e8a0a0';
+  const down = getComputedStyle(document.documentElement).getPropertyValue('--down').trim() || '#5b9bd5';
+
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.strokeStyle = grid;
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 3; i++) {
+    const y = padT + (plotH * i) / 3;
+    ctx.beginPath();
+    ctx.moveTo(padL, y);
+    ctx.lineTo(W - padR, y);
+    ctx.stroke();
+    const price = hi - ((hi - lo) * i) / 3;
+    ctx.fillStyle = text;
+    ctx.font = '10px system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(Math.round(price).toLocaleString('ko-KR'), padL - 4, y + 3);
+  }
+
+  bars.forEach((b, i) => {
+    const x = padL + i * slotW + slotW / 2;
+    if (i > 0) {
+      const d0 = barDate(bars[i - 1].timestamp);
+      const d1 = barDate(b.timestamp);
+      if (d0 !== d1) {
+        const sepX = padL + i * slotW;
+        ctx.strokeStyle = text;
+        ctx.globalAlpha = 0.35;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(sepX, padT);
+        ctx.lineTo(sepX, padT + plotH);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1;
+        ctx.font = '9px system-ui, sans-serif';
+        ctx.fillStyle = text;
+        ctx.textAlign = 'left';
+        ctx.fillText(d1.slice(5), sepX + 2, padT + 10);
+      }
+    }
+    const openY = yOf(b.open);
+    const closeY = yOf(b.close);
+    const highY = yOf(b.high);
+    const lowY = yOf(b.low);
+    const bullish = b.close >= b.open;
+    const color = bullish ? up : down;
+    const bodyW = Math.max(2, slotW * 0.55);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, highY);
+    ctx.lineTo(x, lowY);
+    ctx.stroke();
+    ctx.fillStyle = color;
+    const top = Math.min(openY, closeY);
+    const h = Math.max(1, Math.abs(closeY - openY));
+    ctx.fillRect(x - bodyW / 2, top, bodyW, h);
+  });
+
+  const n = bars.length;
+  if (n > 0) {
+    ctx.fillStyle = text;
+    ctx.font = '9px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    const idxs = [0, Math.floor(n / 2), n - 1];
+    idxs.forEach((i) => {
+      const label = barTimeLabel(bars[i].timestamp);
+      if (!label) return;
+      const x = padL + i * slotW + slotW / 2;
+      ctx.fillText(label, x, H - 6);
+    });
+  }
+}
+
+async function loadAnalysisChart(stockCode) {
+  const canvas = $('analysisChartCanvas');
+  const statusEl = $('analysisChartStatus');
+  if (!canvas) return;
+  if (statusEl) {
+    statusEl.style.display = 'block';
+    statusEl.textContent = '5분봉 차트 불러오는 중…';
+    statusEl.classList.remove('err', 'warn');
+  }
+  canvas.style.display = 'none';
+  try {
+    const data = await fetchJSON(
+      `/fundamentals/${encodeURIComponent(stockCode)}/chart?interval=5M`,
+    );
+    chartPayload = data;
+    renderAnalysisChart(canvas, data);
+  } catch (e) {
+    chartPayload = null;
+    if (statusEl) {
+      statusEl.textContent = '차트를 불러오지 못했습니다 (장외·API 제한일 수 있음)';
+      statusEl.classList.add('err');
+      statusEl.style.display = 'block';
+    }
+    canvas.style.display = 'none';
+  }
+}
+
+function onChartResize() {
+  if (!chartPayload) return;
+  const canvas = $('analysisChartCanvas');
+  if (!canvas || canvas.style.display === 'none') return;
+  if (chartResizeTimer) clearTimeout(chartResizeTimer);
+  chartResizeTimer = setTimeout(() => renderAnalysisChart(canvas, chartPayload), 120);
 }
 
 async function selectStock(code) {
@@ -331,4 +536,5 @@ document.addEventListener('DOMContentLoaded', () => {
   loadList().then(() => {
     if (state.selectedCode) selectStock(state.selectedCode);
   });
+  window.addEventListener('resize', onChartResize);
 });

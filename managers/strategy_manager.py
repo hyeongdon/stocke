@@ -15,6 +15,7 @@ from core.models import get_db, WatchlistStock, TradingStrategy, StrategySignal,
 from api.kiwoom_api import KiwoomAPI
 from managers.signal_manager import SignalManager, SignalType, SignalStatus
 from core.config import Config
+from utils.datetime_kst import kst_today, utc_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -1083,7 +1084,7 @@ class StrategyManager:
                     stock_name=stock.stock_name,
                     signal_type=signal_result["signal_type"],
                     signal_value=signal_value,
-                    detected_date=date.today(),
+                    detected_date=kst_today(),
                     additional_data=additional_data_native
                 )
                 
@@ -1187,7 +1188,7 @@ class StrategyManager:
             for db in get_db():
                 session: Session = db
                 recent_signals = session.query(StrategySignal).filter(
-                    StrategySignal.detected_at >= datetime.now() - timedelta(hours=24)
+                    StrategySignal.detected_at >= utc_now_naive() - timedelta(hours=24)
                 ).count()
                 recent_signals_count = recent_signals
                 break

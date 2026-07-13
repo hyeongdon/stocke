@@ -28,6 +28,7 @@ if sys.platform == "win32":
 from api.kiwoom_api import KiwoomAPI  # noqa: E402
 from core.models import FundamentalSnapshot, get_db  # noqa: E402
 from utils.technical_mart_store import upsert_many  # noqa: E402
+from utils.datetime_kst import kst_today, now_kst  # noqa: E402
 
 LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
 LOG_FILE = os.path.join(LOG_DIR, "technical_mart_batch.log")
@@ -205,7 +206,7 @@ def _load_universe(market: str = "all", limit: int = 0) -> Tuple[datetime.date, 
     for db in get_db():
         latest = db.query(FundamentalSnapshot.as_of_date).order_by(FundamentalSnapshot.as_of_date.desc()).first()
         if not latest:
-            return datetime.now().date(), []
+            return kst_today(), []
         as_of_date = latest[0]
         q = db.query(
             FundamentalSnapshot.stock_code,
@@ -222,7 +223,7 @@ def _load_universe(market: str = "all", limit: int = 0) -> Tuple[datetime.date, 
             for r in rows
         ]
         return as_of_date, items
-    return datetime.now().date(), []
+    return kst_today(), []
 
 
 async def _process_one(
@@ -303,9 +304,9 @@ def main() -> int:
     setup_logging()
     logger = logging.getLogger(__name__)
     args = parse_args()
-    started = datetime.now()
+    started = now_kst()
     rc = asyncio.run(_run_async(args, logger))
-    elapsed = (datetime.now() - started).total_seconds()
+    elapsed = (now_kst() - started).total_seconds()
     logger.info("종료 코드=%d, 소요=%.1fs", rc, elapsed)
     return rc
 

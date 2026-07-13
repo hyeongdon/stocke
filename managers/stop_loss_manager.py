@@ -9,7 +9,22 @@ from core.models import Position, SellOrder, AutoTradeSettings, get_db
 from core.config import Config
 from utils.debug_tracer import debug_tracer
 from utils.auto_trade_activity_log import log_activity
-from utils.market_hours import is_krx_session, is_krx_trading_day
+from utils.market_hours import (
+    in_linked_trading_session,
+    is_krx_session,
+    is_krx_trading_day,
+    linked_trading_session_window_str,
+    seconds_until_stop_loss_monitoring,
+)
+from utils.auto_trade_engine import get_auto_trade_settings_sync
+from utils.datetime_kst import as_kst, kst_today, now_kst, utc_now_naive, KST
+from utils.position_peak_since_buy import (
+    buy_time_utc_naive_to_kst,
+    max_high_full_holding_days,
+    max_high_since_buy_from_intraday_bars,
+    resolve_position_peak_price,
+    should_disarm_trailing,
+)
 from notifications.trade_alert import notify_sell_filled_async, sell_fill_snapshot
 
 logger = logging.getLogger(__name__)
@@ -58,7 +73,7 @@ def _collapse_duplicate_holdings(session: Session) -> int:
                 SellOrder.status == "COMPLETED",
             ).order_by(SellOrder.completed_at.desc()).first()
             dup.status = (last_done.sell_reason if last_done else "DUPLICATE_HOLDING")
-            dup.sell_time = (last_done.completed_at if last_done else datetime.utcnow())
+            dup.sell_time = (last_done.completed_at if last_done else utc_now_naive())
             logger.warning(
                 f"🛡️ [RECONCILE] 중복 HOLDING 정리 — {dup.stock_name} "
                 f"#{dup.id} → {dup.status} (유지 #{keep.id})"
@@ -79,14 +94,28 @@ class StopLossManager:
     def __init__(self):
         self.kiwoom_api = KiwoomAPI()
         self.is_running = False
-        self.monitoring_interval = 120  # 120초(2분)마다 모니터링 (API 제한 고려)
+        self.monitoring_interval = 30  # 30초마다 모니터링 (잔고·차트 캐시로 API 부하 완화)
         self.auto_trade_settings = None
         # 일봉 ATR — 종목당 하루 1회 계산 (장중 변동성만 반영)
         self._atr_daily_cache: Dict[str, Tuple[float, date]] = {}
+        self._since_buy_peak_cache: Dict[str, Tuple[int, str]] = {}  # code -> (peak, buy_iso)
         self._last_cycle_at: Optional[datetime] = None
         self._last_heartbeat_msg: Optional[str] = None
         self._loop_active = False
         self._monitor_task: Optional[asyncio.Task] = None
+        self._off_hours_logged = False
+
+    def _settings_for_session(self) -> Optional[AutoTradeSettings]:
+        return get_auto_trade_settings_sync()
+
+    def invalidate_settings_cache(self) -> None:
+        """설정 저장 후 인메모리 캐시 제거."""
+        self.auto_trade_settings = None
+
+    def is_monitoring_active(self) -> bool:
+        """매매 시간 연동 세션 여부 (UI·API용 — 루프 태스크와 별개)."""
+        settings = self._settings_for_session()
+        return in_linked_trading_session(settings)
 
     def monitoring_task_running(self) -> bool:
         return self._loop_active or (
@@ -113,12 +142,44 @@ class StopLossManager:
             self.is_running = True
 
         logger.info("🛡️ [STOP_LOSS] 손절/익절 모니터링 시작")
-        log_activity("SELL", "손절/익절 모니터 시작 (2분 주기)", "info")
+        log_activity("SELL", f"손절/익절 모니터 시작 ({self.monitoring_interval}초 주기)", "info")
         
         try:
             while self.is_running:
-                # 자동매매 설정 로드
                 await self._load_auto_trade_settings()
+
+                if not self.is_monitoring_active():
+                    if not self._off_hours_logged:
+                        settings = self._settings_for_session()
+                        nxt = seconds_until_stop_loss_monitoring(settings)
+                        window = (
+                            linked_trading_session_window_str(settings)
+                            if settings
+                            else "매매시간"
+                        )
+                        mins = max(1, nxt // 60)
+                        log_activity(
+                            "SELL",
+                            f"장외 — 손절/익절 모니터 일시 중지 ({window}, 약 {mins}분 후 재개)",
+                            "info",
+                        )
+                        logger.info(
+                            "🛡️ [STOP_LOSS] 장외 대기 — 다음 모니터까지 %ds (%s)",
+                            nxt,
+                            window,
+                        )
+                        self._off_hours_logged = True
+                    settings = self._settings_for_session()
+                    await asyncio.sleep(seconds_until_stop_loss_monitoring(settings))
+                    continue
+
+                if self._off_hours_logged:
+                    log_activity(
+                        "SELL",
+                        f"손절/익절 모니터 재개 ({self.monitoring_interval}초 주기)",
+                        "info",
+                    )
+                    self._off_hours_logged = False
 
                 # 매도 체결 확인 → DB 동기화 (주문 접수와 청산 확정 분리)
                 await self._reconcile_sell_orders_and_holdings()
@@ -132,15 +193,12 @@ class StopLossManager:
                     await self._log_cycle_heartbeat(mode="장마감청산")
                     await asyncio.sleep(30)
                     continue
-                elif (
-                    is_krx_session()
-                    and self.auto_trade_settings
-                    and self.auto_trade_settings.is_enabled
-                ):
+                elif is_krx_session() and self.auto_trade_settings:
+                    # 보유 포지션 청산 판단은 자동매매 ON/OFF·매매종료(15:20)와 무관하게 장중(09:00~15:30) 수행
                     await self._monitor_positions()
                     await self._log_cycle_heartbeat(mode="손절점검")
                 else:
-                    logger.debug("🛡️ [STOP_LOSS] 장외/자동매매 OFF — 손절·익절 판단 건너뜀")
+                    logger.debug("🛡️ [STOP_LOSS] 장외 — 손절·익절 판단 건너뜀")
                     await self._log_cycle_heartbeat(mode="동기화")
                 
                 await asyncio.sleep(self.monitoring_interval)
@@ -224,7 +282,7 @@ class StopLossManager:
         return updated
 
     async def _log_cycle_heartbeat(self, mode: str = "동기화"):
-        """2분 주기 — 보유·손익 요약을 활동 로그에 남김 (대시보드 가시성)."""
+        """모니터링 주기마다 — 보유·손익 요약을 활동 로그에 남김 (대시보드 가시성)."""
         try:
             rows: List[Position] = []
             for db in get_db():
@@ -246,7 +304,7 @@ class StopLossManager:
                 f"{mode} · {session_txt} · 자동매매 {'ON' if auto_on else 'OFF'} · "
                 f"HOLDING {len(rows)} · 합산 {pl_sum:+,}원 · {detail}"
             )
-            now = datetime.now()
+            now = now_kst()
             if (
                 self._last_heartbeat_msg == msg
                 and self._last_cycle_at
@@ -502,7 +560,7 @@ class StopLossManager:
 
                         if holding:
                             apply_holding_to_position(position, holding)
-                            position.last_monitored = datetime.utcnow()
+                            position.last_monitored = utc_now_naive()
                             logger.debug(
                                 f"🛡️ [STOP_LOSS] API 동기화 — {position.stock_name}: "
                                 f"{position.current_profit_loss:+,}원 ({position.current_profit_loss_rate:+.2f}%)"
@@ -522,7 +580,7 @@ class StopLossManager:
                                 position.current_price = current_price
                                 position.current_profit_loss = pl
                                 position.current_profit_loss_rate = rate
-                                position.last_monitored = datetime.utcnow()
+                                position.last_monitored = utc_now_naive()
                             else:
                                 logger.info(
                                     f"🛡️ [STOP_LOSS] 현재가 미확인 — DB 값 유지 ({position.stock_name})"
@@ -578,7 +636,10 @@ class StopLossManager:
                 logger.warning(f"현재가 조회 타임아웃 — {position.stock_name}")
 
         buy_price = position.buy_price or current_price
-        peak = max(int(getattr(position, "peak_price", None) or buy_price), int(current_price))
+        # 당일 일봉 고가는 live 여부와 무관하게 조회 (모니터링 주기 사이 급등 고점 누락 방지)
+        peak = await self._resolve_position_peak(
+            position, int(current_price), allow_api=True,
+        )
         profit_loss, profit_loss_rate = self._calc_profit(position, int(current_price), holding)
 
         if api_live and position.id and (fetched_live or holding):
@@ -587,14 +648,17 @@ class StopLossManager:
             )
             if holding:
                 await self._sync_position_from_api(position.id, holding)
+
+        if position.id and getattr(position, "status", None) == "HOLDING":
             stored_peak = int(getattr(position, "peak_price", None) or buy_price)
-            if peak > stored_peak:
+            if peak != stored_peak:
                 await self._update_position_tracking(position.id, peak, None)
+                position.peak_price = peak
 
         tp = self._num(s.take_profit_rate)
         trail_start = tp if tp and tp > 0 else None
         peak_rate = self._peak_rate_pct(buy_price, peak)
-        trailing_armed, trailing_floor = self._resolve_trailing_state(
+        trailing_armed, trailing_floor = await self._guard_trailing_arm_state(
             position, buy_price, peak, trail_start,
         )
         trailing_start_price = (
@@ -628,6 +692,13 @@ class StopLossManager:
         if effective and current_price:
             dist_pct = (current_price - effective) / current_price * 100
 
+        peak_drop_amount = None
+        peak_drop_pct = None
+        if peak and current_price and peak > 0:
+            peak_drop_amount = max(0, int(peak) - int(current_price))
+            peak_drop_pct = round(peak_drop_amount / peak * 100, 2)
+
+        trailing_stop_pct = self._num(s.trailing_stop_pct)
         level_rows = []
         for reason, price, method in candidates:
             level_rows.append({
@@ -663,6 +734,9 @@ class StopLossManager:
             "stop_loss_price_pct": stop_loss_price_pct,
             "stored_stop_loss_price": stored_stop,
             "stop_distance_pct": round(dist_pct, 2) if dist_pct is not None else None,
+            "peak_drop_amount": peak_drop_amount,
+            "peak_drop_pct": peak_drop_pct,
+            "trailing_stop_pct": trailing_stop_pct,
             "levels": level_rows,
             "liquidate_time": getattr(s, "liquidate_time", None) if getattr(s, "liquidate_before_close", False) else None,
             "levels_live": api_live,
@@ -684,6 +758,157 @@ class StopLossManager:
             return 0.0
         return (peak - buy_price) / buy_price * 100
 
+    async def _resolve_position_peak(
+        self,
+        position: Position,
+        current_price: int,
+        *,
+        allow_api: bool = True,
+    ) -> int:
+        """진입 후 고점 — 저장값·현재가·매수 시각 이후 차트 고가만 반영."""
+        buy_price = int(position.buy_price or current_price or 0)
+        stored = int(getattr(position, "peak_price", None) or buy_price)
+        since_buy_high = 0
+
+        if allow_api:
+            code = KiwoomAPI.normalize_stock_code(position.stock_code or "")
+            if code:
+                since_buy_high = await self._fetch_peak_high_since_buy(position, code)
+
+        peak = resolve_position_peak_price(
+            buy_price=buy_price,
+            current_price=int(current_price or 0),
+            stored_peak=stored,
+            since_buy_high=since_buy_high,
+            allow_api=allow_api,
+        )
+
+        if allow_api and stored > peak:
+            logger.info(
+                f"🛡️ [STOP_LOSS] 고점 보정 — {position.stock_name}: "
+                f"stored {stored:,} → {peak:,} (매수 이후 고점만)"
+            )
+
+        return peak
+
+    async def _fetch_peak_high_since_buy(self, position: Position, code: str) -> int:
+        """매수 시각(KST) 이후 분봉·중간 일봉 고가."""
+        buy_kst = buy_time_utc_naive_to_kst(getattr(position, "buy_time", None))
+        if buy_kst is None:
+            return 0
+
+        buy_iso = buy_kst.isoformat()
+        cached = self._since_buy_peak_cache.get(code)
+        if cached and cached[1] == buy_iso:
+            return cached[0]
+
+        buy_date = buy_kst.date()
+        today = kst_today()
+        peak = 0
+        session_open = datetime(
+            buy_date.year, buy_date.month, buy_date.day, 9, 0, tzinfo=KST,
+        )
+
+        try:
+            daily_bars = await self.kiwoom_api.get_stock_chart_data(
+                code, "1D", allow_off_hours=True,
+            )
+            peak = max(peak, max_high_full_holding_days(daily_bars, buy_date, today))
+        except Exception as e:
+            logger.debug(f"🛡️ [STOP_LOSS] 일봉 고가 조회 실패 {position.stock_name}: {e}")
+
+        intraday_dates = []
+        if buy_date == today:
+            intraday_dates.append(today)
+        else:
+            intraday_dates.append(buy_date)
+            if today > buy_date:
+                intraday_dates.append(today)
+
+        for trade_date in intraday_dates:
+            try:
+                result = await self.kiwoom_api.get_intraday_chart_for_date(
+                    code, trade_date.isoformat(), tic_scope="15",
+                )
+                bars = result.get("bars") or []
+                if trade_date == buy_date:
+                    cutoff = buy_kst
+                else:
+                    cutoff = session_open.replace(
+                        year=trade_date.year,
+                        month=trade_date.month,
+                        day=trade_date.day,
+                    )
+                peak = max(
+                    peak,
+                    max_high_since_buy_from_intraday_bars(bars, cutoff),
+                )
+            except Exception as e:
+                logger.debug(
+                    f"🛡️ [STOP_LOSS] 분봉 고가 조회 실패 {position.stock_name} "
+                    f"{trade_date}: {e}"
+                )
+
+        self._since_buy_peak_cache[code] = (peak, buy_iso)
+        return peak
+
+    async def _disarm_trailing(self, position: Position, *, reason: str) -> None:
+        """잘못 활성화된 트레일링 해제."""
+        if not getattr(position, "id", None):
+            return
+        try:
+            changed = False
+            for db in get_db():
+                session: Session = db
+                p = session.query(Position).filter(Position.id == position.id).first()
+                if not p:
+                    break
+                if p.trailing_armed or p.trailing_floor_price:
+                    p.trailing_armed = False
+                    p.trailing_floor_price = None
+                    changed = True
+                    session.commit()
+                break
+            if changed:
+                position.trailing_armed = False
+                position.trailing_floor_price = None
+                logger.warning(
+                    f"🛡️ [STOP_LOSS] 트레일링 해제 — {position.stock_name}: {reason}"
+                )
+                log_activity(
+                    "SELL",
+                    f"트레일링 해제 — {position.stock_name}: {reason}",
+                    "warn",
+                    stock_code=position.stock_code,
+                )
+        except Exception as e:
+            logger.error(f"🛡️ [STOP_LOSS] 트레일링 해제 오류 {position.stock_name}: {e}")
+
+    async def _guard_trailing_arm_state(
+        self,
+        position: Position,
+        buy_price: int,
+        peak: int,
+        trail_start_val: Optional[float],
+    ) -> Tuple[bool, Optional[int]]:
+        """고점 수익률 미달 시 오활성화 트레일링 방어."""
+        trailing_armed, trailing_floor = self._resolve_trailing_state(
+            position, buy_price, peak, trail_start_val,
+        )
+        if should_disarm_trailing(
+            trailing_armed=bool(getattr(position, "trailing_armed", False) or trailing_armed),
+            trail_start_rate=trail_start_val,
+            buy_price=buy_price,
+            peak=peak,
+        ):
+            await self._disarm_trailing(
+                position,
+                reason=f"고점 수익률 {StopLossManager._peak_rate_pct(buy_price, peak):.2f}% "
+                f"< 시작 {trail_start_val}% (매수 이후 고점 기준)",
+            )
+            return False, None
+        return trailing_armed, trailing_floor
+
     @staticmethod
     def _trailing_floor_price(buy_price: int, trail_start_rate: float) -> int:
         return int(buy_price * (1 + trail_start_rate / 100.0))
@@ -704,6 +929,8 @@ class StopLossManager:
 
         peak_rate = self._peak_rate_pct(buy_price, peak)
         if stored_armed:
+            if peak_rate < trail_start_rate:
+                return False, None
             floor = self._trailing_floor_for_buy(
                 buy_price, trail_start_rate, stored_floor, peak,
             )
@@ -870,29 +1097,35 @@ class StopLossManager:
                 position = session.query(Position).filter(Position.id == position_id).first()
                 if position:
                     reconcile_position_buy_with_fills(session, position, holding)
-                    position.last_monitored = datetime.utcnow()
+                    position.last_monitored = utc_now_naive()
                     session.commit()
                 break
         except Exception as e:
             logger.error(f"🛡️ [STOP_LOSS] API 포지션 동기화 오류: {e}")
 
     def _is_in_liquidation_window(self) -> bool:
-        """장 마감 전 전량청산 유효 구간 — 평일, liquidate_time(기본 15:05) ~ 15:20."""
+        """장 마감 전 전량청산 유효 구간 — 평일, liquidate_time(기본 15:10) ~ 15:20."""
         s = self.auto_trade_settings
-        if not s or not getattr(s, "liquidate_before_close", False):
+        kst = as_kst()
+        if not is_krx_trading_day(kst):
             return False
-        now = datetime.now()
-        if not is_krx_trading_day(now):
-            return False
-        t = getattr(s, "liquidate_time", "") or "15:05"
+        t = getattr(s, "liquidate_time", "") or "15:10" if s else "15:10"
         try:
             lh, lm = map(int, str(t).split(":"))
             start = (lh, lm)
-            end = (15, 20)  # 장종료 리스크 감소를 위해 청산 시도 상한을 15:20으로 제한
-            now_t = (now.hour, now.minute)
-            return start <= now_t <= end
+            end = (15, 20)
+            now_t = (kst.hour, kst.minute)
+            in_time = start <= now_t <= end
         except Exception:
             return False
+        if not s or not getattr(s, "liquidate_before_close", False):
+            if in_time:
+                logger.warning(
+                    "🛡️ [STOP_LOSS] 장마감 청산 시각(%s)이나 liquidate_before_close=OFF — 청산 미실행",
+                    t,
+                )
+            return False
+        return in_time
 
     def _is_past_liquidation_time(self) -> bool:
         """청산 트리거 시각 경과 (장마감 윈도우 안에서만 True)."""
@@ -944,7 +1177,7 @@ class StopLossManager:
         """일봉 ATR — 종목·기간당 하루 1회 API 조회, 장외엔 당일 캐시 재사용."""
         code = KiwoomAPI.normalize_stock_code(stock_code)
         key = f"{code}:{period}"
-        today = date.today()
+        today = kst_today()
         cached = self._atr_daily_cache.get(key)
         if cached and cached[1] == today:
             return cached[0]
@@ -1030,12 +1263,17 @@ class StopLossManager:
             if holding:
                 await self._sync_position_from_api(position.id, holding)
 
-            # 고점 갱신
-            peak = max(int(getattr(position, 'peak_price', None) or buy_price), int(current_price))
+            # 고점 갱신 (매수 시각 이후 고가만)
+            peak = await self._resolve_position_peak(position, int(current_price), allow_api=True)
 
             trail_start = self._num(s.take_profit_rate)
             trail_start_val = trail_start if trail_start and trail_start > 0 else None
-            trailing_armed, trailing_floor = self._resolve_trailing_state(
+            stored_peak = int(getattr(position, "peak_price", None) or buy_price)
+            if peak != stored_peak:
+                await self._update_position_tracking(position.id, peak, None)
+                position.peak_price = peak
+
+            trailing_armed, trailing_floor = await self._guard_trailing_arm_state(
                 position, buy_price, peak, trail_start_val,
             )
             if trailing_armed and trailing_floor:
@@ -1133,7 +1371,7 @@ class StopLossManager:
                     position.current_price = current_price
                     position.current_profit_loss = profit_loss
                     position.current_profit_loss_rate = profit_loss_rate
-                    position.last_monitored = datetime.utcnow()
+                    position.last_monitored = utc_now_naive()
                     session.commit()
                     logger.debug(f"🛡️ [STOP_LOSS] 포지션 업데이트 - {position.stock_name}: {profit_loss_rate:.2f}%")
                 break
@@ -1187,7 +1425,7 @@ class StopLossManager:
         ref = sell.ordered_at or sell.created_at
         if not ref:
             return 9999.0
-        return (datetime.utcnow() - ref).total_seconds() / 60.0
+        return (utc_now_naive() - ref).total_seconds() / 60.0
 
     def _reconcile_sell_order_hygiene(self, session: Session, holdings: Dict[str, int]) -> int:
         """중복·만료 매도 주문 정리 → 익절 등 신규 주문 가능하게."""
@@ -1546,12 +1784,20 @@ class StopLossManager:
 
             if last_done:
                 pos.status = last_done.sell_reason or "MANUAL_SELL"
-                pos.sell_time = last_done.completed_at or datetime.utcnow()
+                pos.sell_time = last_done.completed_at or utc_now_naive()
                 detail = f"계좌 미보유 — DB 정리 ({pos.stock_name} → {pos.status})"
             else:
                 pos.status = "MANUAL_SELL"
-                pos.sell_time = datetime.utcnow()
+                pos.sell_time = utc_now_naive()
                 detail = f"계좌 청산 확인 — {pos.stock_name} (앱 매도 기록 없음)"
+                from utils.position_sell_backfill import ensure_completed_sell_order
+                ensure_completed_sell_order(
+                    session,
+                    pos,
+                    sell_reason="MANUAL",
+                    sell_reason_detail="계좌 미보유 동기화 — 키움 잔고 기준 청산",
+                    completed_at=pos.sell_time,
+                )
 
             log_activity("SELL", detail, "info", stock_code=pos.stock_code)
             logger.info(f"🛡️ [RECONCILE] {detail}")
@@ -1564,9 +1810,9 @@ class StopLossManager:
         """매도 체결 확정 — SellOrder COMPLETED, Position 청산 상태."""
         if sell.status != "COMPLETED":
             sell.status = "COMPLETED"
-            sell.completed_at = datetime.utcnow()
+            sell.completed_at = utc_now_naive()
         pos.status = sell.sell_reason or "MANUAL_SELL"
-        pos.sell_time = sell.completed_at or datetime.utcnow()
+        pos.sell_time = sell.completed_at or utc_now_naive()
         if sell.profit_loss is None and pos.buy_price and sell.sell_price:
             sell.profit_loss = (sell.sell_price - pos.buy_price) * sell.sell_quantity
         session.flush()
@@ -1659,9 +1905,9 @@ class StopLossManager:
                             sell_order.sell_reason_detail = str(order_id_or_error)[:200]
                     elif status == "ORDERED" and order_id_or_error:
                         sell_order.sell_order_id = order_id_or_error
-                        sell_order.ordered_at = datetime.utcnow()
+                        sell_order.ordered_at = utc_now_naive()
                     elif status == "COMPLETED":
-                        sell_order.completed_at = datetime.utcnow()
+                        sell_order.completed_at = utc_now_naive()
                     session.commit()
                 break
         except Exception as e:
@@ -1762,9 +2008,20 @@ class StopLossManager:
                 ).limit(10).all()
                 break
             
+            settings = self._settings_for_session()
+            session_window = (
+                linked_trading_session_window_str(settings) if settings else None
+            )
             status = {
                 "is_running": self.is_running,
+                "monitoring_active": self.is_monitoring_active(),
+                "monitoring_loop_alive": self.monitoring_task_running(),
                 "monitoring_interval": self.monitoring_interval,
+                "linked_session_window": session_window,
+                "session_window": session_window,
+                "trade_start_time": settings.trade_start_time if settings else None,
+                "trade_end_time": settings.trade_end_time if settings else None,
+                "in_linked_session": in_linked_trading_session(settings),
                 "auto_trade_settings_loaded": self.auto_trade_settings is not None,
                 "auto_trade_enabled": self.auto_trade_settings.is_enabled if self.auto_trade_settings else False,
                 "stop_loss_rate": self.auto_trade_settings.stop_loss_rate if self.auto_trade_settings else 0,

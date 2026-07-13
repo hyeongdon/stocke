@@ -10,6 +10,7 @@ from typing import List
 from sqlalchemy.orm import Session
 
 from core.models import get_db, PendingBuySignal
+from utils.datetime_kst import utc_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ class CleanupScheduler:
     async def _cleanup_old_signals(self):
         """오래된 신호들 정리"""
         try:
-            cutoff_time = datetime.now() - timedelta(hours=self.max_age_hours)
+            cutoff_time = utc_now_naive() - timedelta(hours=self.max_age_hours)
             
             for db in get_db():
                 session: Session = db
@@ -94,7 +95,7 @@ class CleanupScheduler:
     async def manual_cleanup(self) -> dict:
         """수동 정리 실행"""
         try:
-            cutoff_time = datetime.now() - timedelta(hours=self.max_age_hours)
+            cutoff_time = utc_now_naive() - timedelta(hours=self.max_age_hours)
             cleaned_count = 0
             
             for db in get_db():
@@ -164,7 +165,7 @@ class CleanupScheduler:
                     ).count()
                     
                     # 오래된 PENDING 신호 수
-                    cutoff_time = datetime.now() - timedelta(hours=self.max_age_hours)
+                    cutoff_time = utc_now_naive() - timedelta(hours=self.max_age_hours)
                     old_pending = session.query(PendingBuySignal).filter(
                         PendingBuySignal.status == "PENDING",
                         PendingBuySignal.detected_at < cutoff_time

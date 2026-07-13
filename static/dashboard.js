@@ -43,6 +43,43 @@ function numFixed(v, digits) {
   });
 }
 function signClass(n) { n = parseNum(n); return n > 0 ? 'up' : (n < 0 ? 'down' : 'flat'); }
+
+function fmtIndexValue(v) {
+  if (v == null || Number.isNaN(Number(v))) return '-';
+  return Number(v).toLocaleString('ko-KR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function fmtIndexDelta(v) {
+  if (v == null || Number.isNaN(Number(v))) return '-';
+  const n = Number(v);
+  const sign = n > 0 ? '+' : '';
+  return sign + n.toLocaleString('ko-KR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function fmtIndexPct(v) {
+  if (v == null || Number.isNaN(Number(v))) return '';
+  const n = Number(v);
+  const sign = n > 0 ? '+' : '';
+  return `${sign}${n.toFixed(2)}%`;
+}
+function renderMarketIndexItem(it) {
+  const dir = it.direction || signClass(it.change_pct ?? it.change);
+  const deltaParts = [];
+  if (it.change != null) deltaParts.push(fmtIndexDelta(it.change));
+  if (it.change_pct != null) deltaParts.push(`(${fmtIndexPct(it.change_pct)})`);
+  return `<span class="market-index-item ${dir}"><span class="mi-label">${esc(it.label)}</span><span class="mi-value">${fmtIndexValue(it.value)}</span><span class="mi-delta">${deltaParts.join(' ') || '-'}</span></span>`;
+}
+async function loadMarketIndices(opts) {
+  const el = $('marketIndices');
+  if (!el) return;
+  try {
+    const d = await fetchJSON('/market/indices', { timeoutMs: 20000 });
+    const items = d.indices || [];
+    el.innerHTML = items.length
+      ? items.map(renderMarketIndexItem).join('')
+      : '<span class="market-index-skeleton">지수 데이터 없음</span>';
+  } catch (e) {
+    el.innerHTML = '<span class="market-index-skeleton">지수 로드 실패 (서버 재시작 후 새로고침)</span>';
+  }
+}
 function rateStr(n) { n = parseNum(n); const s = n > 0 ? '+' : ''; return `${s}${n.toFixed(2)}%`; }
 function pnlStr(n) { n = parseNum(n); const s = n > 0 ? '+' : ''; return `${s}${num(n)}원`; }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
@@ -351,7 +388,7 @@ async function loadAccount() {
   }
 }
 
-/* ===== 성과 통계 (단일 API 호출, 대시보드·자동매매 탭 공유) ===== */
+/* ===== 성과 통계 (대시보드 탭) ===== */
 let perfChart = null;
 window._perfStats = null;
 
@@ -380,8 +417,15 @@ async function fetchPerformanceStats(force = false) {
   return d;
 }
 
+function isBoardTabActive() {
+  const pane = $('pane-board');
+  return pane && pane.classList.contains('active');
+}
+
 async function loadPerformance(force = false) {
-  $('perfSourceHint').textContent = '실현손익 조회 중...';
+  const hintEl = $('perfSourceHint');
+  if (!hintEl) return;
+  hintEl.textContent = '실현손익 조회 중...';
   try {
     const d = await fetchPerformanceStats(force);
     applyRealizedSummary(d);
@@ -402,7 +446,6 @@ async function loadPerformance(force = false) {
 
     let cards = '';
     cards += statCard('순손익 (실현)', pnlStr(d.net_pnl), `수익률 ${rateStr(d.return_rate)}`, signClass(d.net_pnl));
-    cards += statCard('거래비용', pnlStr(-Math.abs(d.total_cost)), `비용 전 ${pnlStr(d.gross_pnl)}`, 'down');
     cards += statCard('승률', `${d.win_rate}%`, `${d.wins}승 ${d.losses}패${d.breakeven ? ' · 무승부 ' + d.breakeven : ''}`, 'flat');
     cards += statCard('손익비 (Payoff)', `${d.payoff}`, `평균익 ${pnlStr(d.avg_win)} / 평균손 ${pnlStr(d.avg_loss)}`, 'flat');
     cards += statCard('Profit Factor', `${d.profit_factor}`, '총이익 / 총손실', 'flat');
@@ -413,7 +456,9 @@ async function loadPerformance(force = false) {
     $('perfCards').innerHTML = cards;
 
     $('perfCurveTotal').textContent = pnlStr(d.net_pnl);
-    drawPerfChart(d.curve.map((_, i) => i + 1), d.curve.map((c) => c.cum));
+    if (isBoardTabActive()) {
+      drawPerfChart(d.curve.map((_, i) => i + 1), d.curve.map((c) => c.cum));
+    }
 
     if (!d.by_reason.length) $('byReasonBody').innerHTML = emptyRow('청산 내역이 없습니다.', '📊');
     else $('byReasonBody').innerHTML = `<table class="tbl"><thead><tr><th>사유</th><th class="num">횟수</th><th class="num">실현손익</th></tr></thead><tbody>${
@@ -427,26 +472,66 @@ async function loadPerformance(force = false) {
     $('perfCards').innerHTML = emptyRow('성과 통계를 불러오지 못했습니다.', '⚠️');
   }
 }
-function statusRow(name, label, cls) {
-  return `<div class="status-row"><span class="name">${esc(name)}</span><span class="pill ${cls}">${esc(label)}</span></div>`;
+function statusRow(name, label, cls, hours) {
+  const hoursHtml = hours
+    ? `<span class="status-hours">${esc(hours)}</span>`
+    : '';
+  return `<div class="status-row"><span class="name">${esc(name)}</span>${hoursHtml}<span class="pill ${cls}">${esc(label)}</span></div>`;
+}
+function linkedSessionWindow(settings) {
+  const start = settings?.trade_start_time || '10:00';
+  const end = settings?.trade_end_time || '15:20';
+  return `${start}~${end}`;
+}
+function updateStatusSessionHours(window) {
+  document.querySelectorAll('#statusBody .status-row .status-hours').forEach((el, i) => {
+    if (i >= 1 && i <= 3) el.textContent = window || '설정 없음';
+  });
+}
+function bindTradeTimePreview() {
+  const startEl = $('set_trade_start_time');
+  const endEl = $('set_trade_end_time');
+  const onChange = () => {
+    const start = startEl?.value || '10:00';
+    const end = endEl?.value || '15:20';
+    updateStatusSessionHours(`${start}~${end}`);
+  };
+  if (startEl) startEl.onchange = onChange;
+  if (endEl) endEl.onchange = onChange;
+}
+function sessionActive(block, runtimeKey, runtime) {
+  if (block && typeof block.is_active === 'boolean') return block.is_active;
+  if (runtime && typeof runtime[runtimeKey] === 'boolean') return runtime[runtimeKey];
+  return false;
 }
 async function loadStatus() {
   try {
-    const [mon, settings, stopLoss] = await Promise.all([
+    const [mon, settings, stopLoss, activity] = await Promise.all([
       fetchJSON('/monitoring/status').catch(() => ({})),
       fetchJSON('/trading/settings').catch(() => ({})),
       fetchJSON('/stop-loss/status').catch(() => ({})),
+      fetchJSON('/trading/activity-log?limit=1').catch(() => ({})),
     ]);
-    const monRunning = !!(mon.monitoring && mon.monitoring.is_running);
-    const scanRunning = !!(mon.auto_trade_scanner && mon.auto_trade_scanner.is_running);
-    const buyRunning = !!(mon.buy_executor && mon.buy_executor.is_running);
-    const slRunning = !!stopLoss.is_running;
+    const rt = activity.runtime || {};
+    const scanRunning = sessionActive(mon.auto_trade_scanner, 'scanner_running', rt);
+    const buyRunning = sessionActive(mon.buy_executor, 'buy_executor_running', rt);
+    const slRunning = typeof stopLoss.monitoring_active === 'boolean'
+      ? stopLoss.monitoring_active
+      : (typeof rt.stop_loss_running === 'boolean' ? rt.stop_loss_running : false);
     const autoOn = !!settings.is_enabled;
+    const sessionWindow = mon.linked_session_window
+      || stopLoss.linked_session_window
+      || mon.auto_trade_scanner?.session_window
+      || stopLoss.session_window
+      || mon.buy_executor?.session_window
+      || rt.linked_session_window
+      || linkedSessionWindow(settings);
+    const engineHours = sessionWindow || '설정 없음';
     let html = '';
-    html += statusRow('자동매매', autoOn ? '활성' : '비활성', autoOn ? 'on' : 'off');
-    html += statusRow('종목 스캔', scanRunning ? '실행중' : '중지', scanRunning ? 'run' : 'off');
-    html += statusRow('손절/익절 모니터링', slRunning ? '실행중' : '중지', slRunning ? 'run' : 'off');
-    html += statusRow('매수 실행기', buyRunning ? '실행중' : '중지', buyRunning ? 'run' : 'off');
+    html += statusRow('자동매매', autoOn ? '활성' : '비활성', autoOn ? 'on' : 'off', '설정 ON/OFF');
+    html += statusRow('종목 스캔', scanRunning ? '실행중' : '중지', scanRunning ? 'run' : 'off', engineHours);
+    html += statusRow('손절/익절 모니터링', slRunning ? '실행중' : '중지', slRunning ? 'run' : 'off', engineHours);
+    html += statusRow('매수 실행기', buyRunning ? '실행중' : '중지', buyRunning ? 'run' : 'off', engineHours);
     $('statusBody').innerHTML = html;
     $('statusTime').textContent = mon.timestamp ? new Date(mon.timestamp).toLocaleTimeString('ko-KR') : '';
 
@@ -473,6 +558,165 @@ async function loadTelegram() {
     $('telegramBody').innerHTML = html;
     const btn = $('tgSendBtn'); if (btn) btn.onclick = sendTelegramNow;
   } catch (e) { $('telegramBody').innerHTML = emptyRow('텔레그램 상태를 불러오지 못했습니다.', '⚠️'); }
+}
+
+async function loadTodayKeywords() {
+  const body = $('todayKeywordBody');
+  if (!body) return;
+  try {
+    const d = await fetchJSON('/keywords/today?limit=12', { timeoutMs: 12000 });
+    const items = d.items || [];
+    const hint = $('todayKeywordHint');
+    if (hint) hint.textContent = `${items.length}개`;
+    if (!items.length) {
+      body.innerHTML = emptyRow('키워드 데이터가 없습니다. 테마맵에서 스냅샷 갱신을 먼저 실행하세요.', '🧩');
+      return;
+    }
+    body.innerHTML = `<table class="tbl"><thead><tr><th>키워드</th><th class="num">언급</th><th class="num">종목</th><th>변화</th></tr></thead><tbody>${
+      items.map((r) => {
+        const delta = parseNum(r.delta_vs_prev || 0);
+        const deltaTxt = delta > 0 ? `+${delta}` : `${delta}`;
+        const trend = String(r.trend_label || 'flat').toLowerCase();
+        const cls = trend === 'up' || trend === 'new' ? 'up' : (trend === 'down' ? 'down' : 'flat');
+        return `<tr>
+          <td>${esc(r.keyword || '-')}</td>
+          <td class="num">${num(r.mention_count || 0)}</td>
+          <td class="num">${num(r.stock_count || 0)}</td>
+          <td class="num ${cls}">${esc(r.trend_label || 'flat')} (${deltaTxt})</td>
+        </tr>`;
+      }).join('')
+    }</tbody></table>`;
+  } catch (_) {
+    body.innerHTML = `<div class="activity-line error"><span class="msg">오늘의 키워드를 불러오지 못했습니다.</span></div>`;
+  }
+}
+const BATCH_PROGRESS_POLL_MS = 5000;
+let batchProgressTimer = null;
+
+function fmtEta(seconds) {
+  const s = parseInt(seconds, 10);
+  if (!s || s < 0) return null;
+  if (s < 60) return `약 ${s}초`;
+  if (s < 3600) return `약 ${Math.ceil(s / 60)}분`;
+  const h = Math.floor(s / 3600);
+  const m = Math.ceil((s % 3600) / 60);
+  return m ? `약 ${h}시간 ${m}분` : `약 ${h}시간`;
+}
+
+function stockNewsRemark(job, rootProgress, fallbackToday) {
+  const p = job.progress || {};
+  const merged = {
+    universe_total: p.universe_total ?? rootProgress.universe_total,
+    done_count: p.done_count ?? rootProgress.done_count ?? fallbackToday ?? 0,
+    pending_count: p.remaining_count ?? rootProgress.pending_count,
+    percent: p.percent ?? rootProgress.percent,
+    run_done: p.run_done ?? rootProgress.run_done,
+    run_total: p.run_total ?? rootProgress.run_total,
+    running: job.running || !!rootProgress.running,
+    status: p.last_run_status ?? rootProgress.status,
+    current_stock_name: rootProgress.current_stock_name,
+    current_stock_code: rootProgress.current_stock_code,
+    eta_seconds: p.eta_seconds ?? rootProgress.eta_seconds,
+  };
+  const done = parseInt(merged.done_count, 10) || 0;
+  const total = parseInt(merged.universe_total, 10) || 0;
+  const pending = merged.pending_count != null ? parseInt(merged.pending_count, 10) : Math.max(0, total - done);
+  const runDone = parseInt(merged.run_done, 10) || 0;
+  const runTotal = parseInt(merged.run_total, 10) || 0;
+  const pct = merged.percent != null
+    ? merged.percent
+    : (total ? Math.min(100, Math.round((done / total) * 100)) : 0);
+  const runPct = runTotal ? Math.min(100, Math.round((runDone / runTotal) * 100)) : null;
+  const eta = fmtEta(merged.eta_seconds);
+  const cur = (merged.current_stock_name && merged.current_stock_code)
+    ? `${merged.current_stock_name}(${merged.current_stock_code})`
+    : null;
+
+  const parts = [];
+  if (total > 0) parts.push(`${num(done)}/${num(total)} (${pct}%)`);
+  else if (done > 0) parts.push(`${num(done)}종목`);
+  if (runTotal > 0) parts.push(`이번 ${num(runDone)}/${num(runTotal)}${runPct != null ? `(${runPct}%)` : ''}`);
+  if (pending > 0) parts.push(`남음 ${num(pending)}`);
+  if (merged.running && cur) parts.push(`진행 ${cur}`);
+  if (merged.running && eta) parts.push(`ETA ${eta}`);
+  if (!merged.running && merged.status === 'idle' && parts.length) parts.push('일시중지/종료');
+  return parts.length ? parts.join(' · ') : '-';
+}
+
+function applyStockNewsProgress() { /* no-op: row remark-only UI */ }
+
+function stopBatchProgressPolling() {
+  if (batchProgressTimer) {
+    clearInterval(batchProgressTimer);
+    batchProgressTimer = null;
+  }
+}
+
+function startBatchProgressPolling() {
+  if (batchProgressTimer) return;
+  batchProgressTimer = setInterval(async () => {
+    try {
+      const p = await fetchJSON('/batch-status/stock-news-progress', { timeoutMs: 8000 });
+      applyStockNewsProgress(p);
+      const hint = $('themeBatchHint');
+      if (hint && p.biz_date) hint.textContent = `기준일 ${p.biz_date}`;
+    } catch (_) { /* ignore transient poll errors */ }
+  }, BATCH_PROGRESS_POLL_MS);
+}
+
+async function loadThemeBatchStatus() {
+  const body = $('themeBatchBody');
+  if (!body) return;
+  try {
+    const d = await fetchJSON('/batch-status', { timeoutMs: 25000 });
+    const hint = $('themeBatchHint');
+    const biz = d.latest_article_biz_date || d.latest_keyword_biz_date || '-';
+    if (hint) hint.textContent = `기준일 ${biz}`;
+    const fmtAt = (v) => {
+      if (!v) return '-';
+      if (/오전|오후/.test(String(v))) return String(v);
+      return dtDb(v, true);
+    };
+    const fmtRunState = (job) => {
+      if (job.running) return '<span class="tag-chip theme">실행 중</span>';
+      if (job.registered === true && job.enabled === false) return '<span class="tag-chip kw">비활성</span>';
+      if (job.registered === true) return '<span class="tag-chip">등록됨</span>';
+      if (job.registered === false) return '<span class="tag-chip kw">미등록</span>';
+      return '<span class="tag-chip kw">-</span>';
+    };
+    const jobs = Array.isArray(d.batch_jobs) ? d.batch_jobs : [];
+    const progress = d.stock_news_progress || {};
+    const jobRows = jobs.map((job) => `
+      <tr title="${esc(job.description || '')}">
+        <td>${esc(job.label || job.id || '-')}</td>
+        <td>${fmtRunState(job)}</td>
+        <td>${esc(job.schedule || '-')}</td>
+        <td>${esc(fmtAt(job.last_run_at || job.log_last_at))}</td>
+        <td>${esc(fmtAt(job.next_run_at))}</td>
+        <td>${job.id === 'stock_news' ? esc(stockNewsRemark(job, progress, d.article_stock_count_today)) : '-'}</td>
+      </tr>
+    `).join('');
+    body.innerHTML = `
+      <div class="grid cols-2 board-kv-grid" style="margin-bottom:10px;">
+        <div class="kv"><span class="k">테마 스냅샷 최근</span><span class="v">${esc(fmtAt(d.theme_snapshot_last_at))}</span></div>
+        <div class="kv"><span class="k">뉴스 배치 최근</span><span class="v">${esc(fmtAt(d.news_batch_last_at))}</span></div>
+        <div class="kv"><span class="k">키워드 집계 최근</span><span class="v">${esc(fmtAt(d.keyword_stats_last_at))}</span></div>
+        <div class="kv"><span class="k">오늘 기사/종목</span><span class="v">${num(d.article_count_today || 0)}건 / ${num(d.article_stock_count_today || 0)}종목</span></div>
+      </div>
+      <table class="tbl">
+        <thead><tr>
+          <th>배치</th><th>상태</th><th>스케줄</th><th>최근 실행</th><th>다음 실행</th><th>비고</th>
+        </tr></thead>
+        <tbody>${jobRows || '<tr><td colspan="6"><div class="empty">배치 목록 없음 (서버 재시작 후 새로고침)</div></td></tr>'}</tbody>
+      </table>
+      <div class="hint" style="margin-top:8px;">Windows 작업 스케줄러의 <code>Stocke*</code> / <code>stocke-*</code> 작업을 표시합니다.</div>
+      <div class="hint" style="margin-top:4px;">전체 종목 키워드는 <code>stock_news_daily_batch</code> (장 마감 후, 분할 실행)에서 수집됩니다.</div>
+    `;
+    if (progress.running) startBatchProgressPolling();
+    else stopBatchProgressPolling();
+  } catch (_) {
+    body.innerHTML = emptyRow('배치 상태를 불러오지 못했습니다.', '⚠️');
+  }
 }
 async function sendTelegramNow() {
   const btn = $('tgSendBtn'); btn.disabled = true; const orig = btn.innerHTML;
@@ -604,13 +848,41 @@ function effectiveStopRate(ex, p) {
   if (buy > 0 && px > 0) return (buy - px) / buy * 100;
   return null;
 }
+function effectiveStopDisplayRate(ex, p) {
+  if (ex.effective_stop_reason === 'TRAILING') {
+    const trail = parseNum(ex.trailing_stop_pct);
+    if (trail > 0) return { prefix: '고점−', rate: trail };
+    const peak = parseNum(ex.peak_price || p.peak_price);
+    const px = parseNum(ex.effective_stop_price);
+    if (peak > 0 && px > 0) return { prefix: '고점−', rate: (peak - px) / peak * 100 };
+  }
+  const rate = effectiveStopRate(ex, p);
+  return { prefix: '', rate };
+}
 
 function levelChipPct(l, ex, p, slRate) {
+  const peak = parseNum(ex.peak_price || p.peak_price);
   const buy = positionBuyPrice(p);
   const px = parseNum(l.price);
-  if (l.method === 'PCT' && slRate != null) return slRate;
+  if (l.reason === 'TRAILING' && peak > 0 && px > 0) {
+    return (peak - px) / peak * 100;
+  }
+  if (l.method === 'PCT' && l.reason === 'STOP_LOSS' && slRate != null) return slRate;
   if (buy > 0 && px > 0) return (buy - px) / buy * 100;
   return null;
+}
+function peakDropMeta(ex, p, cur) {
+  const peak = parseNum(ex.peak_price || p.peak_price || cur);
+  const price = parseNum(cur);
+  if (!(peak > 0 && price > 0)) return { amount: null, pct: null };
+  const amount = Math.max(0, peak - price);
+  const pct = amount > 0 ? (amount / peak) * 100 : 0;
+  return { amount, pct };
+}
+function fmtPeakDrop(amount, pct) {
+  if (amount == null || pct == null) return '-';
+  if (amount <= 0) return '0 (0.00%)';
+  return `−${num(amount)} (−${pct.toFixed(2)}%)`;
 }
 function renderLevelChip(l, ex, p, effStop, slRate) {
   const active = l.price === effStop;
@@ -785,8 +1057,13 @@ function renderPositionCards(items, containerId) {
     const effMeta = effectiveStopMeta(ex);
     const effPrice = effMeta.price;
     const effRate = effectiveStopRate(ex, p);
+    const effDisplay = effectiveStopDisplayRate(ex, p);
     const dist = ex.stop_distance_pct;
     const pctRate = pctStopRate(ex, p);
+    const peakDrop = peakDropMeta(ex, p, cur);
+    const peakDropAmt = ex.peak_drop_amount != null ? parseNum(ex.peak_drop_amount) : peakDrop.amount;
+    const peakDropPct = ex.peak_drop_pct != null ? parseNum(ex.peak_drop_pct) : peakDrop.pct;
+    const trailPctSetting = parseNum(ex.trailing_stop_pct);
     const safe = dist != null && dist > 1.5;
     const atrTxt = ex.atr ? `ATR ${num(ex.atr)}원 (${ex.atr_period}일)` : (ex.levels_live === false ? 'ATR: 새로고침 시 계산' : 'ATR 미사용 (%기준)');
     const reason = REASON_LABEL[ex.effective_stop_reason] || ex.effective_stop_reason || '-';
@@ -811,15 +1088,16 @@ function renderPositionCards(items, containerId) {
         <div><div class="pk">매입금액</div><div class="pv">${won(buyAmt)}</div></div>
         <div><div class="pk">비중</div><div class="pv" title="평가금액 ÷ 키움 주식총평가">${weight.toFixed(1)}%</div></div>
         <div><div class="pk">고점</div><div class="pv">${num(ex.peak_price || p.peak_price || cur)}</div></div>
+        <div><div class="pk">고점대비 하락</div><div class="pv ${peakDropAmt > 0 ? 'down' : 'flat'}">${fmtPeakDrop(peakDropAmt, peakDropPct)}</div></div>
         <div><div class="pk">${ex.trailing_armed ? '트레일링' : '트레일 시작'}</div><div class="pv ${ex.trailing_armed ? 'up' : ''}">${ex.trailing_armed && effStop ? num(effStop) : (ex.trailing_start_price ? num(ex.trailing_start_price) : '-')}</div></div>
         ${ex.trailing_floor_price ? `<div><div class="pk">익절 바닥</div><div class="pv up">${num(ex.trailing_floor_price)}</div></div>` : ''}
         <div><div class="pk">${ex.atr ? 'ATR' : '변동성'}</div><div class="pv text-cyan">${ex.atr ? num(ex.atr) + '원' : '-'}</div></div>
       </div>
       <div class="pos-stop-bar ${safe ? 'safe' : ''}">
         <div class="stop-main">유효 손절선 <span style="color:var(--down);">${effPrice ? num(effPrice) + '원' : '-'}</span>
-          ${effRate != null && effPrice ? `<span class="stop-pct-hint"> · ${methodLbl || esc(reason)} −${effRate.toFixed(1)}%</span>` : ''}
+          ${effDisplay.rate != null && effPrice ? `<span class="stop-pct-hint"> · ${methodLbl || esc(reason)} ${effDisplay.prefix}−${effDisplay.rate.toFixed(1)}%</span>` : ''}
           <span class="pill run" style="margin-left:6px;">${esc(reason)}</span></div>
-        <div class="stop-sub">${atrTxt}${dist != null ? ` · 손절선까지 ${dist.toFixed(2)}%` : ''}${ex.liquidate_time ? ` · ${ex.liquidate_time} 장마감청산` : ''}${ex.levels_live ? ' · 실시간' : ''}</div>
+        <div class="stop-sub">${atrTxt}${dist != null ? ` · 손절선까지 ${dist.toFixed(2)}%` : ''}${ex.trailing_armed && peakDropAmt != null ? ` · 고점대비 ${fmtPeakDrop(peakDropAmt, peakDropPct)}` : ''}${ex.trailing_armed && trailPctSetting > 0 ? ` · 트레일 기준 −${trailPctSetting.toFixed(1)}%` : ''}${ex.liquidate_time ? ` · ${ex.liquidate_time} 장마감청산` : ''}${ex.levels_live ? ' · 실시간' : ''}</div>
         ${chips ? `<div class="pos-levels">${chips}</div>` : ''}
       </div>
       <div class="pos-card-actions">${renderPosSellBtn(p)}</div>
@@ -930,7 +1208,7 @@ function bindPositionSellButtons() {
   });
 }
 
-let positionsLoading = false;
+let positionsLoadSeq = 0;
 
 function shouldLoadPositionsLive() {
   return isAutoTabActive() && isAutoMonitorSubActive();
@@ -939,8 +1217,7 @@ function shouldLoadPositionsLive() {
 async function loadPositions(live = false, opts = {}) {
   const silent = opts.silent === true;
   const useLive = live || (opts.preferLive !== false && shouldLoadPositionsLive());
-  if (positionsLoading) return;
-  positionsLoading = true;
+  const seq = ++positionsLoadSeq;
   const sk = '<div class="skeleton">현재가·ATR 조회 중...</div>';
   if (useLive && !silent && !$('autoPositionsBody')?.querySelector('.pos-card')) {
     if ($('positionsBody')) $('positionsBody').innerHTML = sk;
@@ -950,8 +1227,9 @@ async function loadPositions(live = false, opts = {}) {
     if (!(window._kiwoomHoldings || []).length) {
       try { await loadAccount(); } catch (_) { /* 비중 계산은 DB 폴백 */ }
     }
-    const url = `/positions/?status=HOLDING&limit=100&with_levels=true${useLive ? '&live=true' : ''}`;
+    const url = `/positions/?status=HOLDING&limit=100&with_levels=true${useLive ? '&live=true' : ''}&_=${Date.now()}`;
     const d = await fetchJSON(url, { timeoutMs: useLive ? 90000 : 12000 });
+    if (seq !== positionsLoadSeq) return;
     const items = d.items || [];
     window._appHoldings = items;
     if ($('holdingCount')) {
@@ -988,8 +1266,6 @@ async function loadPositions(live = false, opts = {}) {
     if ($('autoPositionsBody') && !silent) $('autoPositionsBody').innerHTML = emptyRow(msg, '⚠️');
     if (!silent && $('positionsBody')) $('positionsBody').innerHTML = emptyRow(msg, '⚠️');
     if (useLive && !silent) toast('보유종목 갱신 실패', true);
-  } finally {
-    positionsLoading = false;
   }
 }
 
@@ -1178,7 +1454,8 @@ async function loadActivity() {
     const d = await fetchJSON('/trading/activity-log?limit=80');
     const rt = d.runtime || {};
     const enabled = !!rt.auto_trade_enabled;
-    const allRunning = enabled && rt.scanner_running && rt.buy_executor_running && rt.stop_loss_running;
+    const stopActive = rt.stop_loss_running !== false;
+    const allRunning = enabled && rt.scanner_running && rt.buy_executor_running && stopActive;
     const banner = $('activityBanner');
     if (banner) {
       banner.className = 'activity-banner' + (allRunning ? '' : ' off');
@@ -1186,14 +1463,16 @@ async function loadActivity() {
       const lastSync = fmtScanTime(rt.last_sync_at);
       const scanInfo = rt.last_scan_at
         ? `마지막 스캔 ${lastScan} · 대상 ${rt.last_scan_targets || 0} · 신호 ${rt.last_scan_created || 0}`
-        : (enabled ? '아직 스캔 없음 (2분 주기)' : '자동매매 OFF — 스캔 미실행');
-      const syncInfo = rt.last_sync_at
-        ? `마지막 동기화 ${lastSync} (${rt.monitor_interval_sec || 120}초 주기)`
-        : `포지션 동기화 대기 (${rt.monitor_interval_sec || 120}초 주기)`;
+        : (enabled ? '아직 스캔 없음 (1분 주기)' : '자동매매 OFF — 스캔 미실행');
+      const syncInfo = stopActive
+        ? (rt.last_sync_at
+          ? `마지막 동기화 ${lastSync} (${rt.monitor_interval_sec || 30}초 주기)`
+          : `포지션 동기화 대기 (${rt.monitor_interval_sec || 30}초 주기)`)
+        : '장외 — 손절/익절 모니터 일시 중지 (다음 장 시작 시 재개)';
       banner.innerHTML = `
         <div class="ab-item"><span class="ab-dot ${allRunning ? 'pulse' : ''}"></span>
           <strong>${allRunning ? '자동매매 실행 중' : (enabled ? '일부 중지됨' : '자동매매 OFF · 동기화만')}</strong></div>
-        <div class="ab-item">${runtimeBadge(rt.scanner_running, '스캐너')}${runtimeBadge(rt.buy_executor_running, '매수')}${runtimeBadge(rt.stop_loss_running, '동기화')}</div>
+        <div class="ab-item">${runtimeBadge(rt.scanner_running, '스캐너')}${runtimeBadge(rt.buy_executor_running, '매수')}${runtimeBadge(stopActive, '동기화')}</div>
         <div class="ab-item hint">${syncInfo}</div>
         <div class="ab-item hint">${scanInfo}</div>
         <div class="ab-item hint">${rt.is_trading_day === false ? esc(rt.trading_day_block_reason || '휴장') : (rt.in_trade_hours ? '장중' : '장외')} · ${rt.allows_new_buy === false ? esc(rt.new_buy_block_reason || '매수 차단') : '매수 허용'}${rt.mock_mode ? ' · 모의' : ''}</div>`;
@@ -1204,8 +1483,10 @@ async function loadActivity() {
     if (!events.length) {
       const rt = d.runtime || {};
       let hint = '활동 이벤트 없음 — 서버 재시작 직후이거나 아직 한 사이클이 돌지 않았습니다.';
-      if (rt.stop_loss_running) {
-        hint = `포지션 동기화 루프 실행 중 (${rt.monitor_interval_sec || 120}초마다 [SYNC] 로그). 자동매매 ON 시 [SCANNER]/[BUY] 로그도 표시됩니다.`;
+      if (stopActive) {
+        hint = `포지션 동기화 루프 실행 중 (${rt.monitor_interval_sec || 30}초마다 [SYNC] 로그). 자동매매 ON 시 [SCANNER]/[BUY] 로그도 표시됩니다.`;
+      } else if (rt.stop_loss_loop_alive) {
+        hint = '장외 — 손절/익절 모니터 일시 중지. 다음 거래일 장 시작 시 자동 재개됩니다.';
       }
       body.innerHTML = `<div class="activity-line info"><span class="msg">${esc(hint)}</span></div>`;
       return;
@@ -1310,16 +1591,64 @@ async function loadLog() {
 /* ===== 스크리너 후보 ===== */
 const PT_LABEL = { LEVERAGE: '레버리지', INVERSE: '인버스', DOUBLE_INVERSE: '곱버스', ETF: 'ETF', ETN: 'ETN', STOCK: '일반' };
 const PT_CLS = { LEVERAGE: 'on', INVERSE: 'run', DOUBLE_INVERSE: 'off', ETF: 'off', ETN: 'off', STOCK: 'run' };
+const SRC_LABEL = { screener: '거래대금', condition: '조건식', both: '거래대금+조건식' };
+function sourceLabel(s) {
+  const base = SRC_LABEL[s.source] || s.source || '—';
+  if (s.condition_name) return `${base} (${s.condition_name})`;
+  return base;
+}
 function fmtEokOrJo(v) {
   if (v === null || v === undefined || v === '') return '-';
   const n = parseNum(v);
   if (Math.abs(n) >= 10000) return numFixed(n / 10000, 2) + '조';
   return numFixed(n, 1) + '억';
 }
+function tagChipHtml(list, cls) {
+  const arr = Array.isArray(list) ? list.filter(Boolean) : [];
+  if (!arr.length) return '<span class="muted">-</span>';
+  return `<span class="tag-chips">${arr.map((t) => {
+    if (t && typeof t === 'object' && t.name) {
+      const tier = t.tier === 'core' ? ' core' : (t.tier === 'related' ? ' related' : (t.tier === 'event' ? ' event' : ''));
+      const score = t.score != null ? ` ${(t.score * 100).toFixed(0)}%` : '';
+      return `<span class="tag-chip ${cls || ''}${tier}" title="연관도${score}">${esc(t.name)}</span>`;
+    }
+    return `<span class="tag-chip ${cls || ''}">${esc(String(t))}</span>`;
+  }).join('')}</span>`;
+}
+function renderScreenerNews(stockCode, stockName, items) {
+  const box = $('screenerNewsBody');
+  if (!box) return;
+  if (!items || !items.length) {
+    box.innerHTML = `<div class="empty"><span class="ico">📰</span><b>${esc(stockName || stockCode)}</b> 당일 근거 기사가 없습니다.</div>`;
+    return;
+  }
+  box.innerHTML = `
+    <div class="hint" style="margin-bottom:6px;"><b>${esc(stockName || stockCode)}</b> (${esc(stockCode)}) · 근거 기사 ${items.length}건</div>
+    <div class="screener-news-wrap">
+      ${items.map((it) => `
+        <div class="screener-news-item">
+          <a href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">${esc(it.title)}</a>
+          <div class="screener-news-meta">${esc(it.published_at || '-')}${it.matched_keyword_weight != null ? ` · w=${esc(it.matched_keyword_weight)}` : ''}</div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+async function loadScreenerStockNews(stockCode, stockName) {
+  const box = $('screenerNewsBody');
+  if (box) box.innerHTML = `<div class="skeleton">📰 ${esc(stockName || stockCode)} 기사 조회 중...</div>`;
+  try {
+    const d = await fetchJSON(`/stocks/${encodeURIComponent(stockCode)}/articles?limit=20`);
+    renderScreenerNews(stockCode, stockName, d.items || []);
+  } catch (e) {
+    if (box) box.innerHTML = emptyRow('근거 기사 조회 실패', '⚠️');
+  }
+}
 async function loadScreener() {
   const market = $('scrMarket').value;
-  $('screenerBody').innerHTML = '<div class="skeleton">거래대금순 상위 조회 중...</div>';
+  $('screenerBody').innerHTML = '<div class="skeleton">거래대금순·조건식 후보 조회 중...</div>';
   $('screenerCount').textContent = '';
+  if ($('screenerNewsBody')) $('screenerNewsBody').innerHTML = '<div class="empty"><span class="ico">📰</span>종목의 <b>뉴스</b> 버튼을 누르면 근거 기사(당일)를 표시합니다.</div>';
   try {
     const d = await fetchJSON(`/screener/candidates?market=${market}&limit=50`);
     if (!d.success) { $('screenerBody').innerHTML = emptyRow(d.error || '조회 실패 (장중/토큰 확인)', '⚠️'); return; }
@@ -1329,25 +1658,40 @@ async function loadScreener() {
     const exclPer = d.excluded_per_count != null ? d.excluded_per_count : 0;
     const exclParts = [`ETF·파생 ${excl}`];
     if (exclPer > 0) exclParts.push(`PER ${exclPer}`);
-    $('screenerCount').textContent = `후보 ${d.selected_count} / API ${rawN} (${exclParts.join(', ')} 제외)`;
+    const condPart = (d.condition_names && d.condition_names.length)
+      ? ` · 조건식 ${d.condition_names.join(', ')}`
+      : '';
+    const tagged = items.filter(s => (s.themes && s.themes.length) || (s.keywords && s.keywords.length)).length;
+    $('screenerCount').textContent = `후보 ${d.selected_count} / 전체 ${items.length}${condPart} (${exclParts.join(', ')} 제외) · 테마표시 ${tagged}`;
     if (!items.length) { $('screenerBody').innerHTML = emptyRow('데이터가 없습니다.', '🧭'); return; }
     const rows = items.map(s => {
       const rate = parseNum(s.change_rate);
       const amtEok = parseNum(s.trade_amount) / 100; // 백만원 → 억원
-      return `<tr style="${s.included ? '' : 'opacity:.42;'}">
+      return `<tr class="${s.included ? '' : 'screener-out'}">
         <td style="text-align:center;">${s.included ? '✅' : '—'}</td>
-        <td><span class="stock-name">${esc(s.stock_name)}</span><span class="stock-code">${esc(s.stock_code)}</span></td>
+        <td><span class="stock-name">${esc(s.stock_name)}</span><span class="stock-code">${esc(s.stock_code)}</span><button class="btn-news" data-scr-news="${esc(s.stock_code)}" data-scr-name="${esc(s.stock_name)}">뉴스</button></td>
+        <td><span class="pill run">${esc(sourceLabel(s))}</span></td>
+        <td class="screener-tags">${tagChipHtml(s.theme_items && s.theme_items.length ? s.theme_items : s.themes, 'theme')}</td>
+        <td class="screener-tags">${tagChipHtml(s.keywords, 'kw')}</td>
         <td><span class="pill ${PT_CLS[s.product_type] || 'off'}">${esc(PT_LABEL[s.product_type] || s.product_type)}</span></td>
         <td class="num">${num(s.current_price)}</td>
         <td class="num ${signClass(rate)}">${rateStr(rate)}</td>
-        <td class="num">${num(s.volume)}</td>
-        <td class="num">${num(amtEok)}억</td>
+        <td class="num">${s.volume ? num(s.volume) : '—'}</td>
+        <td class="num">${s.trade_amount ? `${num(amtEok)}억` : '—'}</td>
         <td class="num">${fmtEokOrJo(s.market_cap)}</td>
         <td class="num">${s.per == null ? '-' : numFixed(s.per, 2)}</td>
         <td class="num">${s.pbr == null ? '-' : numFixed(s.pbr, 2)}</td>
         <td class="num">${s.roe == null ? '-' : numFixed(s.roe, 2)}</td></tr>`;
     }).join('');
-    $('screenerBody').innerHTML = `<table class="tbl"><thead><tr><th>편입</th><th>종목</th><th>구분</th><th class="num">현재가</th><th class="num">등락률</th><th class="num">거래량</th><th class="num">거래대금</th><th class="num">시총</th><th class="num">PER</th><th class="num">PBR</th><th class="num">ROE</th></tr></thead><tbody>${rows}</tbody></table>`;
+    $('screenerBody').innerHTML = `<table class="tbl"><thead><tr><th>편입</th><th>종목</th><th>출처</th><th>테마</th><th>키워드</th><th>구분</th><th class="num">현재가</th><th class="num">등락률</th><th class="num">거래량</th><th class="num">거래대금</th><th class="num">시총</th><th class="num">PER</th><th class="num">PBR</th><th class="num">ROE</th></tr></thead><tbody>${rows}</tbody></table>`;
+    document.querySelectorAll('[data-scr-news]').forEach((btn) => {
+      btn.addEventListener('click', async (ev) => {
+        ev.preventDefault();
+        const code = btn.getAttribute('data-scr-news') || '';
+        const name = btn.getAttribute('data-scr-name') || '';
+        await loadScreenerStockNews(code, name);
+      });
+    });
   } catch (e) { $('screenerBody').innerHTML = emptyRow('조회 중 오류 (서버/네트워크 확인)', '⚠️'); }
 }
 
@@ -1393,9 +1737,9 @@ function fieldSizingPyramiding(s) {
         <span class="sr-unit" style="grid-column:auto;">원 (작은 금액)</span>
       </div>
     </div>${spreadHint}
-    <div style="margin-top:14px;padding-top:14px;border-top:1px dashed var(--border);">
-      <div class="box-title" style="color:var(--green);">추가매수 — 이미 보유 중일 때</div>
-      <div class="desc" style="margin-bottom:10px;">매수 후 수익이 나면 같은 종목에 조금씩 더 삽니다.</div>
+    <div class="sizing-add-section">
+      <div class="box-title">추가매수 — 이미 보유 중일 때</div>
+      <div class="desc">매수 후 수익이 나면 같은 종목에 조금씩 더 삽니다.</div>
       <div class="sizing-add-row">
         <span class="sr-label">수익률</span>
         <input type="number" class="w-rate" id="set_add_buy_trigger" value="${esc(_v(s, 'add_buy_trigger') || '0.7')}" step="any">
@@ -1530,17 +1874,22 @@ function renderSettingsForm(s) {
   const on = !!s.is_enabled;
   let h = '';
 
-  // 종목 선정 — 개별주만 고정 (ETF/파생상품 설정 UI 제거됨)
+  // 종목 선정 — 개별주 + 선택 조건식
   h += `<div class="form-section">
     <h4>종목 선정 (스크리너)</h4>
     <div class="box-soft screener-policy">
-      <div class="desc">거래대금 상위 <b>코스피·코스닥 개별 주식</b>만 자동 후보로 사용합니다. ETF·ETN·파생상품은 설정과 무관하게 항상 제외됩니다.</div>
+      <div class="desc">거래대금 상위 <b>코스피·코스닥 개별 주식</b>에 더해, 아래에서 선택한 <b>키움 조건식</b> 편입 종목도 후보에 포함됩니다. ETF·ETN·파생상품은 항상 제외됩니다.</div>
       <ul class="policy-list">
         <li><span class="policy-tag on">포함</span> 거래대금 상위 50 · KRX · 당일 20만주 이상</li>
+        <li><span class="policy-tag on">포함</span> 선택한 조건식 편입 종목 (아래 체크)</li>
         <li><span class="policy-tag off">제외</span> ETF · ETN · 레버리지 · 인버스 · 곱버스 · SPAC · 우선주 · 정리매매</li>
         <li><span class="policy-tag off">제외</span> PER 100배 이상 · PER 마이너스 (재무 데이터 없으면 통과)</li>
       </ul>
-      <div class="exit-note">2분 주기 스캔 · API(ETF·ETN 제외) + 종목명 후처리 이중 필터 · 우측 「스크리너 후보」에서 확인</div>
+      <div class="box-title" style="margin-top:12px;">조건식 후보 (선택)</div>
+      <div class="desc" style="margin-bottom:8px;">체크한 조건식에 편입된 종목만 스크리너·자동매매 스캔 대상에 추가됩니다. 미선택 시 거래대금순만 사용합니다.</div>
+      <div id="screenerCondPicker" class="cond-picker"><div class="skeleton">조건식 목록 불러오는 중...</div></div>
+      <input type="hidden" id="set_screener_condition_names" value="${esc(_v(s, 'screener_condition_names'))}">
+      <div class="exit-note">1분 주기 스캔 · 우측 「스크리너 후보」에서 출처(거래대금/조건식) 확인</div>
     </div>
   </div>`;
 
@@ -1585,6 +1934,7 @@ function renderSettingsForm(s) {
       ${field('재주문 쿨다운(초)', fNum('reorder_cooldown_sec', s, '300'))}
       ${field('매매 시작', fTime('trade_start_time', s))}
       ${field('매매 종료', fTime('trade_end_time', s))}
+      ${field('매수 주문 방식', fSelect('order_method', s, [['MARKET', '시장가 (권장)'], ['LIMIT', '지정가 (현재가)']]))}
     </div>
     <div class="desc" style="margin-top:8px;">거래일 08:50~「매매 종료」까지 엔진(스캐너·매수기)이 자동 기동되며, 종료 시각 이후 루프가 중지됩니다. 실제 매수는 「매매 시작」부터 허용됩니다.</div>
     <input type="hidden" id="set_max_invest_amount" value="${esc(_v(s, 'max_invest_amount') || s.initial_max_amount || 5000000)}">
@@ -1596,7 +1946,6 @@ function renderSettingsForm(s) {
       ${fCheck('liquidate_before_close', s, '장 마감 전 전량 청산 (오버나잇 방지)')}
       <div class="desc">지정 시각이 지나면 보유 종목을 손익과 무관하게 모두 시장가로 정리합니다. 매매 종료(15:20) 이전 시각으로 설정하세요.</div>
       ${field('청산 시작 시각', fTime('liquidate_time', s))}
-      <input type="hidden" id="set_order_method" value="${esc(_v(s, 'order_method') || 'MARKET')}">
     </div>
   </div>`;
 
@@ -1641,7 +1990,49 @@ function renderSettingsForm(s) {
   }
   $('btnSaveSettings').onclick = () => saveSettings(null);
   bindAutoTradeToggle();
+  bindTradeTimePreview();
   loadHolidaySection();
+  loadScreenerConditionPicker(s);
+}
+
+function parseConditionNameList(raw) {
+  if (!raw) return [];
+  return String(raw).split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+}
+
+function syncScreenerConditionNamesField() {
+  const hidden = $('set_screener_condition_names');
+  if (!hidden) return;
+  const names = [...document.querySelectorAll('.screener-cond-check:checked')]
+    .map((el) => el.value.trim())
+    .filter(Boolean);
+  hidden.value = names.join(', ');
+}
+
+async function loadScreenerConditionPicker(settings) {
+  const box = $('screenerCondPicker');
+  if (!box) return;
+  const selected = new Set(parseConditionNameList(settings?.screener_condition_names));
+  try {
+    const d = await fetchJSON('/conditions/');
+    const conds = Array.isArray(d) ? d : (d.data || []);
+    if (!conds.length) {
+      box.innerHTML = '<div class="desc">키움 조건식이 없습니다. HTS에서 조건식을 등록한 뒤 새로고침하세요.</div>';
+      syncScreenerConditionNamesField();
+      return;
+    }
+    box.innerHTML = conds.map((c) => {
+      const name = c.condition_name || '';
+      const checked = selected.has(name) ? 'checked' : '';
+      return `<label class="check cond-pick"><input type="checkbox" class="screener-cond-check" value="${esc(name)}" ${checked}>${esc(name)} <span class="fhint">API ${esc(c.api_id)}</span></label>`;
+    }).join('');
+    document.querySelectorAll('.screener-cond-check').forEach((el) => {
+      el.addEventListener('change', syncScreenerConditionNamesField);
+    });
+    syncScreenerConditionNamesField();
+  } catch (e) {
+    box.innerHTML = emptyRow('조건식 목록을 불러오지 못했습니다.', '⚠️');
+  }
 }
 
 async function loadHolidaySection() {
@@ -1742,9 +2133,10 @@ function bindHolidayActions() {
 }
 
 function collectSettings() {
+  syncScreenerConditionNamesField();
   const out = {};
   const sizingMethod = ($('set_sizing_method')?.value || 'PYRAMIDING').toUpperCase();
-  const skipKeys = new Set(['initial_max_amount_fixed', 'signal_min_threshold_fixed']);
+  const skipKeys = new Set(['initial_max_amount_fixed', 'signal_min_threshold_fixed', 'screener_condition_names']);
   if (sizingMethod === 'FIXED') {
     skipKeys.add('initial_min_amount');
     skipKeys.add('initial_max_amount');
@@ -1781,6 +2173,19 @@ function collectSettings() {
       out.initial_min_amount = Math.min(weak, strong);
     }
   }
+  const hiddenCond = $('set_screener_condition_names');
+  if (hiddenCond) {
+    out.screener_condition_names = hiddenCond.value.trim();
+  } else {
+    const condChecks = document.querySelectorAll('.screener-cond-check');
+    if (condChecks.length) {
+      const condNames = [...condChecks]
+        .filter((el) => el.checked)
+        .map((el) => el.value.trim())
+        .filter(Boolean);
+      out.screener_condition_names = condNames.join(', ');
+    }
+  }
   return out;
 }
 
@@ -1799,10 +2204,12 @@ async function saveSettings(enableOverride) {
   if (payload.take_profit_rate == null) payload.take_profit_rate = 10; // 트레일링 시작 %
   payload.profit_lock_trigger = null;
   payload.profit_lock_floor = null;
+  if (!payload.order_method) payload.order_method = 'MARKET';
   try {
-    const r = await postJSON('/trading/settings', payload);
+    await postJSON('/trading/settings', payload);
     toast(enableOverride === true ? '자동매매를 시작했습니다.' : (enableOverride === false ? '자동매매를 중지했습니다.' : '설정을 저장했습니다.'));
-    renderSettingsForm(r);
+    await loadSettings();
+    await loadStatus();
     if (isAutoTabActive()) loadPositions(true, { silent: true });
   } catch (e) { toast('설정 저장 실패', true); }
 }
@@ -1813,6 +2220,17 @@ function isAutoMonitorSubActive() {
   return sub && sub.classList.contains('active');
 }
 
+function syncDashStickyOffsets() {
+  const topbar = document.querySelector('.topbar');
+  const wrap = document.querySelector('.wrap');
+  const root = document.documentElement;
+  root.style.setProperty('--dash-topbar-h', `${Math.ceil(topbar?.getBoundingClientRect().height || 54)}px`);
+  const wrapPad = wrap
+    ? Math.ceil(wrap.getBoundingClientRect().top + (window.innerHeight - wrap.getBoundingClientRect().bottom))
+    : 32;
+  root.style.setProperty('--dash-wrap-pad', `${Math.max(wrapPad, 24)}px`);
+}
+
 function switchAutoSubTab(name) {
   document.querySelectorAll('.auto-subtab').forEach((t) => {
     t.classList.toggle('active', t.dataset.autoSub === name);
@@ -1820,9 +2238,9 @@ function switchAutoSubTab(name) {
   document.querySelectorAll('.auto-subpane').forEach((p) => {
     p.classList.toggle('active', p.id === `auto-sub-${name}`);
   });
+  requestAnimationFrame(syncDashStickyOffsets);
   if (name === 'monitor' && isAutoTabActive()) {
     loadPositions(true, { silent: true });
-    loadPerformance(true);
     loadLog();
     loadScreener();
     loadActivity();
@@ -1834,22 +2252,28 @@ function switchAutoSubTab(name) {
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.pane').forEach(p => p.classList.toggle('active', p.id === 'pane-' + name));
+  if (name === 'auto') requestAnimationFrame(syncDashStickyOffsets);
   if (name === 'auto' && isAutoMonitorSubActive()) {
     loadPositions(true, { silent: true });
+  }
+  if (name === 'board') {
+    requestAnimationFrame(() => loadPerformance(true));
   }
 }
 
 /* ===== Refresh orchestration ===== */
 function refreshAll() {
   $('lastUpdated').textContent = new Date().toLocaleTimeString('ko-KR');
+  loadMarketIndices({ silent: true });
   loadPerformance(true);
   loadAccount(); loadStatus(); loadTelegram();
+  loadTodayKeywords();
+  loadThemeBatchStatus();
   loadPositions(shouldLoadPositionsLive(), { silent: shouldLoadPositionsLive() });
   loadSells(); loadOrders();
   loadActivity(); loadLog(); loadSettings();
   if (isAutoTabActive() && isAutoMonitorSubActive()) {
     loadScreener();
-    loadPerformance(false);
   }
 }
 const refreshMap = {
@@ -1880,6 +2304,9 @@ function setupAutoRefresh() {
     if (cb.checked) {
       autoTimer = setInterval(() => {
         loadAccount(); loadStatus();
+        loadMarketIndices({ silent: true });
+        loadTodayKeywords();
+        loadThemeBatchStatus();
         loadPositions(shouldLoadPositionsLive(), { silent: shouldLoadPositionsLive() });
         loadSells(); loadOrders(); loadLog();
         $('lastUpdated').textContent = new Date().toLocaleTimeString('ko-KR');
@@ -1899,6 +2326,8 @@ function startActivityPolling() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  syncDashStickyOffsets();
+  window.addEventListener('resize', syncDashStickyOffsets);
   document.querySelectorAll('.tab[data-tab]').forEach(t => {
     t.onclick = (e) => { e.preventDefault(); switchTab(t.dataset.tab); };
   });

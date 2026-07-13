@@ -1,8 +1,9 @@
 """보유 포지션용 당일 분봉 스파크라인."""
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any, Dict, List, Optional
+
+from utils.datetime_kst import kst_date_str
 
 
 def bars_to_sparkline(bars: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -43,4 +44,4 @@ def bars_to_sparkline(bars: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
 
 
 def today_kst_date() -> str:
-    return datetime.now().strftime("%Y-%m-%d")
+    return kst_date_str()

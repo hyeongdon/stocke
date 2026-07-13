@@ -27,6 +27,7 @@ if sys.platform == "win32":
 
 from utils.naver_market_sum_crawler import crawl_all_markets  # noqa: E402
 from utils.fundamental_mart_store import upsert_many  # noqa: E402
+from utils.datetime_kst import kst_today  # noqa: E402
 
 LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
 LOG_FILE = os.path.join(LOG_DIR, "fundamental_mart_batch.log")
@@ -74,7 +75,7 @@ def main() -> int:
     if args.as_of:
         as_of_date = datetime.strptime(args.as_of.strip()[:10], "%Y-%m-%d").date()
     else:
-        as_of_date = datetime.now().date()
+        as_of_date = kst_today()
 
     markets = None if args.market == "all" else [args.market]
     log.info("기본적분석 마트 배치 시작 — as_of=%s market=%s", as_of_date, args.market)

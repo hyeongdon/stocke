@@ -11,7 +11,8 @@ from datetime import datetime, timedelta
 from typing import Dict, Optional, Callable, List, Tuple
 from core.config import Config
 from api.api_rate_limiter import api_rate_limiter
-from api.token_manager import TokenManager
+from api.token_manager import TokenManager, get_token_manager
+from utils.datetime_kst import kst_today, now_kst
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +124,7 @@ class KiwoomAPI:
     def __init__(self):
         self.base_url = Config.KIWOOM_BASE_URL
         self.ws_url = Config.KIWOOM_WS_URL
-        self.token_manager = TokenManager()
+        self.token_manager = get_token_manager()
         self.websocket = None
         self.condition_callbacks = {}
         self.running = False
@@ -165,6 +166,19 @@ class KiwoomAPI:
             if wait_sec > 0:
                 await asyncio.sleep(wait_sec)
         return False
+
+    @staticmethod
+    def _is_kiwoom_token_invalid(error_msg: str, data: Optional[Dict] = None) -> bool:
+        msg_lower = f"{error_msg or ''} {data or {}}".lower()
+        return ("8005" in msg_lower) or (
+            "token" in msg_lower and ("invalid" in msg_lower or "유효하지" in msg_lower)
+        )
+
+    async def _reauthenticate_async(self) -> bool:
+        """토큰 무효 시 재발급 (동기 requests가 이벤트 루프를 막지 않도록 스레드 실행)."""
+        self.token_manager.access_token = None
+        self.token_manager.token_expiry = None
+        return await asyncio.to_thread(self.authenticate)
 
     def authenticate(self) -> bool:
         """키움증권 API 인증"""
@@ -693,7 +707,7 @@ class KiwoomAPI:
                 }
             else:
                 api_id = 'ka10081'
-                today = datetime.now()
+                today = now_kst()
                 if today.weekday() == 5:
                     base_dt = (today - timedelta(days=1)).strftime('%Y%m%d')
                 elif today.weekday() == 6:
@@ -739,6 +753,11 @@ class KiwoomAPI:
                                 logger.warning(f"차트 조회 제한 — {backoff:.2f}s 후 재시도 {attempt+1}/{max_attempts}")
                                 await asyncio.sleep(backoff)
                                 continue
+                            if attempt == 0 and self._is_kiwoom_token_invalid(data.get('return_msg', ''), data):
+                                logger.warning("🔑 [TOKEN] 차트 조회 토큰 무효 — 재인증 후 재시도")
+                                if await self._reauthenticate_async():
+                                    headers['authorization'] = f'Bearer {self.token_manager.get_valid_token()}'
+                                    continue
                             logger.error(f"키움 API 오류: {data.get('return_msg')}")
                             return cached[0] if cached else []
                         elif response.status == 429:
@@ -777,7 +796,7 @@ class KiwoomAPI:
 
         yyyymmdd = target.strftime("%Y%m%d")
         cache_key = f"{stock_code}:M{tic_scope}:{yyyymmdd}"
-        today_kst = datetime.now().strftime("%Y%m%d")
+        today_kst = kst_today().strftime("%Y%m%d")
         ttl = self._chart_cache_ttl if yyyymmdd == today_kst else 86400
 
         cached = self._chart_cache.get(cache_key)
@@ -937,7 +956,7 @@ class KiwoomAPI:
             
             # 요청 데이터 (최근 1일 데이터만 조회)
             # 최근 거래일 계산 (주말 제외)
-            today = datetime.now()
+            today = now_kst()
             if today.weekday() == 5:  # 토요일
                 base_dt = (today - timedelta(days=1)).strftime('%Y%m%d')
             elif today.weekday() == 6:  # 일요일
@@ -1268,20 +1287,6 @@ class KiwoomAPI:
         sort_tp: 1 거래량 / 2 거래회전율 / 3 거래대금
         screener_filters: True면 KRX·20만주+·관리/우선주 제외 등 스크리너 기본값 적용
         """
-        token = self.token_manager.get_valid_token()
-        if not token:
-            return {"success": False, "error": "토큰 없음", "items": []}
-
-        use_mock = Config.KIWOOM_USE_MOCK_ACCOUNT
-        host = Config.KIWOOM_MOCK_API_URL if use_mock else Config.KIWOOM_REAL_API_URL
-        url = host + "/api/dostk/rkinfo"
-        headers = {
-            "Content-Type": "application/json;charset=UTF-8",
-            "authorization": f"Bearer {token}",
-            "cont-yn": "N",
-            "next-key": "",
-            "api-id": "ka10030",
-        }
         if screener_filters:
             filt = dict(SCREENER_VOLUME_RANK_FILTERS)
         else:
@@ -1309,90 +1314,117 @@ class KiwoomAPI:
         body = {"mrkt_tp": market, "sort_tp": sort_tp, **filt}
         try:
             timeout = aiohttp.ClientTimeout(total=30)
-            kept: List[Dict] = []
-            raw_count = 0
-            excluded_etf_count = 0
-            seen_codes: set[str] = set()
-            cont_yn, next_key = "N", ""
-            pages = 0
-            max_pages = 12 if screener_filters else 1
+            use_mock = Config.KIWOOM_USE_MOCK_ACCOUNT
+            host = Config.KIWOOM_MOCK_API_URL if use_mock else Config.KIWOOM_REAL_API_URL
+            url = host + "/api/dostk/rkinfo"
 
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                while pages < max_pages:
-                    pages += 1
-                    if not await self._acquire_api_slot("ka10030", max_wait=20.0 if limit > 20 else 8.0):
-                        logger.warning("[VOLUME_RANK] rate limit slot timeout")
-                        if kept:
-                            break
-                        return {"success": False, "error": "API 호출 제한", "items": []}
-                    req_headers = {
-                        **headers,
-                        "cont-yn": cont_yn,
-                        "next-key": next_key,
-                    }
-                    async with session.post(url, headers=req_headers, json=body) as resp:
-                        text = await resp.text()
-                        resp_cont = resp.headers.get("cont-yn") or resp.headers.get("Cont-Yn") or "N"
-                        resp_next = resp.headers.get("next-key") or resp.headers.get("Next-Key") or ""
-                        if resp.status == 429:
-                            api_rate_limiter.handle_api_error(Exception("429 Too Many Requests"))
-                            logger.warning(f"[VOLUME_RANK] HTTP 429, body={text[:300]}")
+            for auth_try in range(2):
+                token = self.token_manager.get_valid_token()
+                if not token:
+                    return {"success": False, "error": "토큰 없음", "items": []}
+
+                headers = {
+                    "Content-Type": "application/json;charset=UTF-8",
+                    "authorization": f"Bearer {token}",
+                    "cont-yn": "N",
+                    "next-key": "",
+                    "api-id": "ka10030",
+                }
+                kept: List[Dict] = []
+                raw_count = 0
+                excluded_etf_count = 0
+                seen_codes: set[str] = set()
+                cont_yn, next_key = "N", ""
+                pages = 0
+                max_pages = 12 if screener_filters else 1
+                retry_auth = False
+
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    while pages < max_pages:
+                        pages += 1
+                        if not await self._acquire_api_slot("ka10030", max_wait=20.0 if limit > 20 else 8.0):
+                            logger.warning("[VOLUME_RANK] rate limit slot timeout")
                             if kept:
                                 break
-                            return {"success": False, "error": "HTTP 429", "items": []}
-                        if resp.status != 200:
-                            logger.warning(f"[VOLUME_RANK] HTTP {resp.status}, body={text[:300]}")
+                            return {"success": False, "error": "API 호출 제한", "items": []}
+                        req_headers = {
+                            **headers,
+                            "cont-yn": cont_yn,
+                            "next-key": next_key,
+                        }
+                        async with session.post(url, headers=req_headers, json=body) as resp:
+                            text = await resp.text()
+                            resp_cont = resp.headers.get("cont-yn") or resp.headers.get("Cont-Yn") or "N"
+                            resp_next = resp.headers.get("next-key") or resp.headers.get("Next-Key") or ""
+                            if resp.status == 429:
+                                api_rate_limiter.handle_api_error(Exception("429 Too Many Requests"))
+                                logger.warning(f"[VOLUME_RANK] HTTP 429, body={text[:300]}")
+                                if kept:
+                                    break
+                                return {"success": False, "error": "HTTP 429", "items": []}
+                            if resp.status != 200:
+                                logger.warning(f"[VOLUME_RANK] HTTP {resp.status}, body={text[:300]}")
+                                if kept:
+                                    break
+                                return {"success": False, "error": f"HTTP {resp.status}", "items": []}
+                            data = json.loads(text)
+
+                        ok = (data.get("return_code") == 0) or (data.get("returnCode") == 0) or (data.get("rt_cd") == "0")
+                        if not ok:
+                            msg = data.get("return_msg") or data.get("returnMsg") or "조회 실패"
+                            logger.warning(f"[VOLUME_RANK] 실패 msg={msg}")
                             if kept:
                                 break
-                            return {"success": False, "error": f"HTTP {resp.status}", "items": []}
-                        data = json.loads(text)
+                            if auth_try == 0 and self._is_kiwoom_token_invalid(msg, data):
+                                logger.warning("🔑 [TOKEN] VOLUME_RANK 토큰 무효 — 재인증 후 재시도")
+                                if await self._reauthenticate_async():
+                                    retry_auth = True
+                                    break
+                            return {"success": False, "error": msg, "items": []}
 
-                    ok = (data.get("return_code") == 0) or (data.get("returnCode") == 0) or (data.get("rt_cd") == "0")
-                    if not ok:
-                        msg = data.get("return_msg") or data.get("returnMsg") or "조회 실패"
-                        logger.warning(f"[VOLUME_RANK] 실패 msg={msg}")
-                        if kept:
-                            break
-                        return {"success": False, "error": msg, "items": []}
+                        rows = data.get("tdy_trde_qty_upper") or []
+                        raw_count += len(rows)
+                        for r in rows:
+                            it = self._parse_volume_rank_row(r)
+                            code = it.get("stock_code", "")
+                            if code and code in seen_codes:
+                                continue
+                            if code:
+                                seen_codes.add(code)
+                            if screener_filters:
+                                if self._is_etf_family_item(it.get("stock_name", ""), it.get("product_type")):
+                                    excluded_etf_count += 1
+                                    continue
+                                if not self._is_screener_stock(it.get("stock_name", ""), it.get("product_type")):
+                                    continue
+                            kept.append(it)
+                            if len(kept) >= limit:
+                                break
 
-                    rows = data.get("tdy_trde_qty_upper") or []
-                    raw_count += len(rows)
-                    for r in rows:
-                        it = self._parse_volume_rank_row(r)
-                        code = it.get("stock_code", "")
-                        if code and code in seen_codes:
-                            continue
-                        if code:
-                            seen_codes.add(code)
-                        if screener_filters:
-                            if self._is_etf_family_item(it.get("stock_name", ""), it.get("product_type")):
-                                excluded_etf_count += 1
-                                continue
-                            if not self._is_screener_stock(it.get("stock_name", ""), it.get("product_type")):
-                                continue
-                        kept.append(it)
                         if len(kept) >= limit:
                             break
+                        next_key = data.get("next_key") or data.get("next-key") or resp_next or ""
+                        cont_yn = "Y" if (resp_cont or "").upper() == "Y" and next_key else "N"
+                        if cont_yn != "Y":
+                            break
 
-                    if len(kept) >= limit:
-                        break
-                    next_key = data.get("next_key") or data.get("next-key") or resp_next or ""
-                    cont_yn = "Y" if (resp_cont or "").upper() == "Y" and next_key else "N"
-                    if cont_yn != "Y":
-                        break
+                if retry_auth:
+                    continue
 
-            items = kept[:limit]
-            logger.info(
-                f"[VOLUME_RANK] success count={len(items)} raw={raw_count} excluded_etf={excluded_etf_count} "
-                f"pages={pages} market={market} sort={sort_tp} screener={screener_filters} body={body}"
-            )
-            return {
-                "success": True,
-                "items": items,
-                "raw_count": raw_count,
-                "excluded_etf_count": excluded_etf_count,
-                "api_filters": body,
-            }
+                items = kept[:limit]
+                logger.info(
+                    f"[VOLUME_RANK] success count={len(items)} raw={raw_count} excluded_etf={excluded_etf_count} "
+                    f"pages={pages} market={market} sort={sort_tp} screener={screener_filters} body={body}"
+                )
+                return {
+                    "success": True,
+                    "items": items,
+                    "raw_count": raw_count,
+                    "excluded_etf_count": excluded_etf_count,
+                    "api_filters": body,
+                }
+
+            return {"success": False, "error": "토큰 재인증 후에도 조회 실패", "items": []}
         except Exception as e:
             logger.exception(f"[VOLUME_RANK] error={e}")
             return {"success": False, "error": str(e), "items": []}
@@ -1711,7 +1743,7 @@ class KiwoomAPI:
             "price_diff": self._pick_int(basic_row, ["pred_pre", "diff", "11"]),
             "change_rate": self._pick_str(basic_row, ["flu_rt", "change_rate", "12"], "0"),
             "volume": self._pick_int(basic_row, ["trde_qty", "volume", "13"]),
-            "orderbook_time": self._pick_str(quote_row, ["hotime", "hoga_time", "time"], datetime.now().strftime("%H:%M:%S")),
+            "orderbook_time": self._pick_str(quote_row, ["hotime", "hoga_time", "time"], now_kst().strftime("%H:%M:%S")),
             "orderbook": [],
             "raw_basic": basic_row,
             "raw_quote": quote_row,
@@ -1835,7 +1867,7 @@ class KiwoomAPI:
                     if len(cntr_tm) >= 12:
                         formatted_date = f"{cntr_tm[:4]}-{cntr_tm[4:6]}-{cntr_tm[6:8]} {cntr_tm[8:10]}:{cntr_tm[10:12]}:00"
                     else:
-                        formatted_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        formatted_date = now_kst().strftime("%Y-%m-%d %H:%M:%S")
                     
                     chart_data.append({
                         "timestamp": formatted_date,
@@ -1861,7 +1893,7 @@ class KiwoomAPI:
                     if len(dt) == 8:
                         formatted_date = f"{dt[:4]}-{dt[4:6]}-{dt[6:8]} 15:30:00"
                     else:
-                        formatted_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        formatted_date = now_kst().strftime("%Y-%m-%d %H:%M:%S")
                     
                     chart_data.append({
                         "timestamp": formatted_date,
@@ -2011,17 +2043,6 @@ class KiwoomAPI:
             app_key = Config.KIWOOM_MOCK_APP_KEY if use_mock_account else Config.KIWOOM_APP_KEY
             app_secret = Config.KIWOOM_MOCK_APP_SECRET if use_mock_account else Config.KIWOOM_APP_SECRET
 
-            # 요청 헤더 (kt10000 스펙)
-            headers = {
-                'Content-Type': 'application/json;charset=UTF-8',
-                'authorization': f'Bearer {self.token_manager.get_valid_token()}',
-                'appkey': app_key,
-                'appsecret': app_secret,
-                'cont-yn': 'N',  # 연속조회여부
-                'next-key': '',  # 연속조회키
-                'api-id': 'kt10000',  # TR명
-            }
-            
             # 주문 요청 데이터 (kt10000 스펙)
             account_pw = Config.KIWOOM_MOCK_ACCOUNT_PASSWORD if use_mock_account else Config.KIWOOM_ACCOUNT_PASSWORD
             request_data = {
@@ -2039,59 +2060,80 @@ class KiwoomAPI:
             if account_pw:
                 request_data['acnt_pwd'] = account_pw
                 request_data['acnt_pw'] = account_pw
-            
-            logger.info(f"매수 주문 요청: {stock_code}, 수량: {quantity}, 가격: {price}, 타입: {order_type}")
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    url, 
-                    headers=headers, 
-                    json=request_data,
-                    timeout=aiohttp.ClientTimeout(total=30)
-                ) as response:
-                    
-                    response_text = await response.text()
-                    logger.info(f"매수 주문 응답: {response.status} - {response_text}")
-                    
-                    if response.status == 200:
+
+            order_kind = "시장가" if order_type == "3" else "지정가"
+            logger.info(
+                f"매수 주문 요청: {stock_code}, 수량: {quantity}, "
+                f"가격: {price}, 타입: {order_type}({order_kind})"
+            )
+
+            async def _do_request() -> tuple[int, Optional[dict], str]:
+                headers = {
+                    'Content-Type': 'application/json;charset=UTF-8',
+                    'authorization': f'Bearer {self.token_manager.get_valid_token()}',
+                    'appkey': app_key,
+                    'appsecret': app_secret,
+                    'cont-yn': 'N',
+                    'next-key': '',
+                    'api-id': 'kt10000',
+                }
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        url,
+                        headers=headers,
+                        json=request_data,
+                        timeout=aiohttp.ClientTimeout(total=30),
+                    ) as response:
+                        response_text = await response.text()
+                        if response.status != 200:
+                            return response.status, None, response_text
                         try:
-                            data = json.loads(response_text)
+                            return response.status, json.loads(response_text), response_text
+                        except json.JSONDecodeError:
+                            return response.status, None, response_text
 
-                            # 키움 응답 키가 버전에 따라 다를 수 있어 둘 다 허용
-                            return_code = data.get("return_code")
-                            rt_cd = data.get("rt_cd")
-                            success = (return_code == 0) or (rt_cd == "0")
+            for attempt in range(2):
+                resp_status, data, response_text = await _do_request()
+                logger.info(f"매수 주문 응답: {resp_status} - {response_text}")
 
-                            if success:
-                                order_no = data.get('ord_no', '') or data.get("order_no", "")
-                                logger.info(f"매수 주문 성공: {stock_code} - 주문번호: {order_no}")
-                                return {
-                                    "success": True,
-                                    "order_id": order_no,
-                                    "order_no": order_no,
-                                    "message": data.get('return_msg') or data.get("msg1") or '정상적으로 처리되었습니다'
-                                }
+                if resp_status == 200 and data:
+                    return_code = data.get("return_code")
+                    rt_cd = data.get("rt_cd")
+                    success = (return_code == 0) or (rt_cd == "0")
 
-                            error_msg = data.get('return_msg') or data.get("msg1") or '알 수 없는 오류'
-                            logger.error(f"매수 주문 실패: {error_msg}")
-                            return {
-                                "success": False,
-                                "error": error_msg,
-                                "_request": request_data,
-                                "_response": data,
-                            }
-                        except json.JSONDecodeError as e:
-                            logger.error(f"매수 주문 응답 파싱 실패: {e}")
-                            return {
-                                "success": False,
-                                "error": "응답 파싱 실패"
-                            }
-                    else:
-                        logger.error(f"매수 주문 API 호출 실패: {response.status}")
+                    if success:
+                        order_no = data.get('ord_no', '') or data.get("order_no", "")
+                        logger.info(f"매수 주문 성공: {stock_code} - 주문번호: {order_no}")
                         return {
-                            "success": False,
-                            "error": f"API 호출 실패: {response.status}"
+                            "success": True,
+                            "order_id": order_no,
+                            "order_no": order_no,
+                            "message": data.get('return_msg') or data.get("msg1") or '정상적으로 처리되었습니다',
                         }
+
+                    error_msg = data.get('return_msg') or data.get("msg1") or '알 수 없는 오류'
+                    if attempt == 0 and self._is_kiwoom_token_invalid(error_msg, data):
+                        logger.warning("🔑 [TOKEN] 매수 주문 토큰 무효(8005) — 재인증 후 1회 재시도")
+                        if await self._reauthenticate_async():
+                            continue
+                    logger.error(f"매수 주문 실패: {error_msg}")
+                    return {
+                        "success": False,
+                        "error": error_msg,
+                        "_request": request_data,
+                        "_response": data,
+                    }
+
+                err = response_text or f"HTTP {resp_status}"
+                if attempt == 0 and self._is_kiwoom_token_invalid(err, data):
+                    logger.warning("🔑 [TOKEN] 매수 주문 HTTP 오류 중 토큰 무효 — 재인증 후 1회 재시도")
+                    if await self._reauthenticate_async():
+                        continue
+                logger.error(f"매수 주문 API 호출 실패: {resp_status}")
+                return {
+                    "success": False,
+                    "error": f"API 호출 실패: {resp_status}" if resp_status != 200 else "응답 파싱 실패",
+                }
                         
         except Exception as e:
             logger.error(f"매수 주문 중 오류: {e}")
