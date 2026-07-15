@@ -52,6 +52,8 @@ class Config:
     MAX_SIGNALS_PER_CONDITION_SCAN = int(os.getenv("MAX_SIGNALS_PER_CONDITION_SCAN", 1))
     # 장시간 체크 우회(테스트용). 실계좌에서는 기본 False 권장.
     ALLOW_OUT_OF_MARKET_TRADING = os.getenv("ALLOW_OUT_OF_MARKET_TRADING", "false").lower() == "true"
+    # 매수 직후 키움 잔고 미반영으로 HOLDING→MANUAL_SELL 오판 방지(초). ORDERED 매도 확정은 유예 제외.
+    BUY_SETTLE_GRACE_SECONDS = int(os.getenv("BUY_SETTLE_GRACE_SECONDS", "90"))
 
     # ===== 관심종목 동기화 설정 =====
     # 예: WATCHLIST_SYNC_TARGET_CONDITION_NAMES=돌파,120일선돌파

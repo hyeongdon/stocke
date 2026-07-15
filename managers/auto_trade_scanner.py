@@ -31,7 +31,7 @@ from utils.auto_trade_engine import (
 )
 from utils.auto_trade_activity_log import log_activity
 from utils.market_hours import linked_trading_session_window_str
-from utils.datetime_kst import kst_day_start_utc_naive, kst_now_iso, utc_now_naive
+from utils.datetime_kst import kst_day_start_utc_naive, now_kst, utc_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +126,11 @@ class AutoTradeScanner:
             "session_window": window,
             "trade_start_time": settings.trade_start_time if settings else None,
             "trade_end_time": settings.trade_end_time if settings else None,
-            "last_scan_at": self.last_scan_at.isoformat() if self.last_scan_at else None,
+            "last_scan_at": (
+                self.last_scan_at if isinstance(self.last_scan_at, str) else self.last_scan_at.isoformat() 
+            )
+            if self.last_scan_at
+            else None, 
             "last_scan_targets": self.last_scan_targets,
             "last_scan_created": self.last_scan_created,
             "scan_interval_sec": self.scan_interval,
@@ -145,7 +149,7 @@ class AutoTradeScanner:
                     else:
                         try:
                             created, targets = await self._scan_once(settings)
-                            self.last_scan_at = kst_now_iso()
+                            self.last_scan_at = now_kst()
                             self.last_scan_created = created
                             self.last_scan_targets = targets
                         except Exception as e:

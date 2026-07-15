@@ -1,6 +1,6 @@
 import logging
 import asyncio
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from typing import Dict, List, Optional, Tuple
 from sqlalchemy.orm import Session
 
@@ -39,6 +39,37 @@ SELL_REASON_PRIORITY = {
     "MANUAL": 5,
 }
 STALE_SELL_ORDER_MINUTES = 15
+
+
+def _buy_age_seconds(pos: Position, *, now: Optional[datetime] = None) -> Optional[float]:
+    """매수 후 경과 초(UTC naive buy_time 기준). buy_time 없으면 None."""
+    if not pos.buy_time:
+        return None
+    bt = pos.buy_time
+    if bt.tzinfo is not None:
+        bt = bt.astimezone(timezone.utc).replace(tzinfo=None)
+    ref = now or utc_now_naive()
+    if ref.tzinfo is not None:
+        ref = ref.astimezone(timezone.utc).replace(tzinfo=None)
+    return (ref - bt).total_seconds()
+
+
+def _within_buy_settle_grace(
+    pos: Position,
+    *,
+    grace_seconds: Optional[int] = None,
+    now: Optional[datetime] = None,
+) -> bool:
+    """매수 직후 잔고 반영 유예 구간이면 True (가짜 계좌청산 방지)."""
+    grace = grace_seconds if grace_seconds is not None else int(
+        getattr(Config, "BUY_SETTLE_GRACE_SECONDS", 90) or 90
+    )
+    if grace <= 0:
+        return False
+    age = _buy_age_seconds(pos, now=now)
+    if age is None:
+        return False
+    return age < grace
 
 
 def _holding_rows_for_code(session: Session, stock_code: str) -> List[Position]:
@@ -1753,6 +1784,18 @@ class StopLossManager:
                 SellOrder.position_id == pos.id,
                 SellOrder.status.in_(("PENDING", "ORDERED")),
             ).order_by(SellOrder.created_at.asc()).all()
+
+            # 매수 직후 잔고 API 미반영 → 앱 매도 없이 MANUAL_SELL 오판 방지.
+            # ORDERED 매도가 있으면 실제 청산 확정이므로 유예하지 않음.
+            has_ordered_sell = any(s.status == "ORDERED" for s in open_sells)
+            if not has_ordered_sell and _within_buy_settle_grace(pos):
+                age = _buy_age_seconds(pos)
+                grace = int(getattr(Config, "BUY_SETTLE_GRACE_SECONDS", 90) or 90)
+                logger.info(
+                    f"🛡️ [RECONCILE] 매수 직후 유예 — {pos.stock_name} "
+                    f"({age:.0f}s < {grace}s, 잔고 미반영 가능)"
+                )
+                continue
 
             finalized = False
             for sell in open_sells:
