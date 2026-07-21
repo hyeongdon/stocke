@@ -160,6 +160,24 @@ function toast(msg, isErr) {
 }
 function setConn(state, text) { $('connBadge').className = 'conn-badge ' + state; $('connText').textContent = text; }
 
+function updateApiLimitBadge(info, traffic) {
+  if (!info) return;
+  const wait = Number(info.seconds_until_available || 0);
+  const usage = Number(info.usage_percent || 0);
+  if (traffic && traffic.defer_dashboard_live) {
+    setConn('warn', '스캔 중 — live 조회 지연');
+    return;
+  }
+  if (info.status === 'limited' || wait > 1.5) {
+    setConn('warn', `키움 API 대기 (${Math.ceil(wait)}초)`);
+    return;
+  }
+  if (usage > 85) {
+    setConn('warn', `키움 API ${Math.round(usage)}%`);
+    return;
+  }
+}
+
 async function pingServer() {
   try {
     await fetchJSON('/health', { timeoutMs: 4000 });
@@ -478,10 +496,77 @@ function statusRow(name, label, cls, hours) {
     : '';
   return `<div class="status-row"><span class="name">${esc(name)}</span>${hoursHtml}<span class="pill ${cls}">${esc(label)}</span></div>`;
 }
+function _hmToMin(hm, fallback) {
+  const raw = String(hm || fallback || '00:00');
+  const m = raw.match(/^(\d{1,2}):(\d{2})/);
+  if (!m) {
+    const f = String(fallback || '00:00').match(/^(\d{1,2}):(\d{2})/);
+    return f ? (+f[1]) * 60 + (+f[2]) : 0;
+  }
+  return (+m[1]) * 60 + (+m[2]);
+}
+function _minToHm(mins) {
+  const h = Math.floor(Math.max(0, mins) / 60);
+  const m = Math.max(0, mins) % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+/** 전략별 매매시간 합집합 — 가동 구간 (표시 전용) */
 function linkedSessionWindow(settings) {
-  const start = settings?.trade_start_time || '10:00';
-  const end = settings?.trade_end_time || '15:20';
-  return `${start}~${end}`;
+  const detail = linkedSessionWindowDetail(settings);
+  return `${detail.start}~${detail.end}`;
+}
+function linkedSessionWindowDetail(settings) {
+  const s = settings || {};
+  const parts = [
+    { key: 'legacy', label: '레거시', start: _v(s, 'trade_start_time') || '10:00', end: _v(s, 'trade_end_time') || '15:20' },
+    { key: 'sangtta', label: '상따', start: _v(s, 'sangtta_trade_start_time') || '09:05', end: _v(s, 'sangtta_trade_end_time') || '11:00' },
+  ];
+  const useBreakout = !!(s.use_breakout || String(s.breakout_condition_names || '').trim());
+  if (useBreakout) {
+    parts.push({
+      key: 'breakout',
+      label: '돌파',
+      start: _v(s, 'breakout_trade_start_time') || '11:00',
+      end: _v(s, 'breakout_trade_end_time') || '14:30',
+    });
+  }
+  let startMin = Math.min(...parts.map((p) => _hmToMin(p.start, p.start)));
+  let endMin = Math.max(...parts.map((p) => _hmToMin(p.end, p.end)));
+  if (s.liquidate_before_close) {
+    const liq = _hmToMin(s.liquidate_time, '15:10');
+    if (liq > endMin) endMin = liq;
+  }
+  return {
+    start: _minToHm(startMin),
+    end: _minToHm(endMin),
+    parts,
+  };
+}
+function readSessionOptsFromForm() {
+  return {
+    trade_start_time: $('set_trade_start_time')?.value || '10:00',
+    trade_end_time: $('set_trade_end_time')?.value || '15:20',
+    sangtta_trade_start_time: $('set_sangtta_trade_start_time')?.value || '09:05',
+    sangtta_trade_end_time: $('set_sangtta_trade_end_time')?.value || '11:00',
+    breakout_trade_start_time: $('set_breakout_trade_start_time')?.value || '11:00',
+    breakout_trade_end_time: $('set_breakout_trade_end_time')?.value || '14:30',
+    use_breakout: !!$('set_use_breakout')?.checked,
+    breakout_condition_names: $('set_breakout_condition_names')?.value || '',
+    liquidate_before_close: !!$('set_liquidate_before_close')?.checked,
+    liquidate_time: $('set_liquidate_time')?.value || '15:10',
+  };
+}
+function refreshEngineSessionDisplay() {
+  const detail = linkedSessionWindowDetail(readSessionOptsFromForm());
+  const startEl = $('engineSessionStart');
+  const endEl = $('engineSessionEnd');
+  const breakEl = $('engineSessionBreakdown');
+  if (startEl) startEl.textContent = detail.start;
+  if (endEl) endEl.textContent = detail.end;
+  if (breakEl) {
+    breakEl.textContent = detail.parts.map((p) => `${p.label} ${p.start}~${p.end}`).join(' · ');
+  }
+  updateStatusSessionHours(`${detail.start}~${detail.end}`);
 }
 function updateStatusSessionHours(window) {
   document.querySelectorAll('#statusBody .status-row .status-hours').forEach((el, i) => {
@@ -489,15 +574,23 @@ function updateStatusSessionHours(window) {
   });
 }
 function bindTradeTimePreview() {
-  const startEl = $('set_trade_start_time');
-  const endEl = $('set_trade_end_time');
-  const onChange = () => {
-    const start = startEl?.value || '10:00';
-    const end = endEl?.value || '15:20';
-    updateStatusSessionHours(`${start}~${end}`);
-  };
-  if (startEl) startEl.onchange = onChange;
-  if (endEl) endEl.onchange = onChange;
+  const ids = [
+    'set_trade_start_time', 'set_trade_end_time',
+    'set_sangtta_trade_start_time', 'set_sangtta_trade_end_time',
+    'set_breakout_trade_start_time', 'set_breakout_trade_end_time',
+    'set_liquidate_time',
+  ];
+  ids.forEach((id) => {
+    const el = $(id);
+    if (!el) return;
+    el.addEventListener('change', refreshEngineSessionDisplay);
+    el.addEventListener('input', refreshEngineSessionDisplay);
+  });
+  const br = $('set_use_breakout');
+  if (br) br.addEventListener('change', refreshEngineSessionDisplay);
+  const liq = $('set_liquidate_before_close');
+  if (liq) liq.addEventListener('change', refreshEngineSessionDisplay);
+  refreshEngineSessionDisplay();
 }
 function sessionActive(block, runtimeKey, runtime) {
   if (block && typeof block.is_active === 'boolean') return block.is_active;
@@ -534,6 +627,7 @@ async function loadStatus() {
     html += statusRow('매수 실행기', buyRunning ? '실행중' : '중지', buyRunning ? 'run' : 'off', engineHours);
     $('statusBody').innerHTML = html;
     $('statusTime').textContent = mon.timestamp ? new Date(mon.timestamp).toLocaleTimeString('ko-KR') : '';
+    updateApiLimitBadge(activity.api_rate_limit, activity.api_traffic);
 
     const sig = mon.signals || {};
     const map = [['총 신호', 'total_signals'], ['주문', 'ordered_signals'], ['처리중', 'processing_signals'], ['실패', 'failed_signals'], ['취소', 'cancelled_signals']];
@@ -1002,7 +1096,7 @@ function sparklineForPosition(p) {
 }
 
 const _sparklineCache = { at: 0, data: {} };
-const SPARKLINE_TTL_MS = 120000;
+const SPARKLINE_TTL_MS = 300000;
 let sparklineLoading = false;
 
 async function loadPositionSparklines(items) {
@@ -1216,10 +1310,16 @@ function shouldLoadPositionsLive() {
 
 async function loadPositions(live = false, opts = {}) {
   const silent = opts.silent === true;
-  const useLive = live || (opts.preferLive !== false && shouldLoadPositionsLive());
+  // forceLive: 30초 자동/전체새로고침처럼 silent여도 키움 live
+  // 10초 폴링은 forceLive 없이 silent → DB만
+  const effectiveLive = opts.forceLive === true
+    ? true
+    : (silent
+      ? false
+      : (live === true || (opts.preferLive !== false && shouldLoadPositionsLive())));
   const seq = ++positionsLoadSeq;
   const sk = '<div class="skeleton">현재가·ATR 조회 중...</div>';
-  if (useLive && !silent && !$('autoPositionsBody')?.querySelector('.pos-card')) {
+  if (effectiveLive && !silent && !$('autoPositionsBody')?.querySelector('.pos-card')) {
     if ($('positionsBody')) $('positionsBody').innerHTML = sk;
     if ($('autoPositionsBody')) $('autoPositionsBody').innerHTML = sk;
   }
@@ -1227,10 +1327,22 @@ async function loadPositions(live = false, opts = {}) {
     if (!(window._kiwoomHoldings || []).length) {
       try { await loadAccount(); } catch (_) { /* 비중 계산은 DB 폴백 */ }
     }
-    const url = `/positions/?status=HOLDING&limit=100&with_levels=true${useLive ? '&live=true' : ''}&_=${Date.now()}`;
-    const d = await fetchJSON(url, { timeoutMs: useLive ? 90000 : 12000 });
+    const prevById = {};
+    (window._appHoldings || []).forEach((p) => { if (p?.id != null) prevById[p.id] = p; });
+    const url = `/positions/?status=HOLDING&limit=100&with_levels=true${effectiveLive ? '&live=true' : ''}&_=${Date.now()}`;
+    const d = await fetchJSON(url, { timeoutMs: effectiveLive ? 90000 : 12000 });
     if (seq !== positionsLoadSeq) return;
-    const items = d.items || [];
+    let items = d.items || [];
+    // DB 폴링 시 직전 live 청산레벨을 유지해 카드가 비지 않게 함
+    if (!effectiveLive && items.length) {
+      items = items.map((p) => {
+        const prev = prevById[p.id];
+        if (prev?.exit_levels && !p.exit_levels?.levels?.length) {
+          return { ...p, exit_levels: { ...prev.exit_levels, ...p.exit_levels, current_price: p.current_price || prev.exit_levels.current_price } };
+        }
+        return p;
+      });
+    }
     window._appHoldings = items;
     if ($('holdingCount')) {
       $('holdingCount').textContent = items.length
@@ -1257,15 +1369,15 @@ async function loadPositions(live = false, opts = {}) {
         $('positionsBody').innerHTML = emptyRow('보유 종목이 없습니다.', '💼');
       }
     }
-    if (useLive) {
+    if (effectiveLive) {
       $('lastUpdated').textContent = new Date().toLocaleTimeString('ko-KR');
       if (!silent) toast(`보유 ${items.length}종목 현재가 갱신 완료`);
     }
   } catch (e) {
-    const msg = useLive ? '현재가/ATR 갱신 실패 — 잠시 후 다시 시도하세요.' : '포지션을 불러오지 못했습니다.';
+    const msg = effectiveLive ? '현재가/ATR 갱신 실패 — 잠시 후 다시 시도하세요.' : '포지션을 불러오지 못했습니다.';
     if ($('autoPositionsBody') && !silent) $('autoPositionsBody').innerHTML = emptyRow(msg, '⚠️');
     if (!silent && $('positionsBody')) $('positionsBody').innerHTML = emptyRow(msg, '⚠️');
-    if (useLive && !silent) toast('보유종목 갱신 실패', true);
+    if (effectiveLive && !silent) toast('보유종목 갱신 실패', true);
   }
 }
 
@@ -1372,10 +1484,34 @@ async function loadOrders() {
 }
 
 /* ===== 조건식 ===== */
+let _conditionsListPromise = null;
+let _conditionsListAt = 0;
+const CONDITIONS_LIST_TTL_MS = 30000;
+
+async function fetchConditionsList() {
+  const now = Date.now();
+  if (_conditionsListPromise && (now - _conditionsListAt) < CONDITIONS_LIST_TTL_MS) {
+    return _conditionsListPromise;
+  }
+  _conditionsListAt = now;
+  _conditionsListPromise = fetchJSON('/conditions/', { timeoutMs: 45000 })
+    .then((d) => {
+      if (!d || d.error || d.detail || d.success === false) {
+        throw new Error((d && (d.error || d.detail)) || '조건식 목록 조회 실패');
+      }
+      return Array.isArray(d) ? d : (d.data || []);
+    })
+    .catch((e) => {
+      _conditionsListPromise = null;
+      _conditionsListAt = 0;
+      throw e;
+    });
+  return _conditionsListPromise;
+}
+
 async function loadConditions() {
   try {
-    const d = await fetchJSON('/conditions/');
-    const conds = Array.isArray(d) ? d : (d.data || []);
+    const conds = await fetchConditionsList();
     $('condCount').textContent = `${conds.length}개`;
     if (!conds.length) { $('conditionsBody').innerHTML = emptyRow('조건식이 없습니다.', '🔍'); return; }
     $('conditionsBody').innerHTML = conds.map(c => `
@@ -1615,42 +1751,12 @@ function tagChipHtml(list, cls) {
     return `<span class="tag-chip ${cls || ''}">${esc(String(t))}</span>`;
   }).join('')}</span>`;
 }
-function renderScreenerNews(stockCode, stockName, items) {
-  const box = $('screenerNewsBody');
-  if (!box) return;
-  if (!items || !items.length) {
-    box.innerHTML = `<div class="empty"><span class="ico">📰</span><b>${esc(stockName || stockCode)}</b> 당일 근거 기사가 없습니다.</div>`;
-    return;
-  }
-  box.innerHTML = `
-    <div class="hint" style="margin-bottom:6px;"><b>${esc(stockName || stockCode)}</b> (${esc(stockCode)}) · 근거 기사 ${items.length}건</div>
-    <div class="screener-news-wrap">
-      ${items.map((it) => `
-        <div class="screener-news-item">
-          <a href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">${esc(it.title)}</a>
-          <div class="screener-news-meta">${esc(it.published_at || '-')}${it.matched_keyword_weight != null ? ` · w=${esc(it.matched_keyword_weight)}` : ''}</div>
-        </div>
-      `).join('')}
-    </div>
-  `;
-}
-async function loadScreenerStockNews(stockCode, stockName) {
-  const box = $('screenerNewsBody');
-  if (box) box.innerHTML = `<div class="skeleton">📰 ${esc(stockName || stockCode)} 기사 조회 중...</div>`;
-  try {
-    const d = await fetchJSON(`/stocks/${encodeURIComponent(stockCode)}/articles?limit=20`);
-    renderScreenerNews(stockCode, stockName, d.items || []);
-  } catch (e) {
-    if (box) box.innerHTML = emptyRow('근거 기사 조회 실패', '⚠️');
-  }
-}
 async function loadScreener() {
   const market = $('scrMarket').value;
   $('screenerBody').innerHTML = '<div class="skeleton">거래대금순·조건식 후보 조회 중...</div>';
   $('screenerCount').textContent = '';
-  if ($('screenerNewsBody')) $('screenerNewsBody').innerHTML = '<div class="empty"><span class="ico">📰</span>종목의 <b>뉴스</b> 버튼을 누르면 근거 기사(당일)를 표시합니다.</div>';
   try {
-    const d = await fetchJSON(`/screener/candidates?market=${market}&limit=50`);
+    const d = await fetchJSON(`/screener/candidates?market=${market}`);
     if (!d.success) { $('screenerBody').innerHTML = emptyRow(d.error || '조회 실패 (장중/토큰 확인)', '⚠️'); return; }
     const items = d.items || [];
     const rawN = d.raw_count != null ? d.raw_count : d.total;
@@ -1661,15 +1767,16 @@ async function loadScreener() {
     const condPart = (d.condition_names && d.condition_names.length)
       ? ` · 조건식 ${d.condition_names.join(', ')}`
       : '';
+    const limitPart = d.candidate_limit ? ` · 상위 ${d.candidate_limit}` : '';
     const tagged = items.filter(s => (s.themes && s.themes.length) || (s.keywords && s.keywords.length)).length;
-    $('screenerCount').textContent = `후보 ${d.selected_count} / 전체 ${items.length}${condPart} (${exclParts.join(', ')} 제외) · 테마표시 ${tagged}`;
+    $('screenerCount').textContent = `후보 ${d.selected_count} / 전체 ${items.length}${limitPart}${condPart} (${exclParts.join(', ')} 제외) · 테마표시 ${tagged}`;
     if (!items.length) { $('screenerBody').innerHTML = emptyRow('데이터가 없습니다.', '🧭'); return; }
     const rows = items.map(s => {
       const rate = parseNum(s.change_rate);
       const amtEok = parseNum(s.trade_amount) / 100; // 백만원 → 억원
       return `<tr class="${s.included ? '' : 'screener-out'}">
         <td style="text-align:center;">${s.included ? '✅' : '—'}</td>
-        <td><span class="stock-name">${esc(s.stock_name)}</span><span class="stock-code">${esc(s.stock_code)}</span><button class="btn-news" data-scr-news="${esc(s.stock_code)}" data-scr-name="${esc(s.stock_name)}">뉴스</button></td>
+        <td><span class="stock-name">${esc(s.stock_name)}</span><span class="stock-code">${esc(s.stock_code)}</span></td>
         <td><span class="pill run">${esc(sourceLabel(s))}</span></td>
         <td class="screener-tags">${tagChipHtml(s.theme_items && s.theme_items.length ? s.theme_items : s.themes, 'theme')}</td>
         <td class="screener-tags">${tagChipHtml(s.keywords, 'kw')}</td>
@@ -1684,15 +1791,87 @@ async function loadScreener() {
         <td class="num">${s.roe == null ? '-' : numFixed(s.roe, 2)}</td></tr>`;
     }).join('');
     $('screenerBody').innerHTML = `<table class="tbl"><thead><tr><th>편입</th><th>종목</th><th>출처</th><th>테마</th><th>키워드</th><th>구분</th><th class="num">현재가</th><th class="num">등락률</th><th class="num">거래량</th><th class="num">거래대금</th><th class="num">시총</th><th class="num">PER</th><th class="num">PBR</th><th class="num">ROE</th></tr></thead><tbody>${rows}</tbody></table>`;
-    document.querySelectorAll('[data-scr-news]').forEach((btn) => {
-      btn.addEventListener('click', async (ev) => {
-        ev.preventDefault();
-        const code = btn.getAttribute('data-scr-news') || '';
-        const name = btn.getAttribute('data-scr-name') || '';
-        await loadScreenerStockNews(code, name);
-      });
-    });
   } catch (e) { $('screenerBody').innerHTML = emptyRow('조회 중 오류 (서버/네트워크 확인)', '⚠️'); }
+}
+
+/* ===== 상따 후보 (Phase0 관측용) ===== */
+async function loadSangtta() {
+  $('sangttaBody').innerHTML = '<div class="skeleton">상따 후보 조회 중...</div>';
+  $('sangttaCount').textContent = '';
+  try {
+    const d = await fetchJSON(`/sangtta/candidates`);
+    if (!d.success) { $('sangttaBody').innerHTML = emptyRow(d.error || '조회 실패', '⚠️'); return; }
+    const items = d.items || [];
+    $('sangttaCount').textContent = `후보 ${items.length}`;
+    if (!items.length) { $('sangttaBody').innerHTML = emptyRow('데이터가 없습니다.', '🔎'); return; }
+    const rows = items.map(s => {
+      const rate = parseNum(s.change_rate);
+      return `<tr>
+        <td><span class="stock-name">${esc(s.stock_name)}</span><span class="stock-code">${esc(s.stock_code)}</span></td>
+        <td><span class="pill run">${esc(s.condition_name || '')}</span></td>
+        <td class="num">${num(s.current_price)}</td>
+        <td class="num ${signClass(rate)}">${rateStr(rate)}</td>
+        <td class="num">${s.volume ? num(s.volume) : '—'}</td>
+        <td class="screener-tags">${tagChipHtml(s.theme_items && s.theme_items.length ? s.theme_items : s.themes, 'theme')}</td>
+      </tr>`;
+    }).join('');
+    $('sangttaBody').innerHTML = `<table class="tbl"><thead><tr><th>종목</th><th>조건식</th><th class="num">현재가</th><th class="num">등락률</th><th class="num">거래량</th><th>테마</th></tr></thead><tbody>${rows}</tbody></table>`;
+  } catch (e) { $('sangttaBody').innerHTML = emptyRow('조회 중 오류 (서버/네트워크 확인)', '⚠️'); }
+}
+
+/* ===== 과매도 돌파 후보 (Phase0~3 관측용) ===== */
+async function loadBreakout() {
+  $('breakoutBody').innerHTML = '<div class="skeleton">돌파 후보와 레벨 계산 중...</div>';
+  $('breakoutCount').textContent = '';
+  try {
+    const d = await fetchJSON('/breakout/candidates', { timeoutMs: 90000 });
+    if (!d.success) {
+      $('breakoutBody').innerHTML = emptyRow(d.error || d.detail || '조회 실패', '⚠️');
+      return;
+    }
+    const items = d.items || [];
+    const errHint = (d.errors && d.errors.length)
+      ? ` · 조건식 오류: ${d.errors.join(', ')}`
+      : '';
+    $('breakoutCount').textContent = `후보 ${items.length}${errHint}`;
+    if (!items.length) {
+      const emptyMsg = (d.errors && d.errors.length)
+        ? `조건식 조회 실패 (${d.errors.join(', ')})`
+        : (d.message || '조건식 편입 종목이 없습니다.');
+      $('breakoutBody').innerHTML = emptyRow(emptyMsg, d.errors && d.errors.length ? '⚠️' : '🔎');
+      return;
+    }
+    const rows = items.map((s) => {
+      const proximity = s.proximity_pct == null ? '—' : `${parseNum(s.proximity_pct) >= 0 ? '+' : ''}${parseNum(s.proximity_pct).toFixed(2)}%`;
+      const gateCls = s.gate_ok ? 'up' : '';
+      const softN = s.entry_soft_polls != null ? s.entry_soft_polls : '—';
+      const softSt = s.entry_soft_streak != null ? s.entry_soft_streak : '—';
+      const hardBit = s.entry_hard_ok ? 'HARD✓' : 'HARD·';
+      const softBit = `SOFT ${softSt}/${softN}`;
+      const confirmHint = [
+        s.confirm_close ? `종가 ${num(s.confirm_close)}` : null,
+        hardBit,
+        softBit,
+      ].filter(Boolean).join(' · ');
+      return `<tr>
+        <td><b>${esc(s.stock_name || s.stock_code)}</b><div class="hint">${esc(s.stock_code)}</div></td>
+        <td>${esc(s.condition_name || '—')}</td>
+        <td>${esc(s.level_kind || '—')}<div class="hint">${s.level_price ? `${num(s.level_price)}원` : '—'}</div></td>
+        <td class="num ${gateCls}">${proximity}</td>
+        <td class="num">${s.volume_ratio == null ? '—' : `${parseNum(s.volume_ratio).toFixed(2)}배`}</td>
+        <td class="${gateCls}">${s.gate_ok ? '통과' : '대기'}<div class="hint">${esc(s.gate_reason || '')}</div><div class="hint">${esc(confirmHint)}</div></td>
+      </tr>`;
+    }).join('');
+    $('breakoutBody').innerHTML = `<table class="tbl"><thead><tr><th>종목</th><th>조건식</th><th>돌파 레벨</th><th class="num">근접도</th><th class="num">거래량</th><th>게이트·확인</th></tr></thead><tbody>${rows}</tbody></table>`;
+  } catch (e) {
+    const msg = String(e && e.message || '');
+    const hint = msg.includes('404')
+      ? 'API 없음 — 서버를 재시작해 주세요'
+      : (msg.includes('AbortError') || msg.includes('aborted')
+        ? '조회 시간 초과 — 잠시 후 다시 시도'
+        : `조회 실패${msg ? ` (${msg})` : ''}`);
+    $('breakoutBody').innerHTML = emptyRow(hint, '⚠️');
+  }
 }
 
 /* ===== 자동매매 설정 폼 ===== */
@@ -1771,7 +1950,7 @@ function fieldSizingFixed(s) {
 function fieldExitRules(s) {
   const hasAtr = _v(s, 'atr_mult_stop') !== '' || _v(s, 'atr_mult_trail') !== '';
   return `<div class="exit-stack">
-    <div class="exit-note">📌 <b>매도(청산)</b> 전용 설정입니다. 추가매수·진입 타이밍과 무관합니다. 아래 ①②③ 중 <b>ATR을 입력하면 ②③의 % 방식을 대체</b>합니다.</div>
+    <div class="exit-note">📌 <b>레거시(거래대금·스크리너) 포지션 전용</b> 청산입니다. 상따·과매도 돌파는 각 전략 카드의 매도 규칙을 씁니다. ATR을 입력하면 아래 % 방식을 대체합니다.</div>
 
     <div class="exit-card">
       <h5><span class="exit-num">1</span> 손절 — 손실 한도</h5>
@@ -1785,16 +1964,16 @@ function fieldExitRules(s) {
       <h5><span class="exit-num">2</span> 트레일링 스탑 — 고점 따라 수익 실현</h5>
       <div class="exit-desc">고점이 <b>시작 %</b>에 도달하면 트레일링이 켜지고 <b>익절 바닥</b>이 잠깁니다. 고점이 오를수록 트레일링선도 올라가며, 바닥 이하로는 내려가지 않습니다.</div>
       <div class="exit-fields">
-        ${field('트레일링 시작 — 고점 수익률(%) 도달 후 적용 (0=즉시)', fNum('take_profit_rate', s, '예: 10'), '기존 「익절 %」 필드 · 도달 시 즉시매도 아님')}
+        ${field('트레일링 시작 — 고점 수익률(%) 도달 후 적용 (0=즉시)', fNum('take_profit_rate', s, '예: 10'), '도달 시 즉시매도 아님 · 활성화만')}
         ${field('고점 대비 하락 % (비우면 미사용)', fNum('trailing_stop_pct', s, '예: 1.8'), 'ATR 트레일 배수를 입력하면 이 값은 사용하지 않습니다')}
       </div>
-      <div class="exit-example">예: 시작 10% · 하락 3% → +10% 도달 시 바닥 233,200원 잠금 · 고점 251,000이면 매도선 max(243,470, 233,200)=243,470</div>
+      <div class="exit-example">예: 시작 10% · 하락 3% → +10% 도달 시 바닥 잠금 · 이후 고점 대비 3% 하락 시 매도</div>
     </div>
 
     <div class="exit-card atr">
       <h5><span class="exit-num">3</span> ATR 변동성 — 종목별 동적 손절·트레일 (입력 시 ②·손절% 대체)</h5>
       <div class="exit-desc">
-        <b>ATR</b> = 최근 일봉 기준, 하루 평균 가격 변동폭(원). 변동 큰 종목은 손절선을 넓게, 작은 종목은 좁게 잡습니다.<br>
+        <b>ATR</b> = 최근 일봉 기준, 하루 평균 가격 변동폭(원).<br>
         <span class="text-cyan">손절선 ≈ 매수가 − ATR×손절배수 · 트레일선 ≈ 고점 − ATR×트레일배수</span>
       </div>
       <div class="exit-fields cols-3">
@@ -1802,8 +1981,7 @@ function fieldExitRules(s) {
         ${field('트레일 배수 (비우면 ② 트레일 % 사용)', fNum('atr_mult_trail', s, '예: 2'))}
         ${field('ATR 계산 기간(일)', fNum('atr_period', s, '14'))}
       </div>
-      <div class="exit-example">예: 매수 1만원, ATR 400원, 손절배수 1.5 → <b>9,400원</b> 이하 매도 · 고점 1만2천, 트레일배수 2 → <b>1만1,200원</b> 이하 매도<br>
-      ${hasAtr ? '<span class="text-accent" style="font-weight:600;">✓ ATR 값이 설정되어 있어 손절/트레일은 변동성 기준으로 동작합니다.</span>' : '비워 두면 ①②의 % 방식만 사용합니다.'}</div>
+      <div class="exit-example">${hasAtr ? '<span class="text-accent" style="font-weight:600;">✓ ATR 값이 설정되어 있어 손절/트레일은 변동성 기준으로 동작합니다.</span>' : '비워 두면 ①②의 % 방식만 사용합니다.'}</div>
     </div>
   </div>`;
 }
@@ -1874,82 +2052,219 @@ function renderSettingsForm(s) {
   const on = !!s.is_enabled;
   let h = '';
 
-  // 종목 선정 — 개별주 + 선택 조건식
-  h += `<div class="form-section">
-    <h4>종목 선정 (스크리너)</h4>
-    <div class="box-soft screener-policy">
-      <div class="desc">거래대금 상위 <b>코스피·코스닥 개별 주식</b>에 더해, 아래에서 선택한 <b>키움 조건식</b> 편입 종목도 후보에 포함됩니다. ETF·ETN·파생상품은 항상 제외됩니다.</div>
-      <ul class="policy-list">
-        <li><span class="policy-tag on">포함</span> 거래대금 상위 50 · KRX · 당일 20만주 이상</li>
-        <li><span class="policy-tag on">포함</span> 선택한 조건식 편입 종목 (아래 체크)</li>
-        <li><span class="policy-tag off">제외</span> ETF · ETN · 레버리지 · 인버스 · 곱버스 · SPAC · 우선주 · 정리매매</li>
-        <li><span class="policy-tag off">제외</span> PER 100배 이상 · PER 마이너스 (재무 데이터 없으면 통과)</li>
-      </ul>
-      <div class="box-title" style="margin-top:12px;">조건식 후보 (선택)</div>
-      <div class="desc" style="margin-bottom:8px;">체크한 조건식에 편입된 종목만 스크리너·자동매매 스캔 대상에 추가됩니다. 미선택 시 거래대금순만 사용합니다.</div>
-      <div id="screenerCondPicker" class="cond-picker"><div class="skeleton">조건식 목록 불러오는 중...</div></div>
-      <input type="hidden" id="set_screener_condition_names" value="${esc(_v(s, 'screener_condition_names'))}">
-      <div class="exit-note">1분 주기 스캔 · 우측 「스크리너 후보」에서 출처(거래대금/조건식) 확인</div>
-    </div>
-  </div>`;
+  const sangBuy = _v(s, 'sangtta_buy_amount') !== '' ? _v(s, 'sangtta_buy_amount') : '500000';
+  const sangSlots = _v(s, 'sangtta_max_slots') !== '' ? _v(s, 'sangtta_max_slots') : '2';
+  const sangStart = _v(s, 'sangtta_trade_start_time') || '09:05';
+  const sangEnd = _v(s, 'sangtta_trade_end_time') || '11:00';
+  const sangChgMin = _v(s, 'sangtta_change_min') !== '' ? _v(s, 'sangtta_change_min') : '12';
+  const sangChgMax = _v(s, 'sangtta_change_max') !== '' ? _v(s, 'sangtta_change_max') : '15';
+  const breakoutBuy = _v(s, 'breakout_buy_amount') !== '' ? _v(s, 'breakout_buy_amount') : '1000000';
+  const breakoutSlots = _v(s, 'breakout_max_slots') !== '' ? _v(s, 'breakout_max_slots') : '1';
+  const breakoutStart = _v(s, 'breakout_trade_start_time') || '11:00';
+  if (s.breakout_entry_hard == null) s.breakout_entry_hard = true;
+  if (s.breakout_entry_soft == null) s.breakout_entry_soft = true;
+  if (s.breakout_entry_soft_polls == null || s.breakout_entry_soft_polls === '') s.breakout_entry_soft_polls = 2;
+  const breakoutEnd = _v(s, 'breakout_trade_end_time') || '14:30';
+  const screenerLimit = _v(s, 'screener_candidate_limit') || '70';
+  const softPolls = Math.max(1, parseInt(_v(s, 'soft_confirm_polls') || '2', 10) || 2);
+  const softHint = `SOFT ${softPolls}회 연속 확인 후 매도`;
+  const hardHint = 'HARD 1회(즉시) 매도 · 확인 대기 없음';
+  const engineDetail = linkedSessionWindowDetail(s);
+  const engineBreak = engineDetail.parts.map((p) => `${p.label} ${p.start}~${p.end}`).join(' · ');
 
-  // 청산 규칙 (전체 너비, 3단 카드)
-  h += `<div class="form-section">
-    <h4>청산 규칙 (매도)</h4>
-    <div class="desc">이미 산 종목을 <b>언제 팔지</b> 정합니다. 2분마다 현재가를 확인해 조건 충족 시 전량 매도합니다.</div>
-    ${fieldExitRules(s)}
-  </div>`;
-
-  // 진입 타이밍
-  h += `<div class="form-section">
-    <h4>진입 타이밍</h4>
-    <div class="desc">스크리너를 통과해도 아래 타이밍을 만족할 때만 신규 진입. (데이터 없으면 통과)</div>
-    <div class="box-soft" style="margin-top:0;">
-      ${fCheck('use_entry_gate', s, '진입 타이밍 게이트 사용')}
-      ${fCheck('require_above_open', s, '현재가 ≥ 시가 (당일 양봉만)')}
-      ${fCheck('require_above_vwap', s, '현재가 ≥ 장중 VWAP (분봉 강세 확인)')}
-      <div class="form-grid" style="margin-top:12px;">
-        ${field('당일 위치 하한 (0~1, 고가·저가 사이)', fNum('day_position_min', s, '0.5'))}
-        ${field('당일 위치 상한 (0~1, 이 값 초과 시 매수 금지)', fNum('day_position_max', s, '비우면 미적용'))}
-        ${field('전일대비 거래량비율(%) 하한', fNum('volume_ratio_min', s, '비우면 미적용'))}
-      </div>
-    </div>
-  </div>`;
-
-  // 매수 사이징
-  h += `<div class="form-section">
-    <h4>매수 사이징</h4>
-    <div class="desc">등락률·금액으로 <b>언제·얼마 살지</b> 정합니다. 역피라미딩은 등락이 클수록 금액을 줄입니다. 「약한 신호」 등락 % 미만이면 매수하지 않습니다.</div>
-    ${field('방식', fSelect('sizing_method', s, [['PYRAMIDING', '역피라미딩 (등락↑ 금액↓)'], ['FIXED', '고정 금액']]))}
-    ${fieldSizingPyramiding(s)}
-    ${fieldSizingFixed(s)}
-    <div class="form-grid" style="margin-top:14px;">
-      ${field('예수금 현금 보유율(%) — 매수에 쓰지 않고 남길 비율', fNum('cash_reserve_pct', s, '10'), '0=전액 사용 · 10=예수금의 10%는 현금 유지')}
-      ${field('최대 동시 보유 종목 (0=예수금 기준 자동)', fNum('max_concurrent_positions', s, '0'))}
-      ${field('1일 최대 매수 횟수', fNum('max_daily_buys', s, '20'))}
-      ${field('1일 손실 한도(원)', fNum('daily_loss_limit', s, '-500000'))}
-    </div>
-    <div class="form-grid-4" style="margin-top:12px;">
-      ${field('1일 이익목표(원, 도달 시 신규매수 종료)', fNum('daily_profit_target', s, '150000'))}
-      ${field('재주문 쿨다운(초)', fNum('reorder_cooldown_sec', s, '300'))}
-      ${field('매매 시작', fTime('trade_start_time', s))}
-      ${field('매매 종료', fTime('trade_end_time', s))}
-      ${field('매수 주문 방식', fSelect('order_method', s, [['MARKET', '시장가 (권장)'], ['LIMIT', '지정가 (현재가)']]))}
-    </div>
-    <div class="desc" style="margin-top:8px;">거래일 08:50~「매매 종료」까지 엔진(스캐너·매수기)이 자동 기동되며, 종료 시각 이후 루프가 중지됩니다. 실제 매수는 「매매 시작」부터 허용됩니다.</div>
-    <input type="hidden" id="set_max_invest_amount" value="${esc(_v(s, 'max_invest_amount') || s.initial_max_amount || 5000000)}">
-  </div>`;
-
-  // 장 마감 전 전량 청산
-  h += `<div class="form-section">
+  // ===== 공통 (포트폴리오) =====
+  h += `<div class="form-section strategy-card strategy-common">
+    <h4>공통 · 포트폴리오</h4>
+    <div class="desc">전략과 무관한 계좌·한도입니다. 매매 시작/종료는 <b>각 전략 카드에서만</b> 설정합니다. 아래는 합친 결과 표시입니다.</div>
     <div class="box-soft">
+      <div class="box-title">매매시간 (표시 전용 · 수정 불가)</div>
+      <div class="engine-session-readonly" id="engineSessionPanel">
+        <div class="engine-session-pair">
+          <span class="engine-session-label">매매시작시간</span>
+          <strong class="engine-session-value" id="engineSessionStart">${esc(engineDetail.start)}</strong>
+        </div>
+        <div class="engine-session-pair">
+          <span class="engine-session-label">매매종료시간</span>
+          <strong class="engine-session-value" id="engineSessionEnd">${esc(engineDetail.end)}</strong>
+        </div>
+        <span class="fhint" id="engineSessionBreakdown">${esc(engineBreak)}</span>
+      </div>
+      <div class="form-grid" style="margin-top:12px;">
+        ${field('예수금 현금 보유율(%)', fNum('cash_reserve_pct', s, '10'), '0=전액 사용')}
+        ${field('최대 동시 보유 종목 (0=자동)', fNum('max_concurrent_positions', s, '0'))}
+        ${field('1일 최대 매수 횟수', fNum('max_daily_buys', s, '20'))}
+        ${field('1일 손실 한도(원)', fNum('daily_loss_limit', s, '-500000'))}
+        ${field('1일 이익목표(원)', fNum('daily_profit_target', s, '150000'))}
+        ${field('재주문 쿨다운(초)', fNum('reorder_cooldown_sec', s, '300'))}
+        ${field('매매 주기(초)', fNum('scan_interval_sec', s, '60'), '스캐너·매수 폴링 · 15~600 · 기본 60')}
+        ${field('매수 주문 방식', fSelect('order_method', s, [['MARKET', '시장가 (권장)'], ['LIMIT', '지정가 (현재가)']]))}
+        ${field('SOFT 연속 확인 횟수', fNum('soft_confirm_polls', s, '2'), `SOFT=${softPolls}회 · HARD=1회(즉시) · 상따·돌파 공통`)}
+      </div>
+      <div class="box-title" style="margin-top:12px;">장마감 전량 청산</div>
       ${fCheck('liquidate_before_close', s, '장 마감 전 전량 청산 (오버나잇 방지)')}
-      <div class="desc">지정 시각이 지나면 보유 종목을 손익과 무관하게 모두 시장가로 정리합니다. 매매 종료(15:20) 이전 시각으로 설정하세요.</div>
+      <div class="desc">지정 시각 이후 레거시·상따 보유를 시장가 정리합니다. 과매도 돌파는 적용하지 않습니다.</div>
       ${field('청산 시작 시각', fTime('liquidate_time', s))}
     </div>
   </div>`;
 
-  // actions
+  // ===== 레거시 =====
+  h += `<div class="form-section strategy-card strategy-legacy">
+    <h4>레거시 · 거래대금 / 스크리너</h4>
+    <div class="desc">거래대금 상위·조건식 후보의 <b>매수·진입·청산</b>입니다. 상따·돌파와 규칙을 공유하지 않습니다.</div>
+    <div class="box-soft screener-policy">
+      <div class="box-title">매수 시간</div>
+      <div class="desc">레거시 신규매수에만 적용됩니다. (공통란 매매시간은 전략별 시간을 합친 표시값)</div>
+      <div class="form-grid">
+        ${field('매수 시작', fTime('trade_start_time', s))}
+        ${field('매수 종료', fTime('trade_end_time', s))}
+      </div>
+
+      <div class="box-title" style="margin-top:14px;">종목 선정</div>
+      <ul class="policy-list">
+        <li><span class="policy-tag on">포함</span> 거래대금 상위 ${esc(screenerLimit)} · KRX · 당일 20만주 이상</li>
+        <li><span class="policy-tag on">포함</span> 선택한 조건식 편입 종목</li>
+        <li><span class="policy-tag off">제외</span> ETF · ETN · 레버리지 · 인버스 · 곱버스 · SPAC · 우선주</li>
+      </ul>
+      <div id="screenerCondPicker" class="cond-picker"><div class="skeleton">조건식 목록 불러오는 중...</div></div>
+      <input type="hidden" id="set_screener_condition_names" value="${esc(_v(s, 'screener_condition_names'))}">
+      <div class="box-title" style="margin-top:12px;">검증 전용 조건식 <span class="fhint">주문 없음</span></div>
+      <div class="desc">예: <code>검증(눌림목)</code> — 실매매 스크리너와 분리 · 전략 시뮬 「당일 검증」용</div>
+      <div id="screenerVerifyCondPicker" class="cond-picker"><div class="skeleton">조건식 목록 불러오는 중...</div></div>
+      <input type="hidden" id="set_screener_verify_condition_names" value="${esc(_v(s, 'screener_verify_condition_names'))}">
+
+      <div class="box-title" style="margin-top:14px;">진입 타이밍</div>
+      <div class="desc">스크리너 통과 후 아래를 만족할 때만 신규 진입. (데이터 없으면 통과)</div>
+      ${fCheck('use_entry_gate', s, '진입 타이밍 게이트 사용')}
+      ${fCheck('require_above_open', s, '현재가 ≥ 시가 (당일 양봉만)')}
+      ${fCheck('require_above_vwap', s, '현재가 ≥ 장중 VWAP')}
+      <div class="form-grid" style="margin-top:10px;">
+        ${field('당일 위치 하한 (0~1)', fNum('day_position_min', s, '0.5'))}
+        ${field('당일 위치 상한 (0~1)', fNum('day_position_max', s, '비우면 미적용'))}
+        ${field('전일대비 거래량비율(%) 하한', fNum('volume_ratio_min', s, '비우면 미적용'))}
+      </div>
+
+      <div class="box-title" style="margin-top:14px;">매수 사이징</div>
+      <div class="desc">등락률·금액으로 얼마 살지 정합니다. 상따·돌파 금액과는 별개입니다.</div>
+      ${field('방식', fSelect('sizing_method', s, [['PYRAMIDING', '역피라미딩 (등락↑ 금액↓)'], ['FIXED', '고정 금액']]))}
+      ${fieldSizingPyramiding(s)}
+      ${fieldSizingFixed(s)}
+      <input type="hidden" id="set_max_invest_amount" value="${esc(_v(s, 'max_invest_amount') || s.initial_max_amount || 5000000)}">
+
+      <div class="box-title" style="margin-top:14px;">레거시 청산 (매도)</div>
+      ${fieldExitRules(s)}
+    </div>
+  </div>`;
+
+  // ===== 상따 =====
+  h += `<div class="form-section strategy-card strategy-sangtta">
+    <h4>상따</h4>
+    <div class="desc">전용 조건식 유니버스 · 소액 매수 · <b>상한가 이탈 / 급락</b> 청산. 레거시 손절·트레일과 별개입니다.</div>
+    <div class="box-soft screener-policy">
+      <div class="box-title">종목 선정 · 매수</div>
+      <ul class="policy-list">
+        <li><span class="policy-tag on">포함</span> 상따 전용 조건식 편입 종목</li>
+        <li><span class="policy-tag on">관찰</span> 등락 ${esc(sangChgMin)}~${esc(sangChgMax)}% · 시총≤3000억</li>
+        <li><span class="policy-tag off">제외</span> 상한가 도달 · ETF·파생</li>
+      </ul>
+      <div id="sangttaCondPicker" class="cond-picker"><div class="skeleton">조건식 목록 불러오는 중...</div></div>
+      <input type="hidden" id="set_sangtta_condition_names" value="${esc(_v(s, 'sangtta_condition_names'))}">
+      <div class="box-title" style="margin-top:12px;">검증 전용 조건식 <span class="fhint">주문 없음</span></div>
+      <div class="desc">예: <code>검증(상따)</code> — 실매매 상따 조건식과 분리 · 당일 검증 전용</div>
+      <div id="sangttaVerifyCondPicker" class="cond-picker"><div class="skeleton">조건식 목록 불러오는 중...</div></div>
+      <input type="hidden" id="set_sangtta_verify_condition_names" value="${esc(_v(s, 'sangtta_verify_condition_names'))}">
+      <div class="form-grid" style="margin-top:12px;">
+        ${field('1회 매수 금액(원)', `<input type="number" id="set_sangtta_buy_amount" value="${esc(sangBuy)}" step="10000" min="0" placeholder="500000">`, '기본 50만원')}
+        ${field('동시 보유 슬롯', `<input type="number" id="set_sangtta_max_slots" value="${esc(sangSlots)}" step="1" min="0" placeholder="2">`)}
+        ${field('매수 시작', `<input type="time" id="set_sangtta_trade_start_time" value="${esc(sangStart)}">`)}
+        ${field('매수 종료', `<input type="time" id="set_sangtta_trade_end_time" value="${esc(sangEnd)}">`)}
+        ${field('진입 등락 하한(%)', `<input type="number" id="set_sangtta_change_min" value="${esc(sangChgMin)}" step="0.5" min="0" max="30" placeholder="12">`, '전일대비 최소 등락')}
+        ${field('진입 등락 상한(%)', `<input type="number" id="set_sangtta_change_max" value="${esc(sangChgMax)}" step="0.5" min="0" max="30" placeholder="15">`, '전일대비 최대 등락 · 상한가 미도달')}
+      </div>
+
+      <div class="box-title" style="margin-top:14px;">상따 청산 (매도)</div>
+      <div class="desc">우선순위: 상한가 이탈 HARD/SOFT → 급락 HARD/SOFT. · ${esc(softHint)} · ${esc(hardHint)}</div>
+      <div class="exit-stack">
+        <div class="exit-card">
+          <h5><span class="exit-num">1</span> 상한가 이탈</h5>
+          <div class="exit-desc">상한가 터치 이후, 상한가 대비 하락 %로 이탈을 판정합니다.</div>
+          <div class="exit-fields">
+            ${field('이탈 SOFT (%)', fNum('limit_break_soft_pct', s, '2'), softHint)}
+            ${field('이탈 HARD (%)', fNum('limit_break_hard_pct', s, '3'), hardHint)}
+          </div>
+        </div>
+        <div class="exit-card alt">
+          <h5><span class="exit-num">2</span> 급락 (고점 대비)</h5>
+          <div class="exit-desc">진입 후 고점 대비 하락 %입니다.</div>
+          <div class="exit-fields">
+            ${field('급락 SOFT (%)', fNum('sharp_drop_soft_pct', s, '3'), softHint)}
+            ${field('급락 HARD (%)', fNum('sharp_drop_hard_pct', s, '5'), hardHint)}
+          </div>
+        </div>
+      </div>
+      <div class="exit-note">등락 ${esc(sangChgMin)}~${esc(sangChgMax)}% · 시간창 ${esc(sangStart)}~${esc(sangEnd)} · 1회 ${esc(sangBuy)}원 · 슬롯 ${esc(sangSlots)}</div>
+    </div>
+  </div>`;
+
+  // ===== 과매도 돌파 =====
+  h += `<div class="form-section strategy-card strategy-breakout">
+    <h4>과매도 돌파</h4>
+    <div class="desc">전용 조건식 유니버스(5분봉 RSI) · 5분봉 돌파 진입 · <b>구조 이탈 → 고정손절 → 트레일</b>. 장마감 강제청산 제외.</div>
+    <div class="box-soft screener-policy">
+      ${fCheck('use_breakout', s, '과매도 돌파 전략 사용')}
+      <div class="box-title" style="margin-top:8px;">종목 선정 · 매수</div>
+      <div class="desc">과매도 이력은 조건식이 담당합니다. (5분봉 RSI(10) 18→28 등) 서버 RSI 전수 스캔 없음.</div>
+      <div id="breakoutCondPicker" class="cond-picker"><div class="skeleton">조건식 목록 불러오는 중...</div></div>
+      <input type="hidden" id="set_breakout_condition_names" value="${esc(_v(s, 'breakout_condition_names'))}">
+      <div class="box-title" style="margin-top:12px;">검증 전용 조건식 <span class="fhint">주문 없음</span></div>
+      <div class="desc">예: <code>검증(과매도돌파)</code> — 실매매 돌파 조건식과 분리</div>
+      <div id="breakoutVerifyCondPicker" class="cond-picker"><div class="skeleton">조건식 목록 불러오는 중...</div></div>
+      <input type="hidden" id="set_breakout_verify_condition_names" value="${esc(_v(s, 'breakout_verify_condition_names'))}">
+      <div class="form-grid" style="margin-top:12px;">
+        ${field('1회 매수 금액(원)', `<input type="number" id="set_breakout_buy_amount" value="${esc(breakoutBuy)}" step="10000" min="0">`)}
+        ${field('동시 보유 슬롯', `<input type="number" id="set_breakout_max_slots" value="${esc(breakoutSlots)}" step="1" min="1">`)}
+        ${field('매수 시작', `<input type="time" id="set_breakout_trade_start_time" value="${esc(breakoutStart)}">`)}
+        ${field('매수 종료', `<input type="time" id="set_breakout_trade_end_time" value="${esc(breakoutEnd)}">`)}
+      </div>
+
+      <div class="box-title" style="margin-top:14px;">진입 게이트</div>
+      <div class="form-grid">
+        ${field('돌파 레벨', fSelect('breakout_level_mode', s, [['prev_high', '직전 5분봉 고가'], ['n_day_high', '최근 N봉 고가(5분)']]))}
+        <div id="breakoutNDayField">${field('N봉 고가 기간', fNum('breakout_n_day', s, '10'), '5분봉 N개 (예: 10=50분)')}</div>
+        ${field('분봉 거래량 배수', fNum('breakout_vol_mult', s, '1.5'), '현재 5분봉 ÷ 직전 N봉 평균')}
+        ${field('과열 컷 등락률(%)', fNum('breakout_max_change_pct', s, '12'), '이 이상이면 매수 금지')}
+      </div>
+      <div class="box-title" style="margin-top:10px;">진입 확인</div>
+      <div class="desc">레벨 위 + 거래량 통과 후 HARD 또는 SOFT 중 하나면 매수. 둘 다 끄면 터치(기존) 진입.</div>
+      <div class="form-grid">
+        ${fCheck('breakout_entry_hard', s, 'HARD — 직전 5분봉 종가 > 레벨 시 즉시', '가짜 돌파 완화')}
+        ${fCheck('breakout_entry_soft', s, 'SOFT — 레벨 위 연속 스캔', '스캔 간격마다 +1, 이탈 시 리셋')}
+        ${field('SOFT 필요 횟수', fNum('breakout_entry_soft_polls', s, '2'), '예: 2 = 약 2스캔 연속 레벨 위')}
+      </div>
+
+      <div class="box-title" style="margin-top:14px;">돌파 청산 (매도)</div>
+      <div class="desc">구조 이탈(돌파 레벨 기준) → 고정손절(매수가) → 트레일링(고점). · ${esc(softHint)} · ${esc(hardHint)}</div>
+      <div class="exit-stack">
+        <div class="exit-card">
+          <h5><span class="exit-num">1</span> 구조 이탈</h5>
+          <div class="exit-fields">
+            ${field('구조 SOFT (%)', fNum('struct_break_soft_pct', s, '1'), softHint)}
+            ${field('구조 HARD (%)', fNum('struct_break_hard_pct', s, '2'), hardHint)}
+          </div>
+        </div>
+        <div class="exit-card alt">
+          <h5><span class="exit-num">2</span> 고정손절 · 트레일</h5>
+          <div class="exit-fields">
+            ${field('고정 손절(%)', fNum('breakout_stop_loss_pct', s, '3'))}
+            ${field('트레일링 시작 수익률(%)', fNum('breakout_trailing_start_pct', s, '10'), '고점 수익률 도달 시 활성화')}
+            ${field('활성 후 고점 하락폭(%)', fNum('breakout_trailing_pct', s, '4'))}
+          </div>
+        </div>
+      </div>
+      <div class="exit-note">우선순위: 상따 &gt; 과매도 돌파 &gt; 레거시 · ${esc(breakoutStart)}~${esc(breakoutEnd)} · ${esc(breakoutBuy)}원 · 슬롯 ${esc(breakoutSlots)}</div>
+    </div>
+  </div>`;
+
+  // ===== 휴장일 · 저장 =====
   h += `<div class="form-section" id="holidaySection">
     <h4>거래소 휴장일 (KRX)</h4>
     <div class="desc">주말(토·일)은 자동 휴장. 아래는 <b>추가 휴장일</b>만 등록합니다.</div>
@@ -1993,6 +2308,26 @@ function renderSettingsForm(s) {
   bindTradeTimePreview();
   loadHolidaySection();
   loadScreenerConditionPicker(s);
+  loadSangttaConditionPicker(s);
+  loadBreakoutConditionPicker(s);
+  loadScreenerVerifyConditionPicker(s);
+  loadSangttaVerifyConditionPicker(s);
+  loadBreakoutVerifyConditionPicker(s);
+  bindBreakoutLevelModeToggle();
+}
+
+function bindBreakoutLevelModeToggle() {
+  const sel = $('set_breakout_level_mode');
+  const wrap = $('breakoutNDayField');
+  const input = $('set_breakout_n_day');
+  if (!sel || !wrap) return;
+  const sync = () => {
+    const useNDay = sel.value === 'n_day_high';
+    wrap.classList.toggle('is-dimmed', !useNDay);
+    if (input) input.disabled = !useNDay;
+  };
+  sel.onchange = sync;
+  sync();
 }
 
 function parseConditionNameList(raw) {
@@ -2014,8 +2349,7 @@ async function loadScreenerConditionPicker(settings) {
   if (!box) return;
   const selected = new Set(parseConditionNameList(settings?.screener_condition_names));
   try {
-    const d = await fetchJSON('/conditions/');
-    const conds = Array.isArray(d) ? d : (d.data || []);
+    const conds = await fetchConditionsList();
     if (!conds.length) {
       box.innerHTML = '<div class="desc">키움 조건식이 없습니다. HTS에서 조건식을 등록한 뒤 새로고침하세요.</div>';
       syncScreenerConditionNamesField();
@@ -2033,6 +2367,122 @@ async function loadScreenerConditionPicker(settings) {
   } catch (e) {
     box.innerHTML = emptyRow('조건식 목록을 불러오지 못했습니다.', '⚠️');
   }
+}
+
+// 상따 조건식 선택기 (스크리너와 동일한 /conditions/ API 사용)
+async function loadSangttaConditionPicker(settings) {
+  const box = $('sangttaCondPicker');
+  if (!box) return;
+  const selected = new Set(parseConditionNameList(settings?.sangtta_condition_names));
+  try {
+    const conds = await fetchConditionsList();
+    if (!conds.length) {
+      box.innerHTML = '<div class="desc">키움 조건식이 없습니다. HTS에서 조건식을 등록한 뒤 새로고침하세요.</div>';
+      syncSangttaConditionNamesField();
+      return;
+    }
+    box.innerHTML = conds.map((c) => {
+      const name = c.condition_name || '';
+      const checked = selected.has(name) ? 'checked' : '';
+      return `<label class="check cond-pick"><input type="checkbox" class="sangtta-cond-check" value="${esc(name)}" ${checked}>${esc(name)} <span class="fhint">API ${esc(c.api_id)}</span></label>`;
+    }).join('');
+    document.querySelectorAll('.sangtta-cond-check').forEach((el) => {
+      el.addEventListener('change', syncSangttaConditionNamesField);
+    });
+    syncSangttaConditionNamesField();
+  } catch (e) {
+    box.innerHTML = emptyRow('조건식 목록을 불러오지 못했습니다.', '⚠️');
+  }
+}
+
+function syncSangttaConditionNamesField() {
+  const hidden = $('set_sangtta_condition_names');
+  if (!hidden) return;
+  const names = [...document.querySelectorAll('.sangtta-cond-check:checked')]
+    .map((el) => el.value.trim())
+    .filter(Boolean);
+  hidden.value = names.join(', ');
+}
+
+async function loadBreakoutConditionPicker(settings) {
+  const box = $('breakoutCondPicker');
+  if (!box) return;
+  const selected = new Set(parseConditionNameList(settings?.breakout_condition_names));
+  try {
+    const conds = await fetchConditionsList();
+    if (!conds.length) {
+      box.innerHTML = '<div class="desc">키움 조건식이 없습니다.</div>';
+      syncBreakoutConditionNamesField();
+      return;
+    }
+    box.innerHTML = conds.map((c) => {
+      const name = c.condition_name || '';
+      const checked = selected.has(name) ? 'checked' : '';
+      return `<label class="check cond-pick"><input type="checkbox" class="breakout-cond-check" value="${esc(name)}" ${checked}>${esc(name)} <span class="fhint">API ${esc(c.api_id)}</span></label>`;
+    }).join('');
+    document.querySelectorAll('.breakout-cond-check').forEach((el) => {
+      el.addEventListener('change', syncBreakoutConditionNamesField);
+    });
+    syncBreakoutConditionNamesField();
+  } catch (e) {
+    box.innerHTML = emptyRow('조건식 목록을 불러오지 못했습니다.', '⚠️');
+  }
+}
+
+function syncBreakoutConditionNamesField() {
+  const hidden = $('set_breakout_condition_names');
+  if (!hidden) return;
+  hidden.value = [...document.querySelectorAll('.breakout-cond-check:checked')]
+    .map((el) => el.value.trim())
+    .filter(Boolean)
+    .join(', ');
+}
+
+async function _loadVerifyCondPicker(boxId, hiddenId, checkClass, selectedRaw) {
+  const box = $(boxId);
+  if (!box) return;
+  const selected = new Set(parseConditionNameList(selectedRaw));
+  try {
+    const conds = await fetchConditionsList();
+    if (!conds.length) {
+      box.innerHTML = '<div class="desc">키움 조건식이 없습니다.</div>';
+      return;
+    }
+    box.innerHTML = conds.map((c) => {
+      const name = c.condition_name || '';
+      const checked = selected.has(name) ? 'checked' : '';
+      return `<label class="check cond-pick"><input type="checkbox" class="${checkClass}" value="${esc(name)}" ${checked}>${esc(name)} <span class="fhint">API ${esc(c.api_id)}</span></label>`;
+    }).join('');
+    const sync = () => {
+      const hidden = $(hiddenId);
+      if (!hidden) return;
+      hidden.value = [...document.querySelectorAll(`.${checkClass}:checked`)]
+        .map((el) => el.value.trim()).filter(Boolean).join(', ');
+    };
+    document.querySelectorAll(`.${checkClass}`).forEach((el) => el.addEventListener('change', sync));
+    sync();
+  } catch (e) {
+    box.innerHTML = emptyRow('조건식 목록을 불러오지 못했습니다.', '⚠️');
+  }
+}
+
+async function loadScreenerVerifyConditionPicker(settings) {
+  await _loadVerifyCondPicker(
+    'screenerVerifyCondPicker', 'set_screener_verify_condition_names',
+    'screener-verify-cond-check', settings?.screener_verify_condition_names,
+  );
+}
+async function loadSangttaVerifyConditionPicker(settings) {
+  await _loadVerifyCondPicker(
+    'sangttaVerifyCondPicker', 'set_sangtta_verify_condition_names',
+    'sangtta-verify-cond-check', settings?.sangtta_verify_condition_names,
+  );
+}
+async function loadBreakoutVerifyConditionPicker(settings) {
+  await _loadVerifyCondPicker(
+    'breakoutVerifyCondPicker', 'set_breakout_verify_condition_names',
+    'breakout-verify-cond-check', settings?.breakout_verify_condition_names,
+  );
 }
 
 async function loadHolidaySection() {
@@ -2134,9 +2584,18 @@ function bindHolidayActions() {
 
 function collectSettings() {
   syncScreenerConditionNamesField();
+  syncSangttaConditionNamesField();
+  syncBreakoutConditionNamesField();
   const out = {};
   const sizingMethod = ($('set_sizing_method')?.value || 'PYRAMIDING').toUpperCase();
-  const skipKeys = new Set(['initial_max_amount_fixed', 'signal_min_threshold_fixed', 'screener_condition_names']);
+  // hidden 조건식 필드는 아래에서 체크박스 기준으로 직접 수집
+  const skipKeys = new Set([
+    'initial_max_amount_fixed',
+    'signal_min_threshold_fixed',
+    'screener_condition_names',
+    'sangtta_condition_names',
+    'breakout_condition_names',
+  ]);
   if (sizingMethod === 'FIXED') {
     skipKeys.add('initial_min_amount');
     skipKeys.add('initial_max_amount');
@@ -2173,19 +2632,83 @@ function collectSettings() {
       out.initial_min_amount = Math.min(weak, strong);
     }
   }
+
+  // 조건식은 체크박스 상태를 최우선으로 수집 (hidden 값에 의존하지 않음)
+  const condNames = [...document.querySelectorAll('.screener-cond-check:checked')]
+    .map((el) => el.value.trim())
+    .filter(Boolean);
+  out.screener_condition_names = condNames.join(', ');
+
+  const sangNames = [...document.querySelectorAll('.sangtta-cond-check:checked')]
+    .map((el) => el.value.trim())
+    .filter(Boolean);
+  out.sangtta_condition_names = sangNames.join(', ');
+  const breakoutNames = [...document.querySelectorAll('.breakout-cond-check:checked')]
+    .map((el) => el.value.trim())
+    .filter(Boolean);
+  out.breakout_condition_names = breakoutNames.join(', ');
+
+  out.screener_verify_condition_names = [...document.querySelectorAll('.screener-verify-cond-check:checked')]
+    .map((el) => el.value.trim()).filter(Boolean).join(', ');
+  out.sangtta_verify_condition_names = [...document.querySelectorAll('.sangtta-verify-cond-check:checked')]
+    .map((el) => el.value.trim()).filter(Boolean).join(', ');
+  out.breakout_verify_condition_names = [...document.querySelectorAll('.breakout-verify-cond-check:checked')]
+    .map((el) => el.value.trim()).filter(Boolean).join(', ');
+
   const hiddenCond = $('set_screener_condition_names');
-  if (hiddenCond) {
-    out.screener_condition_names = hiddenCond.value.trim();
-  } else {
-    const condChecks = document.querySelectorAll('.screener-cond-check');
-    if (condChecks.length) {
-      const condNames = [...condChecks]
-        .filter((el) => el.checked)
-        .map((el) => el.value.trim())
-        .filter(Boolean);
-      out.screener_condition_names = condNames.join(', ');
+  if (hiddenCond) hiddenCond.value = out.screener_condition_names;
+  const hiddenSang = $('set_sangtta_condition_names');
+  if (hiddenSang) hiddenSang.value = out.sangtta_condition_names;
+  const hiddenBreakout = $('set_breakout_condition_names');
+  if (hiddenBreakout) hiddenBreakout.value = out.breakout_condition_names;
+  const hv1 = $('set_screener_verify_condition_names');
+  if (hv1) hv1.value = out.screener_verify_condition_names;
+  const hv2 = $('set_sangtta_verify_condition_names');
+  if (hv2) hv2.value = out.sangtta_verify_condition_names;
+  const hv3 = $('set_breakout_verify_condition_names');
+  if (hv3) hv3.value = out.breakout_verify_condition_names;
+
+  // 상따 소액/슬롯 기본값
+  if (out.sangtta_buy_amount == null || out.sangtta_buy_amount === '' || Number(out.sangtta_buy_amount) <= 0) {
+    out.sangtta_buy_amount = 500000;
+  }
+  if (out.sangtta_max_slots == null || out.sangtta_max_slots === '') {
+    out.sangtta_max_slots = 2;
+  }
+  if (!out.sangtta_trade_start_time) out.sangtta_trade_start_time = '09:05';
+  if (!out.sangtta_trade_end_time) out.sangtta_trade_end_time = '11:00';
+  if (out.sangtta_change_min == null || out.sangtta_change_min === '') out.sangtta_change_min = 12;
+  if (out.sangtta_change_max == null || out.sangtta_change_max === '') out.sangtta_change_max = 15;
+  {
+    let lo = Number(out.sangtta_change_min);
+    let hi = Number(out.sangtta_change_max);
+    if (Number.isFinite(lo) && Number.isFinite(hi) && hi < lo) {
+      out.sangtta_change_min = hi;
+      out.sangtta_change_max = lo;
     }
   }
+  if (out.limit_break_soft_pct == null || out.limit_break_soft_pct === '') out.limit_break_soft_pct = 2;
+  if (out.limit_break_hard_pct == null || out.limit_break_hard_pct === '') out.limit_break_hard_pct = 3;
+  if (out.sharp_drop_soft_pct == null || out.sharp_drop_soft_pct === '') out.sharp_drop_soft_pct = 3;
+  if (out.sharp_drop_hard_pct == null || out.sharp_drop_hard_pct === '') out.sharp_drop_hard_pct = 5;
+  if (out.soft_confirm_polls == null || out.soft_confirm_polls === '' || Number(out.soft_confirm_polls) <= 0) {
+    out.soft_confirm_polls = 2;
+  }
+  if (out.scan_interval_sec == null || out.scan_interval_sec === '' || Number(out.scan_interval_sec) <= 0) {
+    out.scan_interval_sec = 60;
+  } else {
+    out.scan_interval_sec = Math.max(15, Math.min(600, Number(out.scan_interval_sec) || 60));
+  }
+  if (out.breakout_buy_amount == null || Number(out.breakout_buy_amount) <= 0) out.breakout_buy_amount = 1000000;
+  if (out.breakout_max_slots == null || Number(out.breakout_max_slots) <= 0) out.breakout_max_slots = 1;
+  if (!out.breakout_trade_start_time) out.breakout_trade_start_time = '11:00';
+  if (!out.breakout_trade_end_time) out.breakout_trade_end_time = '14:30';
+  if (out.breakout_entry_hard == null) out.breakout_entry_hard = true;
+  if (out.breakout_entry_soft == null) out.breakout_entry_soft = true;
+  if (out.breakout_entry_soft_polls == null || Number(out.breakout_entry_soft_polls) <= 0) {
+    out.breakout_entry_soft_polls = 2;
+  }
+
   return out;
 }
 
@@ -2242,7 +2765,6 @@ function switchAutoSubTab(name) {
   if (name === 'monitor' && isAutoTabActive()) {
     loadPositions(true, { silent: true });
     loadLog();
-    loadScreener();
     loadActivity();
   } else if (name === 'settings') {
     loadSettings();
@@ -2269,18 +2791,16 @@ function refreshAll() {
   loadAccount(); loadStatus(); loadTelegram();
   loadTodayKeywords();
   loadThemeBatchStatus();
-  loadPositions(shouldLoadPositionsLive(), { silent: shouldLoadPositionsLive() });
+  loadPositions(true, { silent: true, forceLive: true });
   loadSells(); loadOrders();
   loadActivity(); loadLog(); loadSettings();
-  if (isAutoTabActive() && isAutoMonitorSubActive()) {
-    loadScreener();
-  }
 }
 const refreshMap = {
   positions: () => loadPositions(true), sells: loadSells, orders: loadOrders, conditions: loadConditions,
 };
-const ACTIVITY_REFRESH_MS = 3000;
+const ACTIVITY_REFRESH_MS = 5000;
 const POSITION_LIVE_REFRESH_MS = 10000;
+const AUTO_REFRESH_MS = 60000;
 
 let autoTimer = null;
 let activityTimer = null;
@@ -2294,7 +2814,7 @@ function isAutoTabActive() {
 function startPositionsLivePolling() {
   if (positionsLiveTimer) clearInterval(positionsLiveTimer);
   positionsLiveTimer = setInterval(() => {
-    if (isAutoTabActive() && isAutoMonitorSubActive()) loadPositions(true, { silent: true });
+    if (isAutoTabActive() && isAutoMonitorSubActive()) loadPositions(false, { silent: true });
   }, POSITION_LIVE_REFRESH_MS);
 }
 function setupAutoRefresh() {
@@ -2307,10 +2827,10 @@ function setupAutoRefresh() {
         loadMarketIndices({ silent: true });
         loadTodayKeywords();
         loadThemeBatchStatus();
-        loadPositions(shouldLoadPositionsLive(), { silent: shouldLoadPositionsLive() });
+        loadPositions(true, { silent: true });
         loadSells(); loadOrders(); loadLog();
         $('lastUpdated').textContent = new Date().toLocaleTimeString('ko-KR');
-      }, 30000);
+      }, AUTO_REFRESH_MS);
     }
   }
   cb.onchange = applyAuto;
@@ -2341,6 +2861,8 @@ document.addEventListener('DOMContentLoaded', () => {
   if ($('activityRefresh')) $('activityRefresh').onclick = loadActivity;
   $('autoPosRefresh').onclick = () => loadPositions(true);
   $('scrRefresh').onclick = loadScreener;
+  if ($('sangRefresh')) $('sangRefresh').onclick = loadSangtta;
+  if ($('breakoutRefresh')) $('breakoutRefresh').onclick = loadBreakout;
   document.querySelectorAll('[data-refresh]').forEach(btn => { btn.onclick = () => { $('lastUpdated').textContent = new Date().toLocaleTimeString('ko-KR'); (refreshMap[btn.dataset.refresh] || (() => {}))(); }; });
   setupAutoRefresh();
   startActivityPolling();

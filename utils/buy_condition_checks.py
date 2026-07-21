@@ -200,19 +200,25 @@ def build_buy_condition_checklist(
             required=f"+{settings.get('add_buy_trigger')}% 이상",
             key="pyramiding_add",
         ))
-    elif cid in (0, 99999) or source in ("screener", "watchlist", "condition", "both"):
+    elif cid in (0, 99999) or source in ("screener", "watchlist", "condition", "both", "sangtta", "breakout"):
         src_map = {
             "screener": "거래대금순 스크리너",
             "condition": "조건식 스크리너",
             "both": "거래대금+조건식",
             "watchlist": "관심종목",
+            "sangtta": "상따 전용 조건식",
+            "breakout": "과매도 돌파 전용 조건식",
         }
         src_label = src_map.get(source) or "자동매매 스캐너"
+        if meta.get("strategy") == "sangtta" or source == "sangtta":
+            src_label = "상따 전용 조건식"
+        elif meta.get("strategy") == "breakout" or source == "breakout":
+            src_label = "과매도 돌파 전용 조건식"
         items.append(_chk(
             "매수 경로", "후보 종목",
             passed=infer,
             actual=src_label,
-            required="관심종목·스크리너(거래대금/조건식)·ETF 제외",
+            required="관심종목·스크리너(거래대금/조건식)·상따·ETF 제외",
             key="candidate_source",
         ))
     elif signal:
@@ -247,40 +253,168 @@ def build_buy_condition_checklist(
         ))
         return items
 
-    # --- 가격·등락률 ---
-    has_price_cond = bool(settings.get("buy_below_price")) or _eff_min_rate(settings) is not None
-    if settings.get("buy_below_price"):
-        cap = int(settings["buy_below_price"])
-        passed_p = price <= cap if price else None
+    # --- 가격·등락률 / 전략 게이트 ---
+    is_sangtta = (meta.get("strategy") == "sangtta") or (source == "sangtta")
+    is_breakout = (meta.get("strategy") == "breakout") or (source == "breakout")
+    if is_breakout:
+        level_kind = meta.get("level_kind") or settings.get("breakout_level_mode") or "prev_high"
+        level_price = int(meta.get("breakout_level_price") or meta.get("level_price") or 0)
+        level_ok = bool(price and level_price and int(price) > level_price)
         items.append(_chk(
-            "가격·등락률", "매수가 상한",
-            passed=passed_p if passed_p is not None else infer,
+            "돌파 게이트", "과매도 조건식 유니버스",
+            passed=infer,
+            actual="전용 조건식 통과",
+            required="breakout_condition_names 편입",
+            key="breakout_universe",
+        ))
+        items.append(_chk(
+            "돌파 게이트", "돌파 레벨 상향 돌파",
+            passed=level_ok if level_price and price else infer,
+            actual=f"{int(price):,}원" if price else "—",
+            required=f"> {level_price:,}원 ({level_kind})" if level_price else level_kind,
+            key="breakout_level",
+        ))
+        vol_ratio = meta.get("volume_ratio")
+        vol_mult = float(settings.get("breakout_vol_mult") or 1.5)
+        items.append(_chk(
+            "돌파 게이트", "5분봉 거래량 배수",
+            passed=(float(vol_ratio) >= vol_mult) if vol_ratio is not None else infer,
+            actual=f"{float(vol_ratio):.2f}배" if vol_ratio is not None else "—",
+            required=f"≥ {vol_mult:g}배",
+            key="breakout_volume",
+        ))
+        max_change = float(settings.get("breakout_max_change_pct") or 12.0)
+        items.append(_chk(
+            "돌파 게이트", "과열 컷",
+            passed=(float(change_rate) < max_change) if change_rate is not None else infer,
+            actual=f"{float(change_rate):+.2f}%" if change_rate is not None else "—",
+            required=f"< {max_change:g}%",
+            key="breakout_overheat",
+        ))
+        items.append(_chk(
+            "돌파 게이트", "oversold_breakout 패키지",
+            passed=infer,
+            actual=f"{level_kind} · {level_price:,}원" if level_price else level_kind,
+            required="AND 통과",
+            key="oversold_breakout",
+        ))
+    elif is_sangtta:
+        from utils.auto_trade_engine import (
+            SANGTTA_CHANGE_MAX,
+            SANGTTA_CHANGE_MIN,
+            SANGTTA_MAX_MARKET_CAP_EOK,
+            SANGTTA_OPEN_RISE_MIN_PCT,
+            estimate_upper_limit_price,
+            evaluate_sangtta_breakout_from_ctx,
+            sangtta_band_bounds,
+        )
+
+        class _S:
+            pass
+
+        s_obj = _S()
+        for k, v in settings.items():
+            setattr(s_obj, k, v)
+        band_lo, band_hi = sangtta_band_bounds(s_obj)
+        cr = float(change_rate) if change_rate is not None else None
+        band_ok = (cr is not None and band_lo <= cr <= band_hi)
+        items.append(_chk(
+            "상따 게이트", f"등락 밴드 {band_lo:g}~{band_hi:g}%",
+            passed=band_ok if cr is not None else infer,
+            actual=f"{cr:+.2f}%" if cr is not None else "—",
+            required=f"{band_lo:g}% ~ {band_hi:g}%",
+            key="sangtta_band",
+        ))
+
+        day_open = (gate_ctx or {}).get("day_open")
+        open_ok = None
+        open_actual = "—"
+        if day_open and price:
+            open_chg = (price - int(day_open)) / int(day_open) * 100
+            open_ok = open_chg >= SANGTTA_OPEN_RISE_MIN_PCT or price >= int(day_open)
+            open_actual = f"시가대비 {open_chg:+.2f}%"
+        items.append(_chk(
+            "상따 게이트", "시가 위/시가대비≥3%",
+            passed=open_ok if open_ok is not None else infer,
+            actual=open_actual,
+            required=f"시가 이상 또는 ≥{SANGTTA_OPEN_RISE_MIN_PCT:g}%",
+            key="sangtta_open",
+        ))
+
+        prev_close = (gate_ctx or {}).get("prev_close")
+        ul = (gate_ctx or {}).get("upper_limit_price")
+        if ul is None and prev_close:
+            ul = estimate_upper_limit_price(int(prev_close))
+        lim_ok = None
+        if ul and price:
+            lim_ok = price < int(ul)
+        items.append(_chk(
+            "상따 게이트", "상한가 미도달",
+            passed=lim_ok if lim_ok is not None else infer,
             actual=f"{price:,}원" if price else "—",
-            required=f"≤ {cap:,}원",
-            key="buy_below_price",
+            required=f"< 상한가 {int(ul):,}원" if ul else "상한가 미만",
+            key="sangtta_not_limit_up",
         ))
 
-    min_rate = _eff_min_rate(settings)
-    if min_rate is not None:
-        passed_r = float(change_rate or 0) >= min_rate if change_rate is not None else None
+        mcap = (gate_ctx or {}).get("market_cap")
+        cap_ok = None
+        if mcap is not None:
+            try:
+                cap_ok = float(mcap) <= float(settings.get("sangtta_max_market_cap") or SANGTTA_MAX_MARKET_CAP_EOK)
+            except (TypeError, ValueError):
+                cap_ok = None
         items.append(_chk(
-            "가격·등락률", "최소 등락률",
-            passed=passed_r if passed_r is not None else infer,
-            actual=f"{change_rate:+.2f}%" if change_rate is not None else "—",
-            required=f"≥ +{min_rate}%",
-            key="min_change_rate",
+            "상따 게이트", "시총 ≤3000억",
+            passed=cap_ok if cap_ok is not None else infer,
+            actual=f"{float(mcap):.0f}억" if mcap is not None else "—",
+            required=f"≤ {float(settings.get('sangtta_max_market_cap') or SANGTTA_MAX_MARKET_CAP_EOK):.0f}억",
+            key="sangtta_market_cap",
         ))
 
-    if not has_price_cond:
+        pack_ok, pack_reason = evaluate_sangtta_breakout_from_ctx(
+            s_obj, int(price or 0), cr, gate_ctx or {}, skip_time_check=True,
+        )
         items.append(_chk(
-            "가격·등락률", "가격/등락 조건",
-            passed=True,
-            actual="미설정",
-            required="—",
-            enabled=False,
+            "상따 게이트", "sangtta_breakout 패키지",
+            passed=pack_ok if (price and cr is not None) else infer,
+            actual=pack_reason,
+            required="AND 통과",
+            key="sangtta_breakout",
         ))
+    else:
+        has_price_cond = bool(settings.get("buy_below_price")) or _eff_min_rate(settings) is not None
+        if settings.get("buy_below_price"):
+            cap = int(settings["buy_below_price"])
+            passed_p = price <= cap if price else None
+            items.append(_chk(
+                "가격·등락률", "매수가 상한",
+                passed=passed_p if passed_p is not None else infer,
+                actual=f"{price:,}원" if price else "—",
+                required=f"≤ {cap:,}원",
+                key="buy_below_price",
+            ))
 
-    items.extend(entry_gate_check_items(settings, price or 0, gate_ctx, infer_pass_if_ordered=infer))
+        min_rate = _eff_min_rate(settings)
+        if min_rate is not None:
+            passed_r = float(change_rate or 0) >= min_rate if change_rate is not None else None
+            items.append(_chk(
+                "가격·등락률", "최소 등락률",
+                passed=passed_r if passed_r is not None else infer,
+                actual=f"{change_rate:+.2f}%" if change_rate is not None else "—",
+                required=f"≥ +{min_rate}%",
+                key="min_change_rate",
+            ))
+
+        if not has_price_cond:
+            items.append(_chk(
+                "가격·등락률", "가격/등락 조건",
+                passed=True,
+                actual="미설정",
+                required="—",
+                enabled=False,
+            ))
+
+        items.extend(entry_gate_check_items(settings, price or 0, gate_ctx, infer_pass_if_ordered=infer))
 
     # --- 사이징 ---
     sizing = (settings.get("sizing_method") or "FIXED").upper()
@@ -316,7 +450,11 @@ def build_buy_condition_checklist(
             key="pyramiding_size",
         ))
     else:
-        cap = int(settings.get("max_invest_amount") or settings.get("initial_max_amount") or 0)
+        cap = int(
+            (settings.get("breakout_buy_amount") or 0)
+            if is_breakout
+            else (settings.get("max_invest_amount") or settings.get("initial_max_amount") or 0)
+        )
         items.append(_chk(
             "사이징", "고정 매수 금액",
             passed=True if fill_amount else infer,

@@ -24,6 +24,7 @@ from utils.auto_trade_engine import (
     check_entry_gate,
     disable_auto_trade,
     effective_min_change_rate,
+    evaluate_gate_pack,
     get_auto_trade_settings_sync,
     has_buy_conditions,
     new_buy_block_reason,
@@ -79,19 +80,29 @@ class AutoTradeScanner:
     def __init__(self):
         self.kiwoom_api = KiwoomAPI()
         self.is_running = False
-        self.scan_interval = 60  # 1분 (후보 수·스킵 로직으로 API 부하 완화)
+        self.scan_interval = 60  # 기본 1분 — 설정 scan_interval_sec 로 덮어씀
         self._task: Optional[asyncio.Task] = None
         self.last_scan_at: Optional[datetime] = None
         self.last_scan_created = 0
         self.last_scan_targets = 0
+
+    def _effective_scan_interval(self, settings: Optional[AutoTradeSettings] = None) -> int:
+        settings = settings or self._load_settings()
+        try:
+            sec = int(getattr(settings, "scan_interval_sec", None) or self.scan_interval or 60)
+        except (TypeError, ValueError):
+            sec = 60
+        return max(15, min(600, sec))
 
     async def start(self):
         if self.is_running:
             return
         self.is_running = True
         self._task = asyncio.create_task(self._loop())
-        logger.info("📈 [AUTO_SCANNER] 자동매매 스캐너 시작")
-        log_activity("SCANNER", "종목 스캐너 시작 (1분 주기)", "info")
+        interval = self._effective_scan_interval()
+        self.scan_interval = interval
+        logger.info(f"📈 [AUTO_SCANNER] 자동매매 스캐너 시작 ({interval}초 주기)")
+        log_activity("SCANNER", f"종목 스캐너 시작 ({interval}초 주기)", "info")
 
     async def stop(self):
         self.is_running = False
@@ -120,6 +131,7 @@ class AutoTradeScanner:
         active = self.is_session_active()
         settings = get_auto_trade_settings_sync()
         window = linked_trading_session_window_str(settings) if settings else None
+        interval = self._effective_scan_interval(settings)
         return {
             "is_running": self.is_running,
             "is_active": active,
@@ -133,13 +145,15 @@ class AutoTradeScanner:
             else None, 
             "last_scan_targets": self.last_scan_targets,
             "last_scan_created": self.last_scan_created,
-            "scan_interval_sec": self.scan_interval,
+            "scan_interval_sec": interval,
         }
 
     async def _loop(self):
         try:
             while self.is_running:
                 settings = self._load_settings()
+                interval = self._effective_scan_interval(settings)
+                self.scan_interval = interval
                 if settings and settings.is_enabled:
                     allowed, off_reason = auto_trade_engines_allowed()
                     if not allowed:
@@ -156,7 +170,7 @@ class AutoTradeScanner:
                             logger.error(f"📈 [AUTO_SCANNER] 스캔 오류: {e}")
                 else:
                     logger.debug("📈 [AUTO_SCANNER] 자동매매 OFF — 스캔 건너뜀")
-                await asyncio.sleep(self.scan_interval)
+                await asyncio.sleep(interval)
         except asyncio.CancelledError:
             pass
         finally:
@@ -166,6 +180,14 @@ class AutoTradeScanner:
         return get_auto_trade_settings_sync()
 
     async def _scan_once(self, settings: AutoTradeSettings) -> tuple:
+        from utils.api_traffic_guard import mark_scan_end, mark_scan_start
+        mark_scan_start()
+        try:
+            return await self._scan_once_inner(settings)
+        finally:
+            mark_scan_end()
+
+    async def _scan_once_inner(self, settings: AutoTradeSettings) -> tuple:
         if not has_buy_conditions(settings):
             msg = "매수 조건 미설정 — 스캔 건너뜀"
             logger.info(f"📈 [AUTO_SCANNER] {msg}")
@@ -405,8 +427,85 @@ class AutoTradeScanner:
                 f"📈 [AUTO_SCANNER] 후보 수집 — 거래대금 {len(volume_items)} + "
                 f"조건식 편입 {cond_added} (설정: {', '.join(condition_names)})"
             )
+        # 3) 상따 전용 조건식(유니버스 분리) — 존재하면 별도 source로 추가 (거래대금 상위 풀과 섞지 않음)
+        try:
+            sangtta_names = parse_condition_names(getattr(settings, "sangtta_condition_names", None))
+            if sangtta_names:
+                sang_items, sang_errs = await fetch_condition_target_items(self.kiwoom_api, sangtta_names)
+                if sang_errs:
+                    logger.warning(f"📈 [AUTO_SCANNER] 상따 조건식 조회 실패: {', '.join(sang_errs)}")
+                for it in sang_items or []:
+                    code = it.get("stock_code")
+                    if not code:
+                        continue
+                    by_code[code] = {**it, "source": "sangtta"}
+                n = len(sang_items or [])
+                logger.info(
+                    f"📈 [AUTO_SCANNER] 상따 후보 수집 — {n}개 (설정: {', '.join(sangtta_names)})"
+                )
+                self._log_strategy_candidates("상따", sang_items or [])
+        except Exception as e:
+            logger.debug(f"📈 [AUTO_SCANNER] 상따 후보 수집 중 오류: {e}")
+
+        # 4) 과매도 돌파 전용 조건식 — 다른 유니버스와 합치지 않고 source로 전략을 고정
+        try:
+            breakout_names = parse_condition_names(
+                getattr(settings, "breakout_condition_names", None)
+            )
+            if getattr(settings, "use_breakout", False) and breakout_names:
+                breakout_items, breakout_errs = await fetch_condition_target_items(
+                    self.kiwoom_api, breakout_names,
+                )
+                if breakout_errs:
+                    logger.warning(
+                        f"📈 [AUTO_SCANNER] 돌파 조건식 조회 실패: {', '.join(breakout_errs)}"
+                    )
+                for it in breakout_items or []:
+                    code = it.get("stock_code")
+                    if code and by_code.get(code, {}).get("source") != "sangtta":
+                        by_code[code] = {**it, "source": "breakout"}
+                n = len(breakout_items or [])
+                logger.info(
+                    f"📈 [AUTO_SCANNER] 돌파 후보 수집 — {n}개 "
+                    f"(설정: {', '.join(breakout_names)})"
+                )
+                self._log_strategy_candidates("돌파", breakout_items or [])
+        except Exception as e:
+            logger.debug(f"📈 [AUTO_SCANNER] 돌파 후보 수집 중 오류: {e}")
 
         return list(by_code.values())
+
+    @staticmethod
+    def _format_candidate_brief(item: Dict) -> str:
+        code = item.get("stock_code") or "?"
+        name = (item.get("stock_name") or "").strip() or code
+        try:
+            price = int(item.get("current_price") or 0)
+        except (TypeError, ValueError):
+            price = 0
+        chg = item.get("change_rate")
+        try:
+            chg_s = f"{float(chg):+.2f}%" if chg is not None else "?"
+        except (TypeError, ValueError):
+            chg_s = "?"
+        price_s = f"{price:,}" if price else "?"
+        return f"{name}({code}) {price_s} {chg_s}"
+
+    @classmethod
+    def _log_strategy_candidates(cls, label: str, items: List[Dict]) -> None:
+        """상따/돌파 조건식 편입 종목을 파일 로그에 남긴다."""
+        if not items:
+            logger.info(f"📈 [AUTO_SCANNER] [{label}] 편입 종목 없음")
+            return
+        briefs = [cls._format_candidate_brief(it) for it in items]
+        # 한 줄에 过多하지 않게 상위 20개 + 나머지는 개수만
+        shown = briefs[:20]
+        extra = len(briefs) - len(shown)
+        detail = ", ".join(shown)
+        if extra > 0:
+            detail = f"{detail} …외 {extra}개"
+        logger.info(f"📈 [AUTO_SCANNER] [{label}] 편입 {len(briefs)}종목: {detail}")
+        log_activity("SCANNER", f"[{label}] 편입 {len(briefs)}종목: {detail}", "info")
 
     @staticmethod
     def _parse_watchlist(raw: Optional[str]) -> List[str]:
@@ -426,10 +525,17 @@ class AutoTradeScanner:
             return False, "no_price"
 
         if await self._has_open_interest(code):
-            logger.debug(f"📈 [AUTO_SCANNER] 이미 보유/대기 — 스킵: {name}")
+            src = item.get("source")
+            if src in ("sangtta", "breakout"):
+                self._log_scan_skip(name, code, "보유·대기", "이미 보유/대기", strategy=str(src))
+            else:
+                logger.debug(f"📈 [AUTO_SCANNER] 이미 보유/대기 — 스킵: {name}")
             return False, "holding"
 
         if await self._in_cooldown(code, settings.reorder_cooldown_sec or 300):
+            src = item.get("source")
+            if src in ("sangtta", "breakout"):
+                self._log_scan_skip(name, code, "쿨다운", "재주문 쿨다운", strategy=str(src))
             return False, "cooldown"
 
         price = item.get("current_price")
@@ -447,17 +553,120 @@ class AutoTradeScanner:
             else:
                 price = await self.kiwoom_api.get_current_price(code)
         if not price or price <= 0:
+            src = item.get("source")
+            if src in ("sangtta", "breakout"):
+                self._log_scan_skip(name, code, "시세", "현재가 없음", strategy=str(src))
             return False, "no_price"
 
-        if not passes_buy_price_conditions(settings, price, change_rate):
-            skip = buy_price_skip_reason(settings, price, change_rate) or "매수 조건 미충족"
-            self._log_scan_skip(name, code, "등락/가격", skip)
+        # 전략별 시간대 / 슬롯 제약 확인 (예: sangtta 전용 윈도우 및 쿼터)
+        strategy = item.get("source", "scanner")
+        if strategy == "sangtta":
+            strategy = "sangtta"
+        elif strategy in ("screener", "condition", "both", "watchlist", "scanner"):
+            strategy = "legacy"
+        else:
+            strategy = str(strategy or "legacy")
+
+        if strategy in ("sangtta", "breakout"):
+            label = "상따" if strategy == "sangtta" else "돌파"
+            try:
+                chg_s = f"{float(change_rate):+.2f}%" if change_rate is not None else "?"
+            except (TypeError, ValueError):
+                chg_s = "?"
+            logger.info(
+                f"📈 [AUTO_SCANNER] [{label}] 평가 {name}({code}) "
+                f"가격={int(price):,} 등락={chg_s}"
+            )
+
+        # 전략 패키지는 전역 signal_min 대신 자체 등락·과열 규칙을 사용
+        if strategy not in ("sangtta", "breakout"):
+            if not passes_buy_price_conditions(settings, price, change_rate):
+                skip = buy_price_skip_reason(settings, price, change_rate) or "매수 조건 미충족"
+                self._log_scan_skip(name, code, "등락/가격", skip)
+                return False, "price_cond"
+        elif settings.buy_below_price and price > int(settings.buy_below_price):
+            skip = f"매수가 상한 초과 ({price:,} > {int(settings.buy_below_price):,})"
+            self._log_scan_skip(name, code, "등락/가격", skip, strategy=strategy)
             return False, "price_cond"
 
-        gate_ok, gate_reason = await check_entry_gate(self.kiwoom_api, settings, code, price)
+        if strategy == "sangtta":
+            # 전략별 시간 허용 여부
+            from utils.auto_trade_engine import allows_strategy_new_buy, is_strategy_slot_available
+            allowed, reason = allows_strategy_new_buy(settings, "sangtta")
+            if not allowed:
+                self._log_scan_skip(
+                    name, code, "게이트", reason or "상따 시간 외", strategy="sangtta",
+                )
+                return False, "gate"
+            # 전략별 슬롯 확인
+            for db in get_db():
+                if not is_strategy_slot_available(settings, db, "sangtta", for_new_signal=True):
+                    from utils.auto_trade_engine import _count_strategy_slots, effective_sangtta_max_slots
+                    used = _count_strategy_slots(db, "sangtta")
+                    lim = effective_sangtta_max_slots(settings)
+                    self._log_scan_skip(
+                        name, code, "게이트", f"상따 슬롯 포화 ({used}/{lim})",
+                        strategy="sangtta",
+                    )
+                    return False, "gate"
+                break
+            gate_ok, gate_reason = await evaluate_gate_pack(
+                self.kiwoom_api,
+                settings,
+                "sangtta_breakout",
+                code,
+                price,
+                change_rate=change_rate,
+                skip_time_check=True,
+            )
+            gate_ctx = {}
+        elif strategy == "breakout":
+            from utils.auto_trade_engine import allows_strategy_new_buy, is_strategy_slot_available
+            allowed, reason = allows_strategy_new_buy(settings, "breakout")
+            if not allowed:
+                self._log_scan_skip(
+                    name, code, "게이트", reason or "돌파 시간 외", strategy="breakout",
+                )
+                return False, "gate"
+            for db in get_db():
+                if not is_strategy_slot_available(settings, db, "breakout", for_new_signal=True):
+                    from utils.auto_trade_engine import _count_strategy_slots, effective_breakout_max_slots
+                    used = _count_strategy_slots(db, "breakout")
+                    lim = effective_breakout_max_slots(settings)
+                    self._log_scan_skip(
+                        name, code, "게이트", f"돌파 슬롯 포화 ({used}/{lim})",
+                        strategy="breakout",
+                    )
+                    return False, "gate"
+                break
+            gate_ctx = {}
+            gate_ok, gate_reason = await evaluate_gate_pack(
+                self.kiwoom_api,
+                settings,
+                "oversold_breakout",
+                code,
+                price,
+                change_rate=change_rate,
+                ctx=gate_ctx,
+                skip_time_check=True,
+                update_soft_streak=True,
+            )
+        else:
+            gate_ctx = {}
+            gate_ok, gate_reason = await check_entry_gate(self.kiwoom_api, settings, code, price)
+
         if not gate_ok:
-            logger.debug(f"📈 [AUTO_SCANNER] 진입 게이트 미통과 {name}: {gate_reason}")
-            self._log_scan_skip(name, code, "게이트", gate_reason)
+            if strategy in ("sangtta", "breakout"):
+                logger.info(
+                    f"📈 [AUTO_SCANNER] [{('상따' if strategy == 'sangtta' else '돌파')}] "
+                    f"게이트 미통과 {name}({code}): {gate_reason}"
+                )
+            else:
+                logger.debug(f"📈 [AUTO_SCANNER] 진입 게이트 미통과 {name}: {gate_reason}")
+            self._log_scan_skip(
+                name, code, "게이트", gate_reason,
+                strategy=strategy if strategy in ("sangtta", "breakout") else "",
+            )
             return False, "gate"
 
         ok, signal_reason = await signal_manager.create_signal_detail(
@@ -469,26 +678,74 @@ class AutoTradeScanner:
                 "current_price": price,
                 "change_rate": change_rate,
                 "source": item.get("source", "scanner"),
+                "strategy": strategy,
+                "gate_pack": (
+                    "sangtta_breakout" if strategy == "sangtta"
+                    else ("oversold_breakout" if strategy == "breakout" else "legacy_momentum")
+                ),
+                "level_kind": gate_ctx.get("level_kind"),
+                "level_price": gate_ctx.get("level_price"),
+                "breakout_level_price": gate_ctx.get("level_price"),
+                "volume_ratio": gate_ctx.get("volume_ratio"),
+                "entry_confirm_mode": gate_ctx.get("entry_confirm_mode"),
+                "confirm_close": gate_ctx.get("confirm_close"),
+                "entry_soft_streak": gate_ctx.get("entry_soft_streak"),
+                "entry_soft_polls": gate_ctx.get("entry_soft_polls"),
             },
         )
         if ok:
-            msg = f"매수 신호 생성: {name}({code}) 가격={price:,} 등락={change_rate}%"
+            if strategy == "breakout":
+                from utils.auto_trade_engine import clear_breakout_entry_soft_streak
+                clear_breakout_entry_soft_streak(code)
+            strat_label = (
+                "상따" if strategy == "sangtta"
+                else ("돌파" if strategy == "breakout" else "레거시")
+            )
+            confirm_bit = ""
+            if strategy == "breakout" and gate_ctx.get("entry_confirm_mode"):
+                confirm_bit = f" 확인={gate_ctx.get('entry_confirm_mode')}"
+            msg = (
+                f"매수 신호 생성 [{strat_label}]: {name}({code}) "
+                f"가격={price:,} 등락={change_rate}%{confirm_bit}"
+            )
             logger.info(f"📈 [AUTO_SCANNER] {msg}")
             log_activity("SCANNER", msg, "info", stock_code=code, stock_name=name)
             return True, "signal_ok"
-        self._log_scan_skip(name, code, "신호", signal_reason)
+        self._log_scan_skip(
+            name, code, "신호", signal_reason,
+            strategy=strategy if strategy in ("sangtta", "breakout") else "",
+        )
         return False, "signal_fail"
 
     @staticmethod
-    def _log_scan_skip(name: str, code: str, category: str, detail: str) -> None:
+    def _log_scan_skip(
+        name: str,
+        code: str,
+        category: str,
+        detail: str,
+        *,
+        strategy: str = "",
+    ) -> None:
+        label = ""
+        if strategy == "sangtta":
+            label = "[상따] "
+        elif strategy == "breakout":
+            label = "[돌파] "
+        msg = f"진입 보류 {label}[{category}] {name}({code}): {detail}"
+        # 상따/돌파는 파일 로그로 추적 (레거시는 대시보드 링버퍼 + debug만 — 노이즈 방지)
+        if strategy in ("sangtta", "breakout"):
+            logger.info(f"📈 [AUTO_SCANNER] {msg}")
+        else:
+            logger.debug(f"📈 [AUTO_SCANNER] {msg}")
         log_activity(
             "SCANNER",
-            f"진입 보류 [{category}] {name}({code}): {detail}",
+            msg,
             "warn",
             stock_code=code,
             stock_name=name,
             skip_category=category,
             skip_reason=detail,
+            strategy=strategy or None,
         )
 
     async def _scan_pyramiding_adds(self, settings: AutoTradeSettings) -> int:
@@ -529,6 +786,7 @@ class AutoTradeScanner:
                     "change_rate": profit_rate,
                     "source": "pyramiding_add",
                     "is_add_buy": True,
+                    "strategy": getattr(pos, "strategy_key", None) or "legacy",
                 },
             )
             if ok:

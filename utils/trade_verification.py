@@ -9,7 +9,12 @@ from sqlalchemy.orm import Session
 from core.models import AutoTradeSettings, PendingBuySignal, Position, PositionBuyFill, SellOrder
 from utils.auto_trade_engine import compute_buy_amount, parse_signal_meta
 from utils.buy_condition_checks import build_buy_condition_checklist, checklist_summary
-from utils.sell_condition_checks import build_sell_condition_checklist, sell_checklist_summary
+from utils.sell_condition_checks import (
+    SANGTTA_EXIT_KO,
+    build_sell_condition_checklist,
+    classify_sangtta_exit_detail,
+    sell_checklist_summary,
+)
 from utils.position_buy_fills import (
     buy_fills_summary,
     effective_buy_stats,
@@ -367,6 +372,21 @@ def _load_buy_condition_checks(
                 return checks, checklist_summary(checks)
 
     meta = parse_signal_meta(signal) if signal else {}
+    sk = getattr(pos, "strategy_key", None) or meta.get("strategy")
+    if sk and not meta.get("strategy"):
+        meta = {**meta, "strategy": sk}
+    if sk == "sangtta" and not meta.get("source"):
+        meta = {**meta, "source": "sangtta"}
+    if sk == "breakout":
+        meta = {
+            **meta,
+            "source": meta.get("source") or "breakout",
+            "level_kind": meta.get("level_kind") or getattr(pos, "breakout_level_kind", None),
+            "level_price": (
+                meta.get("level_price")
+                or getattr(pos, "breakout_level_price", None)
+            ),
+        }
     price = int(pos.buy_price or 0) or None
     change_rate = None
     if buy_fills and buy_fills[0].get("change_rate") is not None:
@@ -403,7 +423,18 @@ def _settings_dict(s: Optional[AutoTradeSettings]) -> Dict[str, Any]:
         "add_buy_amount", "add_buy_trigger", "max_concurrent_positions",
         "cash_reserve_pct", "max_daily_buys", "daily_loss_limit", "daily_profit_target",
         "liquidate_before_close", "liquidate_time", "order_method",
-        "trade_start_time", "trade_end_time", "watchlist_codes",
+        "trade_start_time", "trade_end_time", "watchlist_codes", "scan_interval_sec",
+        "limit_break_soft_pct", "limit_break_hard_pct",
+        "sharp_drop_soft_pct", "sharp_drop_hard_pct", "soft_confirm_polls",
+        "sangtta_buy_amount", "sangtta_max_slots",
+        "sangtta_trade_start_time", "sangtta_trade_end_time",
+        "use_breakout", "breakout_condition_names",
+        "breakout_buy_amount", "breakout_max_slots",
+        "breakout_trade_start_time", "breakout_trade_end_time",
+        "breakout_level_mode", "breakout_n_day", "breakout_vol_mult",
+        "breakout_max_change_pct", "breakout_stop_loss_pct",
+        "breakout_trailing_start_pct", "breakout_trailing_pct",
+        "struct_break_soft_pct", "struct_break_hard_pct",
     ]
     out = {}
     for k in keys:
@@ -476,13 +507,44 @@ def _condition_name_from_signal(signal: PendingBuySignal) -> str:
 
 def _build_exit_rule_text(settings: Dict[str, Any], pos: Position) -> str:
     parts: List[str] = []
-    if pos.take_profit_rate is not None:
-        parts.append(f"트레일B 시작+바닥 +{pos.take_profit_rate}%")
-    if pos.stop_loss_rate is not None:
-        parts.append(f"손절 {pos.stop_loss_rate}%")
-    if settings.get("trailing_stop_pct"):
-        parts.append(f"트레일 {settings['trailing_stop_pct']}% (고점 대비)")
-    if settings.get("atr_mult_stop") or settings.get("atr_mult_trail"):
+    strategy = (getattr(pos, "strategy_key", None) or "").strip().lower()
+    if strategy == "sangtta":
+        lim_s = settings.get("limit_break_soft_pct", 2.0)
+        lim_h = settings.get("limit_break_hard_pct", 3.0)
+        drop_s = settings.get("sharp_drop_soft_pct", 3.0)
+        drop_h = settings.get("sharp_drop_hard_pct", 5.0)
+        soft_n = settings.get("soft_confirm_polls", 2)
+        parts.append(
+            f"상따 우선: 상한가 이탈 HARD {lim_h}% / SOFT {lim_s}%×{soft_n}회 · "
+            f"급락 HARD {drop_h}% / SOFT {drop_s}%×{soft_n}회 (고점 대비)"
+        )
+    elif strategy == "breakout":
+        parts.append(
+            f"돌파 구조: {getattr(pos, 'breakout_level_kind', None) or 'level'} "
+            f"{int(getattr(pos, 'breakout_level_price', None) or 0):,}원 · "
+            f"HARD {settings.get('struct_break_hard_pct', 2.0)}% / "
+            f"SOFT {settings.get('struct_break_soft_pct', 1.0)}%"
+            f"×{settings.get('soft_confirm_polls', 2)}회"
+        )
+    trail_start_rate = (
+        settings.get("breakout_trailing_start_pct")
+        if strategy == "breakout" else pos.take_profit_rate
+    )
+    if trail_start_rate is not None:
+        parts.append(f"트레일B 시작+바닥 +{trail_start_rate}%")
+    stop_rate = (
+        settings.get("breakout_stop_loss_pct")
+        if strategy == "breakout" else pos.stop_loss_rate
+    )
+    if stop_rate is not None:
+        parts.append(f"손절 {stop_rate}%")
+    trail_rate = (
+        settings.get("breakout_trailing_pct")
+        if strategy == "breakout" else settings.get("trailing_stop_pct")
+    )
+    if trail_rate:
+        parts.append(f"트레일 {trail_rate}% (고점 대비)")
+    if strategy != "breakout" and (settings.get("atr_mult_stop") or settings.get("atr_mult_trail")):
         atr_bits = []
         if settings.get("atr_mult_stop"):
             atr_bits.append(f"손절×{settings['atr_mult_stop']}")
@@ -495,7 +557,10 @@ def _build_exit_rule_text(settings: Dict[str, Any], pos: Position) -> str:
             f"수익잠금 +{settings['profit_lock_trigger']}%→바닥 {settings.get('profit_lock_floor')}%"
         )
     if settings.get("liquidate_before_close"):
-        parts.append(f"장마감 {settings.get('liquidate_time', '15:10')} 전량청산")
+        if strategy == "breakout":
+            parts.append("장마감 청산 제외(오버나잇 허용)")
+        else:
+            parts.append(f"장마감 {settings.get('liquidate_time', '15:10')} 전량청산")
     return " · ".join(parts)
 
 
@@ -511,8 +576,30 @@ def _exit_calc_steps(
     steps: List[Dict[str, Any]] = []
     if not buy:
         return steps
+    is_breakout = (getattr(pos, "strategy_key", None) or "").strip().lower() == "breakout"
 
-    tp = float(pos.take_profit_rate or settings.get("take_profit_rate") or 0)
+    if is_breakout and getattr(pos, "breakout_level_price", None):
+        level = int(pos.breakout_level_price)
+        soft = float(settings.get("struct_break_soft_pct") or 1.0)
+        hard = float(settings.get("struct_break_hard_pct") or 2.0)
+        steps.extend([
+            {
+                "rule": "돌파 구조 이탈 HARD",
+                "formula": f"레벨 {level:,} × (1 − {hard}%)",
+                "price": int(level * (1 - hard / 100)),
+            },
+            {
+                "rule": "돌파 구조 이탈 SOFT",
+                "formula": f"레벨 {level:,} × (1 − {soft}%) · 연속 확인",
+                "price": int(level * (1 - soft / 100)),
+            },
+        ])
+
+    tp = float(
+        (settings.get("breakout_trailing_start_pct") or 0)
+        if is_breakout
+        else (pos.take_profit_rate or settings.get("take_profit_rate") or 0)
+    )
     if tp:
         floor_price = int(buy * (1 + tp / 100))
         steps.append({
@@ -522,7 +609,10 @@ def _exit_calc_steps(
             "note": "바닥 이하로 트레일링선 하락 없음",
         })
 
-    sl = float(pos.stop_loss_rate or settings.get("stop_loss_rate") or 0)
+    sl = float(
+        (settings.get("breakout_stop_loss_pct") or 0)
+        if is_breakout else (pos.stop_loss_rate or settings.get("stop_loss_rate") or 0)
+    )
     if sl:
         price = int(buy * (1 - abs(sl) / 100))
         steps.append({
@@ -531,7 +621,10 @@ def _exit_calc_steps(
             "price": price,
         })
 
-    tr = settings.get("trailing_stop_pct")
+    tr = (
+        settings.get("breakout_trailing_pct")
+        if is_breakout else settings.get("trailing_stop_pct")
+    )
     if tr and peak:
         raw = int(peak * (1 - float(tr) / 100))
         floor_price = int(buy * (1 + tp / 100)) if tp else raw
@@ -543,8 +636,8 @@ def _exit_calc_steps(
             "note": f"armed 후 peak_price={peak:,}",
         })
 
-    atr_stop = settings.get("atr_mult_stop")
-    atr_trail = settings.get("atr_mult_trail")
+    atr_stop = None if is_breakout else settings.get("atr_mult_stop")
+    atr_trail = None if is_breakout else settings.get("atr_mult_trail")
     period = int(settings.get("atr_period") or 14)
     if atr_stop or atr_trail:
         if atr and float(atr) > 0:
@@ -949,8 +1042,9 @@ def calculation_guide() -> Dict[str, List[Dict[str, str]]]:
             {"step": "5. 주문", "desc": "시장가(MARKET) 기본 · 동시보유·일일한도 체크 후 매수"},
         ],
         "exit_priority": [
+            {"step": "상따 이탈/급락", "desc": "strategy=sangtta: 상한가 이탈 HARD/SOFT · 고점 급락 HARD/SOFT (SOFT는 soft_confirm_polls 연속) — STOP_LOSS로 기록"},
             {"step": "트레일링(B)", "desc": "고점≥시작% → armed + 바닥잠금 · 매도선=max(고점−트레일, 바닥)"},
-            {"step": "손절", "desc": "매수가 대비 stop_loss_rate% 또는 매수가−ATR×배수 (유효선은 후보 중 최고가)"},
+            {"step": "손절", "desc": "매수가 대비 stop_loss_rate% 또는 매수가−ATR×배수 (유효선은 후보 중 최고가) — 상따는 백업"},
             {"step": "수익잠금", "desc": "profit_lock_trigger% 도달 후 최소 profit_lock_floor% 선 확보"},
             {"step": "장마감", "desc": "liquidate_time 이후 전량 시장가 MARKET_CLOSE"},
         ],
@@ -1060,6 +1154,16 @@ async def build_verification_report(
             or (primary_sell_row.get("reason_code") if primary_sell_row else None)
             or _infer_sell_reason_from_position(pos)
         )
+        reason_detail = (
+            (sell.sell_reason_detail if sell else None)
+            or (primary_sell_row.get("reason_detail") if primary_sell_row else None)
+        )
+        signal_meta = parse_signal_meta(signal) if signal else {}
+        strategy_key = (
+            getattr(pos, "strategy_key", None)
+            or signal_meta.get("strategy")
+            or (signal_meta.get("source") if signal_meta.get("source") == "sangtta" else None)
+        )
         sell_condition_checks = build_sell_condition_checklist(
             settings,
             pos,
@@ -1069,14 +1173,43 @@ async def build_verification_report(
             trigger_reason=trigger_reason,
             exit_steps=exit_steps,
             has_sell_order=bool(sells),
+            reason_detail=reason_detail,
+            strategy_key=strategy_key,
         )
         sell_condition_summary = sell_checklist_summary(sell_condition_checks)
+
+        sangtta_exit = classify_sangtta_exit_detail(reason_detail) if strategy_key == "sangtta" else None
+        sell_reason_label = (
+            SELL_REASON_KO.get(sell.sell_reason, sell.sell_reason) if sell
+            else (primary_sell_row.get("reason") if primary_sell_row else None)
+        )
+        if sangtta_exit and sell_reason_label:
+            sell_reason_label = f"{sell_reason_label} · {SANGTTA_EXIT_KO[sangtta_exit]}"
+        elif sangtta_exit:
+            sell_reason_label = SANGTTA_EXIT_KO[sangtta_exit]
 
         trades.append({
             "position_id": pos.id,
             "stock_code": pos.stock_code,
             "stock_name": pos.stock_name,
             "status": pos.status,
+            "strategy_key": strategy_key,
+            "strategy_label": (
+                "상따" if strategy_key == "sangtta"
+                else ("과매도 돌파" if strategy_key == "breakout"
+                else ("레거시" if strategy_key in ("legacy", "scanner", "screener", "condition", "both") else (strategy_key or None))
+                )
+            ),
+            "breakout_level_kind": (
+                getattr(pos, "breakout_level_kind", None) or signal_meta.get("level_kind")
+            ),
+            "breakout_level_price": (
+                getattr(pos, "breakout_level_price", None)
+                or signal_meta.get("breakout_level_price")
+                or signal_meta.get("level_price")
+            ),
+            "sangtta_exit_kind": sangtta_exit,
+            "sangtta_exit_label": SANGTTA_EXIT_KO.get(sangtta_exit) if sangtta_exit else None,
             "condition_name": _condition_name(session, pos.condition_id),
             "signal": {
                 "id": signal.id if signal else None,
@@ -1084,6 +1217,11 @@ async def build_verification_report(
                 "status": signal.status if signal else None,
                 "signal_type": SIGNAL_TYPE_KO.get(signal.signal_type, signal.signal_type) if signal else None,
                 "failure_reason": signal.failure_reason if signal else None,
+                "strategy": signal_meta.get("strategy") or strategy_key,
+                "source": signal_meta.get("source"),
+                "gate_pack": signal_meta.get("gate_pack"),
+                "level_kind": signal_meta.get("level_kind"),
+                "level_price": signal_meta.get("level_price"),
             } if signal else None,
             "buy": {
                 "time": _fmt_dt_kst(pos.buy_time),
@@ -1106,10 +1244,7 @@ async def build_verification_report(
                 "amount": int(sell.sell_amount) if sell and sell.sell_amount else (
                     int(primary_sell_row["amount"]) if primary_sell_row and primary_sell_row.get("amount") else None
                 ),
-                "reason": (
-                    SELL_REASON_KO.get(sell.sell_reason, sell.sell_reason) if sell
-                    else (primary_sell_row.get("reason") if primary_sell_row else None)
-                ),
+                "reason": sell_reason_label,
                 "reason_code": (
                     sell.sell_reason if sell
                     else (primary_sell_row.get("reason_code") if primary_sell_row else _infer_sell_reason_from_position(pos))

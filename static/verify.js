@@ -307,6 +307,21 @@ function verdictPill(v) {
   return `<span class="pill ${cls}">${label}</span>`;
 }
 
+function strategyPill(t) {
+  const key = t.strategy_key || (t.signal && (t.signal.strategy || t.signal.source));
+  if (!key) return '';
+  const label = t.strategy_label || (key === 'sangtta' ? '상따' : (key === 'breakout' ? '과매도 돌파' : key));
+  const cls = key === 'sangtta'
+    ? 'strategy-sangtta'
+    : (key === 'breakout' ? 'strategy-breakout' : 'strategy-legacy');
+  return `<span class="pill ${cls}" title="strategy=${esc(key)}">${esc(label)}</span>`;
+}
+
+function sangttaExitPill(t) {
+  if (!t.sangtta_exit_label) return '';
+  return `<span class="pill strategy-sangtta-exit">${esc(t.sangtta_exit_label)}</span>`;
+}
+
 function showBanner(msg, isErr) {
   const b = $('statusBanner');
   if (!b) return;
@@ -405,20 +420,20 @@ function renderTradeTable(trades) {
     const sell = t.sell || {};
     const pl = sell.profit_loss;
     return `<tr data-idx="${i}" class="verify-row" style="cursor:pointer;">
-      <td>${verdictPill(t.entry_verdict)}</td>
+      <td>${verdictPill(t.entry_verdict)} ${strategyPill(t)}</td>
       <td><span class="stock-name">${esc(t.stock_name)}</span><span class="stock-code">${esc(t.stock_code)}</span></td>
       <td>${esc(buy.time || '-')}</td>
       <td class="num">${num(buy.price)}</td>
       <td class="num">${num(buy.quantity)}</td>
       <td>${esc(sell.time || (t.status === 'HOLDING' ? '보유' : '-'))}</td>
       <td class="num">${sell.price != null ? num(sell.price) : '-'}</td>
-      <td>${esc(sell.reason || '-')}</td>
+      <td>${esc(sell.reason || '-')}${t.sangtta_exit_label && !(sell.reason || '').includes(t.sangtta_exit_label) ? ` ${sangttaExitPill(t)}` : ''}</td>
       <td class="num ${pnlClass(pl)}">${pl != null ? pnlStr(pl) : '-'}</td>
       <td class="num ${pnlClass(sell.profit_loss_rate)}">${rateStr(sell.profit_loss_rate)}</td>
     </tr>`;
   }).join('');
   el.innerHTML = `<table class="tbl"><thead><tr>
-    <th>진입</th><th>종목</th><th>매수시각</th><th class="num">매수가</th><th class="num">수량</th>
+    <th>진입·전략</th><th>종목</th><th>매수시각</th><th class="num">매수가</th><th class="num">수량</th>
     <th>매도시각</th><th class="num">매도가</th><th>사유</th><th class="num">손익</th><th class="num">수익률</th>
   </tr></thead><tbody>${rows}</tbody></table>`;
   el.querySelectorAll('.verify-row').forEach((row) => {
@@ -471,8 +486,8 @@ function buildTradeCard(t, i) {
   return `<article class="trade-card${openCls}" id="trade-card-${i}" data-idx="${i}">
     <div class="trade-card-head" role="button" tabindex="0" data-idx="${i}">
       <div>
-        <div class="trade-title">${esc(t.stock_name)} <span class="stock-code">${esc(t.stock_code)}</span> ${verdictPill(t.entry_verdict)}</div>
-        <div class="trade-meta">${esc(t.condition_name)} · ${esc(buy.time || '')} → ${esc(sell.time || '보유')}${t.hold_hours != null ? ` · ${t.hold_hours}h` : ''}</div>
+        <div class="trade-title">${esc(t.stock_name)} <span class="stock-code">${esc(t.stock_code)}</span> ${verdictPill(t.entry_verdict)} ${strategyPill(t)} ${sangttaExitPill(t)}</div>
+        <div class="trade-meta">${esc(t.condition_name)}${t.strategy_key ? ` · strategy=${esc(t.strategy_key)}` : ''} · ${esc(buy.time || '')} → ${esc(sell.time || '보유')}${t.hold_hours != null ? ` · ${t.hold_hours}h` : ''}</div>
       </div>
       <div class="trade-pnl ${pnlCls}">${headPnl}${sell.profit_loss_rate != null ? `<div style="font-size:12px;font-weight:500;">${rateStr(sell.profit_loss_rate)}</div>` : ''}</div>
     </div>
@@ -481,6 +496,7 @@ function buildTradeCard(t, i) {
         <h4>타임라인</h4>
         <div class="v-timeline">
           ${signalBlock}
+          ${t.strategy_key ? `<div class="v-kv"><div class="k">전략</div><div class="v">strategy=${esc(t.strategy_key)}${t.signal && t.signal.gate_pack ? ` · gate=${esc(t.signal.gate_pack)}` : ''}${t.breakout_level_kind ? ` · ${esc(t.breakout_level_kind)} ${num(t.breakout_level_price)}원` : ''}</div></div>` : ''}
           <div class="v-kv"><div class="k">매수</div><div class="v">${esc(buy.time)} · ${num(buy.price)}원 × ${num(buy.quantity)}주</div></div>
           <div class="v-kv"><div class="k">매수금액</div><div class="v">${num(buy.amount)}원${buy.actual_amount ? ` (실매입 ${num(buy.actual_amount)}원)` : ''}</div></div>
           ${sell.time ? `<div class="v-kv"><div class="k">매도</div><div class="v">${esc(sell.time)} · ${num(sell.price)}원 · ${esc(sell.reason)}</div></div>` : ''}
@@ -599,7 +615,14 @@ function renderIntradayChart(canvas, payload) {
     return;
   }
 
-  const W = Math.max(wrap.clientWidth || 640, 280);
+  const padL = 52;
+  const padR = 12;
+  const padT = 22;
+  const padB = 28;
+  const minSlot = 9;
+  const viewW = Math.max(wrap.clientWidth || 640, 280);
+  const plotW = Math.max(bars.length * minSlot, viewW - padL - padR);
+  const W = padL + padR + plotW;
   const H = 300;
   const dpr = window.devicePixelRatio || 1;
   canvas.width = Math.round(W * dpr);
@@ -607,11 +630,13 @@ function renderIntradayChart(canvas, payload) {
   canvas.style.width = `${W}px`;
   canvas.style.height = `${H}px`;
   canvas.style.display = 'block';
+  wrap.classList.add('v-chart-scroll');
   if (statusEl) {
     const parts = [];
     const dr = payload.date_range;
     if (dr && dr.length === 2 && dr[0] !== dr[1]) parts.push(`${dr[0]} ~ ${dr[1]}`);
     if (payload.warning) parts.push(payload.warning);
+    if (W > viewW + 4) parts.push('가로 스크롤로 전체 봉 확인');
     if (parts.length) {
       statusEl.textContent = parts.join(' · ');
       statusEl.classList.remove('err');
@@ -626,11 +651,6 @@ function renderIntradayChart(canvas, payload) {
   const ctx = canvas.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-  const padL = 52;
-  const padR = 12;
-  const padT = 22;
-  const padB = 32;
-  const plotW = W - padL - padR;
   const plotTotalH = H - padT - padB;
   const volGap = 5;
   const volPanelH = 52;
@@ -738,7 +758,7 @@ function renderIntradayChart(canvas, payload) {
     const lowY = yOf(b.low);
     const bullish = b.close >= b.open;
     const color = bullish ? up : down;
-    const bodyW = Math.max(2, slotW * 0.55);
+    const bodyW = Math.max(3, Math.min(slotW * 0.7, slotW - 1));
 
     ctx.strokeStyle = color;
     ctx.lineWidth = 1;
@@ -837,13 +857,17 @@ function renderIntradayChart(canvas, payload) {
   ctx.font = '10px system-ui, sans-serif';
   ctx.textAlign = 'center';
   const multiDay = (payload.date_range && payload.date_range.length === 2 && payload.date_range[0] !== payload.date_range[1]);
-  const tickIdx = [0, Math.floor(bars.length / 2), bars.length - 1];
-  tickIdx.forEach((i) => {
-    if (!bars[i]) return;
+  const labelStep = Math.max(1, Math.ceil(56 / Math.max(slotW, 1)));
+  const labelIdx = new Set();
+  for (let i = 0; i < bars.length; i += labelStep) labelIdx.add(i);
+  labelIdx.add(bars.length - 1);
+  [...labelIdx].sort((a, b) => a - b).forEach((i) => {
+    const b = bars[i];
+    if (!b) return;
     const x = padL + i * slotW + slotW / 2;
-    const ts = String(bars[i].timestamp);
+    const ts = String(b.timestamp);
     const lbl = multiDay ? `${ts.slice(5, 10)} ${ts.slice(11, 16)}` : ts.slice(11, 16);
-    ctx.fillText(lbl, x, H - 6);
+    ctx.fillText(lbl, x, H - 8);
   });
 }
 

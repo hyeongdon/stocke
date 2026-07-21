@@ -63,8 +63,24 @@ def _upsert_tag(
     return row
 
 
+def _strip_naver_news_html(text: str) -> str:
+    return (
+        (text or "")
+        .replace("<b>", "")
+        .replace("</b>", "")
+        .replace("&quot;", '"')
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .strip()
+    )
+
+
 def _fetch_news_titles(query: str, display: int = 8) -> List[str]:
-    """네이버 뉴스 제목만 수집. 키가 없거나 실패하면 빈 리스트."""
+    """네이버 뉴스 검색 API에서 제목+요약(description) 수집.
+
+    본문 크롤 없음 — 검색 응답에 포함된 description만 사용(추가 API 호출 없음).
+    """
     if not query or not Config.NAVER_CLIENT_ID or not Config.NAVER_CLIENT_SECRET:
         return []
     try:
@@ -81,16 +97,14 @@ def _fetch_news_titles(query: str, display: int = 8) -> List[str]:
             return []
         data = resp.json()
         out: List[str] = []
+        seen = set()
         for it in data.get("items") or []:
-            title = str(it.get("title") or "")
-            title = (
-                title.replace("<b>", "")
-                .replace("</b>", "")
-                .replace("&quot;", '"')
-                .replace("&amp;", "&")
-            )
-            if title:
-                out.append(title)
+            for key in ("title", "description"):
+                raw = _strip_naver_news_html(str(it.get(key) or ""))
+                if not raw or raw in seen:
+                    continue
+                seen.add(raw)
+                out.append(raw)
         return out
     except Exception:
         return []
@@ -162,7 +176,7 @@ def refresh_theme_mapping_snapshot(
             for stock in stocks:
                 keyword_stock_sets[kw["keyword"]].add(stock["stock_code"])
 
-        # 키워드 집계(확장): 종목 뉴스 제목 기반
+        # 키워드 집계(확장): 종목 뉴스 제목+요약(description) 기반 (본문 크롤 없음)
         if include_news_keywords and stocks:
             for stock in stocks[: max(1, news_stock_limit_per_theme)]:
                 titles = _fetch_news_titles(stock["stock_name"], display=8)

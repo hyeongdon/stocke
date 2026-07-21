@@ -53,7 +53,10 @@ class Config:
     # 장시간 체크 우회(테스트용). 실계좌에서는 기본 False 권장.
     ALLOW_OUT_OF_MARKET_TRADING = os.getenv("ALLOW_OUT_OF_MARKET_TRADING", "false").lower() == "true"
     # 매수 직후 키움 잔고 미반영으로 HOLDING→MANUAL_SELL 오판 방지(초). ORDERED 매도 확정은 유예 제외.
-    BUY_SETTLE_GRACE_SECONDS = int(os.getenv("BUY_SETTLE_GRACE_SECONDS", "90"))
+    # 90초는 잔고 반영 지연에 부족한 경우가 있어 기본 5분.
+    BUY_SETTLE_GRACE_SECONDS = int(os.getenv("BUY_SETTLE_GRACE_SECONDS", "300"))
+    # 앱 매도 없이 '계좌 미보유'로 청산하려면, 유예 이후 연속 N회 잔고 미확인이 필요.
+    BUY_SETTLE_MISSING_CONFIRMS = int(os.getenv("BUY_SETTLE_MISSING_CONFIRMS", "3"))
 
     # ===== 관심종목 동기화 설정 =====
     # 예: WATCHLIST_SYNC_TARGET_CONDITION_NAMES=돌파,120일선돌파
@@ -71,7 +74,7 @@ class Config:
     API_LIMIT_DURATION_MIN = int(os.getenv("API_LIMIT_DURATION_MIN", "3"))
 
     # 자동매매 스크리너 — 거래대금 상위 후보 종목 수
-    SCREENER_CANDIDATE_LIMIT = int(os.getenv("SCREENER_CANDIDATE_LIMIT", "50"))
+    SCREENER_CANDIDATE_LIMIT = int(os.getenv("SCREENER_CANDIDATE_LIMIT", "70"))
 
     # 서버 설정
     HOST = os.getenv("HOST", "0.0.0.0")
@@ -97,12 +100,25 @@ class Config:
     # true: 조건식·정기 알림은 거래일 장중(09:00~15:30)만 / 매매 체결 알림도 동일
     TELEGRAM_ALERT_MARKET_HOURS_ONLY = os.getenv("TELEGRAM_ALERT_MARKET_HOURS_ONLY", "true").lower() == "true"
 
+    # ===== CPU 과부하 알림 (트레이 풍선 + 텔레그램) =====
+    CPU_ALERT_THRESHOLD = float(os.getenv("CPU_ALERT_THRESHOLD", "90"))
+    CPU_ALERT_SUSTAIN_SEC = int(os.getenv("CPU_ALERT_SUSTAIN_SEC", "60"))
+    CPU_ALERT_COOLDOWN_SEC = int(os.getenv("CPU_ALERT_COOLDOWN_SEC", "900"))
+    CPU_ALERT_TELEGRAM = os.getenv("CPU_ALERT_TELEGRAM", "true").lower() == "true"
+
     # ===== 뉴스 키워드 추출 (KeyBERT) =====
     KEYWORD_USE_KEYBERT = os.getenv("KEYWORD_USE_KEYBERT", "true").lower() == "true"
     KEYBERT_MODEL = os.getenv("KEYBERT_MODEL", "jhgan/ko-sroberta-multitask")
     KEYBERT_USE_MMR = os.getenv("KEYBERT_USE_MMR", "true").lower() == "true"
     KEYBERT_DIVERSITY = float(os.getenv("KEYBERT_DIVERSITY", "0.5"))
     KEYBERT_USE_KIWI = os.getenv("KEYBERT_USE_KIWI", "true").lower() == "true"
+
+    # ===== 종목 뉴스 배치 (미니PC 친화 기본값, 목표 ~30분) =====
+    # theme=테마 편입 종목만 / all=전종목(수시간·고CPU)
+    STOCK_NEWS_UNIVERSE = (os.getenv("STOCK_NEWS_UNIVERSE", "theme") or "theme").strip().lower()
+    # KeyBERT CPU 기준 종목당 ~10~15초 → 120종 ≈ 20~30분
+    STOCK_NEWS_MAX_STOCKS_PER_DAY = int(os.getenv("STOCK_NEWS_MAX_STOCKS_PER_DAY", "120"))
+    STOCK_NEWS_CHUNK_SIZE = int(os.getenv("STOCK_NEWS_CHUNK_SIZE", "40"))
     
     # 로그 디렉토리 생성
     Path(LOG_FILE).parent.mkdir(parents=True, exist_ok=True)

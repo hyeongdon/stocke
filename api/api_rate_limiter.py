@@ -47,6 +47,12 @@ class APIRateLimiter:
             elapsed = (current_time - last_call_time).total_seconds()
             if elapsed < self.min_call_interval:
                 return self.min_call_interval - elapsed
+        # 분당 한도: 가장 오래된 호출이 윈도우 밖으로 나갈 때까지
+        window_start = current_time - timedelta(seconds=self.rate_limit_window)
+        recent = [c for c in self.call_history if c["timestamp"] >= window_start]
+        if len(recent) >= self.max_calls_per_window:
+            oldest = min(c["timestamp"] for c in recent)
+            return max(0.05, (oldest + timedelta(seconds=self.rate_limit_window) - current_time).total_seconds())
         return 0.0
         
     def is_api_available(self) -> bool:
@@ -108,8 +114,15 @@ class APIRateLimiter:
             )
             
             if len(recent_calls) > self.max_calls_per_window:
-                logger.warning(f"🚫 [API_LIMITER] 호출 한도 초과 - {len(recent_calls)}/{self.max_calls_per_window}")
-                self._trigger_rate_limit()
+                # 로컬 분당 한도 — Kiwoom 실제 제한이 아님. LIMITED(수분 정지)로 올리지 않고
+                # 슬롯만 거부해 호출측이 윈도우가 밀릴 때까지 대기하도록 한다.
+                logger.warning(
+                    f"⏳ [API_LIMITER] 분당 호출 한도 도달 "
+                    f"({len(recent_calls)}/{self.max_calls_per_window}) — 대기 필요"
+                )
+                # 방금 append한 기록은 실제 호출이 아니므로 롤백
+                if self.call_history and self.call_history[-1]["api_name"] == api_name:
+                    self.call_history.pop()
                 return False
             
             if len(recent_calls) > self.max_calls_per_window * 0.85:

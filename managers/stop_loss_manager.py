@@ -41,6 +41,24 @@ SELL_REASON_PRIORITY = {
 STALE_SELL_ORDER_MINUTES = 15
 
 
+def classify_breakout_structure(
+    current_price: int,
+    level_price: int,
+    soft_pct: float,
+    hard_pct: float,
+) -> str:
+    """돌파 레벨 이탈 강도: HARD | SOFT | NONE."""
+    if current_price <= 0 or level_price <= 0:
+        return "NONE"
+    hard_line = level_price * (1 - abs(float(hard_pct)) / 100.0)
+    soft_line = level_price * (1 - abs(float(soft_pct)) / 100.0)
+    if current_price <= hard_line:
+        return "HARD"
+    if current_price <= soft_line:
+        return "SOFT"
+    return "NONE"
+
+
 def _buy_age_seconds(pos: Position, *, now: Optional[datetime] = None) -> Optional[float]:
     """매수 후 경과 초(UTC naive buy_time 기준). buy_time 없으면 None."""
     if not pos.buy_time:
@@ -62,7 +80,7 @@ def _within_buy_settle_grace(
 ) -> bool:
     """매수 직후 잔고 반영 유예 구간이면 True (가짜 계좌청산 방지)."""
     grace = grace_seconds if grace_seconds is not None else int(
-        getattr(Config, "BUY_SETTLE_GRACE_SECONDS", 90) or 90
+        getattr(Config, "BUY_SETTLE_GRACE_SECONDS", 300) or 300
     )
     if grace <= 0:
         return False
@@ -70,6 +88,10 @@ def _within_buy_settle_grace(
     if age is None:
         return False
     return age < grace
+
+
+def _required_missing_confirms() -> int:
+    return max(1, int(getattr(Config, "BUY_SETTLE_MISSING_CONFIRMS", 3) or 3))
 
 
 def _holding_rows_for_code(session: Session, stock_code: str) -> List[Position]:
@@ -135,6 +157,11 @@ class StopLossManager:
         self._loop_active = False
         self._monitor_task: Optional[asyncio.Task] = None
         self._off_hours_logged = False
+        # 상따(전략별) 소프트 카운터 — 메모리 캐시 (프로세스 재시작 시 초기화됨)
+        self._sangtta_soft_counters: Dict[int, int] = {}
+        self._breakout_soft_counters: Dict[int, int] = {}
+        # 앱 매도 없는 '계좌 미보유' 청산 — 연속 미확인 횟수 (position_id → count)
+        self._account_missing_strikes: Dict[int, int] = {}
 
     def _settings_for_session(self) -> Optional[AutoTradeSettings]:
         return get_auto_trade_settings_sync()
@@ -441,6 +468,16 @@ class StopLossManager:
                         )
                         continue
                     stock_label = position.stock_name
+                    # PRD §10: breakout는 오버나잇 허용 — 전역 장마감 청산에서 제외
+                    if getattr(position, "strategy_key", None) == "breakout":
+                        log_activity(
+                            "SELL",
+                            f"장마감 청산 생략 — {position.stock_name} (과매도 돌파 오버나잇)",
+                            "info",
+                            stock_code=position.stock_code,
+                            reason="MARKET_CLOSE",
+                        )
+                        continue
 
                     # 장마감 청산은 최우선 사유이므로,
                     # 다른(하위 우선순위) 매도 주문이 있더라도 먼저 취소하고 실행합니다.
@@ -635,8 +672,16 @@ class StopLossManager:
             import traceback
             logger.error(f"🛡️ [STOP_LOSS] 스택 트레이스: {traceback.format_exc()}")
     
-    async def compute_exit_levels(self, position: Position, live: bool = False) -> Dict:
-        """청산 레벨 스냅샷. live=False: DB값만(빠름), live=True: API로 현재가·ATR."""
+    async def compute_exit_levels(
+        self,
+        position: Position,
+        live: bool = False,
+        holdings_map: Optional[Dict[str, dict]] = None,
+    ) -> Dict:
+        """청산 레벨 스냅샷. live=False: DB값만(빠름), live=True: API로 현재가·ATR.
+
+        holdings_map을 넘기면 종목마다 잔고 API를 다시 치지 않는다 (대시보드 N+1 방지).
+        """
         await self._load_auto_trade_settings()
         s = self.auto_trade_settings
         if not s:
@@ -651,7 +696,8 @@ class StopLossManager:
         fetched_live = None
         if api_live:
             try:
-                holdings_map, _ = await self._fetch_balance_holdings()
+                if holdings_map is None:
+                    holdings_map, _ = await self._fetch_balance_holdings()
                 holding = holdings_map.get(KiwoomAPI.normalize_stock_code(position.stock_code))
                 if holding:
                     from utils.eval_pnl import apply_holding_to_position
@@ -667,9 +713,9 @@ class StopLossManager:
                 logger.warning(f"현재가 조회 타임아웃 — {position.stock_name}")
 
         buy_price = position.buy_price or current_price
-        # 당일 일봉 고가는 live 여부와 무관하게 조회 (모니터링 주기 사이 급등 고점 누락 방지)
+        # live 요청에서만 일봉 고가 API — 대시보드 DB 폴링은 저장된 peak 사용
         peak = await self._resolve_position_peak(
-            position, int(current_price), allow_api=True,
+            position, int(current_price), allow_api=api_live,
         )
         profit_loss, profit_loss_rate = self._calc_profit(position, int(current_price), holding)
 
@@ -686,7 +732,11 @@ class StopLossManager:
                 await self._update_position_tracking(position.id, peak, None)
                 position.peak_price = peak
 
-        tp = self._num(s.take_profit_rate)
+        is_breakout = getattr(position, "strategy_key", None) == "breakout"
+        tp = self._num(
+            getattr(s, "breakout_trailing_start_pct", None)
+            if is_breakout else s.take_profit_rate
+        )
         trail_start = tp if tp and tp > 0 else None
         peak_rate = self._peak_rate_pct(buy_price, peak)
         trailing_armed, trailing_floor = await self._guard_trailing_arm_state(
@@ -709,6 +759,7 @@ class StopLossManager:
             s, buy_price, peak, atr,
             trailing_armed=trailing_armed,
             trailing_floor_price=trailing_floor,
+            strategy_key=getattr(position, "strategy_key", None),
         )
 
         eff_reason = None
@@ -729,7 +780,10 @@ class StopLossManager:
             peak_drop_amount = max(0, int(peak) - int(current_price))
             peak_drop_pct = round(peak_drop_amount / peak * 100, 2)
 
-        trailing_stop_pct = self._num(s.trailing_stop_pct)
+        trailing_stop_pct = self._num(
+            getattr(s, "breakout_trailing_pct", None)
+            if is_breakout else s.trailing_stop_pct
+        )
         level_rows = []
         for reason, price, method in candidates:
             level_rows.append({
@@ -738,7 +792,10 @@ class StopLossManager:
                 "method": method,
             })
 
-        sl_rate = self._num(s.stop_loss_rate)
+        sl_rate = self._num(
+            getattr(s, "breakout_stop_loss_pct", None)
+            if is_breakout else s.stop_loss_rate
+        )
         stop_loss_price_pct = (
             int(buy_price * (1 - abs(sl_rate) / 100.0)) if sl_rate and buy_price else None
         )
@@ -768,6 +825,8 @@ class StopLossManager:
             "peak_drop_amount": peak_drop_amount,
             "peak_drop_pct": peak_drop_pct,
             "trailing_stop_pct": trailing_stop_pct,
+            "breakout_level_kind": getattr(position, "breakout_level_kind", None),
+            "breakout_level_price": getattr(position, "breakout_level_price", None),
             "levels": level_rows,
             "liquidate_time": getattr(s, "liquidate_time", None) if getattr(s, "liquidate_before_close", False) else None,
             "levels_live": api_live,
@@ -1032,14 +1091,18 @@ class StopLossManager:
         s = self.auto_trade_settings
         if not s:
             return
-        trail_start = self._num(s.take_profit_rate)
-        if not trail_start or trail_start <= 0:
-            return
         try:
             for db in get_db():
                 session: Session = db
                 p = session.query(Position).filter(Position.id == position_id).first()
                 if not p or p.status not in ("HOLDING", "TRAILING"):
+                    return
+                trail_start = self._num(
+                    getattr(s, "breakout_trailing_start_pct", None)
+                    if getattr(p, "strategy_key", None) == "breakout"
+                    else s.take_profit_rate
+                )
+                if not trail_start or trail_start <= 0:
                     return
                 buy_price = int(p.buy_price or 0)
                 if buy_price <= 0:
@@ -1073,6 +1136,7 @@ class StopLossManager:
         *,
         trailing_armed: bool = False,
         trailing_floor_price: Optional[int] = None,
+        strategy_key: Optional[str] = None,
     ) -> List[Tuple[str, float, str]]:
         """손절·트레일·수익잠금 후보. %·ATR을 모두 포함하고 유효선은 최고가(가장 타이트)."""
         candidates: List[Tuple[str, float, str]] = []
@@ -1083,12 +1147,16 @@ class StopLossManager:
                 return max(raw, float(floor))
             return raw
 
-        sl = self._num(settings.stop_loss_rate)
+        is_breakout = (strategy_key or "").strip().lower() == "breakout"
+        sl = self._num(
+            getattr(settings, "breakout_stop_loss_pct", None)
+            if is_breakout else settings.stop_loss_rate
+        )
         if sl:
             candidates.append(("STOP_LOSS", buy_price * (1 - abs(sl) / 100.0), "PCT"))
 
         atr_stop_mult = self._num(settings.atr_mult_stop)
-        if atr and atr_stop_mult:
+        if not is_breakout and atr and atr_stop_mult:
             candidates.append(("STOP_LOSS", buy_price - atr * atr_stop_mult, "ATR"))
 
         lock_trigger = self._num(settings.profit_lock_trigger)
@@ -1100,13 +1168,16 @@ class StopLossManager:
                 candidates.append(("PROFIT_LOCK", buy_price * (1 + lock_floor / 100.0), "PCT"))
 
         if trailing_armed:
-            tr = self._num(settings.trailing_stop_pct)
+            tr = self._num(
+                getattr(settings, "breakout_trailing_pct", None)
+                if is_breakout else settings.trailing_stop_pct
+            )
             if tr:
                 raw = peak * (1 - tr / 100.0)
                 candidates.append(("TRAILING", _apply_trail_floor(raw), "PCT"))
 
             atr_trail_mult = self._num(settings.atr_mult_trail)
-            if atr and atr_trail_mult:
+            if not is_breakout and atr and atr_trail_mult:
                 raw = peak - atr * atr_trail_mult
                 candidates.append(("TRAILING", _apply_trail_floor(raw), "ATR"))
 
@@ -1297,7 +1368,11 @@ class StopLossManager:
             # 고점 갱신 (매수 시각 이후 고가만)
             peak = await self._resolve_position_peak(position, int(current_price), allow_api=True)
 
-            trail_start = self._num(s.take_profit_rate)
+            is_breakout = getattr(position, "strategy_key", None) == "breakout"
+            trail_start = self._num(
+                getattr(s, "breakout_trailing_start_pct", None)
+                if is_breakout else s.take_profit_rate
+            )
             trail_start_val = trail_start if trail_start and trail_start > 0 else None
             stored_peak = int(getattr(position, "peak_price", None) or buy_price)
             if peak != stored_peak:
@@ -1321,8 +1396,127 @@ class StopLossManager:
             sell_reason = None
             detail = ""
 
-            # 0) 장 마감 전 전량청산 (최우선)
-            if self._is_past_liquidation_time():
+            # Phase3: 상따 전용 soft/hard 임계 (상한가 이탈, 급락룰)
+            try:
+                if getattr(position, "strategy_key", None) == "sangtta":
+                    lim_soft = float(getattr(s, "limit_break_soft_pct", 2.0) or 2.0)
+                    lim_hard = float(getattr(s, "limit_break_hard_pct", 3.0) or 3.0)
+                    drop_soft = float(getattr(s, "sharp_drop_soft_pct", 3.0) or 3.0)
+                    drop_hard = float(getattr(s, "sharp_drop_hard_pct", 5.0) or 5.0)
+                    soft_required = int(getattr(s, "soft_confirm_polls", 2) or 2)
+
+                    # 상한가(approx): 전일 종가 기준 30% 상한가 근사치
+                    ul_price = None
+                    try:
+                        code = KiwoomAPI.normalize_stock_code(position.stock_code or "")
+                        daily = await self.kiwoom_api.get_stock_chart_data(code, "1D")
+                        if daily and len(daily) >= 2:
+                            prev = daily[-2]
+                            prev_close = int(prev.get("close") or 0)
+                            if prev_close > 0:
+                                ul_price = int(prev_close * 1.3)
+                    except Exception:
+                        ul_price = None
+
+                    # 상한가 터치 여부(매수 이후 고점이 상한가 근처였는지)
+                    touched_upper = False
+                    try:
+                        if ul_price and peak and peak >= int(ul_price * 0.999):
+                            touched_upper = True
+                    except Exception:
+                        touched_upper = False
+
+                    # 상한가 이탈 판단 (HARD 즉시, SOFT 연속 확인)
+                    if ul_price and touched_upper:
+                        soft_px = int(ul_price * (1 - lim_soft / 100.0))
+                        hard_px = int(ul_price * (1 - lim_hard / 100.0))
+                        if current_price <= hard_px:
+                            sell_reason = "STOP_LOSS"
+                            detail = f"상한가 이탈(HARD): 현재 {current_price:,} ≤ {hard_px:,} (상한가 {ul_price:,})"
+                        elif current_price <= soft_px:
+                            cnt = self._sangtta_soft_counters.get(position.id, 0) + 1
+                            self._sangtta_soft_counters[position.id] = cnt
+                            if cnt >= soft_required:
+                                sell_reason = "STOP_LOSS"
+                                detail = f"상한가 이탈(SOFT≧{soft_required}회): 현재 {current_price:,} ≤ {soft_px:,} (상한가 {ul_price:,})"
+                            else:
+                                log_activity("SELL", f"상따 SOFT 경고 {position.stock_name}: {cnt}/{soft_required} (현재 {current_price:,} ≤ {soft_px:,})", "warn", stock_code=position.stock_code)
+                        else:
+                            if self._sangtta_soft_counters.get(position.id):
+                                self._sangtta_soft_counters[position.id] = 0
+
+                    # 급락룰 — 당일고 대비 SOFT/HARD
+                    if not sell_reason and peak and peak > 0:
+                        soft_px2 = int(peak * (1 - drop_soft / 100.0))
+                        hard_px2 = int(peak * (1 - drop_hard / 100.0))
+                        if current_price <= hard_px2:
+                            sell_reason = "STOP_LOSS"
+                            detail = f"급락(HARD): 현재 {current_price:,} ≤ {hard_px2:,} (고점 {peak:,})"
+                        elif current_price <= soft_px2:
+                            cnt2 = self._sangtta_soft_counters.get(position.id, 0) + 1
+                            self._sangtta_soft_counters[position.id] = cnt2
+                            if cnt2 >= soft_required:
+                                sell_reason = "STOP_LOSS"
+                                detail = f"급락(SOFT≧{soft_required}회): 현재 {current_price:,} ≤ {soft_px2:,} (고점 {peak:,})"
+                            else:
+                                log_activity("SELL", f"상따 급락 SOFT 경고 {position.stock_name}: {cnt2}/{soft_required} (현재 {current_price:,} ≤ {soft_px2:,})", "warn", stock_code=position.stock_code)
+                        else:
+                            if self._sangtta_soft_counters.get(position.id):
+                                self._sangtta_soft_counters[position.id] = 0
+            except Exception as e:
+                logger.debug(f"🛡️ [STOP_LOSS] 상따 전용 임계 적용 오류: {e}")
+
+            # 과매도 돌파 전용 구조 이탈 — 고정손절·트레일보다 먼저 평가
+            try:
+                if not sell_reason and getattr(position, "strategy_key", None) == "breakout":
+                    level = int(getattr(position, "breakout_level_price", None) or 0)
+                    soft_pct = float(getattr(s, "struct_break_soft_pct", 1.0) or 1.0)
+                    hard_pct = float(getattr(s, "struct_break_hard_pct", 2.0) or 2.0)
+                    soft_required = max(1, int(getattr(s, "soft_confirm_polls", 2) or 2))
+                    state = classify_breakout_structure(
+                        int(current_price), level, soft_pct, hard_pct,
+                    )
+                    if state == "HARD":
+                        self._breakout_soft_counters[position.id] = 0
+                        sell_reason = "STOP_LOSS"
+                        detail = (
+                            f"구조 이탈(HARD): 현재 {current_price:,} ≤ "
+                            f"{int(level * (1 - hard_pct / 100)):,} (돌파레벨 {level:,})"
+                        )
+                    elif state == "SOFT":
+                        count = self._breakout_soft_counters.get(position.id, 0) + 1
+                        self._breakout_soft_counters[position.id] = count
+                        if count >= soft_required:
+                            sell_reason = "STOP_LOSS"
+                            detail = (
+                                f"구조 이탈(SOFT≧{soft_required}회): 현재 {current_price:,} ≤ "
+                                f"{int(level * (1 - soft_pct / 100)):,} (돌파레벨 {level:,})"
+                            )
+                        else:
+                            log_activity(
+                                "SELL",
+                                f"돌파 구조 SOFT 경고 {position.stock_name}: "
+                                f"{count}/{soft_required} (레벨 {level:,})",
+                                "warn",
+                                stock_code=position.stock_code,
+                            )
+                    else:
+                        self._breakout_soft_counters[position.id] = 0
+                    if level <= 0:
+                        logger.warning(
+                            f"🛡️ [STOP_LOSS] 돌파 레벨 없음 — 고정손절로 폴백: "
+                            f"{position.stock_name} #{position.id}"
+                        )
+            except Exception as e:
+                logger.debug(f"🛡️ [STOP_LOSS] 돌파 구조 이탈 적용 오류: {e}")
+
+            # 장마감 청산은 구조·손절 규칙이 미발동일 때만 적용
+            # breakout는 오버나잇 허용이므로 MARKET_CLOSE 제외
+            if (
+                not sell_reason
+                and getattr(position, "strategy_key", None) != "breakout"
+                and self._is_past_liquidation_time()
+            ):
                 sell_reason = "MARKET_CLOSE"
                 detail = f"장마감 전 전량청산 ({getattr(s, 'liquidate_time', '15:10')}) | 손익 {profit_loss_rate:+.2f}%"
                 logger.warning(f"🛡️ [STOP_LOSS] 장마감 청산 - {position.stock_name}: {profit_loss_rate:+.2f}%")
@@ -1342,6 +1536,7 @@ class StopLossManager:
                     s, buy_price, peak, atr,
                     trailing_armed=trailing_armed,
                     trailing_floor_price=trailing_floor,
+                    strategy_key=getattr(position, "strategy_key", None),
                 )
 
                 if candidates:
@@ -1378,7 +1573,10 @@ class StopLossManager:
                 logger.debug(f"🛡️ [STOP_LOSS] 장외 — 현재가 조회 생략: {stock_code}")
                 return None
             logger.debug(f"🛡️ [STOP_LOSS] 현재가 조회 시도: {stock_code}")
-            current_price = await self.kiwoom_api.get_current_price(stock_code)
+            from utils.api_traffic_guard import APIPriority
+            current_price = await self.kiwoom_api.get_current_price(
+                stock_code, priority=APIPriority.CRITICAL,
+            )
             if current_price:
                 logger.debug(f"🛡️ [STOP_LOSS] 현재가 조회 성공: {stock_code} = {current_price:,}원")
             else:
@@ -1775,9 +1973,11 @@ class StopLossManager:
     ) -> int:
         """DB HOLDING인데 키움 계좌에 없음 → 청산 상태로 정리."""
         closed = 0
+        needed = _required_missing_confirms()
         for pos in session.query(Position).filter(Position.status == "HOLDING").all():
             code = KiwoomAPI.normalize_stock_code(pos.stock_code)
             if holdings.get(code, 0) > 0:
+                self._account_missing_strikes.pop(pos.id, None)
                 continue
 
             open_sells = session.query(SellOrder).filter(
@@ -1786,16 +1986,27 @@ class StopLossManager:
             ).order_by(SellOrder.created_at.asc()).all()
 
             # 매수 직후 잔고 API 미반영 → 앱 매도 없이 MANUAL_SELL 오판 방지.
-            # ORDERED 매도가 있으면 실제 청산 확정이므로 유예하지 않음.
+            # ORDERED 매도가 있으면 실제 청산 확정이므로 유예·연속확인을 건너뛴다.
             has_ordered_sell = any(s.status == "ORDERED" for s in open_sells)
             if not has_ordered_sell and _within_buy_settle_grace(pos):
                 age = _buy_age_seconds(pos)
-                grace = int(getattr(Config, "BUY_SETTLE_GRACE_SECONDS", 90) or 90)
+                grace = int(getattr(Config, "BUY_SETTLE_GRACE_SECONDS", 300) or 300)
+                self._account_missing_strikes.pop(pos.id, None)
                 logger.info(
                     f"🛡️ [RECONCILE] 매수 직후 유예 — {pos.stock_name} "
                     f"({age:.0f}s < {grace}s, 잔고 미반영 가능)"
                 )
                 continue
+
+            if not has_ordered_sell:
+                strikes = self._account_missing_strikes.get(pos.id, 0) + 1
+                self._account_missing_strikes[pos.id] = strikes
+                if strikes < needed:
+                    logger.info(
+                        f"🛡️ [RECONCILE] 계좌 미보유 확인 대기 — {pos.stock_name} "
+                        f"({strikes}/{needed}회, 앱 매도 없음)"
+                    )
+                    continue
 
             finalized = False
             for sell in open_sells:
@@ -1818,6 +2029,7 @@ class StopLossManager:
                 logger.info(f"🛡️ [RECONCILE] 미체결 PENDING 취소 — {pos.stock_name} #{sell.id}")
 
             if finalized:
+                self._account_missing_strikes.pop(pos.id, None)
                 continue
 
             last_done = session.query(SellOrder).filter(
@@ -1832,16 +2044,23 @@ class StopLossManager:
             else:
                 pos.status = "MANUAL_SELL"
                 pos.sell_time = utc_now_naive()
-                detail = f"계좌 청산 확인 — {pos.stock_name} (앱 매도 기록 없음)"
+                detail = (
+                    f"계좌 청산 확인 — {pos.stock_name} "
+                    f"(앱 매도 기록 없음, 연속 {needed}회 미보유)"
+                )
                 from utils.position_sell_backfill import ensure_completed_sell_order
                 ensure_completed_sell_order(
                     session,
                     pos,
                     sell_reason="MANUAL",
-                    sell_reason_detail="계좌 미보유 동기화 — 키움 잔고 기준 청산",
+                    sell_reason_detail=(
+                        f"계좌 미보유 동기화 — 키움 잔고 기준 청산 "
+                        f"(연속 {needed}회 확인)"
+                    ),
                     completed_at=pos.sell_time,
                 )
 
+            self._account_missing_strikes.pop(pos.id, None)
             log_activity("SELL", detail, "info", stock_code=pos.stock_code)
             logger.info(f"🛡️ [RECONCILE] {detail}")
             closed += 1
@@ -1975,6 +2194,11 @@ class StopLossManager:
                 return None
 
             code = KiwoomAPI.normalize_stock_code(signal.stock_code)
+            signal_meta = (
+                signal.additional_data
+                if isinstance(getattr(signal, "additional_data", None), dict)
+                else {}
+            )
             buy_atr, buy_atr_period = await self._snapshot_buy_atr(code, s)
 
             for db in get_db():
@@ -2016,6 +2240,13 @@ class StopLossManager:
                     condition_id=signal.condition_id,
                     signal_id=signal.id,
                     status="HOLDING",
+                    # 전략 키를 신호의 additional_data.strategy에서 복사 (예: "sangtta")
+                    strategy_key=signal_meta.get("strategy"),
+                    breakout_level_kind=signal_meta.get("level_kind"),
+                    breakout_level_price=(
+                        int(signal_meta.get("breakout_level_price") or signal_meta.get("level_price") or 0)
+                        or None
+                    ),
                     peak_price=buy_price,
                     buy_atr=buy_atr,
                     buy_atr_period=buy_atr_period,

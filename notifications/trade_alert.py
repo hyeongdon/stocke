@@ -27,6 +27,22 @@ SELL_REASON_KO = {
     "INDICATOR": "지표 매도",
 }
 
+STRATEGY_LABEL_KO = {
+    "legacy": "거래대금",
+    "screener": "거래대금",
+    "condition": "거래대금",
+    "both": "거래대금",
+    "watchlist": "거래대금",
+    "scanner": "거래대금",
+    "sangtta": "상따",
+    "breakout": "돌파",
+}
+
+
+def strategy_label_ko(strategy: Optional[str]) -> str:
+    key = (strategy or "").strip().lower()
+    return STRATEGY_LABEL_KO.get(key, "거래대금")
+
 
 def _fmt_price(value: Optional[int]) -> str:
     if value is None:
@@ -52,13 +68,16 @@ def build_buy_message(
     price: int,
     is_add_buy: bool = False,
     order_id: str = "",
+    strategy: Optional[str] = None,
 ) -> str:
     now = now_kst().strftime("%Y-%m-%d %H:%M:%S")
     buy_type = "추가매수" if is_add_buy else "신규매수"
     total = price * quantity
+    tag = strategy_label_ko(strategy)
     lines = [
-        "🟢 매수 체결",
+        f"🟢 매수 체결 [{tag}]",
         f"종목: {stock_name}({stock_code})",
+        f"전략: {tag}",
         f"유형: {buy_type}",
         f"수량: {quantity:,}주",
         f"가격: {_fmt_price(price)}",
@@ -139,6 +158,7 @@ def notify_buy(
     price: int,
     is_add_buy: bool = False,
     order_id: str = "",
+    strategy: Optional[str] = None,
 ) -> bool:
     try:
         msg = build_buy_message(
@@ -148,6 +168,7 @@ def notify_buy(
             price=price,
             is_add_buy=is_add_buy,
             order_id=order_id,
+            strategy=strategy,
         )
         ok = send_trade_alert(msg)
         if ok:

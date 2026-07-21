@@ -1,9 +1,9 @@
 ﻿# Stocke 서버 관리 (Windows)
-# 사용: server.bat start | stop | restart | status
+# 사용: server.bat start | stop | restart | status | tray
 
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('start', 'stop', 'restart', 'status')]
+    [ValidateSet('start', 'stop', 'restart', 'status', 'tray')]
     [string]$Action = 'status'
 )
 
@@ -30,6 +30,7 @@ Set-Location $Root
 
 $PidFile = Join-Path $Root 'logs\server.pid'
 $LogFile = Join-Path $Root 'logs\server.log'
+$TrayScript = Join-Path $Root 'scripts\server_tray.ps1'
 $Python = Join-Path $Root 'venv\Scripts\python.exe'
 
 function Get-EnvServerSetting {
@@ -133,8 +134,12 @@ function Start-StockeServer([int]$Port, [string]$BindHost) {
         New-Item -ItemType Directory -Path (Split-Path $LogFile) -Force | Out-Null
     }
 
+    $screenerLimit = Get-EnvServerSetting -Name 'SCREENER_CANDIDATE_LIMIT' -Default '70'
+    $env:SCREENER_CANDIDATE_LIMIT = $screenerLimit
+
     $args = @('-m', 'uvicorn', 'core.main:app', '--host', $BindHost, '--port', "$Port")
     Write-Host "서버 시작: http://${BindHost}:$Port (bind=$BindHost)"
+    Write-Host "스크리너 후보: 거래대금 상위 $screenerLimit 종목"
     Write-Host "로컬: http://127.0.0.1:$Port/dashboard"
     if ($BindHost -eq '0.0.0.0') {
         Write-Host "외부(LAN): http://<이PC_LAN_IP>:$Port/dashboard" -ForegroundColor Yellow
@@ -177,12 +182,32 @@ function Show-Status([int]$Port) {
     }
 }
 
+function Start-StockeTray {
+    if (-not (Test-Path $TrayScript)) {
+        Write-Host "트레이 스크립트가 없습니다: $TrayScript" -ForegroundColor Yellow
+        return
+    }
+    # 이미 떠 있으면 server_tray.ps1 이 mutex로 즉시 종료
+    Start-Process -FilePath 'powershell.exe' `
+        -ArgumentList @(
+            '-NoProfile',
+            '-STA',
+            '-WindowStyle', 'Hidden',
+            '-ExecutionPolicy', 'Bypass',
+            '-File', $TrayScript
+        ) `
+        -WorkingDirectory $Root `
+        -WindowStyle Hidden | Out-Null
+    Write-Host "시스템 트레이 아이콘을 띄웠습니다. (작업표시줄 우측)" -ForegroundColor Cyan
+}
+
 $port = Get-ServerPort
 $bindHost = Get-ServerHost
 
 switch ($Action) {
-    'start'   { Start-StockeServer $port $bindHost }
+    'start'   { Start-StockeServer $port $bindHost; Start-StockeTray }
     'stop'    { Stop-StockeServer $port }
-    'restart' { Stop-StockeServer $port; Start-StockeServer $port $bindHost }
+    'restart' { Stop-StockeServer $port; Start-StockeServer $port $bindHost; Start-StockeTray }
     'status'  { Show-Status $port }
+    'tray'    { Start-StockeTray }
 }

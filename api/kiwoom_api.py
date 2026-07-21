@@ -13,6 +13,7 @@ from core.config import Config
 from api.api_rate_limiter import api_rate_limiter
 from api.token_manager import TokenManager, get_token_manager
 from utils.datetime_kst import kst_today, now_kst
+from utils.api_traffic_guard import APIPriority
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,14 @@ _ACCOUNT_BALANCE_FRESH_SEC = 15
 _ACCOUNT_BALANCE_STALE_SEC = 300
 _balance_fetch_lock: Optional[asyncio.Lock] = None
 _balance_inflight: Optional[asyncio.Task] = None
+# 조건식 WS(목록/검색) — 동시 연결 시 키움이 Bye/타임아웃으로 끊는 경우 방지
+_condition_ws_lock: Optional[asyncio.Lock] = None
+_CONDITION_SEARCH_MAX_ATTEMPTS = 2
+_condition_list_cache: dict = {"at": 0.0, "data": None}
+_CONDITION_LIST_TTL_SEC = 60.0
+_condition_search_cache: Dict[str, dict] = {}
+_CONDITION_SEARCH_TTL_SEC = 25.0
+_CONDITION_SEARCH_STALE_SEC = 180.0
 
 
 def _get_balance_fetch_lock() -> asyncio.Lock:
@@ -58,6 +67,63 @@ def _get_balance_fetch_lock() -> asyncio.Lock:
     if _balance_fetch_lock is None:
         _balance_fetch_lock = asyncio.Lock()
     return _balance_fetch_lock
+
+
+def _get_condition_ws_lock() -> asyncio.Lock:
+    global _condition_ws_lock
+    if _condition_ws_lock is None:
+        _condition_ws_lock = asyncio.Lock()
+    return _condition_ws_lock
+
+
+def _copy_condition_rows(rows: Optional[List[Dict]]) -> List[Dict]:
+    return [dict(r) for r in (rows or [])]
+
+
+def _get_cached_condition_list() -> Optional[List[Dict]]:
+    cached = _condition_list_cache.get("data")
+    at = float(_condition_list_cache.get("at") or 0.0)
+    if cached is None or time.monotonic() - at > _CONDITION_LIST_TTL_SEC:
+        return None
+    return _copy_condition_rows(cached)
+
+
+def _set_cached_condition_list(rows: List[Dict]) -> None:
+    _condition_list_cache["at"] = time.monotonic()
+    _condition_list_cache["data"] = _copy_condition_rows(rows)
+
+
+def _condition_search_cache_key(condition_id: str, condition_name: str) -> str:
+    return f"{condition_id}|{condition_name}"
+
+
+def _get_cached_condition_search(
+    condition_id: str,
+    condition_name: str,
+    *,
+    allow_stale: bool = False,
+) -> Optional[List[Dict]]:
+    key = _condition_search_cache_key(condition_id, condition_name)
+    row = _condition_search_cache.get(key)
+    if not row:
+        return None
+    age = time.monotonic() - float(row.get("at") or 0.0)
+    ttl = _CONDITION_SEARCH_STALE_SEC if allow_stale else _CONDITION_SEARCH_TTL_SEC
+    if age > ttl:
+        return None
+    return _copy_condition_rows(row.get("stocks"))
+
+
+def _set_cached_condition_search(
+    condition_id: str,
+    condition_name: str,
+    stocks: List[Dict],
+) -> None:
+    key = _condition_search_cache_key(condition_id, condition_name)
+    _condition_search_cache[key] = {
+        "at": time.monotonic(),
+        "stocks": _copy_condition_rows(stocks),
+    }
 
 
 def _stale_account_balance(reason: str) -> Optional[Dict]:
@@ -151,18 +217,47 @@ class KiwoomAPI:
             code = code.split("_", 1)[0]
         return code.strip()
 
-    async def _acquire_api_slot(self, api_name: str, max_wait: float = 6.0) -> bool:
-        """레이트 리미터 슬롯 확보 — 간격·LIMITED 상태면 대기 후 재시도."""
+    async def _acquire_api_slot(
+        self,
+        api_name: str,
+        max_wait: float | None = None,
+        *,
+        priority=None,
+    ) -> bool:
+        """레이트 리미터 슬롯 확보 — 간격·분당한도·LIMITED면 대기 후 재시도."""
+        from utils.api_traffic_guard import (
+            APIPriority,
+            effective_max_wait,
+            should_yield_low_priority,
+        )
+        pri = priority if priority is not None else APIPriority.NORMAL
+        if pri == APIPriority.LOW and should_yield_low_priority():
+            return False
+        if max_wait is None:
+            max_wait = effective_max_wait(pri)
         deadline = time.time() + max_wait
         while time.time() < deadline:
             if not api_rate_limiter.is_api_available():
-                wait_sec = min(api_rate_limiter.seconds_until_available(), 1.0, deadline - time.time())
+                wait_sec = min(
+                    max(api_rate_limiter.seconds_until_available(), 0.2),
+                    5.0,
+                    deadline - time.time(),
+                )
                 if wait_sec > 0:
                     await asyncio.sleep(wait_sec)
                     continue
+                # LIMITED가 방금 풀렸을 수 있음
             if api_rate_limiter.record_api_call(api_name):
                 return True
-            wait_sec = min(api_rate_limiter.seconds_until_available() or api_rate_limiter.min_call_interval, 1.0, deadline - time.time())
+            wait_sec = min(
+                max(
+                    api_rate_limiter.seconds_until_available()
+                    or api_rate_limiter.min_call_interval,
+                    0.2,
+                ),
+                5.0,
+                deadline - time.time(),
+            )
             if wait_sec > 0:
                 await asyncio.sleep(wait_sec)
         return False
@@ -366,10 +461,73 @@ class KiwoomAPI:
                 self.websocket = None
 
     
+    async def _suspend_main_websocket(self) -> dict:
+        """조건식 전용 WS를 위해 메인 실시간 WS를 잠시 중지.
+
+        키움은 동일 토큰으로 /api/dostk/websocket 동시 연결 시 한쪽을 Bye로 끊는 경우가 많음.
+        """
+        state = {
+            "auto_reconnect": bool(getattr(self, "auto_reconnect", True)),
+            "had_ws": bool(self.websocket) or bool(self.running),
+        }
+        self.auto_reconnect = False
+        self.running = False
+        message_task = getattr(self, "message_task", None)
+        if message_task:
+            message_task.cancel()
+            try:
+                await message_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+            self.message_task = None
+        if self.websocket:
+            try:
+                await asyncio.wait_for(self.websocket.close(), timeout=2.0)
+            except Exception:
+                pass
+            self.websocket = None
+        return state
+
+    async def _resume_main_websocket(self, state: Optional[dict]) -> None:
+        """조건식 조회 후 메인 WS 복구."""
+        if not state:
+            return
+        self.auto_reconnect = bool(state.get("auto_reconnect", True))
+        if not state.get("had_ws"):
+            return
+        try:
+            ok = await self.connect()
+            if not ok:
+                logger.warning("조건식 조회 후 메인 WebSocket 재연결 실패")
+        except Exception as e:
+            logger.warning(f"조건식 조회 후 메인 WebSocket 재연결 오류: {e}")
+
     async def get_condition_list_websocket(self) -> List[Dict]:
         """조건식 목록 조회 (WebSocket) - 키움증권 API 방식"""
         logger.debug("get_condition_list_websocket 시작")
-        
+        cached = _get_cached_condition_list()
+        if cached is not None:
+            logger.debug(f"조건식 목록 캐시 사용 ({len(cached)}개)")
+            return cached
+        async with _get_condition_ws_lock():
+            cached = _get_cached_condition_list()
+            if cached is not None:
+                return cached
+            rows = await self._get_condition_list_websocket_unlocked()
+            if rows:
+                _set_cached_condition_list(rows)
+            return rows
+
+    async def _get_condition_list_websocket_unlocked(self) -> List[Dict]:
+        prev = await self._suspend_main_websocket()
+        try:
+            return await self._get_condition_list_websocket_body()
+        finally:
+            await self._resume_main_websocket(prev)
+
+    async def _get_condition_list_websocket_body(self) -> List[Dict]:
         # 새로운 WebSocket 연결 생성 (기존 연결과 충돌 방지)
         try:
             # 실전/모의에 따른 WebSocket 호스트 및 앱키 선택
@@ -484,154 +642,177 @@ class KiwoomAPI:
             if 'websocket' in locals():
                 await websocket.close()
     
+    def _condition_ws_headers(self) -> Dict[str, str]:
+        use_mock = Config.KIWOOM_USE_MOCK_ACCOUNT
+        app_key = Config.KIWOOM_MOCK_APP_KEY if use_mock else Config.KIWOOM_APP_KEY
+        app_secret = Config.KIWOOM_MOCK_APP_SECRET if use_mock else Config.KIWOOM_APP_SECRET
+        return {
+            "Content-Type": "application/json;charset=UTF-8",
+            "Authorization": f"Bearer {self.token_manager.get_valid_token()}",
+            "appkey": app_key,
+            "appsecret": app_secret,
+        }
+
+    def _condition_ws_url(self) -> str:
+        use_mock = Config.KIWOOM_USE_MOCK_ACCOUNT
+        ws_host = Config.KIWOOM_MOCK_WS_URL if use_mock else Config.KIWOOM_WS_URL
+        return f"{ws_host}/api/dostk/websocket"
+
+    async def _open_condition_websocket(self):
+        """조건식 검색용 WebSocket — LOGIN + CNSRLST까지 완료.
+
+        키움은 LOGIN만 하고 CNSRREQ를내면 응답이 오지 않는 경우가 있음.
+        동일 연결에서 CNSRLST를 한 번 받은 뒤 검색해야 안정적이다.
+        """
+        websocket = await websockets.connect(
+            self._condition_ws_url(),
+            extra_headers=self._condition_ws_headers(),
+        )
+        auth_param = {"trnm": "LOGIN", "token": self.token_manager.get_valid_token()}
+        await websocket.send(json.dumps(auth_param))
+        login_ok = False
+        for _ in range(8):
+            response = await asyncio.wait_for(websocket.recv(), timeout=12.0)
+            try:
+                data = json.loads(response)
+            except json.JSONDecodeError:
+                continue
+            trnm = data.get("trnm")
+            if trnm == "PING":
+                await websocket.send(response)
+                continue
+            if trnm == "SYSTEM":
+                continue
+            if trnm == "LOGIN":
+                if data.get("return_code") not in (0, None):
+                    await websocket.close()
+                    raise RuntimeError(f"조건식 WS LOGIN 실패: {data}")
+                login_ok = True
+                break
+            logger.debug(f"조건식 WS LOGIN 대기 중 기타 응답: {trnm}")
+        if not login_ok:
+            await websocket.close()
+            raise TimeoutError("조건식 WS LOGIN 미수신")
+
+        await websocket.send(json.dumps({
+            "trnm": "CNSRLST",
+            "token": self.token_manager.get_valid_token(),
+        }))
+        list_ok = False
+        for _ in range(8):
+            response = await asyncio.wait_for(websocket.recv(), timeout=12.0)
+            try:
+                data = json.loads(response)
+            except json.JSONDecodeError:
+                continue
+            trnm = data.get("trnm")
+            if trnm == "PING":
+                await websocket.send(response)
+                continue
+            if trnm in ("SYSTEM", "LOGIN"):
+                continue
+            if trnm == "CNSRLST":
+                if data.get("return_code") not in (0, None):
+                    await websocket.close()
+                    raise RuntimeError(f"조건식 WS CNSRLST 실패: {data}")
+                list_ok = True
+                break
+            logger.debug(f"조건식 WS CNSRLST 대기 중 기타 응답: {trnm}")
+        if not list_ok:
+            await websocket.close()
+            raise TimeoutError("조건식 WS CNSRLST 미수신")
+
+        await asyncio.sleep(0.15)
+        return websocket
+
+    async def _recv_cnsrreq_on_ws(self, websocket) -> Optional[Dict]:
+        for attempt in range(6):
+            response = await asyncio.wait_for(websocket.recv(), timeout=10.0)
+            try:
+                data = json.loads(response)
+            except json.JSONDecodeError:
+                logger.warning(f"JSON 파싱 실패 (시도 {attempt + 1}): {str(response)[:100]}...")
+                continue
+            trnm = data.get("trnm")
+            if trnm == "PING":
+                await websocket.send(response)
+                continue
+            # 키움이 LOGIN 직후/검색 중 SYSTEM 알림을 끼워 넣는 경우가 있음
+            if trnm in ("SYSTEM", "LOGIN"):
+                logger.debug(f"조건식 WS 무시 응답: {trnm}")
+                continue
+            if trnm == "CNSRREQ":
+                return data
+            logger.warning(f"예상치 못한 응답 (시도 {attempt + 1}): {trnm or 'UNKNOWN'}")
+        return None
+
+    def _parse_cnsrreq_stocks(self, data: Dict, condition_name: str) -> List[Dict]:
+        stocks: List[Dict] = []
+        for item in data.get("data") or []:
+            if not isinstance(item, dict):
+                continue
+            stock_code = str(item.get("9001", "")).replace("A", "")
+            stock_name = item.get("302", "")
+            current_price_int = abs(_parse_kiwoom_int(item.get("10", "0")))
+            price_diff_int = _parse_kiwoom_int(item.get("11", "0"))
+            volume_int = abs(_parse_kiwoom_int(item.get("13", "0")))
+            prev_close_int = current_price_int - price_diff_int
+            if prev_close_int > 0:
+                change_rate_float = round(price_diff_int / prev_close_int * 100, 2)
+            else:
+                change_rate_float = _parse_kiwoom_float(item.get("12", "0"))
+            stocks.append({
+                "stock_code": stock_code,
+                "stock_name": stock_name,
+                "current_price": str(current_price_int),
+                "price_diff": str(price_diff_int),
+                "prev_close": str(prev_close_int),
+                "change_rate": str(round(change_rate_float, 2)),
+                "volume": str(volume_int),
+            })
+        logger.info(f"조건식 검색 성공: {condition_name}, 종목 수: {len(stocks)}개")
+        return stocks
+
+    async def _search_condition_on_websocket(
+        self,
+        websocket,
+        condition_id: str,
+        condition_name: str,
+    ) -> List[Dict]:
+        search_param = {
+            "trnm": "CNSRREQ",
+            "seq": condition_id,
+            "search_type": "0",
+            "stex_tp": "K",
+            "cont_yn": "N",
+            "next_key": "",
+        }
+        await websocket.send(json.dumps(search_param))
+        logger.debug(f"CNSRREQ 전송: {condition_name} (ID={condition_id})")
+        data = await self._recv_cnsrreq_on_ws(websocket)
+        if not data:
+            raise TimeoutError(f"조건식 CNSRREQ 미수신: {condition_name}")
+        if data.get("return_code") not in (0, None):
+            raise RuntimeError(f"조건식 검색 실패: {condition_name} — {data}")
+        return self._parse_cnsrreq_stocks(data, condition_name)
+
+    def condition_search_session(self) -> "ConditionSearchSession":
+        return ConditionSearchSession(self)
+
     async def search_condition_stocks(self, condition_id: str, condition_name: str) -> List[Dict]:
-        """조건식으로 종목 검색 (WebSocket)"""
+        """조건식으로 종목 검색 (WebSocket) — 단일 호출."""
         logger.debug(f"조건식 검색 시작: {condition_name} (ID: {condition_id})")
-        
         try:
-            # 실전/모의에 따른 WebSocket 호스트 및 앱키 선택
-            use_mock = Config.KIWOOM_USE_MOCK_ACCOUNT
-            ws_host = Config.KIWOOM_MOCK_WS_URL if use_mock else Config.KIWOOM_WS_URL
-            app_key = Config.KIWOOM_MOCK_APP_KEY if use_mock else Config.KIWOOM_APP_KEY
-            app_secret = Config.KIWOOM_MOCK_APP_SECRET if use_mock else Config.KIWOOM_APP_SECRET
-
-            ws_url = f"{ws_host}/api/dostk/websocket"
-            
-            websocket = await websockets.connect(
-                ws_url,
-                extra_headers={
-                    "Content-Type": "application/json;charset=UTF-8",
-                    "Authorization": f"Bearer {self.token_manager.get_valid_token()}",
-                    "appkey": app_key,
-                    "appsecret": app_secret
-                }
-            )
-            
-            # 먼저 로그인 인증 메시지 전송
-            auth_param = {
-                'trnm': 'LOGIN',
-                'token': self.token_manager.get_valid_token()
-            }
-            
-            logger.debug(f"LOGIN 패킷 전송: {auth_param}")
-            await websocket.send(json.dumps(auth_param))
-            logger.info("LOGIN 패킷 전송")
-            
-            # 로그인 응답 대기
-            auth_response = await asyncio.wait_for(websocket.recv(), timeout=10.0)
-            logger.debug(f"로그인 응답: {auth_response}")
-            
-            # 먼저 조건검색 목록 조회
-            list_param = {
-                'trnm': 'CNSRLST'
-            }
-            
-            list_json = json.dumps(list_param)
-            logger.info(f"CNSRLST 패킷 전송: {list_json}")
-            await websocket.send(list_json)
-            
-            # 조건검색 목록 응답 대기
-            list_response = await asyncio.wait_for(websocket.recv(), timeout=10.0)
-            logger.info(f"조건검색 목록 응답: {list_response}")
-            
-            # 조건식 검색 요청 패킷 (키움증권 API 형식)
-            search_param = {
-                'trnm': 'CNSRREQ',
-                'seq': condition_id,  # 조건검색식 일련번호
-                'search_type': '0',
-                'stex_tp': 'K',
-                'cont_yn': 'N',
-                'next_key': ''
-            }
-            
-            search_json = json.dumps(search_param)
-            logger.info(f"CNSRREQ 패킷 전송: {search_json}")
-            await websocket.send(search_json)
-            
-            # 조건식 검색 응답 대기 (PING 응답 처리)
-            logger.info("조건식 검색 응답 대기 중...")
-            
-            # PING 응답을 처리하고 실제 응답을 기다림
-            max_attempts = 10
-            for attempt in range(max_attempts):
-                response = await asyncio.wait_for(websocket.recv(), timeout=15.0)
-                
-                try:
-                    data = json.loads(response)
-                    # PING 응답이면 그대로 다시 전송
-                    if data.get('trnm') == 'PING':
-                        logger.debug(f"PING 응답 수신 (시도 {attempt + 1}), 응답 전송")
-                        await websocket.send(response)
-                        continue
-                    # 실제 응답이면 처리
-                    elif data.get('trnm') == 'CNSRREQ':
-                        logger.info(f"CNSRREQ 응답 수신 (시도 {attempt + 1}): {response}")
-                        break
-                    else:
-                        logger.warning(f"예상치 못한 응답 (시도 {attempt + 1}): {data.get('trnm', 'UNKNOWN')}")
-                        continue
-                except json.JSONDecodeError:
-                    logger.warning(f"JSON 파싱 실패 (시도 {attempt + 1}): {response[:100]}...")
-                    continue
-            else:
-                logger.error("최대 시도 횟수 초과, 유효한 응답을 받지 못함")
-                return []
-            
-            # 응답 데이터 처리
-            if data.get('trnm') == 'CNSRREQ':
-                stocks = []
-                stock_data = data.get('data', [])
-                
-                if stock_data:
-                    for item in stock_data:
-                        if isinstance(item, dict):
-                            # 키움증권 응답 필드 매핑
-                            stock_code = item.get('9001', '').replace('A', '')  # 종목코드에서 'A' 제거
-                            stock_name = item.get('302', '')
-
-                            # 키움 값은 부호(+/-)와 선행 0이 붙은 문자열로 내려온다.
-                            # 현재가는 항상 양수로, 전일대비는 부호를 유지한다.
-                            current_price_int = abs(_parse_kiwoom_int(item.get('10', '0')))  # 현재가
-                            price_diff_int = _parse_kiwoom_int(item.get('11', '0'))          # 전일대비 (부호 유지)
-                            volume_int = abs(_parse_kiwoom_int(item.get('13', '0')))         # 거래량
-
-                            # 전일종가 = 현재가 - 전일대비
-                            prev_close_int = current_price_int - price_diff_int
-
-                            # 등락률은 키움 필드(12) 단위가 불안정하므로 전일대비/전일종가로 직접 계산
-                            if prev_close_int > 0:
-                                change_rate_float = round(price_diff_int / prev_close_int * 100, 2)
-                            else:
-                                change_rate_float = _parse_kiwoom_float(item.get('12', '0'))
-
-                            stock_info = {
-                                'stock_code': stock_code,
-                                'stock_name': stock_name,
-                                'current_price': str(current_price_int),
-                                'price_diff': str(price_diff_int),
-                                'prev_close': str(prev_close_int),
-                                'change_rate': str(round(change_rate_float, 2)),
-                                'volume': str(volume_int)
-                            }
-                            stocks.append(stock_info)
-                
-                logger.info(f"조건식 검색 성공: {condition_name}, 종목 수: {len(stocks)}개")
-                return stocks
-            else:
-                logger.error(f"조건식 검색 실패: {data}")
-                return []
-                
+            async with self.condition_search_session() as session:
+                return await session.search(condition_id, condition_name)
         except asyncio.TimeoutError:
             logger.error("조건식 검색 타임아웃")
             return []
         except Exception as e:
             logger.error(f"조건식 검색 중 오류: {e}")
             return []
-        finally:
-            # WebSocket 연결 정리
-            if 'websocket' in locals():
-                await websocket.close()
-    
+
+
     async def get_stock_chart_data(
         self, stock_code: str, period: str = "1D", max_bars: Optional[int] = None,
         *, allow_off_hours: bool = False,
@@ -671,7 +852,8 @@ class KiwoomAPI:
                 logger.error("키움 API 토큰이 없습니다")
                 return cached[0] if cached else []
             
-            if not api_rate_limiter.is_api_available():
+            # LIMITED여도 allow_off_hours(검증·시뮬)는 즉시 포기하지 않고 슬롯 대기로 넘긴다.
+            if not api_rate_limiter.is_api_available() and not allow_off_hours:
                 logger.warning("차트 조회 건너뜀 - API 제한 상태")
                 return cached[0] if cached else []
             
@@ -730,9 +912,18 @@ class KiwoomAPI:
             }
 
             max_attempts = 3
+            slot_wait = 45.0 if allow_off_hours else 6.0
             for attempt in range(max_attempts):
-                if not await self._acquire_api_slot("chart_data", max_wait=6.0):
+                if not await self._acquire_api_slot("chart_data", max_wait=slot_wait, priority=APIPriority.HIGH):
                     logger.warning("차트 조회 슬롯 확보 실패")
+                    if attempt < max_attempts - 1:
+                        # 분당 한도/간격 — 윈도우가 밀릴 때까지 대기
+                        wait_more = max(
+                            2.0,
+                            min(api_rate_limiter.seconds_until_available() or 3.0, 20.0),
+                        )
+                        await asyncio.sleep(wait_more)
+                        continue
                     return cached[0] if cached else []
 
                 async with aiohttp.ClientSession() as session:
@@ -780,6 +971,8 @@ class KiwoomAPI:
         trade_date: str,
         tic_scope: str = "15",
         max_pages: int = 1,
+        *,
+        priority=APIPriority.NORMAL,
     ) -> Dict:
         """특정 거래일(KST) 분봉 OHLCV 조회 (ka10080, 검증 페이지용).
 
@@ -812,9 +1005,8 @@ class KiwoomAPI:
             return {"success": False, "error": "키움 API 토큰이 없습니다", "bars": []}
 
         if not api_rate_limiter.is_api_available():
-            if cached:
-                return {"success": True, "bars": cached[0], "cached": True, "warning": "API 제한 — 캐시 사용"}
-            return {"success": False, "error": "API 호출 제한 중입니다. 잠시 후 다시 시도하세요.", "bars": []}
+            # 검증용 분봉은 LIMITED에서도 슬롯 대기로 진행 (즉시 포기하지 않음)
+            pass
 
         use_mock = Config.KIWOOM_USE_MOCK_ACCOUNT
         host = Config.KIWOOM_MOCK_API_URL if use_mock else Config.KIWOOM_REAL_API_URL
@@ -843,7 +1035,7 @@ class KiwoomAPI:
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 while pages < max_pages:
                     pages += 1
-                    if not await self._acquire_api_slot("verify_intraday_chart", max_wait=8.0):
+                    if not await self._acquire_api_slot("verify_intraday_chart", max_wait=45.0, priority=priority):
                         last_error = "API 슬롯 확보 실패"
                         break
 
@@ -905,7 +1097,7 @@ class KiwoomAPI:
                 return {"success": True, "bars": cached[0], "cached": True, "warning": str(e)}
             return {"success": False, "error": str(e), "bars": []}
     
-    async def get_current_price(self, stock_code: str) -> Optional[int]:
+    async def get_current_price(self, stock_code: str, *, priority=None) -> Optional[int]:
         """종목 현재가 조회 (캐싱 적용)"""
         try:
             from utils.market_hours import is_krx_session
@@ -932,7 +1124,9 @@ class KiwoomAPI:
                 logger.error("키움 API 토큰이 없습니다")
                 return None
 
-            if not await self._acquire_api_slot(f"get_current_price_{stock_code}", max_wait=6.0):
+            if not await self._acquire_api_slot(
+                f"get_current_price_{stock_code}", priority=priority,
+            ):
                 if stock_code in self._price_cache:
                     price, _ = self._price_cache[stock_code]
                     logger.debug(f"API 슬롯 대기 초과 — 캐시 사용: {stock_code}")
@@ -1342,7 +1536,7 @@ class KiwoomAPI:
                 async with aiohttp.ClientSession(timeout=timeout) as session:
                     while pages < max_pages:
                         pages += 1
-                        if not await self._acquire_api_slot("ka10030", max_wait=20.0 if limit > 20 else 8.0):
+                        if not await self._acquire_api_slot("ka10030", max_wait=20.0 if limit > 20 else 8.0, priority=APIPriority.HIGH):
                             logger.warning("[VOLUME_RANK] rate limit slot timeout")
                             if kept:
                                 break
@@ -2292,7 +2486,7 @@ class KiwoomAPI:
             return {"_error": "no_token", "_error_msg": "토큰 없음"}
 
         try:
-            if not await self._acquire_api_slot("get_account_balance", max_wait=8.0):
+            if not await self._acquire_api_slot("get_account_balance", max_wait=8.0, priority=APIPriority.LOW):
                 stale = _stale_account_balance("rate_limit")
                 if stale:
                     return stale
@@ -2399,7 +2593,7 @@ class KiwoomAPI:
                         break
 
                     # 재시도 전에 슬롯/레이트리밋 다시 확인
-                    if not await self._acquire_api_slot("get_account_balance", max_wait=3.0):
+                    if not await self._acquire_api_slot("get_account_balance", max_wait=3.0, priority=APIPriority.LOW):
                         break
                     continue
 
@@ -2501,6 +2695,111 @@ class KiwoomAPI:
             import traceback
             logger.error(f"스택 트레이스: {traceback.format_exc()}")
             return {}
+
+
+class ConditionSearchSession:
+    """조건식 WS 1연결로 여러 CNSRREQ — LOGIN 1회.
+
+    전역 락 + 메인 WS 일시 중지로 동시 연결 Bye를 방지한다.
+    """
+
+    def __init__(self, api: KiwoomAPI):
+        self._api = api
+        self._websocket = None
+        self._lock_held = False
+        self._main_ws_state: Optional[dict] = None
+
+    async def __aenter__(self):
+        await _get_condition_ws_lock().acquire()
+        self._lock_held = True
+        try:
+            self._main_ws_state = await self._api._suspend_main_websocket()
+            self._websocket = await self._api._open_condition_websocket()
+        except Exception:
+            try:
+                await self._api._resume_main_websocket(self._main_ws_state)
+            finally:
+                self._main_ws_state = None
+                _get_condition_ws_lock().release()
+                self._lock_held = False
+            raise
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        try:
+            if self._websocket:
+                try:
+                    await self._websocket.close()
+                except Exception:
+                    pass
+                self._websocket = None
+        finally:
+            try:
+                await self._api._resume_main_websocket(self._main_ws_state)
+            finally:
+                self._main_ws_state = None
+                if self._lock_held:
+                    _get_condition_ws_lock().release()
+                    self._lock_held = False
+
+    async def _reopen(self) -> None:
+        if self._websocket:
+            try:
+                await self._websocket.close()
+            except Exception:
+                pass
+            self._websocket = None
+        self._websocket = await self._api._open_condition_websocket()
+
+    async def search(self, condition_id: str, condition_name: str) -> List[Dict]:
+        cached = _get_cached_condition_search(condition_id, condition_name)
+        if cached is not None:
+            logger.debug(f"조건식 검색 캐시 사용: {condition_name} ({len(cached)}개)")
+            return cached
+
+        last_err: Optional[BaseException] = None
+        for attempt in range(1, _CONDITION_SEARCH_MAX_ATTEMPTS + 1):
+            try:
+                if not self._websocket:
+                    self._websocket = await self._api._open_condition_websocket()
+                stocks = await self._api._search_condition_on_websocket(
+                    self._websocket, condition_id, condition_name,
+                )
+                _set_cached_condition_search(condition_id, condition_name, stocks)
+                return stocks
+            except (asyncio.TimeoutError, websockets.exceptions.ConnectionClosed) as e:
+                last_err = e
+                logger.warning(
+                    f"조건식 검색 재시도 ({attempt}/{_CONDITION_SEARCH_MAX_ATTEMPTS}): "
+                    f"{condition_name} — {type(e).__name__}: {e!r}"
+                )
+            except Exception as e:
+                last_err = e
+                logger.warning(
+                    f"조건식 검색 오류 재시도 ({attempt}/{_CONDITION_SEARCH_MAX_ATTEMPTS}): "
+                    f"{condition_name} — {type(e).__name__}: {e!r}"
+                )
+            if attempt >= _CONDITION_SEARCH_MAX_ATTEMPTS:
+                break
+            await asyncio.sleep(0.4 * attempt)
+            try:
+                await self._reopen()
+            except Exception as e:
+                last_err = e
+                logger.warning(f"조건식 WS 재연결 실패: {type(e).__name__}: {e!r}")
+
+        stale = _get_cached_condition_search(
+            condition_id, condition_name, allow_stale=True,
+        )
+        if stale is not None:
+            logger.warning(
+                f"조건식 검색 실패 → stale 캐시 사용: {condition_name} ({len(stale)}개)"
+            )
+            return stale
+        if last_err:
+            raise last_err
+        return []
+
 
 # 전역 인스턴스
 kiwoom_api = KiwoomAPI()

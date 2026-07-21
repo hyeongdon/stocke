@@ -1,11 +1,11 @@
 """
-종목별 네이버 뉴스 검색 API(Stage C) → tag_articles + 기사 제목 키워드
+종목별 네이버 뉴스 검색 API(Stage C) → tag_articles + 기사 제목·요약 키워드
 
 핵심:
 - `tag_articles`: 기사 메타(title/url/published_at) 저장
-- 기사 제목에서 키워드를 추출해서 `theme_tags(tag_type=news_keyword)`와
-  `theme_tag_edges(stock_code -> news_keyword)`까지 업데이트
-- 추가로 `tag_article_keyword_edges(article_id -> news_keyword)`도 저장
+- 기사 제목 + 검색 API description(요약)에서 키워드 추출
+  (`theme_tags(tag_type=news_keyword)`, `theme_tag_edges`, `tag_article_keyword_edges`)
+- 본문 HTML 크롤 없음 (description은 검색 응답에 포함 → 추가 API/네트워크 부하 없음)
 
 주의:
 - "전체 종목"을 돌리면 API 호출량이 매우 커집니다. 본 스크립트는
@@ -72,10 +72,23 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--min-call-interval", type=float, default=0.9, help="종목당 최소 요청 간격(초)")
     p.add_argument("--max-retries", type=int, default=4, help="429/일시 오류 재시도 횟수")
     p.add_argument(
+        "--universe",
+        type=str,
+        default=None,
+        choices=["theme", "all"],
+        help="theme=테마 편입 종목만(기본, 미니PC), all=전종목",
+    )
+    p.add_argument(
+        "--max-stocks-per-day",
+        type=int,
+        default=None,
+        help="하루 최대 처리 종목 수 (기본: Config.STOCK_NEWS_MAX_STOCKS_PER_DAY)",
+    )
+    p.add_argument(
         "--max-stocks-per-run",
         type=int,
         default=0,
-        help="0=남은 전체, N=미처리 종목 중 앞에서 N개만 (분할 실행용)",
+        help="0=남은 전체(일일 상한 내), N=미처리 종목 중 앞에서 N개만 (분할 실행용)",
     )
     p.add_argument(
         "--offset",
@@ -84,8 +97,8 @@ def parse_args() -> argparse.Namespace:
         help="미처리 종목 큐에서의 시작 오프셋(기본 0). 예: --offset 100 --max-stocks-per-run 100",
     )
     p.add_argument("--page-delay", type=float, default=0.6, help="종목 유니버스(Naver 시장) 페이지 딜레이")
-    p.add_argument("--article-title-keywords-top", type=int, default=4, help="기사 1개 title → 키워드 top")
-    p.add_argument("--stock-keywords-top", type=int, default=12, help="종목 전체 title 목록 → 키워드 top")
+    p.add_argument("--article-title-keywords-top", type=int, default=4, help="기사 1개 제목+요약 → 키워드 top")
+    p.add_argument("--stock-keywords-top", type=int, default=12, help="종목 전체 제목+요약 목록 → 키워드 top")
     p.add_argument("--keyword-edge-weight-mode", type=str, default="mention_count", choices=["mention_count"], help="weight 계산 방식")
     p.add_argument("--force", action="store_true", help="이미 biz_date를 처리한 종목도 강제 재수집")
     p.add_argument("--commit-every", type=int, default=20, help="stock 처리 후 커밋 주기")
@@ -122,6 +135,50 @@ def _safe_text(v: object) -> str:
     s = "" if v is None else str(v)
     s = s.replace("<b>", "").replace("</b>", "").replace("&quot;", '"').replace("&amp;", "&")
     return s.strip()
+
+
+def _load_theme_universe(session, biz: date) -> Tuple[List[Dict], Optional[date]]:
+    """테마 편입 종목 유니버스. 당일 스냅샷이 없으면 최근 편입일을 사용."""
+    today_n = int(
+        session.query(func.count(ThemeTagEdge.id))
+        .filter(
+            ThemeTagEdge.source == "naver_theme",
+            ThemeTagEdge.biz_date == biz,
+        )
+        .scalar()
+        or 0
+    )
+    use_biz = biz if today_n > 0 else (
+        session.query(func.max(ThemeTagEdge.biz_date))
+        .filter(
+            ThemeTagEdge.source == "naver_theme",
+            ThemeTagEdge.biz_date.isnot(None),
+        )
+        .scalar()
+    )
+    if not use_biz:
+        return [], None
+
+    rows = (
+        session.query(ThemeTagEdge.stock_code, ThemeTagEdge.stock_name)
+        .filter(
+            ThemeTagEdge.source == "naver_theme",
+            ThemeTagEdge.biz_date == use_biz,
+        )
+        .distinct()
+        .all()
+    )
+    out: List[Dict] = []
+    seen = set()
+    for code_raw, name_raw in rows:
+        code = _norm_stock_code(code_raw)
+        name = _safe_text(name_raw) or code
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        out.append({"stock_code": code, "stock_name": name})
+    out = sorted(out, key=lambda x: x["stock_code"])
+    return out, use_biz
 
 
 def _upsert_keyword_tag(
@@ -185,9 +242,24 @@ def main() -> int:
     else:
         biz = kst_today()
 
-    log.info("stock_news_daily_batch 시작 biz_date=%s display=%s", biz.isoformat(), args.display)
+    log.info(
+        "stock_news_daily_batch 시작 biz_date=%s display=%s universe=%s max_per_day=%s",
+        biz.isoformat(),
+        args.display,
+        (args.universe or Config.STOCK_NEWS_UNIVERSE or "theme"),
+        args.max_stocks_per_day if args.max_stocks_per_day is not None else Config.STOCK_NEWS_MAX_STOCKS_PER_DAY,
+    )
 
     started_at = time.time()
+    universe_mode = (args.universe or Config.STOCK_NEWS_UNIVERSE or "theme").strip().lower()
+    if universe_mode not in ("theme", "all"):
+        universe_mode = "theme"
+    max_per_day = (
+        int(args.max_stocks_per_day)
+        if args.max_stocks_per_day is not None
+        else int(Config.STOCK_NEWS_MAX_STOCKS_PER_DAY or 0)
+    )
+    max_per_day = max(0, max_per_day)
 
     session_gen = get_db()
     for session in session_gen:
@@ -206,6 +278,25 @@ def main() -> int:
             done_stock_codes = {str(r[0] or "") for r in rows if r and r[0]}
             log.info("오늘 처리된 종목 스킵 set size=%d", len(done_stock_codes))
 
+        if max_per_day > 0 and len(done_stock_codes) >= max_per_day and not args.force:
+            log.info(
+                "일일 상한 도달 — 종료 (done=%d >= max_per_day=%d)",
+                len(done_stock_codes),
+                max_per_day,
+            )
+            _report_progress(
+                biz_date=biz.isoformat(),
+                running=False,
+                status="all_done",
+                universe_total=max_per_day,
+                done_count=len(done_stock_codes),
+                pending_count=0,
+                percent=100.0,
+                day_cap=max_per_day,
+                universe_mode=universe_mode,
+            )
+            return 0
+
         progress_state: Dict[str, object] = {
             "biz_date": biz.isoformat(),
             "running": True,
@@ -219,6 +310,8 @@ def main() -> int:
             "ok_count": 0,
             "fail_count": 0,
             "started_at": kst_now_iso(),
+            "universe_mode": universe_mode,
+            "day_cap": max_per_day or None,
         }
         progress_lock = threading.Lock()
 
@@ -240,22 +333,63 @@ def main() -> int:
         hb_thread.start()
         _emit_progress()
 
-        # 종목 유니버스(전체 종목)
-        stocks = crawl_all_markets(markets=None, page_delay_sec=args.page_delay)
-        all_stock_rows: List[Dict] = []
-        for r in stocks:
-            code = _norm_stock_code(r.get("stock_code"))
-            name = _safe_text(r.get("stock_name"))
-            if not code or not name:
-                continue
-            all_stock_rows.append({"stock_code": code, "stock_name": name})
-        all_stock_rows = sorted(all_stock_rows, key=lambda x: x["stock_code"])
+        theme_edge_biz = None
+        if universe_mode == "theme":
+            log.info("테마 편입 종목 유니버스 로드 중...")
+            all_stock_rows, theme_edge_biz = _load_theme_universe(session, biz)
+            log.info(
+                "테마 유니버스 완료 n=%d edge_biz=%s",
+                len(all_stock_rows),
+                theme_edge_biz.isoformat() if theme_edge_biz else None,
+            )
+            if not all_stock_rows:
+                log.error("테마 편입 종목이 없습니다. 테마 배치를 먼저 실행하거나 --universe all 을 사용하세요.")
+                _report_progress(
+                    biz_date=biz.isoformat(),
+                    running=False,
+                    status="idle",
+                    universe_total=0,
+                    done_count=len(done_stock_codes),
+                    pending_count=0,
+                    universe_mode=universe_mode,
+                )
+                hb_stop.set()
+                hb_thread.join(timeout=1.0)
+                return 1
+        else:
+            # 종목 유니버스(전체 종목) — 페이지 크롤이라 1~3분 걸릴 수 있음
+            log.info("종목 유니버스 수집 시작 (네이버 시장 합산, 잠시 대기)...")
+            stocks = crawl_all_markets(markets=None, page_delay_sec=args.page_delay)
+            log.info("종목 유니버스 수집 완료 raw=%d", len(stocks or []))
+            all_stock_rows = []
+            for r in stocks:
+                code = _norm_stock_code(r.get("stock_code"))
+                name = _safe_text(r.get("stock_name"))
+                if not code or not name:
+                    continue
+                all_stock_rows.append({"stock_code": code, "stock_name": name})
+            all_stock_rows = sorted(all_stock_rows, key=lambda x: x["stock_code"])
 
         # 이미 처리된 종목은 큐에서 제외 → 분할 실행마다 "다음 N개"가 이어짐
         if args.force:
             pending_rows = list(all_stock_rows)
         else:
             pending_rows = [s for s in all_stock_rows if s["stock_code"] not in done_stock_codes]
+
+        # 미니PC: 하루 상한으로 큐 자체를 자름
+        day_capped = False
+        if max_per_day > 0:
+            budget = max(0, max_per_day - len(done_stock_codes))
+            if len(pending_rows) > budget:
+                pending_rows = pending_rows[:budget]
+                day_capped = True
+            log.info(
+                "일일 상한 max_per_day=%d 이미완료=%d 오늘예산=%d 대기큐=%d",
+                max_per_day,
+                len(done_stock_codes),
+                budget,
+                len(pending_rows),
+            )
 
         offset = max(0, int(args.offset or 0))
         pending_total = len(pending_rows)
@@ -267,8 +401,14 @@ def main() -> int:
         else:
             stock_rows = pending_rows
 
+        # 진행률 분모: 테마/전종일 때도 일일 상한을 목표치로 표시
+        progress_universe = len(all_stock_rows)
+        if max_per_day > 0:
+            progress_universe = min(progress_universe, max_per_day) if progress_universe else max_per_day
+
         log.info(
-            "유니버스=%d 이미완료=%d 미처리=%d offset=%d 이번_실행=%d",
+            "유니버스모드=%s 유니버스=%d 이미완료=%d 미처리=%d offset=%d 이번_실행=%d",
+            universe_mode,
             len(all_stock_rows),
             len(done_stock_codes),
             pending_total,
@@ -276,15 +416,22 @@ def main() -> int:
             len(stock_rows),
         )
         if not stock_rows:
-            log.info("처리할 미완료 종목이 없습니다. (biz_date=%s)", biz.isoformat())
+            log.info(
+                "처리할 미완료 종목이 없습니다. (biz_date=%s day_cap=%s)",
+                biz.isoformat(),
+                max_per_day or "none",
+            )
             _report_progress(
                 biz_date=biz.isoformat(),
                 running=False,
                 status="all_done",
-                universe_total=len(all_stock_rows),
+                universe_total=progress_universe,
                 done_count=len(done_stock_codes),
                 pending_count=0,
-                percent=100.0 if all_stock_rows else 0,
+                percent=100.0 if progress_universe else 0,
+                day_cap=max_per_day or None,
+                universe_mode=universe_mode,
+                day_capped=day_capped,
             )
             hb_stop.set()
             hb_thread.join(timeout=1.0)
@@ -294,7 +441,7 @@ def main() -> int:
             biz_date=biz.isoformat(),
             running=True,
             status="running",
-            universe_total=len(all_stock_rows),
+            universe_total=progress_universe,
             done_count=len(done_stock_codes),
             done_at_start=len(done_stock_codes),
             pending_count=pending_total,
@@ -303,6 +450,8 @@ def main() -> int:
             ok_count=0,
             fail_count=0,
             started_at=kst_now_iso(),
+            universe_mode=universe_mode,
+            day_cap=max_per_day or None,
         )
 
         req = requests.Session()
@@ -385,11 +534,12 @@ def main() -> int:
                 continue
 
             items = data.get("items") or []
-            # 오늘(biz_date) 기사만 수집
+            # 오늘(biz_date) 기사만 수집 (제목 + 검색 API 요약 description)
             today_articles: List[Dict] = []
-            today_titles: List[str] = []
+            today_texts: List[str] = []
             for it in items:
                 title = _safe_text(it.get("title"))
+                description = _safe_text(it.get("description"))
                 url = _safe_text(it.get("link") or it.get("url"))
                 if not title or not url:
                     continue
@@ -399,10 +549,13 @@ def main() -> int:
                 dt_kst_date = dt.astimezone(KST).date()
                 if dt_kst_date != biz:
                     continue
-                today_titles.append(title)
+                today_texts.append(title)
+                if description and description != title:
+                    today_texts.append(description)
                 today_articles.append(
                     {
                         "title": title,
+                        "description": description,
                         "url": url,
                         "published_at": dt,
                     }
@@ -485,7 +638,10 @@ def main() -> int:
                     published_at=a["published_at"].replace(tzinfo=None) if a["published_at"] else None,
                     stock_code=code,
                     stock_name=name,
-                    meta_json={"query": query},
+                    meta_json={
+                        "query": query,
+                        "description": (a.get("description") or "")[:500] or None,
+                    },
                 )
                 session.add(row)
                 inserted_articles.append(row)
@@ -509,8 +665,8 @@ def main() -> int:
                 for r in existing_article_rows:
                     article_url_to_row[r.url] = r
 
-            # 종목 키워드(기사 제목 전체 기준)
-            stock_kw_rows = extract_keywords(today_titles, top_n=args.stock_keywords_top)
+            # 종목 키워드(기사 제목+요약 전체 기준)
+            stock_kw_rows = extract_keywords(today_texts, top_n=args.stock_keywords_top)
 
             # keyword tag upsert cache + stock->keyword edge upsert (observed_at snapshot)
             news_edge_observed_at = utc_now_naive()
@@ -543,14 +699,18 @@ def main() -> int:
                 )
                 stock_keyword_edge_count += 1
 
-            # 기사(타이틀) -> 키워드 edge
+            # 기사(제목+요약) -> 키워드 edge
             if stock_keyword_edge_count > 0:
                 article_kw_observed_at = utc_now_naive()
                 for a in today_articles:
                     art_row = article_url_to_row.get(a["url"])
                     if not art_row:
                         continue
-                    title_kw = extract_keywords([a["title"]], top_n=args.article_title_keywords_top)
+                    texts = [a["title"]]
+                    desc = (a.get("description") or "").strip()
+                    if desc and desc != a["title"]:
+                        texts.append(desc)
+                    title_kw = extract_keywords(texts, top_n=args.article_title_keywords_top)
                     if not title_kw:
                         continue
                     for kw in title_kw:
@@ -700,7 +860,9 @@ def main() -> int:
 
         remaining = max(0, pending_total - offset - ok_count)
         final_done = len(done_stock_codes) + ok_count
-        final_status = "all_done" if remaining <= 0 else "run_done"
+        # 일일 상한에 도달했으면 전종목 남은 게 있어도 오늘 분은 완료
+        hit_day_cap = bool(max_per_day > 0 and final_done >= max_per_day)
+        final_status = "all_done" if (remaining <= 0 or hit_day_cap) else "run_done"
         hb_stop.set()
         hb_thread.join(timeout=1.0)
 
@@ -708,23 +870,28 @@ def main() -> int:
             biz_date=biz.isoformat(),
             running=False,
             status=final_status,
-            universe_total=len(all_stock_rows),
+            universe_total=progress_universe,
             done_count=final_done,
-            pending_count=remaining,
+            pending_count=0 if final_status == "all_done" else remaining,
             run_total=len(stock_rows),
             run_done=len(stock_rows),
             ok_count=ok_count,
             fail_count=fail_count,
-            percent=round(min(100.0, (final_done / len(all_stock_rows)) * 100), 1) if all_stock_rows else 0,
+            percent=round(min(100.0, (final_done / progress_universe) * 100), 1) if progress_universe else 0,
+            day_cap=max_per_day or None,
+            universe_mode=universe_mode,
+            day_capped=day_capped or hit_day_cap,
         )
         log.info(
-            "완료 biz_date=%s 이번큐=%d ok=%d skip=%d fail=%d remaining≈%d elapsed=%.1fs",
+            "완료 biz_date=%s mode=%s 이번큐=%d ok=%d skip=%d fail=%d remaining≈%d day_cap=%s elapsed=%.1fs",
             biz.isoformat(),
+            universe_mode,
             len(stock_rows),
             ok_count,
             done_count,
             fail_count,
-            remaining,
+            0 if final_status == "all_done" else remaining,
+            max_per_day or "none",
             time.time() - started_at,
         )
         if remaining > 0:

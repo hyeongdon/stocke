@@ -51,7 +51,11 @@ if (Test-ServerUp $port) {
     }
 }
 
+# 시스템 트레이에 서버 상태 표시 (이미 있으면 무시)
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ServerScript tray | Out-Null
+
 Write-Host "대시보드 열기: $dashboardUrl" -ForegroundColor Green
+Write-Host "트레이: 작업표시줄 우측 Stocke 아이콘 (초록=실행 중)" -ForegroundColor Cyan
 Start-Process $dashboardUrl
 Write-Host ""
 Write-Host "완료. 이 창은 닫아도 됩니다."

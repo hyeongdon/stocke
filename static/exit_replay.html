@@ -3,39 +3,63 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>청산 시뮬레이션</title>
+  <title>전략 청산 시뮬레이션</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/dashboard.css?v=64">
-  <link rel="stylesheet" href="/static/verify.css?v=13">
-  <link rel="stylesheet" href="/static/exit_replay.css?v=1">
+  <link rel="stylesheet" href="/static/verify.css?v=15">
+  <link rel="stylesheet" href="/static/exit_replay.css?v=9">
 </head>
 <body>
   <header class="topbar">
     <div class="topbar-inner">
       <div class="brand">
-        <h1>청산 시뮬레이션</h1>
-        <span class="sub">현재 설정값 · 단일 종목 · 일봉 역사 재현</span>
+        <h1>전략 시뮬</h1>
+        <span class="sub">단일 종목 · 당일 검증(조건식) · 15분봉</span>
       </div>
       <nav class="tabs">
         <a href="/dashboard" class="tab">대시보드</a>
         <a href="/analysis" class="tab-link">분석 ↗</a>
         <a href="/verify" class="tab-link">검증 ↗</a>
-        <a href="/exit-replay" class="tab active">청산 시뮬</a>
+        <a href="/exit-replay" class="tab active">전략 시뮬</a>
         <a href="/static/glossary.html" class="tab-link">용어정리 ↗</a>
       </nav>
       <div class="topbar-actions replay-filters">
+        <div class="replay-mode-tabs">
+          <button type="button" class="btn sm mode-tab active" data-mode="single" id="modeSingle">단일 종목</button>
+          <button type="button" class="btn sm mode-tab" data-mode="day" id="modeDay">당일 검증</button>
+        </div>
+        <select id="strategy" class="replay-select" title="전략 프로필">
+          <option value="legacy">거래대금 눌림목</option>
+          <option value="sangtta" selected>상따</option>
+          <option value="breakout">과매도 돌파</option>
+        </select>
         <input type="text" id="stockCode" class="replay-code-input" placeholder="종목코드" maxlength="6" value="005930">
-        <input type="date" id="entryDate" class="verify-date-input" title="가상 진입일">
-        <select id="entryMode" class="replay-select" title="진입가">
+        <input type="date" id="entryDate" class="verify-date-input" title="진입일 / 검증일">
+        <select id="resolution" class="replay-select" title="해상도(단일)">
+          <option value="15m" selected>15분봉</option>
+          <option value="5m">5분봉</option>
+          <option value="1d">일봉(장기)</option>
+        </select>
+        <select id="entryMode" class="replay-select" title="진입가(일봉만)">
           <option value="close">당일 종가</option>
           <option value="next_open">다음날 시가</option>
         </select>
         <label class="replay-days-label">기간
           <select id="simDays" class="replay-select">
+            <option value="1" selected>1일</option>
+            <option value="3">3일</option>
+            <option value="5">5일</option>
+            <option value="7">7일</option>
             <option value="60">60일</option>
-            <option value="90">90일</option>
-            <option value="120" selected>120일</option>
-            <option value="180">180일</option>
+            <option value="120">120일</option>
+          </select>
+        </label>
+        <label class="replay-days-label" id="limitLabel" style="display:none;" title="편입 종목 중 시뮬할 최대 개수 (API 부하)">시뮬수
+          <select id="verifyLimit" class="replay-select">
+            <option value="5">5</option>
+            <option value="8">8</option>
+            <option value="12">12</option>
+            <option value="20" selected>20</option>
           </select>
         </label>
         <button class="btn sm primary" id="btnSimulate" type="button">시뮬레이션</button>
@@ -45,32 +69,100 @@
 
   <div class="wrap verify-wrap replay-wrap">
     <div id="statusBanner" class="verify-banner" style="display:none;"></div>
-
     <section class="verify-summary" id="summaryCards">
-      <div class="v-stat"><div class="k">상태</div><div class="v" style="font-size:14px;">종목·진입일을 선택 후 시뮬레이션</div></div>
+      <div class="v-stat"><div class="k">상태</div><div class="v" style="font-size:14px;">전략·종목·진입일을 선택 후 시뮬레이션</div></div>
     </section>
 
-    <div class="grid cols-2 replay-guide-grid">
-      <div class="card">
-        <div class="card-head"><h3>적용 설정 (AutoTradeSettings)</h3></div>
-        <div class="card-body" id="settingsPanel"><div class="hint">시뮬레이션 후 표시</div></div>
-      </div>
-      <div class="card">
-        <div class="card-head"><h3>가정 · 한계</h3></div>
-        <div class="card-body" id="assumptionsPanel"><div class="hint">일봉 MVP — 장중 세부·장마감 청산 미포함</div></div>
+    <div id="dayLayout" class="day-layout" style="display:none;">
+      <aside class="day-cond-panel card">
+        <div class="card-head">
+          <h3>검증 조건식</h3>
+          <button type="button" class="btn sm" id="btnReloadConditions" title="목록 새로고침">↻</button>
+        </div>
+        <div class="card-body">
+          <p class="hint day-cond-hint" id="dayCondHint">
+            조건식을 클릭하면 편입 종목 시뮬이 실행됩니다 (주문 없음).
+          </p>
+          <ul class="day-cond-list" id="dayCondList">
+            <li class="hint">전략 선택 후 목록 로드…</li>
+          </ul>
+        </div>
+      </aside>
+      <div class="day-main">
+        <div id="dayProgress" class="batch-progress-card" style="display:none;margin-bottom:12px;">
+          <div class="batch-progress-head">
+            <span class="batch-progress-title" id="dayProgressTitle">당일 검증</span>
+            <span class="batch-progress-badge running" id="dayProgressBadge">진행</span>
+          </div>
+          <div class="batch-progress-stats">
+            <span class="batch-progress-pct" id="dayProgressPct">0%</span>
+            <span class="batch-progress-count" id="dayProgressCount">0 / 0</span>
+          </div>
+          <div class="batch-progress-track">
+            <div class="batch-progress-fill running" id="dayProgressFill" style="width:0%"></div>
+          </div>
+          <div class="batch-progress-sub" id="dayProgressSub">대기 중…</div>
+        </div>
+        <div class="section-title" id="dayResultsTitle">당일 검증 결과</div>
+        <div class="card">
+          <div class="card-body scroll" id="dayResultsWrap" style="max-height:min(520px, calc(100vh - 280px));">
+            <div class="hint">왼쪽에서 조건식을 선택하세요</div>
+          </div>
+        </div>
+        <div id="daySkippedBlock" style="display:none;margin-top:12px;">
+          <div class="section-title">시뮬 제외 종목</div>
+          <div class="card">
+            <div class="card-body" id="daySkippedWrap"></div>
+          </div>
+        </div>
+        <div id="dayDetailHint" class="hint" style="margin-top:12px;display:none;">
+          종목 행을 클릭하면 아래에 게이트 체크리스트·차트가 표시됩니다.
+        </div>
       </div>
     </div>
 
-    <div id="checksBlock"></div>
+    <div id="singlePanels">
+      <div class="grid cols-2 replay-guide-grid">
+        <div class="card">
+          <div class="card-head"><h3>적용 설정</h3></div>
+          <div class="card-body" id="settingsPanel"><div class="hint">시뮬레이션 후 표시</div></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>가정 · 한계</h3></div>
+          <div class="card-body" id="assumptionsPanel"><div class="hint">15분봉 — 조건식 이력 미포함(단일) / 검증모드는 조건식 편입 사용</div></div>
+        </div>
+      </div>
 
-    <div class="section-title">일별 타임라인</div>
-    <div class="card">
-      <div class="card-body scroll" id="timelineWrap" style="max-height:480px;">
-        <div class="hint">시뮬레이션 결과가 여기 표시됩니다</div>
+      <div class="section-title">매매 15분봉 (검증 페이지와 동일)</div>
+      <div class="card">
+        <div class="card-body">
+          <div class="v-chart-wrap" id="chartWrap">
+            <div class="v-chart-status" id="chartStatus">시뮬레이션 후 표시</div>
+            <canvas id="replayChart" class="v-chart-canvas" style="display:none;" aria-label="15분봉 시뮬 차트"></canvas>
+            <div class="v-chart-legend" id="chartLegend" style="display:none;">
+              <span class="lg-buy">● 매수(가격)</span>
+              <span class="lg-sell">● 매도(가격)</span>
+              <span class="lg-stop">┄ 손절</span>
+              <span class="lg-take">┄ 익절</span>
+              <span class="lg-up">▮ 양봉</span>
+              <span class="lg-down">▮ 음봉</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="buyChecksBlock"></div>
+      <div id="checksBlock"></div>
+
+      <div class="section-title" id="timelineTitle">타임라인</div>
+      <div class="card">
+        <div class="card-body scroll" id="timelineWrap" style="max-height:480px;">
+          <div class="hint">시뮬레이션 결과가 여기 표시됩니다</div>
+        </div>
       </div>
     </div>
   </div>
 
-  <script src="/static/exit_replay.js?v=2"></script>
+  <script src="/static/exit_replay.js?v=14"></script>
 </body>
 </html>

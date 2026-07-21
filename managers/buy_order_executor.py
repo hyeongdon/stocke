@@ -20,6 +20,7 @@ from utils.auto_trade_engine import (
     compute_quantity,
     count_open_position_slots,
     effective_min_change_rate,
+    evaluate_gate_pack,
     get_auto_trade_settings_sync,
     has_buy_conditions,
     allows_new_buy,
@@ -69,12 +70,18 @@ class BuyOrderExecutor:
         active = self.is_session_active()
         settings = get_auto_trade_settings_sync()
         window = linked_trading_session_window_str(settings) if settings else None
+        try:
+            poll = int(getattr(settings, "scan_interval_sec", None) or 60)
+        except (TypeError, ValueError):
+            poll = 60
+        poll = max(15, min(600, poll))
         return {
             "is_running": self.is_running,
             "is_active": active,
             "session_window": window,
             "trade_start_time": settings.trade_start_time if settings else None,
             "trade_end_time": settings.trade_end_time if settings else None,
+            "scan_interval_sec": poll,
             "max_invest_amount": (
                 settings.max_invest_amount if settings else 0
             ),
@@ -84,7 +91,12 @@ class BuyOrderExecutor:
     async def start_processing(self):
         """매수 주문 처리 시작"""
         logger.info("💰 [BUY_EXECUTOR] 매수 주문 처리기 시작")
-        log_activity("BUY", "매수 실행기 시작 (60초 주기)", "info")
+        try:
+            poll0 = int(getattr(get_auto_trade_settings_sync(), "scan_interval_sec", None) or 60)
+        except (TypeError, ValueError, AttributeError):
+            poll0 = 60
+        poll0 = max(15, min(600, poll0))
+        log_activity("BUY", f"매수 실행기 시작 ({poll0}초 주기)", "info")
         self.is_running = True
         
         try:
@@ -101,8 +113,12 @@ class BuyOrderExecutor:
                         await self._process_pending_signals()
                 else:
                     logger.debug("💰 [BUY_EXECUTOR] 자동매매 비활성화 상태 - 신호 처리 건너뜀")
-                
-                await asyncio.sleep(60)  # 60초마다 확인 (API 제한 고려)
+
+                try:
+                    poll = int(getattr(self.auto_trade_settings, "scan_interval_sec", None) or 60)
+                except (TypeError, ValueError):
+                    poll = 60
+                await asyncio.sleep(max(15, min(600, poll)))
         except Exception as e:
             logger.error(f"💰 [BUY_EXECUTOR] 처리 중 오류: {e}")
         finally:
@@ -218,7 +234,52 @@ class BuyOrderExecutor:
 
             meta = parse_signal_meta(signal)
             is_add_buy = bool(meta.get("is_add_buy"))
-            if self.auto_trade_settings and not is_add_buy and self.auto_trade_settings.use_entry_gate:
+            # 전략별 시간/슬롯/게이트 재검증 (보호)
+            strategy = meta.get("strategy")
+            if strategy in ("sangtta", "breakout") and not is_add_buy:
+                from utils.auto_trade_engine import allows_strategy_new_buy, is_strategy_slot_available
+                label = "상따" if strategy == "sangtta" else "돌파"
+                allowed, reason = allows_strategy_new_buy(self.auto_trade_settings, strategy)
+                if not allowed:
+                    log_activity("BUY", f"{label} 시간 외 - {signal.stock_name}: {reason}", "warn", stock_code=signal.stock_code)
+                    await self._update_signal_status(signal.id, "FAILED", reason or f"{label} 시간 외")
+                    return
+                for db in get_db():
+                    if not is_strategy_slot_available(self.auto_trade_settings, db, strategy, for_new_signal=False):
+                        from utils.auto_trade_engine import _count_strategy_slots, effective_sangtta_max_slots, effective_breakout_max_slots
+                        used = _count_strategy_slots(db, strategy)
+                        lim = (
+                            effective_sangtta_max_slots(self.auto_trade_settings)
+                            if strategy == "sangtta"
+                            else effective_breakout_max_slots(self.auto_trade_settings)
+                        )
+                        msg = f"{label} 슬롯 포화 ({used}/{lim})"
+                        log_activity("BUY", f"{msg} - {signal.stock_name}", "warn", stock_code=signal.stock_code)
+                        await self._update_signal_status(signal.id, "FAILED", msg)
+                        return
+                    break
+                gate_ok, gate_reason = await evaluate_gate_pack(
+                    self.kiwoom_api,
+                    self.auto_trade_settings,
+                    "sangtta_breakout" if strategy == "sangtta" else "oversold_breakout",
+                    signal.stock_code,
+                    current_price,
+                    change_rate=meta.get("change_rate"),
+                    ctx=meta,
+                    skip_time_check=True,
+                )
+                if not gate_ok:
+                    reason = f"{label} 게이트: {gate_reason}"
+                    logger.warning(f"💰 [BUY_EXECUTOR] 주문 직전 {label} 게이트 실패 - {signal.stock_name}: {reason}")
+                    log_activity(
+                        "BUY",
+                        f"{label} 게이트 실패 {signal.stock_name}: {gate_reason}",
+                        "warn",
+                        stock_code=signal.stock_code,
+                    )
+                    await self._update_signal_status(signal.id, "FAILED", reason)
+                    return
+            elif self.auto_trade_settings and not is_add_buy and self.auto_trade_settings.use_entry_gate:
                 gate_ok, gate_reason = await check_entry_gate(
                     self.kiwoom_api,
                     self.auto_trade_settings,
@@ -244,6 +305,7 @@ class BuyOrderExecutor:
                 current_price,
                 change_rate=meta.get("change_rate"),
                 is_add_buy=bool(meta.get("is_add_buy")),
+                strategy_key=meta.get("strategy"),
             )
             debug_tracer.log_checkpoint(f"3단계 결과: 수량={quantity}주, 총액={current_price*quantity:,}원", "BUY_EXECUTOR")
             
@@ -271,11 +333,26 @@ class BuyOrderExecutor:
     async def _validate_buy_conditions(self, signal: PendingBuySignal) -> Dict:
         """매수 전 검증"""
         try:
-            # 1. 시장 시간·장마감 청산 이후 매수 차단
+            meta = parse_signal_meta(signal)
+            is_add_buy = bool(meta.get("is_add_buy"))
+            strategy = meta.get("strategy")
             now = as_kst()
-            block = new_buy_block_reason(self.auto_trade_settings, now)
-            if block:
-                return {"valid": False, "reason": block}
+
+            # 1. 시장 시간 — 전략 프로필은 전용 윈도우, legacy는 전역 매수 허용 시각
+            if strategy in ("sangtta", "breakout") and not is_add_buy:
+                from utils.auto_trade_engine import allows_strategy_new_buy
+                allowed, reason = allows_strategy_new_buy(self.auto_trade_settings, strategy, now)
+                if not allowed:
+                    return {"valid": False, "reason": reason or f"{strategy} 시간대 외"}
+                # 거래일/장마감 청산 이후만 전역 규칙 재사용
+                from utils.market_hours import trading_day_block_reason
+                off_day = trading_day_block_reason(now)
+                if off_day:
+                    return {"valid": False, "reason": off_day}
+            else:
+                block = new_buy_block_reason(self.auto_trade_settings, now)
+                if block:
+                    return {"valid": False, "reason": block}
 
             # 1b. 일일 손익 한도
             if self.auto_trade_settings:
@@ -288,9 +365,7 @@ class BuyOrderExecutor:
             if not account_info:
                 return {"valid": False, "reason": "계좌 정보 조회 실패"}
 
-            meta = parse_signal_meta(signal)
-            is_add_buy = bool(meta.get("is_add_buy"))
-
+            # meta / is_add_buy already parsed above
             # 1c. 최대 동시 보유 (신규 매수만 — 대기 신호 슬롯 포함)
             if self.auto_trade_settings and not is_add_buy:
                 limit = max_concurrent_positions_limit(self.auto_trade_settings)
@@ -336,6 +411,9 @@ class BuyOrderExecutor:
                     meta.get("change_rate"),
                     is_add_buy,
                 )
+                if not is_add_buy and strategy == "breakout":
+                    from utils.auto_trade_engine import effective_breakout_buy_amount
+                    planned = effective_breakout_buy_amount(self.auto_trade_settings)
                 planned = cap_buy_amount_by_cash(planned, investable)
                 if planned <= 0:
                     return {
@@ -369,14 +447,13 @@ class BuyOrderExecutor:
 
             if self.auto_trade_settings and not is_add_buy:
                 cfg = self.auto_trade_settings
-                need_price = bool(cfg.buy_below_price) or effective_min_change_rate(cfg) is not None
-                need_gate = bool(cfg.use_entry_gate)
-                if need_price or need_gate:
+                strategy = meta.get("strategy")
+                if strategy in ("sangtta", "breakout"):
                     current_price = await self._get_current_price(signal.stock_code)
                     if not current_price:
                         return {"valid": False, "reason": "현재가 조회 실패(매수조건 검증)"}
-                    change_rate = None
-                    if need_price:
+                    change_rate = meta.get("change_rate")
+                    if change_rate is None:
                         snap = await self.kiwoom_api.get_stock_snapshot(signal.stock_code)
                         if snap.get("success"):
                             snap_data = snap.get("snapshot") or {}
@@ -384,16 +461,44 @@ class BuyOrderExecutor:
                                 change_rate = float(str(snap_data.get("change_rate", "0")).replace(",", ""))
                             except (TypeError, ValueError):
                                 change_rate = None
-                        if not passes_buy_price_conditions(cfg, current_price, change_rate):
-                            skip = buy_price_skip_reason(cfg, current_price, change_rate) or "매수 조건 미충족(가격/등락률)"
-                            return {"valid": False, "reason": skip}
+                    if cfg.buy_below_price and current_price > int(cfg.buy_below_price):
+                        return {"valid": False, "reason": f"매수가 상한 초과 ({current_price:,} > {int(cfg.buy_below_price):,})"}
+                    gate_ok, gate_reason = await evaluate_gate_pack(
+                        self.kiwoom_api, cfg,
+                        "sangtta_breakout" if strategy == "sangtta" else "oversold_breakout",
+                        signal.stock_code, current_price,
+                        change_rate=change_rate,
+                        ctx=meta,
+                    )
+                    if not gate_ok:
+                        label = "상따" if strategy == "sangtta" else "돌파"
+                        return {"valid": False, "reason": f"{label} 게이트: {gate_reason}"}
+                else:
+                    need_price = bool(cfg.buy_below_price) or effective_min_change_rate(cfg) is not None
+                    need_gate = bool(cfg.use_entry_gate)
+                    if need_price or need_gate:
+                        current_price = await self._get_current_price(signal.stock_code)
+                        if not current_price:
+                            return {"valid": False, "reason": "현재가 조회 실패(매수조건 검증)"}
+                        change_rate = None
+                        if need_price:
+                            snap = await self.kiwoom_api.get_stock_snapshot(signal.stock_code)
+                            if snap.get("success"):
+                                snap_data = snap.get("snapshot") or {}
+                                try:
+                                    change_rate = float(str(snap_data.get("change_rate", "0")).replace(",", ""))
+                                except (TypeError, ValueError):
+                                    change_rate = None
+                            if not passes_buy_price_conditions(cfg, current_price, change_rate):
+                                skip = buy_price_skip_reason(cfg, current_price, change_rate) or "매수 조건 미충족(가격/등락률)"
+                                return {"valid": False, "reason": skip}
 
-                    if need_gate:
-                        gate_ok, gate_reason = await check_entry_gate(
-                            self.kiwoom_api, cfg, signal.stock_code, current_price,
-                        )
-                        if not gate_ok:
-                            return {"valid": False, "reason": f"진입 게이트: {gate_reason}"}
+                        if need_gate:
+                            gate_ok, gate_reason = await check_entry_gate(
+                                self.kiwoom_api, cfg, signal.stock_code, current_price,
+                            )
+                            if not gate_ok:
+                                return {"valid": False, "reason": f"진입 게이트: {gate_reason}"}
 
             return {"valid": True, "reason": "검증 통과"}
             
@@ -502,6 +607,7 @@ class BuyOrderExecutor:
         current_price: int,
         change_rate: Optional[float] = None,
         is_add_buy: bool = False,
+        strategy_key: Optional[str] = None,
     ) -> int:
         """매수 수량 계산 (FIXED / PYRAMIDING, 추가매수 포함)."""
         try:
@@ -510,6 +616,17 @@ class BuyOrderExecutor:
                 return 0
 
             amount = compute_buy_amount(self.auto_trade_settings, change_rate, is_add_buy)
+            # 상따 전략일 경우 전용 소액 파라미터 우선 적용 (Phase1)
+            try:
+                from utils.auto_trade_engine import effective_sangtta_buy_amount
+                if strategy_key == "sangtta" and not is_add_buy:
+                    sang_amt = effective_sangtta_buy_amount(self.auto_trade_settings)
+                    amount = sang_amt
+                elif strategy_key == "breakout" and not is_add_buy:
+                    from utils.auto_trade_engine import effective_breakout_buy_amount
+                    amount = effective_breakout_buy_amount(self.auto_trade_settings)
+            except Exception:
+                pass
             account_info = await self._get_account_info()
             if account_info:
                 investable = account_info.get("investable_cash", 0)
@@ -564,6 +681,20 @@ class BuyOrderExecutor:
 
                     meta = parse_signal_meta(signal)
                     is_add = bool(meta.get("is_add_buy"))
+                    strategy = meta.get("strategy")
+                    if not strategy and is_add:
+                        for db in get_db():
+                            pos = (
+                                db.query(Position)
+                                .filter(
+                                    Position.stock_code == signal.stock_code,
+                                    Position.status == "HOLDING",
+                                )
+                                .first()
+                            )
+                            if pos is not None:
+                                strategy = getattr(pos, "strategy_key", None)
+                            break
                     asyncio.create_task(notify_buy_async(
                         stock_name=signal.stock_name,
                         stock_code=signal.stock_code,
@@ -571,6 +702,7 @@ class BuyOrderExecutor:
                         price=current_price,
                         is_add_buy=is_add,
                         order_id=order_id,
+                        strategy=strategy,
                     ))
                     
                     # 포지션 생성 또는 추가매수 반영

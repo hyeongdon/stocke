@@ -20,6 +20,7 @@ echo   server.bat start
 echo   server.bat stop
 echo   server.bat restart
 echo   server.bat status
+echo   server.bat tray     ^(시스템 트레이 아이콘^)
 echo.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\server.ps1" status
 echo.

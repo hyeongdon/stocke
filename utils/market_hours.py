@@ -53,10 +53,38 @@ def _parse_hm(value: Optional[str], default: Tuple[int, int]) -> dt_time:
         return dt_time(*default)
 
 
+def _strategy_windows(settings) -> list:
+    """전략별 (라벨, 시작, 종료) — 엔진 가동 합집합·신규매수 any-open 판정용."""
+    windows = [
+        (
+            "레거시",
+            _parse_hm(getattr(settings, "trade_start_time", None), (10, 0)),
+            _parse_hm(getattr(settings, "trade_end_time", None), (15, 20)),
+        ),
+        (
+            "상따",
+            _parse_hm(getattr(settings, "sangtta_trade_start_time", None), (9, 5)),
+            _parse_hm(getattr(settings, "sangtta_trade_end_time", None), (11, 0)),
+        ),
+    ]
+    use_breakout = bool(getattr(settings, "use_breakout", False))
+    has_breakout_conds = bool(str(getattr(settings, "breakout_condition_names", None) or "").strip())
+    if use_breakout or has_breakout_conds:
+        windows.append(
+            (
+                "돌파",
+                _parse_hm(getattr(settings, "breakout_trade_start_time", None), (11, 0)),
+                _parse_hm(getattr(settings, "breakout_trade_end_time", None), (14, 30)),
+            )
+        )
+    return windows
+
+
 def linked_trading_session_bounds(settings, now: Optional[datetime] = None) -> Tuple[dt_time, dt_time]:
-    """스캐너·매수·손절 모니터 공통 구간 (trade_start ~ trade_end, 장마감청산 시 연장)."""
-    start = _parse_hm(getattr(settings, "trade_start_time", None), (10, 0))
-    end = _parse_hm(getattr(settings, "trade_end_time", None), (15, 20))
+    """스캐너·매수·손절 모니터 가동 구간 = 전략 시간창 합집합(+장마감청산 연장)."""
+    windows = _strategy_windows(settings)
+    start = min(w[1] for w in windows)
+    end = max(w[2] for w in windows)
     if getattr(settings, "liquidate_before_close", False):
         liq = _parse_hm(getattr(settings, "liquidate_time", None), (15, 10))
         if liq > end:
@@ -69,8 +97,20 @@ def linked_trading_session_window_str(settings, now: Optional[datetime] = None) 
     return f"{start.strftime('%H:%M')}~{end.strftime('%H:%M')}"
 
 
+def any_strategy_buy_window_open(settings, now: Optional[datetime] = None) -> bool:
+    """레거시·상따·돌파 중 하나라도 신규매수 시간창이면 True."""
+    if settings is None:
+        return False
+    kst = as_kst(now)
+    t = kst.time()
+    for _label, start, end in _strategy_windows(settings):
+        if start <= t <= end:
+            return True
+    return False
+
+
 def in_linked_trading_session(settings, now: Optional[datetime] = None) -> bool:
-    """종목 스캔·매수 실행기·손절/익절 모니터 — 동일 매매 시간 연동."""
+    """종목 스캔·매수 실행기·손절/익절 모니터 — 전략 합집합 매매 시간."""
     if settings is None:
         return False
     kst = as_kst(now)

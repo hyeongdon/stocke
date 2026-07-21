@@ -1,0 +1,124 @@
+{
+  "code": "006660",
+  "name": "삼성공조(모나리자 가정)",
+  "assumptions": [
+    "상따 조건식 편입",
+    "실주문 없음",
+    "시간 윈도우 09:30 시뮬레이션"
+  ],
+  "quote": {
+    "price": 15001,
+    "change_rate": 17.0,
+    "source": "synthetic_17pct"
+  },
+  "steps": [
+    {
+      "step": "0.settings",
+      "pass": true,
+      "detail": "enabled=True sangtta_names='상따' slots=2 buy_amt=None window=09:05~11:00"
+    },
+    {
+      "step": "1.universe",
+      "pass": true,
+      "detail": "가정: 006660 상따 조건식 편입 (source=sangtta)"
+    },
+    {
+      "step": "2.quote",
+      "pass": true,
+      "detail": "합성 시세 price=15,001 change=17.0% open=13,462 UL=16,667 mcap=784.0 (synthetic_17pct)"
+    },
+    {
+      "step": "3.open_interest",
+      "pass": true,
+      "detail": "holding=False pending=False"
+    },
+    {
+      "step": "4.sangtta_time_real",
+      "pass": false,
+      "detail": "상따 시간대 외 (09:05~11:00)"
+    },
+    {
+      "step": "4b.sangtta_time_sim_09:30",
+      "pass": true,
+      "detail": "시뮬레이션 09:30 통과"
+    },
+    {
+      "step": "5.global_new_buy_sim",
+      "pass": true,
+      "detail": "전역 신규매수 허용 (참고, 상따는 전략시간 우선)"
+    },
+    {
+      "step": "6.sangtta_slot",
+      "pass": true,
+      "detail": "상따 슬롯 여유"
+    },
+    {
+      "step": "7.daily_limits",
+      "pass": true,
+      "detail": "일일 손익 한도 OK"
+    },
+    {
+      "step": "8.sangtta_breakout",
+      "pass": true,
+      "detail": "상따 게이트 통과",
+      "implemented": true,
+      "ctx": {
+        "day_open": 13462,
+        "prev_close": 12821,
+        "upper_limit_price": 16667,
+        "market_cap": 784.0
+      }
+    },
+    {
+      "step": "8n.band_low",
+      "pass": true,
+      "detail": "거부OK — 상따 등락 밴드 이탈 (10.00% / 15~19%) (등락 10%는 밴드 이탈이어야 함)"
+    },
+    {
+      "step": "8n.at_limit",
+      "pass": true,
+      "detail": "거부OK — 상한가 진입 금지 (15,001 ≥ 상한가 15,001) (상한가 도달은 금지여야 함)"
+    },
+    {
+      "step": "8n.mcap_over",
+      "pass": true,
+      "detail": "거부OK — 시총 초과 (5000억 > 3000억) (시총 5000억은 거부여야 함)"
+    },
+    {
+      "step": "9.sizing",
+      "pass": true,
+      "detail": "amount=1,300,000원 sangtta_buy_amount=미설정 -> qty=86주 @ 15,001"
+    },
+    {
+      "step": "10.signal_eligible",
+      "pass": true,
+      "detail": "PENDING 신호 생성 가능 (가정/sim 09:30/sangtta_breakout)",
+      "additional_data": {
+        "strategy": "sangtta",
+        "source": "sangtta",
+        "gate_pack": "sangtta_breakout",
+        "current_price": 15001,
+        "change_rate": 17.0
+      }
+    }
+  ],
+  "phase_status": {
+    "Phase0_observe": true,
+    "Phase1_gate_pack_sangtta_breakout": true,
+    "Phase1_band_15_19": true,
+    "Phase1_market_cap_filter": true,
+    "Phase1_limit_up_entry_ban": true,
+    "Phase1_slots_time_amount": true,
+    "Phase1_strategy_tag_on_signal": true,
+    "Phase2_sangtta_condition_universe": true,
+    "Phase3_strategy_key_on_position": true,
+    "Phase3_limit_break_sharp_drop": true,
+    "Phase3_soft_confirm_polls": true
+  },
+  "verdict": {
+    "signal_to_buy_pipeline_ready": true,
+    "phase1_gate_pack_implemented": true,
+    "phase3_complete": true,
+    "note": "sangtta_breakout 구현 후 드라이런. 실주문/실차트는 장중 재검증 권장."
+  }
+}

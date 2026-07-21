@@ -51,11 +51,36 @@ def _normalize_condition_stock(stock: Dict, condition_name: str) -> Dict:
     }
 
 
+async def _merge_stocks_into_map(
+    by_code: Dict[str, Dict],
+    stocks: List[Dict],
+    resolved: str,
+) -> None:
+    for stock in stocks or []:
+        item = _normalize_condition_stock(stock, resolved)
+        code = item.get("stock_code")
+        if not code:
+            continue
+        if code in by_code:
+            prev = by_code[code]
+            prev_names = prev.get("condition_names") or (
+                [prev["condition_name"]] if prev.get("condition_name") else []
+            )
+            if resolved not in prev_names:
+                prev_names.append(resolved)
+            prev["condition_names"] = prev_names
+            prev["condition_name"] = ", ".join(prev_names)
+            if prev.get("source") == "screener":
+                prev["source"] = "both"
+            continue
+        by_code[code] = item
+
+
 async def fetch_condition_target_items(
     kiwoom_api: KiwoomAPI,
     condition_names: List[str],
     *,
-    pause_sec: float = 1.0,
+    pause_sec: float = 2.0,
 ) -> Tuple[List[Dict], List[str]]:
     """선택 조건식별 종목 조회 → 스크리너 후보 형식으로 반환.
 
@@ -67,8 +92,9 @@ async def fetch_condition_target_items(
 
     by_code: Dict[str, Dict] = {}
     errors: List[str] = []
+    resolved_queries: List[Tuple[str, str, str]] = []
 
-    for i, name in enumerate(condition_names):
+    for name in condition_names:
         api_id, resolved = _resolve_condition_api_id(name)
         if not api_id:
             try:
@@ -88,35 +114,35 @@ async def fetch_condition_target_items(
                 continue
             api_id = str(matched.get("condition_id", ""))
             resolved = str(matched.get("condition_name", name))
+        resolved_queries.append((name, api_id, resolved))
 
-        try:
-            stocks = await kiwoom_api.search_condition_stocks(api_id, resolved)
-        except Exception as e:
-            logger.warning(f"조건식 종목 조회 실패 ({resolved}): {e}")
-            errors.append(resolved)
-            continue
+    if not resolved_queries:
+        return [], errors
 
-        for stock in stocks or []:
-            item = _normalize_condition_stock(stock, resolved)
-            code = item.get("stock_code")
-            if not code:
+    try:
+        async with kiwoom_api.condition_search_session() as session:
+            for i, (name, api_id, resolved) in enumerate(resolved_queries):
+                try:
+                    stocks = await session.search(api_id, resolved)
+                except Exception as e:
+                    logger.warning(f"조건식 종목 조회 실패 ({resolved}): {e}")
+                    errors.append(resolved)
+                    continue
+                await _merge_stocks_into_map(by_code, stocks, resolved)
+                if pause_sec > 0 and i < len(resolved_queries) - 1:
+                    await asyncio.sleep(pause_sec)
+    except Exception as e:
+        logger.warning(f"조건식 WS 배치 세션 실패 — 단건 폴백: {e}")
+        for i, (name, api_id, resolved) in enumerate(resolved_queries):
+            try:
+                stocks = await kiwoom_api.search_condition_stocks(api_id, resolved)
+            except Exception as ex:
+                logger.warning(f"조건식 종목 조회 실패 ({resolved}): {ex}")
+                errors.append(resolved)
                 continue
-            if code in by_code:
-                prev = by_code[code]
-                prev_names = prev.get("condition_names") or (
-                    [prev["condition_name"]] if prev.get("condition_name") else []
-                )
-                if resolved not in prev_names:
-                    prev_names.append(resolved)
-                prev["condition_names"] = prev_names
-                prev["condition_name"] = ", ".join(prev_names)
-                if prev.get("source") == "screener":
-                    prev["source"] = "both"
-                continue
-            by_code[code] = item
-
-        if pause_sec > 0 and i < len(condition_names) - 1:
-            await asyncio.sleep(pause_sec)
+            await _merge_stocks_into_map(by_code, stocks, resolved)
+            if pause_sec > 0 and i < len(resolved_queries) - 1:
+                await asyncio.sleep(pause_sec)
 
     return list(by_code.values()), errors
 

@@ -6,7 +6,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <title>stock.daily</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/dashboard.css?v=93">
+  <link rel="stylesheet" href="/static/dashboard.css?v=94">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -83,8 +83,31 @@
         <div class="card-body scroll auto-screener-body" id="screenerBody">
           <div class="empty"><span class="ico">🧭</span>조회 버튼을 누르면 거래대금순·조건식 후보를 불러옵니다. (장중에만 데이터가 정확합니다)</div>
         </div>
-        <div class="card-body" id="screenerNewsBody" style="border-top:1px solid var(--border);">
-          <div class="empty"><span class="ico">📰</span>종목의 <b>뉴스</b> 버튼을 누르면 근거 기사(당일)를 표시합니다.</div>
+      </div>
+
+      <!-- 상따 후보 -->
+      <div class="card compact-card screener-card">
+        <div class="card-head">
+          <div><h3>상따 후보 <span class="hint" id="sangttaCount"></span></h3>
+            <div class="hint" style="margin-top:2px;">상따 전용 조건식 기반 후보 · 소형·급등 관찰용(Phase0)</div></div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <button class="btn primary sm" id="sangRefresh">조회</button>
+          </div>
+        </div>
+        <div class="card-body scroll auto-screener-body" id="sangttaBody">
+          <div class="empty"><span class="ico">🔎</span>조회 버튼을 누르면 상따 조건식 편입 종목을 불러옵니다.</div>
+        </div>
+      </div>
+
+      <!-- 과매도 돌파 후보 -->
+      <div class="card compact-card screener-card">
+        <div class="card-head">
+          <div><h3>과매도 돌파 후보 <span class="hint" id="breakoutCount"></span></h3>
+            <div class="hint" style="margin-top:2px;">전용 조건식 후보 · 전일/N일 고가 돌파 근접도 관측</div></div>
+          <button class="btn primary sm" id="breakoutRefresh">조회</button>
+        </div>
+        <div class="card-body scroll auto-screener-body" id="breakoutBody">
+          <div class="empty"><span class="ico">📈</span>조회 버튼을 누르면 과매도 돌파 조건식 후보를 평가합니다.</div>
         </div>
       </div>
 
@@ -254,6 +277,6 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/static/dashboard.js?v=114"></script>
+  <script src="/static/dashboard.js?v=125"></script>
 </body>
 </html>

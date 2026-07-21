@@ -82,6 +82,7 @@ class AutoTradeSettings(Base):
     # ===== 관심종목 (자동매매 대상) =====
     watchlist_codes = Column(Text, nullable=True)  # 쉼표 구분 종목코드 (예: "005930, 000660")
     screener_condition_names = Column(Text, nullable=True)  # 스크리너에 포함할 조건식명 (쉼표 구분)
+    screener_verify_condition_names = Column(Text, nullable=True)  # 레거시 검증 전용(주문 없음)
 
     # ===== 스크리너 상품 종류 (종목선정 모드) =====
     include_leverage = Column(Boolean, nullable=False, default=True)        # 레버리지(+2X) 포함
@@ -122,12 +123,51 @@ class AutoTradeSettings(Base):
     daily_loss_limit = Column(Integer, nullable=True, default=-200000)   # 1일 손실 한도(원)
     daily_profit_target = Column(Integer, nullable=True, default=150000) # 1일 이익 목표(원)
     reorder_cooldown_sec = Column(Integer, nullable=False, default=300)  # 재주문 콜다운(초)
-    trade_start_time = Column(String(5), nullable=False, default="10:00")  # 매매 시작
-    trade_end_time = Column(String(5), nullable=False, default="15:20")    # 매매 종료
+    trade_start_time = Column(String(5), nullable=False, default="10:00")  # 레거시 매매 시작
+    trade_end_time = Column(String(5), nullable=False, default="15:20")    # 레거시 매매 종료
+    scan_interval_sec = Column(Integer, nullable=False, default=60)       # 스캐너·매수 폴링 주기(초)
 
     # ===== 장 시작 자동 기동 =====
     auto_start_at_open = Column(Boolean, nullable=False, default=True)   # 평일 장 시작 시 엔진 자동 ON
     auto_start_time = Column(String(5), nullable=False, default="08:00")  # 엔진 자동 시작 시각
+    # ===== 상따(Sangtta) 전용 설정 (멀티게이트) =====
+    sangtta_condition_names = Column(Text, nullable=True)  # 쉼표 구분 상따용 조건식명
+    sangtta_verify_condition_names = Column(Text, nullable=True)  # 검증 전용(주문 없음)
+    sangtta_max_slots = Column(Integer, nullable=False, default=2)  # 상따 동시 쿼터
+    sangtta_buy_amount = Column(Integer, nullable=False, default=500000)  # 상따 1회 매수 금액 (소액)
+    sangtta_trade_start_time = Column(String(5), nullable=False, default="09:05")
+    sangtta_trade_end_time = Column(String(5), nullable=False, default="11:00")
+    sangtta_change_min = Column(Float, nullable=False, default=12.0)  # 진입 등락 밴드 하한(%)
+    sangtta_change_max = Column(Float, nullable=False, default=15.0)  # 진입 등락 밴드 상한(%)
+
+    # ===== 과매도 돌파(Breakout) 전용 설정 =====
+    use_breakout = Column(Boolean, nullable=False, default=False)
+    breakout_condition_names = Column(Text, nullable=True)
+    breakout_verify_condition_names = Column(Text, nullable=True)  # 검증 전용(주문 없음)
+    breakout_max_slots = Column(Integer, nullable=False, default=1)
+    breakout_buy_amount = Column(Integer, nullable=False, default=1000000)
+    breakout_trade_start_time = Column(String(5), nullable=False, default="11:00")
+    breakout_trade_end_time = Column(String(5), nullable=False, default="14:30")
+    breakout_level_mode = Column(String(20), nullable=False, default="prev_high")  # prev_high=직전5분고, n_day_high=최근N봉고
+    breakout_n_day = Column(Integer, nullable=False, default=10)  # 5분봉 N개 (레벨·거래량 평균)
+    breakout_vol_mult = Column(Float, nullable=False, default=1.5)
+    breakout_max_change_pct = Column(Float, nullable=False, default=12.0)
+    breakout_stop_loss_pct = Column(Float, nullable=False, default=3.0)
+    breakout_trailing_start_pct = Column(Float, nullable=False, default=10.0)
+    breakout_trailing_pct = Column(Float, nullable=False, default=4.0)
+    struct_break_soft_pct = Column(Float, nullable=False, default=1.0)
+    struct_break_hard_pct = Column(Float, nullable=False, default=2.0)
+    # 진입 확인: HARD=직전 5분봉 종가>레벨 즉시 / SOFT=레벨 위 연속 N스캔
+    breakout_entry_hard = Column(Boolean, nullable=False, default=True)
+    breakout_entry_soft = Column(Boolean, nullable=False, default=True)
+    breakout_entry_soft_polls = Column(Integer, nullable=False, default=2)
+
+    # ===== 상따 청산/소방 규정 =====
+    limit_break_soft_pct = Column(Float, nullable=True, default=2.0)   # 상한가 이탈 soft(%)
+    limit_break_hard_pct = Column(Float, nullable=True, default=3.0)   # 상한가 이탈 hard(%)
+    sharp_drop_soft_pct = Column(Float, nullable=True, default=3.0)    # 당일고 대비 soft(%)
+    sharp_drop_hard_pct = Column(Float, nullable=True, default=5.0)    # 당일고 대비 hard(%)
+    soft_confirm_polls = Column(Integer, nullable=False, default=2)    # SOFT 연속 확인 회수
 
     # ===== 장 마감 전 전량 청산 =====
     liquidate_before_close = Column(Boolean, nullable=False, default=True)
@@ -262,6 +302,10 @@ class Position(Base):
     # 추가 정보
     condition_id = Column(Integer, nullable=True)  # 매수 신호가 발생한 조건식 ID
     signal_id = Column(Integer, nullable=True)  # 매수 신호 ID
+    # 전략 키(예: "sangtta", "legacy") — 포지션별 전략 태그
+    strategy_key = Column(String(50), nullable=True, index=True)
+    breakout_level_kind = Column(String(20), nullable=True)
+    breakout_level_price = Column(Integer, nullable=True)
     
     __table_args__ = (
         Index("idx_position_status_stock", "status", "stock_code"),
@@ -714,6 +758,22 @@ def init_db() -> None:
             if pos_columns and 'buy_atr_period' not in pos_columns:
                 conn.execute(text("ALTER TABLE positions ADD COLUMN buy_atr_period INTEGER"))
                 conn.commit()
+            if pos_columns and 'strategy_key' not in pos_columns:
+                conn.execute(text("ALTER TABLE positions ADD COLUMN strategy_key VARCHAR(50)"))
+                conn.commit()
+                try:
+                    conn.execute(text(
+                        "CREATE INDEX IF NOT EXISTS ix_positions_strategy_key ON positions (strategy_key)"
+                    ))
+                    conn.commit()
+                except Exception:
+                    pass
+            if pos_columns and 'breakout_level_kind' not in pos_columns:
+                conn.execute(text("ALTER TABLE positions ADD COLUMN breakout_level_kind VARCHAR(20)"))
+                conn.commit()
+            if pos_columns and 'breakout_level_price' not in pos_columns:
+                conn.execute(text("ALTER TABLE positions ADD COLUMN breakout_level_price INTEGER"))
+                conn.commit()
 
             result = conn.execute(text("PRAGMA table_info('position_buy_fills')"))
             pbf_cols2 = {row[1] for row in result} if result else set()
@@ -763,6 +823,7 @@ def init_db() -> None:
                 ('reorder_cooldown_sec', 'INTEGER DEFAULT 300'),
                 ('trade_start_time', 'VARCHAR(5) DEFAULT "10:00"'),
                 ('trade_end_time', 'VARCHAR(5) DEFAULT "15:20"'),
+                ('scan_interval_sec', 'INTEGER DEFAULT 60'),
                 ('auto_start_at_open', 'BOOLEAN DEFAULT 1'),
                 ('auto_start_time', 'VARCHAR(5) DEFAULT "08:00"'),
                 ('liquidate_before_close', 'BOOLEAN DEFAULT 1'),
@@ -774,6 +835,55 @@ def init_db() -> None:
                     if col_name not in ats_columns:
                         conn.execute(text(f"ALTER TABLE auto_trade_settings ADD COLUMN {col_name} {col_def}"))
                         conn.commit()
+            # 상따 전용 설정 컬럼 추가
+            ats_extra = [
+                ('sangtta_condition_names', 'TEXT'),
+                ('sangtta_verify_condition_names', 'TEXT'),
+                ('sangtta_max_slots', 'INTEGER DEFAULT 2'),
+                ('sangtta_buy_amount', 'INTEGER DEFAULT 500000'),
+                ('sangtta_trade_start_time', 'VARCHAR(5) DEFAULT "09:05"'),
+                ('sangtta_trade_end_time', 'VARCHAR(5) DEFAULT "11:00"'),
+                ('sangtta_change_min', 'FLOAT DEFAULT 12.0'),
+                ('sangtta_change_max', 'FLOAT DEFAULT 15.0'),
+                ('limit_break_soft_pct', 'FLOAT DEFAULT 2.0'),
+                ('limit_break_hard_pct', 'FLOAT DEFAULT 3.0'),
+                ('sharp_drop_soft_pct', 'FLOAT DEFAULT 3.0'),
+                ('sharp_drop_hard_pct', 'FLOAT DEFAULT 5.0'),
+                ('soft_confirm_polls', 'INTEGER DEFAULT 2'),
+                ('use_breakout', 'BOOLEAN DEFAULT 0'),
+                ('breakout_condition_names', 'TEXT'),
+                ('breakout_verify_condition_names', 'TEXT'),
+                ('screener_verify_condition_names', 'TEXT'),
+                ('breakout_max_slots', 'INTEGER DEFAULT 1'),
+                ('breakout_buy_amount', 'INTEGER DEFAULT 1000000'),
+                ('breakout_trade_start_time', 'VARCHAR(5) DEFAULT "11:00"'),
+                ('breakout_trade_end_time', 'VARCHAR(5) DEFAULT "14:30"'),
+                ('breakout_level_mode', 'VARCHAR(20) DEFAULT "prev_high"'),
+                ('breakout_n_day', 'INTEGER DEFAULT 10'),
+                ('breakout_vol_mult', 'FLOAT DEFAULT 1.5'),
+                ('breakout_max_change_pct', 'FLOAT DEFAULT 12.0'),
+                ('breakout_stop_loss_pct', 'FLOAT DEFAULT 3.0'),
+                ('breakout_trailing_start_pct', 'FLOAT DEFAULT 10.0'),
+                ('breakout_trailing_pct', 'FLOAT DEFAULT 4.0'),
+                ('struct_break_soft_pct', 'FLOAT DEFAULT 1.0'),
+                ('struct_break_hard_pct', 'FLOAT DEFAULT 2.0'),
+                ('breakout_entry_hard', 'BOOLEAN DEFAULT 1'),
+                ('breakout_entry_soft', 'BOOLEAN DEFAULT 1'),
+                ('breakout_entry_soft_polls', 'INTEGER DEFAULT 2'),
+            ]
+            for col_name, col_def in ats_extra:
+                if col_name not in ats_columns:
+                    conn.execute(text(f"ALTER TABLE auto_trade_settings ADD COLUMN {col_name} {col_def}"))
+                    conn.commit()
+            # 기존 NULL sangtta_buy_amount → 기본 소액
+            try:
+                conn.execute(text(
+                    "UPDATE auto_trade_settings SET sangtta_buy_amount = 500000 "
+                    "WHERE sangtta_buy_amount IS NULL OR sangtta_buy_amount <= 0"
+                ))
+                conn.commit()
+            except Exception:
+                pass
 
             # fundamental_snapshots 컬럼 마이그레이션 (v1 확장)
             result = conn.execute(
