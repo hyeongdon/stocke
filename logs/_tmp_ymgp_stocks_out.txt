@@ -1,0 +1,10 @@
+﻿python :   File "c:\Users\MiniPC\stocke\logs\_tmp_ymgp_stocks.py", line 28
+위치 C:\Users\MiniPC\AppData\Local\Temp\ps-script-331585d2-9633-4361-8509-59f00d837778.ps1:170 문자:1
++ python "c:\Users\MiniPC\stocke\logs\_tmp_ymgp_stocks.py" 2>&1 | Out-F ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (  File "c:\User...ks.py", line 28:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+    stock_times[f"{name}({code)}"].append(line[11:19])
+                              ^
+SyntaxError: f-string: unmatched ')'

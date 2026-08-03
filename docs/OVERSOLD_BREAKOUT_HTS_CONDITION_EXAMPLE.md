@@ -1,4 +1,7 @@
-# 과매도 돌파전략 — 키움 HTS 조건식 초안
+# 과매도 돌파전략 — 키움 HTS 조건식 초안 (구)
+
+> **대체 문서**: 파세코 시나리오 재정의 — [`BREAKOUT_HTS_CONDITION_EXAMPLE.md`](BREAKOUT_HTS_CONDITION_EXAMPLE.md) · [`PRD_BREAKOUT_5M_VOLUME.md`](PRD_BREAKOUT_5M_VOLUME.md)  
+> 본 문서는 RSI 18→28 유니버스(구) 참고용. 신규 운영은 대체 문서를 사용.
 
 > 대상 전략: `strategy_key=breakout` / `gate_pack=oversold_breakout`  
 > 목적: **5분봉 RSI 과매도→회복 구간 종목만 유니버스로 공급**  

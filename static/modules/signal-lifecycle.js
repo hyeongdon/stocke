@@ -190,7 +190,10 @@ class SignalLifecycleTracker {
         };
 
         // 상태에 따라 단계 업데이트
-        if (signal.status === 'PENDING') {
+        if (signal.status === 'WATCHING') {
+            stages.priceCheck.status = 'active';
+            stages.priceCheck.label = '관측(유예)';
+        } else if (signal.status === 'PENDING') {
             stages.priceCheck.status = 'active';
         } else if (signal.status === 'PROCESSING') {
             stages.priceCheck.status = 'completed';
@@ -262,6 +265,7 @@ class SignalLifecycleTracker {
         let filteredSignals = this.signals;
         if (this.currentFilter !== 'all') {
             filteredSignals = this.signals.filter(s => {
+                if (this.currentFilter === 'watching') return s.status === 'WATCHING';
                 if (this.currentFilter === 'pending') return s.status === 'PENDING';
                 if (this.currentFilter === 'processing') return s.status === 'PROCESSING';
                 if (this.currentFilter === 'ordered') return s.status === 'ORDERED';
@@ -558,6 +562,7 @@ class SignalLifecycleTracker {
 
     getStatusText(status) {
         const statusMap = {
+            'WATCHING': '관측중',
             'PENDING': '대기중',
             'PROCESSING': '처리중',
             'ORDERED': '주문완료',

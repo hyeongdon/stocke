@@ -1,7 +1,7 @@
 import logging
 import asyncio
 from datetime import datetime, timedelta, date, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy.orm import Session
 
 from api.kiwoom_api import KiwoomAPI, _parse_kiwoom_int
@@ -23,7 +23,6 @@ from utils.position_peak_since_buy import (
     max_high_full_holding_days,
     max_high_since_buy_from_intraday_bars,
     resolve_position_peak_price,
-    should_disarm_trailing,
 )
 from notifications.trade_alert import notify_sell_filled_async, sell_fill_snapshot
 
@@ -39,6 +38,12 @@ SELL_REASON_PRIORITY = {
     "MANUAL": 5,
 }
 STALE_SELL_ORDER_MINUTES = 15
+
+
+def is_sell_qty_shortage_error(msg: Optional[str]) -> bool:
+    """키움 모의/실전: 매도가능수량 부족 (이미 체결·중복 주문 포함)."""
+    text = str(msg or "")
+    return "800033" in text or "매도가능수량이 부족" in text
 
 
 def classify_breakout_structure(
@@ -468,11 +473,16 @@ class StopLossManager:
                         )
                         continue
                     stock_label = position.stock_name
-                    # PRD §10: breakout는 오버나잇 허용 — 전역 장마감 청산에서 제외
-                    if getattr(position, "strategy_key", None) == "breakout":
+                    # PRD: breakout·ymgp·jongga는 오버나잇 허용 — 전역 장마감 청산에서 제외
+                    if getattr(position, "strategy_key", None) in ("breakout", "ymgp", "jongga"):
+                        label = {
+                            "breakout": "수급 돌파",
+                            "ymgp": "역매공파",
+                            "jongga": "종가배팅",
+                        }.get(position.strategy_key, position.strategy_key)
                         log_activity(
                             "SELL",
-                            f"장마감 청산 생략 — {position.stock_name} (과매도 돌파 오버나잇)",
+                            f"장마감 청산 생략 — {position.stock_name} ({label} 오버나잇)",
                             "info",
                             stock_code=position.stock_code,
                             reason="MARKET_CLOSE",
@@ -733,10 +743,16 @@ class StopLossManager:
                 position.peak_price = peak
 
         is_breakout = getattr(position, "strategy_key", None) == "breakout"
-        tp = self._num(
-            getattr(s, "breakout_trailing_start_pct", None)
-            if is_breakout else s.take_profit_rate
-        )
+        is_ymgp = getattr(position, "strategy_key", None) == "ymgp"
+        is_jongga = getattr(position, "strategy_key", None) == "jongga"
+        if is_breakout:
+            tp = self._num(getattr(s, "breakout_trailing_start_pct", None))
+        elif is_ymgp:
+            tp = self._num(getattr(s, "ymgp_trailing_start_pct", None))
+        elif is_jongga:
+            tp = self._num(getattr(s, "jongga_trailing_start_pct", None))
+        else:
+            tp = self._num(s.take_profit_rate)
         trail_start = tp if tp and tp > 0 else None
         peak_rate = self._peak_rate_pct(buy_price, peak)
         trailing_armed, trailing_floor = await self._guard_trailing_arm_state(
@@ -782,7 +798,16 @@ class StopLossManager:
 
         trailing_stop_pct = self._num(
             getattr(s, "breakout_trailing_pct", None)
-            if is_breakout else s.trailing_stop_pct
+            if is_breakout
+            else (
+                getattr(s, "jongga_trailing_pct", None)
+                if is_jongga
+                else (
+                    getattr(s, "ymgp_trailing_pct", None)
+                    if is_ymgp
+                    else s.trailing_stop_pct
+                )
+            )
         )
         level_rows = []
         for reason, price, method in candidates:
@@ -792,13 +817,19 @@ class StopLossManager:
                 "method": method,
             })
 
-        sl_rate = self._num(
-            getattr(s, "breakout_stop_loss_pct", None)
-            if is_breakout else s.stop_loss_rate
-        )
+        if is_breakout:
+            sl_rate = self._num(getattr(s, "breakout_stop_loss_pct", None))
+        elif is_jongga:
+            sl_rate = self._num(getattr(s, "jongga_stop_loss_pct", None))
+        elif is_ymgp:
+            sl_rate = self._num(getattr(s, "ymgp_stop_loss_pct", None))
+        else:
+            sl_rate = self._num(s.stop_loss_rate)
         stop_loss_price_pct = (
             int(buy_price * (1 - abs(sl_rate) / 100.0)) if sl_rate and buy_price else None
         )
+
+        soft_snap = self._soft_confirm_snapshot(position, s)
 
         return {
             "current_price": int(current_price),
@@ -827,9 +858,33 @@ class StopLossManager:
             "trailing_stop_pct": trailing_stop_pct,
             "breakout_level_kind": getattr(position, "breakout_level_kind", None),
             "breakout_level_price": getattr(position, "breakout_level_price", None),
+            **soft_snap,
             "levels": level_rows,
             "liquidate_time": getattr(s, "liquidate_time", None) if getattr(s, "liquidate_before_close", False) else None,
             "levels_live": api_live,
+        }
+
+    def _soft_confirm_snapshot(
+        self,
+        position: Position,
+        settings: Optional["AutoTradeSettings"],
+    ) -> Dict[str, Any]:
+        """상따·돌파 포지션의 SOFT 연속 확인 횟수 (손절 루프 메모리 카운터)."""
+        strat = (getattr(position, "strategy_key", None) or "").strip().lower()
+        if strat not in ("sangtta", "breakout"):
+            return {}
+        polls = max(1, int(getattr(settings, "soft_confirm_polls", 3) or 3)) if settings else 3
+        pid = getattr(position, "id", None)
+        if strat == "sangtta":
+            count = int(self._sangtta_soft_counters.get(pid, 0) or 0) if pid else 0
+            label = "상한가 이탈·급락"
+        else:
+            count = int(self._breakout_soft_counters.get(pid, 0) or 0) if pid else 0
+            label = "구조 이탈"
+        return {
+            "soft_confirm_count": count,
+            "soft_confirm_polls": polls,
+            "soft_confirm_label": label,
         }
 
     @staticmethod
@@ -981,23 +1036,10 @@ class StopLossManager:
         peak: int,
         trail_start_val: Optional[float],
     ) -> Tuple[bool, Optional[int]]:
-        """고점 수익률 미달 시 오활성화 트레일링 방어."""
-        trailing_armed, trailing_floor = self._resolve_trailing_state(
+        """시작% 도달 시 armed+floor. 한 번 잠긴 바닥은 고점 보정으로 해제하지 않음."""
+        return self._resolve_trailing_state(
             position, buy_price, peak, trail_start_val,
         )
-        if should_disarm_trailing(
-            trailing_armed=bool(getattr(position, "trailing_armed", False) or trailing_armed),
-            trail_start_rate=trail_start_val,
-            buy_price=buy_price,
-            peak=peak,
-        ):
-            await self._disarm_trailing(
-                position,
-                reason=f"고점 수익률 {StopLossManager._peak_rate_pct(buy_price, peak):.2f}% "
-                f"< 시작 {trail_start_val}% (매수 이후 고점 기준)",
-            )
-            return False, None
-        return trailing_armed, trailing_floor
 
     @staticmethod
     def _trailing_floor_price(buy_price: int, trail_start_rate: float) -> int:
@@ -1010,7 +1052,7 @@ class StopLossManager:
         peak: int,
         trail_start_rate: Optional[float],
     ) -> Tuple[bool, Optional[int]]:
-        """패턴 B: 시작% 도달 시 armed + floor. armed 후 평균단가 상승 시 floor 상향(추가매수)."""
+        """패턴 B: 시작% 도달 시 armed + floor 잠금. armed 후 바닥 유지(추가매수 시에만 상향)."""
         stored_armed = bool(getattr(position, "trailing_armed", False))
         stored_floor = getattr(position, "trailing_floor_price", None)
 
@@ -1019,8 +1061,6 @@ class StopLossManager:
 
         peak_rate = self._peak_rate_pct(buy_price, peak)
         if stored_armed:
-            if peak_rate < trail_start_rate:
-                return False, None
             floor = self._trailing_floor_for_buy(
                 buy_price, trail_start_rate, stored_floor, peak,
             )
@@ -1097,11 +1137,15 @@ class StopLossManager:
                 p = session.query(Position).filter(Position.id == position_id).first()
                 if not p or p.status not in ("HOLDING", "TRAILING"):
                     return
-                trail_start = self._num(
-                    getattr(s, "breakout_trailing_start_pct", None)
-                    if getattr(p, "strategy_key", None) == "breakout"
-                    else s.take_profit_rate
-                )
+                sk = (getattr(p, "strategy_key", None) or "").strip().lower()
+                if sk == "breakout":
+                    trail_start = self._num(getattr(s, "breakout_trailing_start_pct", None))
+                elif sk == "ymgp":
+                    trail_start = self._num(getattr(s, "ymgp_trailing_start_pct", None))
+                elif sk == "jongga":
+                    trail_start = self._num(getattr(s, "jongga_trailing_start_pct", None))
+                else:
+                    trail_start = self._num(s.take_profit_rate)
                 if not trail_start or trail_start <= 0:
                     return
                 buy_price = int(p.buy_price or 0)
@@ -1148,15 +1192,21 @@ class StopLossManager:
             return raw
 
         is_breakout = (strategy_key or "").strip().lower() == "breakout"
-        sl = self._num(
-            getattr(settings, "breakout_stop_loss_pct", None)
-            if is_breakout else settings.stop_loss_rate
-        )
+        is_ymgp = (strategy_key or "").strip().lower() == "ymgp"
+        is_jongga = (strategy_key or "").strip().lower() == "jongga"
+        if is_breakout:
+            sl = self._num(getattr(settings, "breakout_stop_loss_pct", None))
+        elif is_ymgp:
+            sl = self._num(getattr(settings, "ymgp_stop_loss_pct", None))
+        elif is_jongga:
+            sl = self._num(getattr(settings, "jongga_stop_loss_pct", None))
+        else:
+            sl = self._num(settings.stop_loss_rate)
         if sl:
             candidates.append(("STOP_LOSS", buy_price * (1 - abs(sl) / 100.0), "PCT"))
 
         atr_stop_mult = self._num(settings.atr_mult_stop)
-        if not is_breakout and atr and atr_stop_mult:
+        if not is_breakout and not is_ymgp and not is_jongga and atr and atr_stop_mult:
             candidates.append(("STOP_LOSS", buy_price - atr * atr_stop_mult, "ATR"))
 
         lock_trigger = self._num(settings.profit_lock_trigger)
@@ -1168,16 +1218,20 @@ class StopLossManager:
                 candidates.append(("PROFIT_LOCK", buy_price * (1 + lock_floor / 100.0), "PCT"))
 
         if trailing_armed:
-            tr = self._num(
-                getattr(settings, "breakout_trailing_pct", None)
-                if is_breakout else settings.trailing_stop_pct
-            )
+            if is_breakout:
+                tr = self._num(getattr(settings, "breakout_trailing_pct", None))
+            elif is_ymgp:
+                tr = self._num(getattr(settings, "ymgp_trailing_pct", None))
+            elif is_jongga:
+                tr = self._num(getattr(settings, "jongga_trailing_pct", None))
+            else:
+                tr = self._num(settings.trailing_stop_pct)
             if tr:
                 raw = peak * (1 - tr / 100.0)
                 candidates.append(("TRAILING", _apply_trail_floor(raw), "PCT"))
 
             atr_trail_mult = self._num(settings.atr_mult_trail)
-            if not is_breakout and atr and atr_trail_mult:
+            if not is_breakout and not is_jongga and atr and atr_trail_mult:
                 raw = peak - atr * atr_trail_mult
                 candidates.append(("TRAILING", _apply_trail_floor(raw), "ATR"))
 
@@ -1343,7 +1397,8 @@ class StopLossManager:
     @debug_tracer.trace_async(component="STOP_LOSS")
     async def _check_position_stop_loss(self, position: Position, holding: Optional[dict] = None):
         """개별 포지션 청산 판단.
-        패턴 B: 시작% 도달 → trailing_armed + floor 잠금, 이후 고점 따라 트레일링(바닥 이하로 선 하락 없음).
+        패턴 B: 시작% 도달 → trailing_armed + floor 잠금(이후 고점 보정으로 해제하지 않음),
+        고점 따라 트레일링(바닥 이하로 선 하락 없음).
         """
         try:
             if holding:
@@ -1369,10 +1424,24 @@ class StopLossManager:
             peak = await self._resolve_position_peak(position, int(current_price), allow_api=True)
 
             is_breakout = getattr(position, "strategy_key", None) == "breakout"
-            trail_start = self._num(
-                getattr(s, "breakout_trailing_start_pct", None)
-                if is_breakout else s.take_profit_rate
-            )
+            is_ymgp = getattr(position, "strategy_key", None) == "ymgp"
+            is_jongga = getattr(position, "strategy_key", None) == "jongga"
+
+            # 종가배팅: 매수 당일은 청산 모니터 스킵, 익일부터 고정손절·트레일
+            if is_jongga:
+                from utils.jongga_engine import is_exit_management_day
+                if not is_exit_management_day(getattr(position, "buy_time", None)):
+                    await self._update_position_tracking(position.id, peak, None)
+                    return
+
+            if is_breakout:
+                trail_start = self._num(getattr(s, "breakout_trailing_start_pct", None))
+            elif is_ymgp:
+                trail_start = self._num(getattr(s, "ymgp_trailing_start_pct", None))
+            elif is_jongga:
+                trail_start = self._num(getattr(s, "jongga_trailing_start_pct", None))
+            else:
+                trail_start = self._num(s.take_profit_rate)
             trail_start_val = trail_start if trail_start and trail_start > 0 else None
             stored_peak = int(getattr(position, "peak_price", None) or buy_price)
             if peak != stored_peak:
@@ -1395,6 +1464,7 @@ class StopLossManager:
 
             sell_reason = None
             detail = ""
+            ymgp_sell_qty = None
 
             # Phase3: 상따 전용 soft/hard 임계 (상한가 이탈, 급락룰)
             try:
@@ -1403,7 +1473,7 @@ class StopLossManager:
                     lim_hard = float(getattr(s, "limit_break_hard_pct", 3.0) or 3.0)
                     drop_soft = float(getattr(s, "sharp_drop_soft_pct", 3.0) or 3.0)
                     drop_hard = float(getattr(s, "sharp_drop_hard_pct", 5.0) or 5.0)
-                    soft_required = int(getattr(s, "soft_confirm_polls", 2) or 2)
+                    soft_required = int(getattr(s, "soft_confirm_polls", 3) or 3)
 
                     # 상한가(approx): 전일 종가 기준 30% 상한가 근사치
                     ul_price = None
@@ -1466,13 +1536,13 @@ class StopLossManager:
             except Exception as e:
                 logger.debug(f"🛡️ [STOP_LOSS] 상따 전용 임계 적용 오류: {e}")
 
-            # 과매도 돌파 전용 구조 이탈 — 고정손절·트레일보다 먼저 평가
+            # 수급 돌파 전용 구조 이탈 — 고정손절·트레일보다 먼저 평가
             try:
                 if not sell_reason and getattr(position, "strategy_key", None) == "breakout":
                     level = int(getattr(position, "breakout_level_price", None) or 0)
                     soft_pct = float(getattr(s, "struct_break_soft_pct", 1.0) or 1.0)
                     hard_pct = float(getattr(s, "struct_break_hard_pct", 2.0) or 2.0)
-                    soft_required = max(1, int(getattr(s, "soft_confirm_polls", 2) or 2))
+                    soft_required = max(1, int(getattr(s, "soft_confirm_polls", 3) or 3))
                     state = classify_breakout_structure(
                         int(current_price), level, soft_pct, hard_pct,
                     )
@@ -1510,11 +1580,62 @@ class StopLossManager:
             except Exception as e:
                 logger.debug(f"🛡️ [STOP_LOSS] 돌파 구조 이탈 적용 오류: {e}")
 
+            # 역매공파: 기준봉/MA 손절 · 분할 익절 (전량·부분)
+            try:
+                if not sell_reason and getattr(position, "strategy_key", None) == "ymgp":
+                    from utils.ymgp_engine import (
+                        compute_mas,
+                        mark_stopped,
+                        partial_sell_qty,
+                        stop_invalidated,
+                        take_profit_target,
+                    )
+                    ref = {
+                        "high": getattr(position, "ymgp_ref_high", None),
+                        "low": getattr(position, "ymgp_ref_low", None)
+                            or getattr(position, "breakout_level_price", None),
+                        "open": getattr(position, "ymgp_ref_open", None),
+                    }
+                    bars = await self._ymgp_daily_bars(position.stock_code)
+                    mas = compute_mas(bars or [], s) if bars else {}
+                    inv, inv_detail = stop_invalidated(
+                        int(current_price), ref, mas, s, use_close_vs_ma=True,
+                    )
+                    if inv:
+                        sell_reason = "STOP_LOSS"
+                        detail = f"역매공파 무효화: {inv_detail}"
+                        mark_stopped(position.stock_code, s)
+                    elif getattr(s, "ymgp_enable_partial_tp", True):
+                        tp_stage = int(getattr(position, "ymgp_tp_stage", None) or 0)
+                        box = None
+                        if bars:
+                            from utils.ymgp_engine import _box_stats, _as_int
+                            box = _box_stats(bars, _as_int(s, "ymgp_box_days", 15))
+                        target, tlabel = take_profit_target(tp_stage, box, mas)
+                        if target and current_price >= float(target):
+                            qty = int(position.buy_quantity or 0)
+                            sell_n = partial_sell_qty(qty, tp_stage, s)
+                            if sell_n >= qty:
+                                sell_reason = "TAKE_PROFIT"
+                                detail = f"역매공파 {tlabel} 전량 ({current_price:,} ≥ {float(target):,.0f})"
+                                ymgp_sell_qty = qty
+                            elif sell_n > 0:
+                                sell_reason = "TAKE_PROFIT"
+                                detail = (
+                                    f"역매공파 {tlabel} 분할 {sell_n}/{qty}주 "
+                                    f"({current_price:,} ≥ {float(target):,.0f})"
+                                )
+                                ymgp_sell_qty = sell_n
+                                await self._bump_ymgp_tp_stage(position.id, tp_stage + 1)
+            except Exception as e:
+                logger.debug(f"🛡️ [STOP_LOSS] 역매공파 청산 적용 오류: {e}")
+
             # 장마감 청산은 구조·손절 규칙이 미발동일 때만 적용
-            # breakout는 오버나잇 허용이므로 MARKET_CLOSE 제외
+            # breakout·ymgp·jongga는 오버나잇 허용이므로 MARKET_CLOSE 제외
+            sk = (getattr(position, "strategy_key", None) or "").strip().lower()
             if (
                 not sell_reason
-                and getattr(position, "strategy_key", None) != "breakout"
+                and sk not in ("breakout", "ymgp", "jongga")
                 and self._is_past_liquidation_time()
             ):
                 sell_reason = "MARKET_CLOSE"
@@ -1561,7 +1682,10 @@ class StopLossManager:
                 if await self._has_pending_sell_order(position.id, for_reason=sell_reason):
                     logger.debug(f"🛡️ [STOP_LOSS] 매도 대기 중 — {position.stock_name}, 추가 주문 생략")
                     return
-                await self._execute_sell_order(position, current_price, sell_reason, detail)
+                await self._execute_sell_order(
+                    position, current_price, sell_reason, detail,
+                    quantity=ymgp_sell_qty,
+                )
 
         except Exception as e:
             logger.error(f"🛡️ [STOP_LOSS] 포지션 확인 오류 - {position.stock_name}: {e}")
@@ -1753,6 +1877,16 @@ class StopLossManager:
             if position.status != "HOLDING":
                 return {"success": False, "error": "매도 가능한 포지션이 아닙니다."}
             cancelled = self._cancel_all_open_sell_orders(session, position_id)
+            # commit(expire_on_commit) 후 세션 종료 시 DetachedInstanceError 방지
+            _ = (
+                position.id,
+                position.stock_code,
+                position.stock_name,
+                position.buy_quantity,
+                position.buy_price,
+                position.current_price,
+            )
+            session.expunge(position)
             session.commit()
             break
 
@@ -1888,9 +2022,26 @@ class StopLossManager:
                         snap = sell_fill_snapshot(sell, pos)
                         asyncio.create_task(notify_sell_filled_async(snap, remaining_qty=None))
                     elif acct_qty < pos.buy_quantity:
-                        sold_qty = pos.buy_quantity - acct_qty
+                        sold_qty = int(pos.buy_quantity) - int(acct_qty)
+                        age_min = self._sell_order_age_minutes(sell)
+                        # 접수 직후 잔고 미반영·오차로 극소량만 줄어든 경우 부분체결로 확정하지 않음
+                        # (에스씨디: 전량매도 접수 후 5주만 감소 → 5주 부분확정 → 잔량 재매도 800033)
+                        min_wait_min = 0.75  # 45초
+                        tiny = sold_qty < max(10, int((pos.buy_quantity or 0) * 0.02))
+                        if age_min < min_wait_min and tiny:
+                            logger.info(
+                                f"🛡️ [RECONCILE] 부분체결 보류 — {pos.stock_name} "
+                                f"차이 {sold_qty}주 · 경과 {age_min*60:.0f}초 (잔고 반영 대기)"
+                            )
+                            if pos.status != "HOLDING":
+                                pos.status = "HOLDING"
+                                pos.sell_time = None
+                            continue
                         sell.sell_quantity = sold_qty
                         sell.sell_amount = int((sell.sell_price or pos.current_price or pos.buy_price) * sold_qty)
+                        if sell.profit_loss is not None:
+                            # 수량 정정 시 손익 재계산
+                            sell.profit_loss = None
                         self._finalize_sell_in_session(session, sell, pos)
                         pos.status = "HOLDING"
                         pos.sell_time = None
@@ -2079,7 +2230,14 @@ class StopLossManager:
             sell.profit_loss = (sell.sell_price - pos.buy_price) * sell.sell_quantity
         session.flush()
 
-    async def _execute_sell_order(self, position: Position, sell_price: int, sell_reason: str, sell_reason_detail: str):
+    async def _execute_sell_order(
+        self,
+        position: Position,
+        sell_price: int,
+        sell_reason: str,
+        sell_reason_detail: str,
+        quantity: Optional[int] = None,
+    ):
         """매도 주문 실행 (체결 확정은 _reconcile_sell_orders_and_holdings에서 처리)."""
         try:
             if await self._has_pending_sell_order(position.id, for_reason=sell_reason):
@@ -2093,41 +2251,258 @@ class StopLossManager:
                 )
                 return
 
-            logger.info(f"🛡️ [STOP_LOSS] 매도 주문 실행 - {position.stock_name}: {sell_reason}")
+            qty = int(quantity) if quantity and int(quantity) > 0 else int(position.buy_quantity or 0)
+            if qty <= 0:
+                logger.warning(f"🛡️ [STOP_LOSS] 매도 수량 0 — {position.stock_name}")
+                return
+            if qty > int(position.buy_quantity or 0):
+                qty = int(position.buy_quantity or 0)
+
+            # 계좌 실잔량으로 클램프 (DB/메모리 수량이 남아도 매도가능 부족 방지)
+            acct_qty = await self._fetch_account_qty(position.stock_code)
+            if acct_qty is not None:
+                if acct_qty <= 0:
+                    logger.warning(
+                        f"🛡️ [STOP_LOSS] 계좌 잔량 0 — 매도 생략 {position.stock_name} "
+                        f"(DB {position.buy_quantity}주)"
+                    )
+                    log_activity(
+                        "SELL",
+                        f"매도 생략 — {position.stock_name}: 계좌 잔량 0 (이미 청산)",
+                        "warn",
+                        stock_code=position.stock_code,
+                        reason=sell_reason,
+                    )
+                    return
+                if qty > acct_qty:
+                    logger.info(
+                        f"🛡️ [STOP_LOSS] 매도수량 조정 {qty}→{acct_qty}주 "
+                        f"— {position.stock_name} (계좌 잔량)"
+                    )
+                    qty = acct_qty
+                if int(position.buy_quantity or 0) != acct_qty:
+                    position.buy_quantity = acct_qty
+
+            logger.info(f"🛡️ [STOP_LOSS] 매도 주문 실행 - {position.stock_name}: {sell_reason} {qty}주")
             
             # 매도 주문 생성
-            sell_order_id = await self._create_sell_order(position, sell_price, sell_reason, sell_reason_detail)
+            sell_order_id = await self._create_sell_order(
+                position, sell_price, sell_reason, sell_reason_detail, quantity=qty,
+            )
             if not sell_order_id:
                 return
             
             # 키움 API로 매도 주문
             result = await self.kiwoom_api.place_sell_order(
                 stock_code=position.stock_code,
-                quantity=position.buy_quantity,
+                quantity=qty,
                 price=0,  # 시장가
                 order_type="3"  # 시장가
             )
             
             if result.get("success"):
-                msg = f"매도 주문 {sell_reason} — {position.stock_name} {position.buy_quantity}주 @ {sell_price:,}원"
-                logger.info(f"🛡️ [STOP_LOSS] 매도 주문 성공 - {position.stock_name}: {position.buy_quantity}주")
+                msg = f"매도 주문 {sell_reason} — {position.stock_name} {qty}주 @ {sell_price:,}원"
+                logger.info(f"🛡️ [STOP_LOSS] 매도 주문 성공 - {position.stock_name}: {qty}주")
                 log_activity("SELL", msg, "info", stock_code=position.stock_code, reason=sell_reason)
                 
                 # 매도 주문 접수 — 포지션 청산은 계좌 체결 확인 후 reconcile에서 처리
                 await self._update_sell_order_status(sell_order_id, "ORDERED", result.get("order_id", ""))
+                if sell_reason == "STOP_LOSS" and getattr(position, "strategy_key", None) == "ymgp":
+                    try:
+                        from utils.ymgp_engine import mark_stopped
+                        mark_stopped(position.stock_code, self.auto_trade_settings)
+                    except Exception:
+                        pass
                 
             else:
                 error_msg = result.get("error", "알 수 없는 오류")
+                # 이미 체결된 뒤 중복 매도 → 800033. FAILED로 두면 매 사이클 재시도 스팸.
+                if is_sell_qty_shortage_error(error_msg):
+                    recovered = await self._recover_sell_after_qty_shortage(
+                        position, sell_order_id, sell_reason, error_msg,
+                        requested_qty=qty, sell_price=sell_price,
+                    )
+                    if recovered:
+                        return
                 logger.error(f"🛡️ [STOP_LOSS] 매도 주문 실패 - {position.stock_name}: {error_msg}")
                 log_activity("SELL", f"매도 실패 {position.stock_name}: {error_msg}", "warn", stock_code=position.stock_code, reason=sell_reason)
                 await self._update_sell_order_status(sell_order_id, "FAILED", error_msg)
                 
         except Exception as e:
             logger.error(f"🛡️ [STOP_LOSS] 매도 주문 실행 오류 - {position.stock_name}: {e}")
+
+    async def _fetch_account_qty(self, stock_code: str) -> Optional[int]:
+        """계좌 보유 수량. 조회 실패 시 None."""
+        try:
+            account_number = (
+                Config.KIWOOM_MOCK_ACCOUNT_NUMBER
+                if Config.KIWOOM_USE_MOCK_ACCOUNT
+                else Config.KIWOOM_ACCOUNT_NUMBER
+            )
+            balance = await self.kiwoom_api.get_account_balance(account_number)
+            if not balance or balance.get("_error"):
+                return None
+            code = KiwoomAPI.normalize_stock_code(stock_code or "")
+            return int(self._holdings_qty_map(balance).get(code, 0) or 0)
+        except Exception as e:
+            logger.debug(f"🛡️ [STOP_LOSS] 계좌 수량 조회 실패: {e}")
+            return None
+
+    async def _ymgp_daily_bars(self, stock_code: str):
+        """역매공파용 일봉 캐시 (프로세스 메모리, 코드당 1회/세션)."""
+        if not hasattr(self, "_ymgp_bars_cache"):
+            self._ymgp_bars_cache = {}
+        code = str(stock_code or "").replace("A", "")
+        cached = self._ymgp_bars_cache.get(code)
+        if cached is not None:
+            return cached
+        try:
+            bars = await self.kiwoom_api.get_stock_chart_data(code, "1D", max_bars=520)
+            self._ymgp_bars_cache[code] = bars or []
+            return bars or []
+        except Exception as e:
+            logger.debug(f"🛡️ [STOP_LOSS] ymgp 일봉 조회 실패 {code}: {e}")
+            return []
+
+    async def _bump_ymgp_tp_stage(self, position_id: int, stage: int) -> None:
+        try:
+            for db in get_db():
+                session: Session = db
+                pos = session.query(Position).filter(Position.id == position_id).first()
+                if pos:
+                    pos.ymgp_tp_stage = int(stage)
+                    session.commit()
+                break
+        except Exception as e:
+            logger.debug(f"🛡️ [STOP_LOSS] ymgp_tp_stage 갱신 실패: {e}")
+
+    async def _recover_sell_after_qty_shortage(
+        self,
+        position: Position,
+        sell_order_id: int,
+        sell_reason: str,
+        error_msg: str,
+        *,
+        requested_qty: Optional[int] = None,
+        sell_price: Optional[int] = None,
+    ) -> bool:
+        """800033 등 매도가능수량 부족 — 잔고 0이면 청산 확정, 잔량 있으면 잔량으로 1회 재주문."""
+        try:
+            account_number = (
+                Config.KIWOOM_MOCK_ACCOUNT_NUMBER
+                if Config.KIWOOM_USE_MOCK_ACCOUNT
+                else Config.KIWOOM_ACCOUNT_NUMBER
+            )
+            balance = await self.kiwoom_api.get_account_balance(account_number)
+            holdings = self._holdings_qty_map(balance)
+            code = KiwoomAPI.normalize_stock_code(position.stock_code or "")
+            acct_qty = int(holdings.get(code, 0) or 0)
+
+            if acct_qty > 0:
+                req = int(requested_qty or 0) or int(position.buy_quantity or 0)
+                retry_qty = min(acct_qty, req) if req > 0 else acct_qty
+                # DB 수량 동기화
+                try:
+                    for db in get_db():
+                        session: Session = db
+                        pos = session.query(Position).filter(Position.id == position.id).first()
+                        sell = session.query(SellOrder).filter(SellOrder.id == sell_order_id).first()
+                        if pos and int(pos.buy_quantity or 0) != acct_qty:
+                            pos.buy_quantity = acct_qty
+                        if sell and retry_qty > 0:
+                            sell.sell_quantity = retry_qty
+                            px = int(sell_price or sell.sell_price or pos.current_price or pos.buy_price or 0)
+                            sell.sell_amount = px * retry_qty
+                        session.commit()
+                        break
+                except Exception as e:
+                    logger.debug(f"🛡️ [STOP_LOSS] 800033 수량 동기화 실패: {e}")
+
+                if retry_qty > 0 and retry_qty < req:
+                    logger.warning(
+                        f"🛡️ [STOP_LOSS] 매도가능수량 부족 → 계좌잔량 {retry_qty}주로 재주문 "
+                        f"— {position.stock_name} (요청 {req}주)"
+                    )
+                    result = await self.kiwoom_api.place_sell_order(
+                        stock_code=position.stock_code,
+                        quantity=retry_qty,
+                        price=0,
+                        order_type="3",
+                    )
+                    if result.get("success"):
+                        await self._update_sell_order_status(
+                            sell_order_id, "ORDERED", result.get("order_id", ""),
+                        )
+                        log_activity(
+                            "SELL",
+                            f"매도 재주문(잔량) — {position.stock_name} {retry_qty}주",
+                            "info",
+                            stock_code=position.stock_code,
+                            reason=sell_reason,
+                        )
+                        position.buy_quantity = acct_qty
+                        return True
+
+                logger.warning(
+                    f"🛡️ [STOP_LOSS] 매도가능수량 부족이지만 계좌 잔량 {acct_qty}주 "
+                    f"— {position.stock_name} (DB {position.buy_quantity}주)"
+                )
+                log_activity(
+                    "SELL",
+                    f"매도 실패 {position.stock_name}: {error_msg} (계좌 잔량 {acct_qty}주)",
+                    "warn",
+                    stock_code=position.stock_code,
+                    reason=sell_reason,
+                )
+                await self._update_sell_order_status(sell_order_id, "FAILED", error_msg)
+                position.buy_quantity = acct_qty
+                return True  # 재시도 로직 중복 방지(이미 FAILED 처리함)
+
+            for db in get_db():
+                session: Session = db
+                sell = session.query(SellOrder).filter(SellOrder.id == sell_order_id).first()
+                pos = session.query(Position).filter(Position.id == position.id).first()
+                if not sell or not pos:
+                    break
+                note = f"이미 청산됨(잔고0) · {error_msg}"
+                if sell.sell_reason_detail:
+                    sell.sell_reason_detail = f"{sell.sell_reason_detail} · {note}"[:200]
+                else:
+                    sell.sell_reason_detail = note[:200]
+                self._finalize_sell_in_session(session, sell, pos)
+                session.commit()
+                self._sangtta_soft_counters.pop(pos.id, None)
+                self._breakout_soft_counters.pop(pos.id, None)
+                self._account_missing_strikes.pop(pos.id, None)
+                log_activity(
+                    "SELL",
+                    f"매도 확정(중복주문·잔고0) — {pos.stock_name} {sell.sell_quantity}주 ({sell_reason})",
+                    "info",
+                    stock_code=pos.stock_code,
+                    reason=sell_reason,
+                )
+                logger.info(
+                    f"🛡️ [STOP_LOSS] 800033 복구 — 이미 청산으로 확정: {pos.stock_name}"
+                )
+                snap = sell_fill_snapshot(sell, pos)
+                asyncio.create_task(notify_sell_filled_async(snap, remaining_qty=None))
+                break
+            return True
+        except Exception as e:
+            logger.error(f"🛡️ [STOP_LOSS] 매도가능수량 부족 복구 오류: {e}")
+            return False
     
-    async def _create_sell_order(self, position: Position, sell_price: int, sell_reason: str, sell_reason_detail: str) -> Optional[int]:
+    async def _create_sell_order(
+        self,
+        position: Position,
+        sell_price: int,
+        sell_reason: str,
+        sell_reason_detail: str,
+        quantity: Optional[int] = None,
+    ) -> Optional[int]:
         """매도 주문 생성 — DB id 반환 (세션 분리 안전)."""
         try:
+            qty = int(quantity) if quantity and int(quantity) > 0 else int(position.buy_quantity or 0)
             sell_order_id = None
             for db in get_db():
                 session: Session = db
@@ -2136,11 +2511,11 @@ class StopLossManager:
                     stock_code=position.stock_code,
                     stock_name=position.stock_name,
                     sell_price=sell_price,
-                    sell_quantity=position.buy_quantity,
-                    sell_amount=sell_price * position.buy_quantity,
+                    sell_quantity=qty,
+                    sell_amount=sell_price * qty,
                     sell_reason=sell_reason,
                     sell_reason_detail=sell_reason_detail,
-                    profit_loss=(sell_price - position.buy_price) * position.buy_quantity,
+                    profit_loss=(sell_price - position.buy_price) * qty if position.buy_price else 0,
                     profit_loss_rate=(sell_price - position.buy_price) / position.buy_price * 100 if position.buy_price else 0,
                     status="PENDING"
                 )
@@ -2219,6 +2594,21 @@ class StopLossManager:
                         existing.buy_order_id = buy_order_id
                     if signal.id and not existing.signal_id:
                         existing.signal_id = signal.id
+                    if (signal_meta.get("strategy") or "").strip().lower() == "ymgp":
+                        existing.strategy_key = "ymgp"
+                        leg = int(signal_meta.get("entry_leg") or signal_meta.get("ymgp_entry_leg") or 2)
+                        existing.ymgp_entry_leg = max(int(getattr(existing, "ymgp_entry_leg", None) or 1), leg)
+                        for attr, key in (
+                            ("ymgp_ref_high", "ymgp_ref_high"),
+                            ("ymgp_ref_low", "ymgp_ref_low"),
+                            ("ymgp_ref_open", "ymgp_ref_open"),
+                        ):
+                            val = signal_meta.get(key)
+                            if val and not getattr(existing, attr, None):
+                                try:
+                                    setattr(existing, attr, int(val))
+                                except (TypeError, ValueError):
+                                    pass
                     session.commit()
                     session.refresh(existing)
                     logger.info(
@@ -2227,6 +2617,7 @@ class StopLossManager:
                     )
                     return existing
 
+                ref = signal_meta.get("ymgp_ref") if isinstance(signal_meta.get("ymgp_ref"), dict) else {}
                 position = Position(
                     stock_code=code,
                     stock_name=signal.stock_name,
@@ -2247,6 +2638,17 @@ class StopLossManager:
                         int(signal_meta.get("breakout_level_price") or signal_meta.get("level_price") or 0)
                         or None
                     ),
+                    ymgp_ref_high=(
+                        int(signal_meta.get("ymgp_ref_high") or ref.get("high") or 0) or None
+                    ),
+                    ymgp_ref_low=(
+                        int(signal_meta.get("ymgp_ref_low") or ref.get("low") or 0) or None
+                    ),
+                    ymgp_ref_open=(
+                        int(signal_meta.get("ymgp_ref_open") or ref.get("open") or 0) or None
+                    ),
+                    ymgp_entry_leg=int(signal_meta.get("entry_leg") or signal_meta.get("ymgp_entry_leg") or 1),
+                    ymgp_tp_stage=0,
                     peak_price=buy_price,
                     buy_atr=buy_atr,
                     buy_atr_period=buy_atr_period,

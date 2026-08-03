@@ -74,11 +74,25 @@ class Config:
     API_LIMIT_DURATION_MIN = int(os.getenv("API_LIMIT_DURATION_MIN", "3"))
 
     # 자동매매 스크리너 — 거래대금 상위 후보 종목 수
-    SCREENER_CANDIDATE_LIMIT = int(os.getenv("SCREENER_CANDIDATE_LIMIT", "70"))
+    SCREENER_CANDIDATE_LIMIT = int(os.getenv("SCREENER_CANDIDATE_LIMIT", "50"))
+    # 상따 — 등락률상위 풀에서 거래대금순으로 남길 후보 수
+    SANGTTA_CANDIDATE_LIMIT = int(os.getenv("SANGTTA_CANDIDATE_LIMIT", "20"))
+    # 스크리너 후보 최소 등락률(%). 0이면 기존처럼 플러스(>0)만. 매수 최소등락(예: 3.5)보다 약간 낮게.
+    SCREENER_MIN_CHANGE_RATE = float(os.getenv("SCREENER_MIN_CHANGE_RATE", "3.3"))
+    # 스크리너 후보 과열 컷(%). 이 이상이면 편입 제외. 0이면 상한 미적용.
+    SCREENER_MAX_CHANGE_RATE = float(os.getenv("SCREENER_MAX_CHANGE_RATE", "15"))
+    # 스크리너 후보 최소 당일 거래대금(억원). 0이면 하한 미적용.
+    SCREENER_MIN_TRADE_AMOUNT_EOK = float(os.getenv("SCREENER_MIN_TRADE_AMOUNT_EOK", "20"))
+
+    # 공공데이터포털 (관세청 수출입 OpenAPI)
+    DATA_GO_KR_SERVICE_KEY = os.getenv("DATA_GO_KR_SERVICE_KEY", "")
 
     # 서버 설정
     HOST = os.getenv("HOST", "0.0.0.0")
     PORT = int(os.getenv("PORT", 8000))
+    # 매일 KST 이 시각 이후 uvicorn 프로세스 자동 종료 (장마감 배치·테마 마트는 별도 스케줄)
+    SERVER_AUTO_SHUTDOWN_ENABLED = os.getenv("SERVER_AUTO_SHUTDOWN_ENABLED", "true").lower() == "true"
+    SERVER_AUTO_SHUTDOWN_TIME = os.getenv("SERVER_AUTO_SHUTDOWN_TIME", "19:00")
     
     # 네이버 뉴스 검색 API 설정
     NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID", "")

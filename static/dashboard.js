@@ -257,6 +257,10 @@ function renderCashBreakdown(d, holdings) {
   const d2Cap = Boolean(b.d2_cap_applied) || (d2 > 0 && investable > 0 && investable < investableRaw);
 
   $('stDeposit').textContent = won(entr);
+  window._lastDeposit = entr;
+  if (typeof refreshDepositPctPreviews === 'function') {
+    try { refreshDepositPctPreviews(); } catch (_) { /* settings form 미생성 */ }
+  }
 
   const elStock = $('stStockEval');
   if (elStock) {
@@ -530,6 +534,26 @@ function linkedSessionWindowDetail(settings) {
       end: _v(s, 'breakout_trade_end_time') || '14:30',
     });
   }
+  const useYmgp = !!(s.use_ymgp || String(s.ymgp_condition_names || '').trim());
+  if (useYmgp) {
+    parts.push({
+      key: 'ymgp',
+      label: '역매공파',
+      start: _v(s, 'ymgp_trade_start_time') || '09:30',
+      end: _v(s, 'ymgp_trade_end_time') || '14:30',
+    });
+  }
+  if (s.use_jongga) {
+    const pigOn = s.jongga_pig_split !== false;
+    parts.push({
+      key: 'jongga',
+      label: '종가배팅',
+      start: _v(s, 'jongga_trade_start_time') || '14:30',
+      end: pigOn
+        ? (_v(s, 'jongga_leg3_end_time') || '15:28')
+        : (_v(s, 'jongga_pick_end_time') || _v(s, 'jongga_trade_end_time') || '14:40'),
+    });
+  }
   let startMin = Math.min(...parts.map((p) => _hmToMin(p.start, p.start)));
   let endMin = Math.max(...parts.map((p) => _hmToMin(p.end, p.end)));
   if (s.liquidate_before_close) {
@@ -552,6 +576,18 @@ function readSessionOptsFromForm() {
     breakout_trade_end_time: $('set_breakout_trade_end_time')?.value || '14:30',
     use_breakout: !!$('set_use_breakout')?.checked,
     breakout_condition_names: $('set_breakout_condition_names')?.value || '',
+    ymgp_trade_start_time: $('set_ymgp_trade_start_time')?.value || '09:30',
+    ymgp_trade_end_time: $('set_ymgp_trade_end_time')?.value || '14:30',
+    use_ymgp: !!$('set_use_ymgp')?.checked,
+    ymgp_condition_names: $('set_ymgp_condition_names')?.value || '',
+    jongga_trade_start_time: $('set_jongga_trade_start_time')?.value || '14:30',
+    jongga_pick_end_time: $('set_jongga_pick_end_time')?.value || '14:40',
+    jongga_trade_end_time: $('set_jongga_trade_end_time')?.value || $('set_jongga_pick_end_time')?.value || '14:40',
+    jongga_leg2_start_time: $('set_jongga_leg2_start_time')?.value || '14:50',
+    jongga_leg3_start_time: $('set_jongga_leg3_start_time')?.value || '15:20',
+    jongga_leg3_end_time: $('set_jongga_leg3_end_time')?.value || '15:28',
+    use_jongga: !!$('set_use_jongga')?.checked,
+    jongga_pig_split: !!$('set_jongga_pig_split')?.checked,
     liquidate_before_close: !!$('set_liquidate_before_close')?.checked,
     liquidate_time: $('set_liquidate_time')?.value || '15:10',
   };
@@ -578,6 +614,9 @@ function bindTradeTimePreview() {
     'set_trade_start_time', 'set_trade_end_time',
     'set_sangtta_trade_start_time', 'set_sangtta_trade_end_time',
     'set_breakout_trade_start_time', 'set_breakout_trade_end_time',
+    'set_ymgp_trade_start_time', 'set_ymgp_trade_end_time',
+    'set_jongga_trade_start_time', 'set_jongga_pick_end_time', 'set_jongga_trade_end_time',
+    'set_jongga_leg2_start_time', 'set_jongga_leg3_start_time', 'set_jongga_leg3_end_time',
     'set_liquidate_time',
   ];
   ids.forEach((id) => {
@@ -588,6 +627,8 @@ function bindTradeTimePreview() {
   });
   const br = $('set_use_breakout');
   if (br) br.addEventListener('change', refreshEngineSessionDisplay);
+  const ym = $('set_use_ymgp');
+  if (ym) ym.addEventListener('change', refreshEngineSessionDisplay);
   const liq = $('set_liquidate_before_close');
   if (liq) liq.addEventListener('change', refreshEngineSessionDisplay);
   refreshEngineSessionDisplay();
@@ -630,7 +671,7 @@ async function loadStatus() {
     updateApiLimitBadge(activity.api_rate_limit, activity.api_traffic);
 
     const sig = mon.signals || {};
-    const map = [['총 신호', 'total_signals'], ['주문', 'ordered_signals'], ['처리중', 'processing_signals'], ['실패', 'failed_signals'], ['취소', 'cancelled_signals']];
+    const map = [['총 신호', 'total_signals'], ['관측', 'watching_signals'], ['주문', 'ordered_signals'], ['처리중', 'processing_signals'], ['실패', 'failed_signals'], ['취소', 'cancelled_signals']];
     let any = false, sigHtml = '<div class="grid cols-2 board-kv-grid">';
     for (const [label, key] of map) { if (sig[key] == null) continue; any = true; sigHtml += `<div class="kv"><span class="k">${label}</span><span class="v">${num(sig[key])}</span></div>`; }
     sigHtml += '</div>';
@@ -991,6 +1032,66 @@ function renderPosSellBtn(p) {
   return `<button type="button" class="btn danger sm pos-sell-btn" data-pos-id="${p.id}"${pending ? ' disabled title="매도 주문 진행 중"' : ''}>${pending ? '청산 주문 중' : '수동 청산'}</button>`;
 }
 
+function posThemeChipsHtml(p) {
+  const list = (p.theme_items && p.theme_items.length)
+    ? p.theme_items
+    : (Array.isArray(p.themes) ? p.themes : []);
+  if (!list.length) return '';
+  return tagChipHtml(list.slice(0, 3), 'theme');
+}
+
+const STRATEGY_LABEL = {
+  legacy: '레거시',
+  sangtta: '상따',
+  breakout: '돌파',
+  ymgp: '역매공파',
+};
+
+function posStrategyChipHtml(p) {
+  const key = String(p.strategy_key || '').trim().toLowerCase();
+  if (!key) return '';
+  const label = STRATEGY_LABEL[key] || key;
+  return `<span class="tag-chip strategy ${esc(key)}" title="전략">${esc(label)}</span>`;
+}
+
+function posNameTagsHtml(p) {
+  const strat = posStrategyChipHtml(p);
+  const themes = posThemeChipsHtml(p);
+  if (!strat && !themes) return '';
+  return ` <span class="pos-themes">${strat}${themes || ''}</span>`;
+}
+
+/** 상따·돌파 SOFT 연속 확인 (exit_levels.soft_confirm_*) */
+function softConfirmMeta(p) {
+  const key = String(p.strategy_key || '').trim().toLowerCase();
+  if (key !== 'sangtta' && key !== 'breakout') return null;
+  const ex = p.exit_levels || {};
+  const polls = parseInt(ex.soft_confirm_polls, 10);
+  const count = parseInt(ex.soft_confirm_count, 10);
+  if (!Number.isFinite(polls) || polls <= 0) return null;
+  const n = Number.isFinite(count) && count > 0 ? count : 0;
+  return {
+    count: n,
+    polls,
+    label: ex.soft_confirm_label || (key === 'sangtta' ? '상한가 이탈·급락' : '구조 이탈'),
+    text: `${n}/${polls}`,
+    active: n > 0,
+  };
+}
+
+function softConfirmMetricHtml(p) {
+  const soft = softConfirmMeta(p);
+  if (!soft) return '';
+  return `<div><div class="pk" title="${esc(soft.label)} SOFT 연속 확인">SOFT</div><div class="pv ${soft.active ? 'down' : 'flat'}">${soft.text}</div></div>`;
+}
+
+function softConfirmStopHint(p) {
+  const soft = softConfirmMeta(p);
+  if (!soft) return '';
+  if (soft.active) return ` · SOFT ${soft.text} (${esc(soft.label)})`;
+  return ` · SOFT ${soft.text}`;
+}
+
 function normStockCode(code) {
   return String(code || '').trim().replace(/^A/i, '');
 }
@@ -1033,17 +1134,17 @@ function buyMarkerOnSparkline(timestamps, buyTime, width) {
   if (barTimes.length < 2) return null;
   const t0 = barTimes[0];
   const t1 = barTimes[barTimes.length - 1];
-  if (buyMs < t0 - 60000 || buyMs > t1 + 900000) return null;
-  if (buyMs <= t0) return 0;
-  if (buyMs >= t1) return width;
+  // 전일·장전 매수 → 시점 점이 아니라 매수가 가이드라인으로 표시
+  if (buyMs <= t0) return { prior: true, x: 0 };
+  if (buyMs >= t1) return { prior: false, x: width };
   for (let i = 0; i < barTimes.length - 1; i++) {
     if (buyMs >= barTimes[i] && buyMs <= barTimes[i + 1]) {
       const span = barTimes[i + 1] - barTimes[i] || 1;
       const ratio = (buyMs - barTimes[i]) / span;
-      return ((i + ratio) / (barTimes.length - 1)) * width;
+      return { prior: false, x: ((i + ratio) / (barTimes.length - 1)) * width };
     }
   }
-  return null;
+  return { prior: true, x: 0 };
 }
 
 function renderSparklineSvg(sp, opts, width = 108, height = 34) {
@@ -1068,12 +1169,16 @@ function renderSparklineSvg(sp, opts, width = 108, height = 34) {
   const stroke = up ? 'var(--up)' : 'var(--down)';
   const openY = pad + innerH - ((open - min) / range) * innerH;
   const chg = sp.change_pct != null ? sp.change_pct : ((closes[closes.length - 1] - open) / open * 100);
-  let buyDot = '';
+  let buyMark = '';
   if (buyPrice > 0 && o.buyTime) {
-    const bx = buyMarkerOnSparkline(sp.timestamps, o.buyTime, width);
-    if (bx != null) {
+    const mark = buyMarkerOnSparkline(sp.timestamps, o.buyTime, width);
+    if (mark) {
       const by = pad + innerH - ((buyPrice - min) / range) * innerH;
-      buyDot = `<circle class="pos-spark-buy" cx="${bx.toFixed(1)}" cy="${by.toFixed(1)}" r="2.8"/>`;
+      if (mark.prior) {
+        buyMark = `<line class="pos-spark-buy-level" x1="0" y1="${by.toFixed(1)}" x2="${width}" y2="${by.toFixed(1)}"/>`;
+      } else {
+        buyMark = `<circle class="pos-spark-buy" cx="${mark.x.toFixed(1)}" cy="${by.toFixed(1)}" r="2.8"/>`;
+      }
     }
   }
   const buyHint = buyPrice > 0 ? ` · 매수 ${num(buyPrice)}` : '';
@@ -1081,7 +1186,7 @@ function renderSparklineSvg(sp, opts, width = 108, height = 34) {
     <svg class="pos-spark" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" aria-hidden="true">
       <line x1="0" y1="${openY.toFixed(1)}" x2="${width}" y2="${openY.toFixed(1)}" class="pos-spark-open"/>
       <polyline points="${pts}" class="pos-spark-line" style="stroke:${stroke}"/>
-      ${buyDot}
+      ${buyMark}
     </svg>
     <span class="pos-spark-chg ${signClass(chg)}">${rateStr(chg)}</span>
   </div>`;
@@ -1098,6 +1203,7 @@ function sparklineForPosition(p) {
 const _sparklineCache = { at: 0, data: {} };
 const SPARKLINE_TTL_MS = 300000;
 let sparklineLoading = false;
+let _sparklineRetryTimer = null;
 
 async function loadPositionSparklines(items) {
   if (!items?.length || sparklineLoading) return;
@@ -1120,15 +1226,35 @@ async function loadPositionSparklines(items) {
   sparklineLoading = true;
   try {
     const d = await fetchJSON(`/positions/intraday-sparklines?codes=${codes.join(',')}`, { timeoutMs: 60000 });
-    _sparklineCache.data = { ..._sparklineCache.data, ...(d.sparklines || {}) };
-    _sparklineCache.at = now;
+    const got = d.sparklines || {};
+    _sparklineCache.data = { ..._sparklineCache.data, ...got };
+    // 빈 응답(슬롯 거절 등)은 TTL을 올리지 않아 다음 폴링에서 재시도
+    if (Object.keys(got).length) {
+      _sparklineCache.at = now;
+    }
     window._positionSparklines = _sparklineCache.data;
     if ($('autoPositionsBody') && (window._appHoldings || []).length) {
       renderPositionCards(window._appHoldings, 'autoPositionsBody');
       bindPositionSellButtons();
     }
+    const stillMissing = codes.some((c) => {
+      const sp = _sparklineCache.data[c];
+      return !sp || !sp.timestamps?.length;
+    });
+    if (stillMissing && !_sparklineRetryTimer) {
+      _sparklineRetryTimer = setTimeout(() => {
+        _sparklineRetryTimer = null;
+        if ((window._appHoldings || []).length) loadPositionSparklines(window._appHoldings);
+      }, 8000);
+    }
   } catch (_) {
     /* 스파크라인 실패는 포지션 표시와 분리 */
+    if (!_sparklineRetryTimer) {
+      _sparklineRetryTimer = setTimeout(() => {
+        _sparklineRetryTimer = null;
+        if ((window._appHoldings || []).length) loadPositionSparklines(window._appHoldings);
+      }, 8000);
+    }
   } finally {
     sparklineLoading = false;
   }
@@ -1165,10 +1291,11 @@ function renderPositionCards(items, containerId) {
 
     const chips = (ex.levels || []).map((l) => renderLevelChip(l, ex, p, effStop, pctRate)).join('');
 
+    const themeChips = posNameTagsHtml(p);
     return `<div class="pos-card">
       <div class="pos-card-head">
         <div class="pos-card-title">
-          <div class="name">${esc(p.stock_name)}</div>
+          <div class="name">${esc(p.stock_name)}${themeChips}</div>
           <div class="code">${esc(p.stock_code)} · ${num(p.buy_quantity)}주</div>
         </div>
         <div class="pos-card-spark">${sparklineForPosition(p)}</div>
@@ -1183,6 +1310,7 @@ function renderPositionCards(items, containerId) {
         <div><div class="pk">비중</div><div class="pv" title="평가금액 ÷ 키움 주식총평가">${weight.toFixed(1)}%</div></div>
         <div><div class="pk">고점</div><div class="pv">${num(ex.peak_price || p.peak_price || cur)}</div></div>
         <div><div class="pk">고점대비 하락</div><div class="pv ${peakDropAmt > 0 ? 'down' : 'flat'}">${fmtPeakDrop(peakDropAmt, peakDropPct)}</div></div>
+        ${softConfirmMetricHtml(p)}
         <div><div class="pk">${ex.trailing_armed ? '트레일링' : '트레일 시작'}</div><div class="pv ${ex.trailing_armed ? 'up' : ''}">${ex.trailing_armed && effStop ? num(effStop) : (ex.trailing_start_price ? num(ex.trailing_start_price) : '-')}</div></div>
         ${ex.trailing_floor_price ? `<div><div class="pk">익절 바닥</div><div class="pv up">${num(ex.trailing_floor_price)}</div></div>` : ''}
         <div><div class="pk">${ex.atr ? 'ATR' : '변동성'}</div><div class="pv text-cyan">${ex.atr ? num(ex.atr) + '원' : '-'}</div></div>
@@ -1191,7 +1319,7 @@ function renderPositionCards(items, containerId) {
         <div class="stop-main">유효 손절선 <span style="color:var(--down);">${effPrice ? num(effPrice) + '원' : '-'}</span>
           ${effDisplay.rate != null && effPrice ? `<span class="stop-pct-hint"> · ${methodLbl || esc(reason)} ${effDisplay.prefix}−${effDisplay.rate.toFixed(1)}%</span>` : ''}
           <span class="pill run" style="margin-left:6px;">${esc(reason)}</span></div>
-        <div class="stop-sub">${atrTxt}${dist != null ? ` · 손절선까지 ${dist.toFixed(2)}%` : ''}${ex.trailing_armed && peakDropAmt != null ? ` · 고점대비 ${fmtPeakDrop(peakDropAmt, peakDropPct)}` : ''}${ex.trailing_armed && trailPctSetting > 0 ? ` · 트레일 기준 −${trailPctSetting.toFixed(1)}%` : ''}${ex.liquidate_time ? ` · ${ex.liquidate_time} 장마감청산` : ''}${ex.levels_live ? ' · 실시간' : ''}</div>
+        <div class="stop-sub">${atrTxt}${dist != null ? ` · 손절선까지 ${dist.toFixed(2)}%` : ''}${ex.trailing_armed && peakDropAmt != null ? ` · 고점대비 ${fmtPeakDrop(peakDropAmt, peakDropPct)}` : ''}${ex.trailing_armed && trailPctSetting > 0 ? ` · 트레일 기준 −${trailPctSetting.toFixed(1)}%` : ''}${softConfirmStopHint(p)}${ex.liquidate_time ? ` · ${ex.liquidate_time} 장마감청산` : ''}${ex.levels_live ? ' · 실시간' : ''}</div>
         ${chips ? `<div class="pos-levels">${chips}</div>` : ''}
       </div>
       <div class="pos-card-actions">${renderPosSellBtn(p)}</div>
@@ -1235,15 +1363,18 @@ function renderPositionsTable(items) {
     const effRate = effectiveStopRate(ex, p);
     const reason = REASON_LABEL[ex.effective_stop_reason] || '';
     const buyAmt = positionBuyAmount(p);
+    const themeChips = posNameTagsHtml(p);
+    const soft = softConfirmMeta(p);
+    const softHint = soft ? ` · SOFT ${soft.text}` : '';
     return `<tr>
-      <td><span class="stock-name">${esc(p.stock_name)}</span><span class="stock-code">${esc(p.stock_code)}</span></td>
+      <td><span class="stock-name">${esc(p.stock_name)}</span>${themeChips}<span class="stock-code">${esc(p.stock_code)}</span></td>
       <td class="num">${num(positionBuyPrice(p))}</td><td class="num">${num(ex.current_price || p.current_price || p.buy_price)}</td>
       <td class="num">${num(p.buy_quantity)}</td>
       <td class="num">${won(buyAmt)}</td><td class="num">${weights[i].toFixed(1)}%</td>
       <td class="num ${signClass(pl)}">${pnlStr(pl)}</td><td class="num ${signClass(rate)}">${rateStr(rate)}</td>
       <td class="num down">${effRate != null ? `−${effRate.toFixed(1)}%` : '-'}</td>
       <td class="num down">${effPrice ? num(effPrice) : '-'}</td>
-      <td><span class="hint">${esc(reason)}${effMeta.method ? ` · ${effMeta.method}` : ''}${ex.atr ? ` · ATR ${num(ex.atr)}` : ''}</span></td>
+      <td><span class="hint">${esc(reason)}${effMeta.method ? ` · ${effMeta.method}` : ''}${ex.atr ? ` · ATR ${num(ex.atr)}` : ''}${softHint}</span></td>
       <td class="pos-action-cell">${renderPosSellBtn(p)}</td></tr>`;
   }).join('');
   return `<table class="tbl"><thead><tr>
@@ -1387,7 +1518,8 @@ async function loadAutoPositions(live = true) {
 
 async function loadSells() {
   try {
-    const d = await fetchJSON('/sell-orders/?status=ALL&limit=50');
+    // 체결만 — FAILED(800033 중복주문 등)는 손익에 넣지 않음 (주문 실패는 '주문' 카드)
+    const d = await fetchJSON('/sell-orders/?status=COMPLETED&limit=50');
     const items = (d.items || []).slice().sort((a, b) => (parseDbUtc(sellTradeTs(b)) || 0) - (parseDbUtc(sellTradeTs(a)) || 0));
     $('sellCount').textContent = `${items.length}건`;
     if (!items.length) { $('sellsBody').innerHTML = emptyRow('매도 내역이 없습니다.', '📒'); return; }
@@ -1403,17 +1535,52 @@ async function loadSells() {
   } catch (e) { $('sellsBody').innerHTML = emptyRow('매도 내역을 불러오지 못했습니다.', '⚠️'); }
 }
 function orderStatusLabel(status) {
-  const m = { ORDERED: '접수', FAILED: '실패', FILLED: '체결', COMPLETED: '체결', PENDING: '대기', CANCELLED: '취소' };
+  const m = {
+    WATCHING: '관측', ORDERED: '접수', FAILED: '실패', FILLED: '체결',
+    COMPLETED: '체결', PENDING: '대기', CANCELLED: '취소', EXPIRED: '만료', PROCESSING: '처리중',
+  };
   return m[status] || status || '-';
+}
+
+const STRATEGY_PROFILE_LABELS = {
+  legacy: '거래대금 눌림목',
+  sangtta: '상따',
+  breakout: '수급 돌파',
+  ymgp: '역매공파',
+  jongga: '종가배팅',
+  oversold_breakout: '수급 돌파',
+  sangtta_breakout: '상따',
+  yeokmaegongpa: '역매공파',
+  jongga_closing: '종가배팅',
+  legacy_momentum: '거래대금 눌림목',
+};
+
+function strategyProfileLabel(o) {
+  if (!o) return '—';
+  if (o.strategy_label) return o.strategy_label;
+  const key = (o.strategy_key || o.strategy || '').toString().trim().toLowerCase();
+  if (!key) return '—';
+  return STRATEGY_PROFILE_LABELS[key] || key;
+}
+
+function buyLegLabel(o) {
+  if (!o) return '';
+  if (o.fill_note) return String(o.fill_note);
+  if (o.entry_leg) return `${o.entry_leg}차 매수`;
+  const ft = String(o.fill_type || '').toUpperCase();
+  if (ft === 'ADD') return '추가매수';
+  if (ft === 'INITIAL') return '1차 매수';
+  return '';
 }
 
 function orderReasonBuy(o) {
   if (o.status === 'FAILED') return o.failure_reason || '사유 미기록';
   if (o.status === 'ORDERED') return '매수 주문 접수';
   if (o.status === 'FILLED' || o.status === 'COMPLETED') {
+    const leg = buyLegLabel(o);
     const q = o.fill_quantity != null ? `${num(o.fill_quantity)}주` : '';
     const p = o.fill_price != null ? `@ ${num(o.fill_price)}원` : '';
-    return ['매수 체결', q, p].filter(Boolean).join(' ');
+    return [leg || '매수 체결', q, p].filter(Boolean).join(' ');
   }
   return '-';
 }
@@ -1427,17 +1594,19 @@ function orderReasonSell(o) {
 async function loadOrders() {
   try {
     const [buyRes, sellRes] = await Promise.all([
-      fetchJSON('/trading/orders').catch(() => ({ orders: [] })),
+      fetchJSON('/trading/orders?limit=200').catch(() => ({ orders: [] })),
       fetchJSON('/sell-orders/?status=ALL&limit=100').catch(() => ({ items: [] })),
     ]);
     const items = [];
     for (const o of buyRes.orders || []) {
+      if (isWatchingExitFailure(o)) continue;
       items.push({
         side: '매수',
         name: o.stock_name,
         code: o.stock_code,
         status: o.status,
         reason: orderReasonBuy(o),
+        strategy: strategyProfileLabel(o),
         ts: o.filled_at || o.detected_at,
       });
     }
@@ -1449,6 +1618,7 @@ async function loadOrders() {
           code: o.stock_code,
           status: o.status,
           reason: orderReasonSell(o),
+          strategy: strategyProfileLabel(o),
           ts: o.completed_at || o.ordered_at || o.created_at,
         });
       }
@@ -1472,11 +1642,12 @@ async function loadOrders() {
       <td>${esc(when.day)}</td><td>${esc(when.time)}</td>
       <td class="${sideC(o.side)}" style="font-weight:700;">${esc(o.side)}</td>
       <td><span class="stock-name">${esc(o.name)}</span><span class="stock-code">${esc(o.code)}</span></td>
+      <td><span class="hint">${esc(o.strategy || '—')}</span></td>
       <td><span class="pill ${stateP(o.status)}">${esc(orderStatusLabel(o.status))}</span></td>
       <td style="white-space:normal;color:var(--muted);max-width:280px;">${esc(o.reason)}</td></tr>`;
     }).join('');
     $('ordersBody').innerHTML = `<table class="tbl"><thead><tr>
-      <th>일자</th><th>시각</th><th>구분</th><th>종목</th><th>상태</th><th>사유</th>
+      <th>일자</th><th>시각</th><th>구분</th><th>종목</th><th>전략</th><th>상태</th><th>사유</th>
     </tr></thead><tbody>${rows}</tbody></table>`;
   } catch (e) {
     $('ordersBody').innerHTML = emptyRow('주문 내역을 불러오지 못했습니다.', '⚠️');
@@ -1597,8 +1768,14 @@ async function loadActivity() {
       banner.className = 'activity-banner' + (allRunning ? '' : ' off');
       const lastScan = fmtScanTime(rt.last_scan_at);
       const lastSync = fmtScanTime(rt.last_sync_at);
+      const byStrat = rt.last_scan_by_strategy || {};
+      const stratBits = ['legacy', 'sangtta', 'breakout', 'ymgp']
+        .map((k) => byStrat[k])
+        .filter((x) => x && (x.targets > 0 || x.created > 0))
+        .map((x) => `${x.label || '?'} ${x.targets || 0}/${x.created || 0}`);
       const scanInfo = rt.last_scan_at
         ? `마지막 스캔 ${lastScan} · 대상 ${rt.last_scan_targets || 0} · 신호 ${rt.last_scan_created || 0}`
+          + (stratBits.length ? `<br><span class="hint">전략별 대상/신호: ${stratBits.map(esc).join(' · ')}</span>` : '')
         : (enabled ? '아직 스캔 없음 (1분 주기)' : '자동매매 OFF — 스캔 미실행');
       const syncInfo = stopActive
         ? (rt.last_sync_at
@@ -1655,10 +1832,19 @@ function logReasonForBuy(o) {
   }
   return '';
 }
+
+/** 관측(WATCHING) 만료 실패 — 체결 시도가 아니므로 체결 로그에서 제외 */
+function isWatchingExitFailure(o) {
+  if (!o || o.status !== 'FAILED') return false;
+  const r = String(o.failure_reason || '');
+  return r.startsWith('관측 종료');
+}
 function logStateLabel(status, action) {
   if (status === 'COMPLETED' || status === 'FILLED' || status === 'ORDERED') return '성공';
   if (status === 'FAILED') return '실패';
   if (status === 'PENDING') return '대기';
+  if (status === 'WATCHING') return '관측';
+  if (status === 'EXPIRED') return '만료';
   return status || '-';
 }
 
@@ -1679,20 +1865,42 @@ function isWithinLogDays(ts, days, assumeUtc) {
   return d >= cutoff;
 }
 
+function logPnlCell(l) {
+  if (l.action !== '매도' || l.pl == null || l.pl === '') return '—';
+  const pl = parseNum(l.pl);
+  const ratePart = (l.rate != null && l.rate !== '')
+    ? `<small>${rateStr(parseNum(l.rate))}</small>`
+    : '';
+  return `<div class="pos-pnl ${signClass(pl)}">${pnlStr(pl)}${ratePart}</div>`;
+}
+
 async function loadLog() {
   const days = logDaysFilter();
   try {
     const [sells, orders] = await Promise.all([
       fetchJSON('/sell-orders/?status=ALL&limit=100').catch(() => ({ items: [] })),
-      fetchJSON('/trading/orders').catch(() => ({ orders: [] })),
+      fetchJSON('/trading/orders?limit=200').catch(() => ({ orders: [] })),
     ]);
     let logs = [];
     for (const o of (sells.items || [])) {
-      logs.push({ ts: o.completed_at || o.ordered_at || o.created_at, action: '매도', name: o.stock_name, code: o.stock_code, qty: o.sell_quantity,
-        state: logStateLabel(o.status, '매도'), reason: logReasonForSell(o) });
+      const filled = o.status === 'COMPLETED' || o.status === 'FILLED';
+      logs.push({
+        ts: o.completed_at || o.ordered_at || o.created_at,
+        action: '매도',
+        name: o.stock_name,
+        code: o.stock_code,
+        qty: o.sell_quantity,
+        state: logStateLabel(o.status, '매도'),
+        reason: logReasonForSell(o),
+        strategy: strategyProfileLabel(o),
+        pl: filled ? o.profit_loss : null,
+        rate: filled ? o.profit_loss_rate : null,
+      });
     }
     for (const o of (orders.orders || [])) {
       if (o.status !== 'FILLED' && o.status !== 'COMPLETED' && o.status !== 'ORDERED' && o.status !== 'FAILED') continue;
+      // 관측 만료는 체결 시도가 아님 — 매수 게이트/주문 실패만 표시
+      if (isWatchingExitFailure(o)) continue;
       logs.push({
         ts: o.filled_at || o.detected_at,
         action: '매수',
@@ -1701,6 +1909,9 @@ async function loadLog() {
         qty: o.fill_quantity != null ? o.fill_quantity : '-',
         state: logStateLabel(o.status, '매수'),
         reason: logReasonForBuy(o),
+        strategy: strategyProfileLabel(o),
+        pl: null,
+        rate: null,
       });
     }
     logs = logs.filter(l => l.ts && isWithinLogDays(l.ts, days, true)).sort((a, b) => {
@@ -1718,9 +1929,11 @@ async function loadLog() {
     const rows = logs.map(l => `<tr>
       <td>${dtDb(l.ts, true)}</td><td class="${actC(l.action)}" style="font-weight:700;">${esc(l.action)}</td>
       <td><span class="stock-name">${esc(l.name)}</span><span class="stock-code">${esc(l.code)}</span></td>
+      <td><span class="hint">${esc(l.strategy || '—')}</span></td>
       <td class="num">${esc(l.qty)}</td><td><span class="pill ${stateP(l.state)}">${esc(l.state)}</span></td>
+      <td class="num">${logPnlCell(l)}</td>
       <td style="white-space:normal;color:var(--muted);">${esc(l.reason)}</td></tr>`).join('');
-    $('logBody').innerHTML = `<table class="tbl"><thead><tr><th>시각</th><th>동작</th><th>종목</th><th class="num">수량</th><th>상태</th><th>사유</th></tr></thead><tbody>${rows}</tbody></table>`;
+    $('logBody').innerHTML = `<table class="tbl"><thead><tr><th>시각</th><th>동작</th><th>종목</th><th>전략</th><th class="num">수량</th><th>상태</th><th class="num">손익</th><th>사유</th></tr></thead><tbody>${rows}</tbody></table>`;
   } catch (e) { $('logBody').innerHTML = emptyRow('로그를 불러오지 못했습니다.', '⚠️'); }
 }
 
@@ -1753,29 +1966,32 @@ function tagChipHtml(list, cls) {
 }
 async function loadScreener() {
   const market = $('scrMarket').value;
-  $('screenerBody').innerHTML = '<div class="skeleton">거래대금순·조건식 후보 조회 중...</div>';
+  $('screenerBody').innerHTML = '<div class="skeleton">거래대금순 후보 조회 중...</div>';
   $('screenerCount').textContent = '';
   try {
-    const d = await fetchJSON(`/screener/candidates?market=${market}`);
+    const d = await fetchJSON(`/screener/candidates?market=${market}`, { timeoutMs: 90000 });
     if (!d.success) { $('screenerBody').innerHTML = emptyRow(d.error || '조회 실패 (장중/토큰 확인)', '⚠️'); return; }
     const items = d.items || [];
     const rawN = d.raw_count != null ? d.raw_count : d.total;
     const excl = d.excluded_etf_count != null ? d.excluded_etf_count : 0;
-    const exclPer = d.excluded_per_count != null ? d.excluded_per_count : 0;
+    const exclNeg = d.excluded_negative_count != null ? d.excluded_negative_count : 0;
+    const exclOh = d.excluded_overheat_count != null ? d.excluded_overheat_count : 0;
+    const exclAmt = d.excluded_low_amount_count != null ? d.excluded_low_amount_count : 0;
     const exclParts = [`ETF·파생 ${excl}`];
-    if (exclPer > 0) exclParts.push(`PER ${exclPer}`);
-    const condPart = (d.condition_names && d.condition_names.length)
-      ? ` · 조건식 ${d.condition_names.join(', ')}`
-      : '';
+    if (exclNeg > 0) exclParts.push(`등락미달 ${exclNeg}`);
+    if (exclOh > 0) exclParts.push(`과열 ${exclOh}`);
+    if (exclAmt > 0) exclParts.push(`대금미달 ${exclAmt}`);
     const limitPart = d.candidate_limit ? ` · 상위 ${d.candidate_limit}` : '';
+    const amtFloor = d.min_trade_amount_eok != null ? d.min_trade_amount_eok : null;
+    const amtPart = amtFloor ? ` · 대금≥${amtFloor}억` : '';
     const tagged = items.filter(s => (s.themes && s.themes.length) || (s.keywords && s.keywords.length)).length;
-    $('screenerCount').textContent = `후보 ${d.selected_count} / 전체 ${items.length}${limitPart}${condPart} (${exclParts.join(', ')} 제외) · 테마표시 ${tagged}`;
+    $('screenerCount').textContent = `후보 ${d.selected_count} / 전체 ${items.length}${limitPart}${amtPart} (${exclParts.join(', ')} 제외) · 테마표시 ${tagged}`;
     if (!items.length) { $('screenerBody').innerHTML = emptyRow('데이터가 없습니다.', '🧭'); return; }
     const rows = items.map(s => {
       const rate = parseNum(s.change_rate);
       const amtEok = parseNum(s.trade_amount) / 100; // 백만원 → 억원
       return `<tr class="${s.included ? '' : 'screener-out'}">
-        <td style="text-align:center;">${s.included ? '✅' : '—'}</td>
+        <td style="text-align:center;">${s.included ? '<span class="scr-in" title="편입">✓</span>' : '<span class="scr-out-mark">—</span>'}</td>
         <td><span class="stock-name">${esc(s.stock_name)}</span><span class="stock-code">${esc(s.stock_code)}</span></td>
         <td><span class="pill run">${esc(sourceLabel(s))}</span></td>
         <td class="screener-tags">${tagChipHtml(s.theme_items && s.theme_items.length ? s.theme_items : s.themes, 'theme')}</td>
@@ -1791,35 +2007,69 @@ async function loadScreener() {
         <td class="num">${s.roe == null ? '-' : numFixed(s.roe, 2)}</td></tr>`;
     }).join('');
     $('screenerBody').innerHTML = `<table class="tbl"><thead><tr><th>편입</th><th>종목</th><th>출처</th><th>테마</th><th>키워드</th><th>구분</th><th class="num">현재가</th><th class="num">등락률</th><th class="num">거래량</th><th class="num">거래대금</th><th class="num">시총</th><th class="num">PER</th><th class="num">PBR</th><th class="num">ROE</th></tr></thead><tbody>${rows}</tbody></table>`;
-  } catch (e) { $('screenerBody').innerHTML = emptyRow('조회 중 오류 (서버/네트워크 확인)', '⚠️'); }
+  } catch (e) {
+    const timedOut = e && (e.name === 'AbortError' || /aborted/i.test(String(e.message || e)));
+    console.error('[screener]', e);
+    $('screenerBody').innerHTML = emptyRow(
+      timedOut
+        ? '조회 시간 초과 (키움 API 지연 후 재시도)'
+        : `조회 중 오류: ${esc(String((e && e.message) || e || '서버/네트워크'))}`,
+      '⚠️',
+    );
+  }
 }
 
-/* ===== 상따 후보 (Phase0 관측용) ===== */
+/* ===== 상따 후보 (ka10027 등락률상위) ===== */
 async function loadSangtta() {
   $('sangttaBody').innerHTML = '<div class="skeleton">상따 후보 조회 중...</div>';
   $('sangttaCount').textContent = '';
   try {
-    const d = await fetchJSON(`/sangtta/candidates`);
+    const d = await fetchJSON(`/sangtta/candidates`, { timeoutMs: 90000 });
     if (!d.success) { $('sangttaBody').innerHTML = emptyRow(d.error || '조회 실패', '⚠️'); return; }
     const items = d.items || [];
-    $('sangttaCount').textContent = `후보 ${items.length}`;
-    if (!items.length) { $('sangttaBody').innerHTML = emptyRow('데이터가 없습니다.', '🔎'); return; }
+    const excl = d.excluded_etf_count != null ? d.excluded_etf_count : 0;
+    const minChg = d.min_change_rate != null ? d.min_change_rate : 13;
+    $('sangttaCount').textContent = `후보 ${items.length}${d.candidate_limit ? ` · 대금상위 ${d.candidate_limit}` : ''}${d.pool_count != null ? ` (풀 ${d.pool_count})` : ''} · 등락≥${minChg}% · ETF제외 ${excl}`;
+    if (!items.length) { $('sangttaBody').innerHTML = emptyRow('데이터가 없습니다. (장중·필터 확인)', '🔎'); return; }
     const rows = items.map(s => {
       const rate = parseNum(s.change_rate);
       return `<tr>
         <td><span class="stock-name">${esc(s.stock_name)}</span><span class="stock-code">${esc(s.stock_code)}</span></td>
-        <td><span class="pill run">${esc(s.condition_name || '')}</span></td>
         <td class="num">${num(s.current_price)}</td>
         <td class="num ${signClass(rate)}">${rateStr(rate)}</td>
         <td class="num">${s.volume ? num(s.volume) : '—'}</td>
         <td class="screener-tags">${tagChipHtml(s.theme_items && s.theme_items.length ? s.theme_items : s.themes, 'theme')}</td>
       </tr>`;
     }).join('');
-    $('sangttaBody').innerHTML = `<table class="tbl"><thead><tr><th>종목</th><th>조건식</th><th class="num">현재가</th><th class="num">등락률</th><th class="num">거래량</th><th>테마</th></tr></thead><tbody>${rows}</tbody></table>`;
-  } catch (e) { $('sangttaBody').innerHTML = emptyRow('조회 중 오류 (서버/네트워크 확인)', '⚠️'); }
+    $('sangttaBody').innerHTML = `<table class="tbl"><thead><tr><th>종목</th><th class="num">현재가</th><th class="num">등락률</th><th class="num">거래량</th><th>테마</th></tr></thead><tbody>${rows}</tbody></table>`;
+  } catch (e) {
+    const timedOut = e && (e.name === 'AbortError' || /aborted/i.test(String(e.message || e)));
+    $('sangttaBody').innerHTML = emptyRow(
+      timedOut ? '조회 시간 초과 (API 지연 후 재시도)' : '조회 중 오류 (서버/네트워크 확인)',
+      '⚠️',
+    );
+  }
 }
 
-/* ===== 과매도 돌파 후보 (Phase0~3 관측용) ===== */
+/* ===== 수급 돌파 후보 (Phase0~3 관측용) ===== */
+function renderBreakoutGateChecks(checks) {
+  const list = Array.isArray(checks) ? checks : [];
+  if (!list.length) return '';
+  const chips = list.map((c) => {
+    const enabled = c.enabled !== false;
+    const ok = !!c.ok;
+    let cls = 'gate-chip';
+    if (!enabled) cls += ' off';
+    else cls += ok ? ' ok' : ' bad';
+    const mark = !enabled ? '–' : (ok ? '✓' : '✗');
+    const title = [c.key, c.detail].filter(Boolean).join(' · ');
+    return `<span class="${cls}" title="${esc(title)}"><b>${mark}</b> ${esc(c.key)}${
+      c.detail ? `<i>${esc(c.detail)}</i>` : ''
+    }</span>`;
+  }).join('');
+  return `<div class="gate-checks">${chips}</div>`;
+}
+
 async function loadBreakout() {
   $('breakoutBody').innerHTML = '<div class="skeleton">돌파 후보와 레벨 계산 중...</div>';
   $('breakoutCount').textContent = '';
@@ -1843,26 +2093,31 @@ async function loadBreakout() {
     }
     const rows = items.map((s) => {
       const proximity = s.proximity_pct == null ? '—' : `${parseNum(s.proximity_pct) >= 0 ? '+' : ''}${parseNum(s.proximity_pct).toFixed(2)}%`;
-      const gateCls = s.gate_ok ? 'up' : '';
-      const softN = s.entry_soft_polls != null ? s.entry_soft_polls : '—';
-      const softSt = s.entry_soft_streak != null ? s.entry_soft_streak : '—';
-      const hardBit = s.entry_hard_ok ? 'HARD✓' : 'HARD·';
-      const softBit = `SOFT ${softSt}/${softN}`;
-      const confirmHint = [
-        s.confirm_close ? `종가 ${num(s.confirm_close)}` : null,
-        hardBit,
-        softBit,
-      ].filter(Boolean).join(' · ');
+      const gateCls = s.gate_ok ? 'up' : 'down';
+      const checksHtml = renderBreakoutGateChecks(s.gate_checks);
+      const failKeys = (s.gate_checks || [])
+        .filter((c) => c && c.enabled !== false && !c.ok && c.key !== '진입확인')
+        .map((c) => c.key);
+      const summary = s.gate_ok
+        ? (s.entry_confirm_mode ? `통과 · ${s.entry_confirm_mode}` : '통과')
+        : (failKeys.length ? `미충족: ${failKeys.join(', ')}` : (s.gate_reason || '대기'));
+      const reasonHint = (!s.gate_ok && s.gate_reason && s.gate_reason !== summary)
+        ? `<div class="hint">${esc(s.gate_reason)}</div>`
+        : '';
       return `<tr>
         <td><b>${esc(s.stock_name || s.stock_code)}</b><div class="hint">${esc(s.stock_code)}</div></td>
         <td>${esc(s.condition_name || '—')}</td>
         <td>${esc(s.level_kind || '—')}<div class="hint">${s.level_price ? `${num(s.level_price)}원` : '—'}</div></td>
         <td class="num ${gateCls}">${proximity}</td>
         <td class="num">${s.volume_ratio == null ? '—' : `${parseNum(s.volume_ratio).toFixed(2)}배`}</td>
-        <td class="${gateCls}">${s.gate_ok ? '통과' : '대기'}<div class="hint">${esc(s.gate_reason || '')}</div><div class="hint">${esc(confirmHint)}</div></td>
+        <td class="${gateCls}">
+          <div class="gate-status">${esc(summary)}</div>
+          ${reasonHint}
+          ${checksHtml}
+        </td>
       </tr>`;
     }).join('');
-    $('breakoutBody').innerHTML = `<table class="tbl"><thead><tr><th>종목</th><th>조건식</th><th>돌파 레벨</th><th class="num">근접도</th><th class="num">거래량</th><th>게이트·확인</th></tr></thead><tbody>${rows}</tbody></table>`;
+    $('breakoutBody').innerHTML = `<table class="tbl"><thead><tr><th>종목</th><th>조건식</th><th>돌파 레벨</th><th class="num">근접도</th><th class="num">거래량</th><th>조건 체크</th></tr></thead><tbody>${rows}</tbody></table>`;
   } catch (e) {
     const msg = String(e && e.message || '');
     const hint = msg.includes('404')
@@ -1872,6 +2127,329 @@ async function loadBreakout() {
         : `조회 실패${msg ? ` (${msg})` : ''}`);
     $('breakoutBody').innerHTML = emptyRow(hint, '⚠️');
   }
+}
+
+/* ===== 역매공파 후보 (일봉 단계 관측용) ===== */
+const YMGP_STAGE_LABEL = {
+  NONE: '탈락',
+  FILTERED: '역배열',
+  READY: '바닥/지지',
+  ARMED: '매집·공구리',
+  ENTERED_1: '1차 진입',
+  ENTERED_2: '2차 진입',
+  MANAGING: '익절 관리',
+  STOPPED: '손절 락',
+  DONE: '종료',
+};
+const YMGP_STAGE_CLS = {
+  NONE: 'off',
+  FILTERED: 'off',
+  READY: 'run',
+  ARMED: 'on',
+  ENTERED_1: 'on',
+  ENTERED_2: 'on',
+  MANAGING: 'on',
+  STOPPED: 'off',
+  DONE: 'off',
+};
+function renderYmgpChecks(checks) {
+  const list = Array.isArray(checks) ? checks : [];
+  if (!list.length) return '';
+  const chips = list.map((c) => {
+    const passed = !!c.passed;
+    const cls = passed ? 'gate-chip ok' : 'gate-chip bad';
+    const mark = passed ? '✓' : '✗';
+    const title = [c.label, c.actual].filter(Boolean).join(' · ');
+    return `<span class="${cls}" title="${esc(title)}"><b>${mark}</b> ${esc(c.label || c.key)}${
+      c.actual ? `<i>${esc(c.actual)}</i>` : ''
+    }</span>`;
+  }).join('');
+  return `<div class="gate-checks">${chips}</div>`;
+}
+async function loadYmgp() {
+  $('ymgpBody').innerHTML = '<div class="skeleton">역매공파 후보와 일봉 단계 계산 중...</div>';
+  $('ymgpCount').textContent = '';
+  try {
+    const d = await fetchJSON('/ymgp/candidates', { timeoutMs: 120000 });
+    if (!d.success) {
+      $('ymgpBody').innerHTML = emptyRow(d.error || d.detail || '조회 실패', '⚠️');
+      return;
+    }
+    const items = d.items || [];
+    const errHint = (d.errors && d.errors.length)
+      ? ` · 조건식 오류: ${d.errors.join(', ')}`
+      : '';
+    $('ymgpCount').textContent = `후보 ${items.length}${errHint}`;
+    if (!items.length) {
+      const emptyMsg = (d.errors && d.errors.length)
+        ? `조건식 조회 실패 (${d.errors.join(', ')})`
+        : (d.message || '조건식 편입 종목이 없습니다.');
+      $('ymgpBody').innerHTML = emptyRow(emptyMsg, d.errors && d.errors.length ? '⚠️' : '🔎');
+      return;
+    }
+    const rows = items.map((s) => {
+      const stage = s.ymgp_stage || 'NONE';
+      const stageCls = YMGP_STAGE_CLS[stage] || 'off';
+      const stageLabel = YMGP_STAGE_LABEL[stage] || stage;
+      const ref = s.ymgp_ref || {};
+      const refHtml = ref.high
+        ? `${num(ref.high)}원<div class="hint">${esc(ref.date || '')}${ref.vol_mult ? ` · x${ref.vol_mult}` : ''}</div>`
+        : '—';
+      const armed = stage === 'ARMED';
+      const gateCls = s.gate_ok ? 'up' : 'down';
+      const gateHtml = armed
+        ? `<div class="gate-status">${s.gate_ok ? '통과' : (esc(s.gate_reason) || '대기')}</div>`
+        : `<span class="hint">${esc(s.ymgp_reason || stageLabel)}</span>`;
+      const checksHtml = renderYmgpChecks(s.ymgp_checks);
+      return `<tr>
+        <td><b>${esc(s.stock_name || s.stock_code)}</b><div class="hint">${esc(s.stock_code)}</div></td>
+        <td>${esc(s.condition_name || '—')}</td>
+        <td><span class="pill ${stageCls}">${esc(stageLabel)}</span>${s.reentry_locked ? ' <span class="pill off">락</span>' : ''}</td>
+        <td>${refHtml}</td>
+        <td class="${armed ? gateCls : ''}">${gateHtml}</td>
+        <td>${checksHtml}</td>
+      </tr>`;
+    }).join('');
+    $('ymgpBody').innerHTML = `<table class="tbl"><thead><tr><th>종목</th><th>조건식</th><th>단계</th><th>기준봉</th><th>게이트</th><th>체크요약</th></tr></thead><tbody>${rows}</tbody></table>`;
+  } catch (e) {
+    const msg = String(e && e.message || '');
+    const hint = msg.includes('404')
+      ? 'API 없음 — 서버를 재시작해 주세요'
+      : (msg.includes('AbortError') || msg.includes('aborted')
+        ? '조회 시간 초과 — 잠시 후 다시 시도'
+        : `조회 실패${msg ? ` (${msg})` : ''}`);
+    $('ymgpBody').innerHTML = emptyRow(hint, '⚠️');
+  }
+}
+
+/* ===== 종가배팅 후보 ===== */
+async function pickJongga(code, name) {
+  if (!code) return;
+  const ok = window.confirm(`${name || code}(${code}) 종가배팅 매수할까요?`);
+  if (!ok) return;
+  try {
+    const d = await postJSON('/jongga/pick', { stock_code: code });
+    if (!d.success) {
+      window.alert(d.detail || d.error || d.message || '선택 실패');
+      return;
+    }
+    window.alert(d.message || '매수 신호 생성됨');
+    loadJongga(false);
+  } catch (e) {
+    window.alert(String(e && e.message || e) || '선택 실패');
+  }
+}
+
+async function loadJongga(rebuild = true) {
+  if (!$('jonggaBody')) return;
+  $('jonggaBody').innerHTML = '<div class="skeleton">종가배팅 후보(거래대금·테마) 조회 중...</div>';
+  if ($('jonggaCount')) $('jonggaCount').textContent = '';
+  try {
+    const q = rebuild ? '?rebuild=1' : '';
+    const d = await fetchJSON(`/jongga/candidates${q}`, { timeoutMs: 120000 });
+    if (!d.success) {
+      $('jonggaBody').innerHTML = emptyRow(d.error || d.detail || '조회 실패', '⚠️');
+      return;
+    }
+    const items = d.items || [];
+    const theme = d.strongest_theme || '—';
+    const win = d.pick_window || {};
+    const picked = d.picked_code || '';
+    const status = d.status || '';
+    const w = d.score_weights || { pullback: 1, amount: 1, change: 1 };
+    window._jonggaScoreWeights = w;
+    if ($('jonggaCount')) {
+      $('jonggaCount').textContent =
+        `최강테마 ${theme} · 후보 ${items.length}`
+        + (win.start ? ` · ${win.start}~${win.end}` : '')
+        + (picked ? ` · 선택 ${picked}` : '')
+        + (status ? ` · ${status}` : '');
+    }
+    if (!items.length) {
+      $('jonggaBody').innerHTML = emptyRow('최강 테마 후보가 없습니다. (테마맵·거래대금순 확인)', '🔎');
+      return;
+    }
+    const canPick = !picked && status !== 'auto' && status !== 'done';
+    const wLine = [
+      w.pullback != null ? `눌림×${Number(w.pullback)}` : null,
+      w.amount != null ? `대금×${Number(w.amount)}` : null,
+      w.change != null ? `등락×${Number(w.change)}` : null,
+    ].filter(Boolean).join(' + ');
+    const scoreHint = d.score_hint
+      || '눌림 = 15분봉 고가 대비 하락률. 스코어 = min-max(눌림·대금·등락) 가중합. ★=자동매수 1순위.';
+    window._jonggaItems = items.map((s) => ({ ...s }));
+    window._jonggaRenderOpts = {
+      canPick, picked, autoPick: d.auto_pick, scoreHint, wLine,
+    };
+    renderJonggaTable(window._jonggaItems, window._jonggaRenderOpts);
+    await loadJonggaSparklines(window._jonggaItems);
+  } catch (e) {
+    const msg = String(e && e.message || '');
+    const hint = msg.includes('404')
+      ? 'API 없음 — 서버를 재시작해 주세요'
+      : (msg.includes('AbortError') || msg.includes('aborted')
+        ? '조회 시간 초과 — 잠시 후 다시 시도'
+        : `조회 실패${msg ? ` (${msg})` : ''}`);
+    $('jonggaBody').innerHTML = emptyRow(hint, '⚠️');
+  }
+}
+
+function _jonggaMinMax(vals) {
+  if (!vals.length) return [];
+  const lo = Math.min(...vals);
+  const hi = Math.max(...vals);
+  if (hi <= lo) return vals.map(() => 0.5);
+  return vals.map((v) => (v - lo) / (hi - lo));
+}
+
+function rescoreJonggaItems(items, w) {
+  const wp = Number(w?.pullback ?? 1) || 1;
+  const wa = Number(w?.amount ?? 1) || 1;
+  const wc = Number(w?.change ?? 1) || 1;
+  const wsum = wp + wa + wc || 3;
+  const pulls = items.map((s) => Number(s.pullback_pct) || 0);
+  const amts = items.map((s) => Number(s.trade_amount) || 0);
+  const chgs = items.map((s) => Number(s.change_rate) || 0);
+  const np = _jonggaMinMax(pulls);
+  const na = _jonggaMinMax(amts);
+  const nc = _jonggaMinMax(chgs);
+  items.forEach((s, i) => {
+    s.score = Math.round(((wp * np[i] + wa * na[i] + wc * nc[i]) / wsum) * 1e6) / 1e6;
+    s.score_parts = {
+      pullback_n: Math.round(np[i] * 1e4) / 1e4,
+      amount_n: Math.round(na[i] * 1e4) / 1e4,
+      change_n: Math.round(nc[i] * 1e4) / 1e4,
+    };
+  });
+  items.sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0)
+    || (Number(b.trade_amount) || 0) - (Number(a.trade_amount) || 0));
+  return items;
+}
+
+function renderJonggaTable(items, opts) {
+  const { canPick, picked, autoPick, scoreHint, wLine } = opts || {};
+  const autoCode = autoPick && autoPick.stock_code;
+  const rows = items.map((s, idx) => {
+    const code = s.stock_code || '';
+    const isAuto = autoCode && autoCode === code;
+    const isPicked = picked && picked === code;
+    const btn = canPick
+      ? `<button type="button" class="btn primary sm jongga-pick" data-code="${esc(code)}" data-name="${esc(s.stock_name || code)}">선택</button>`
+      : (isPicked ? '<span class="pill on">선택됨</span>' : '—');
+    const parts = s.score_parts || {};
+    const scoreDetail = [
+      parts.pullback_n != null ? `눌 ${Number(parts.pullback_n).toFixed(2)}` : null,
+      parts.amount_n != null ? `대 ${Number(parts.amount_n).toFixed(2)}` : null,
+      parts.change_n != null ? `등 ${Number(parts.change_n).toFixed(2)}` : null,
+    ].filter(Boolean).join(' · ');
+    const hiTitle = s.day_high
+      ? `차트고가 ${num(s.day_high)}${s.chart_last ? ` · 종가 ${num(s.chart_last)}` : ''}`
+      : '15분봉 고가 대비 하락률';
+    return `<tr class="${isAuto ? 'row-hl' : ''}" data-code="${esc(code)}">
+      <td>${idx + 1}${isAuto ? ' ★' : ''}</td>
+      <td><b>${esc(s.stock_name || code)}</b><div class="hint">${esc(code)}</div></td>
+      <td class="jongga-spark-cell" data-code="${esc(code)}"><span class="pos-spark empty">…</span></td>
+      <td>${esc(s.theme || '미분류')}</td>
+      <td class="num">${fmtEokOrJo(s.market_cap)}</td>
+      <td>${s.trade_amount != null ? num(Math.round(Number(s.trade_amount))) : '—'}</td>
+      <td>${s.change_rate != null ? `${Number(s.change_rate).toFixed(2)}%` : '—'}</td>
+      <td class="jongga-pb-cell" data-code="${esc(code)}" title="${esc(hiTitle)}">${s.pullback_pct != null ? `${Number(s.pullback_pct).toFixed(2)}%` : '—'}</td>
+      <td class="jongga-score-cell" data-code="${esc(code)}" title="${esc(scoreDetail || scoreHint || '')}">${s.score != null ? Number(s.score).toFixed(3) : '—'}
+        ${scoreDetail ? `<div class="hint jongga-score-parts">${esc(scoreDetail)}</div>` : ''}</td>
+      <td>${btn}</td>
+    </tr>`;
+  }).join('');
+  $('jonggaBody').innerHTML =
+    `<div class="hint jongga-score-hint" style="margin:0 0 8px;">${esc(scoreHint || '')}${wLine ? ` · 가중 ${wLine}` : ''}</div>`
+    + `<table class="tbl"><thead><tr>
+      <th>#</th><th>종목</th><th title="당일 15분봉">차트</th><th>테마</th><th class="num" title="기본적분석 마트(억원)">시총</th><th>대금</th><th>등락</th><th title="15분봉 고가 대비 하락률">눌림</th><th title="${esc(scoreHint || '')}">스코어</th><th>매수</th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+  $('jonggaBody').querySelectorAll('.jongga-pick').forEach((btn) => {
+    btn.onclick = () => pickJongga(btn.dataset.code, btn.dataset.name);
+  });
+}
+
+function pullbackFromSparkline(sp) {
+  if (!sp) return null;
+  const closes = (sp.closes || []).map((v) => Number(v)).filter((v) => v > 0);
+  if (closes.length < 2) return null;
+  let hi = Number(sp.day_high) || 0;
+  const maxClose = Math.max(...closes);
+  if (!hi || hi < maxClose) hi = maxClose;
+  const last = Number(sp.last) > 0 ? Number(sp.last) : closes[closes.length - 1];
+  if (hi <= 0 || last <= 0) return null;
+  return Math.max(0, ((hi - last) / hi) * 100);
+}
+
+async function loadJonggaSparklines(items) {
+  const list = items || window._jonggaItems || [];
+  const codes = [...new Set(list.map((s) => normStockCode(s.stock_code)).filter(isSparklineStockCode))];
+  if (!codes.length || !$('jonggaBody')) return;
+
+  let map = {};
+  list.forEach((s) => {
+    const code = normStockCode(s.stock_code);
+    if (s.sparkline && s.sparkline.closes) map[code] = s.sparkline;
+  });
+  const missing = codes.filter((c) => !map[c]);
+  if (missing.length) {
+    try {
+      const d = await fetchJSON(`/positions/intraday-sparklines?codes=${missing.join(',')}`, { timeoutMs: 60000 });
+      map = { ...map, ...(d.sparklines || {}) };
+    } catch (_) { /* ignore */ }
+  }
+
+  let changed = false;
+  list.forEach((s) => {
+    const code = normStockCode(s.stock_code);
+    const sp = map[code];
+    if (!sp) return;
+    s.sparkline = sp;
+    const closes = (sp.closes || []).map((v) => Number(v)).filter((v) => v > 0);
+    const maxClose = closes.length ? Math.max(...closes) : 0;
+    const hi = Math.max(Number(sp.day_high) || 0, maxClose);
+    const last = Number(sp.last) > 0 ? Number(sp.last) : (closes.length ? closes[closes.length - 1] : 0);
+    if (hi > 0) s.day_high = hi;
+    if (last > 0) s.chart_last = last;
+    const pb = pullbackFromSparkline(sp);
+    if (pb == null || Number.isNaN(pb)) return;
+    // 백엔드가 0/미산출이어도 차트 고가 기준으로 항상 덮어씀
+    if (Number(s.pullback_pct) !== pb) {
+      s.pullback_pct = Math.round(pb * 10000) / 10000;
+      changed = true;
+    }
+  });
+
+  if (changed) {
+    rescoreJonggaItems(list, window._jonggaScoreWeights);
+    const opts = {
+      ...(window._jonggaRenderOpts || {}),
+      autoPick: list[0],
+    };
+    window._jonggaRenderOpts = opts;
+    renderJonggaTable(list, opts);
+  }
+
+  $('jonggaBody').querySelectorAll('.jongga-spark-cell').forEach((cell) => {
+    const code = normStockCode(cell.dataset.code);
+    cell.innerHTML = renderSparklineSvg(map[code], {}, 120, 36);
+  });
+  $('jonggaBody').querySelectorAll('.jongga-pb-cell').forEach((cell) => {
+    const code = normStockCode(cell.dataset.code);
+    const s = list.find((x) => normStockCode(x.stock_code) === code);
+    const sp = map[code];
+    const pb = s?.pullback_pct != null ? Number(s.pullback_pct) : pullbackFromSparkline(sp);
+    if (pb == null || Number.isNaN(pb)) {
+      cell.textContent = '—';
+      return;
+    }
+    const hi = s?.day_high ?? sp?.day_high;
+    const last = s?.chart_last ?? sp?.last;
+    cell.textContent = `${pb.toFixed(2)}%`;
+    cell.title = hi
+      ? `차트고가 ${num(hi)}${last != null ? ` · 종가 ${num(last)}` : ''} (15분봉)`
+      : '15분봉 고가 대비';
+  });
 }
 
 /* ===== 자동매매 설정 폼 ===== */
@@ -1889,6 +2467,9 @@ function fieldSizingPyramiding(s) {
   const rawMax = parseNum(_v(s, 'initial_max_amount') || 0);
   const weakAmt = (rawMin > 0 || rawMax > 0) ? Math.max(rawMin, rawMax) : 5000000;
   const strongAmt = (rawMin > 0 || rawMax > 0) ? Math.min(rawMin, rawMax) : 2000000;
+  const weakPct = _v(s, 'initial_max_deposit_pct') !== '' ? _v(s, 'initial_max_deposit_pct') : '';
+  const strongPct = _v(s, 'initial_min_deposit_pct') !== '' ? _v(s, 'initial_min_deposit_pct') : '';
+  const addPct = _v(s, 'add_buy_deposit_pct') !== '' ? _v(s, 'add_buy_deposit_pct') : '';
   const spread = weakAmt - strongAmt;
   const spreadHint = spread < 500000
     ? '<div class="fhint warn" style="margin-top:8px;">금액 차이가 작으면 등락률별 매수금이 거의 같아집니다. 약한 신호 금액을 더 크게 두는 것을 권장합니다.</div>'
@@ -1896,25 +2477,32 @@ function fieldSizingPyramiding(s) {
   return `<div class="box-soft" id="sizingPyramidPanel">
     <div class="box-title">첫 매수 — 역피라미딩 (등락률↑ 금액↓)</div>
     <div class="desc" style="margin-bottom:10px;">아래 <b>최소 등락</b> 미만이면 매수하지 않습니다. 등락이 커질수록 금액을 줄여 변동성·손절 리스크를 낮춥니다.</div>
-    <div class="desc" style="margin-bottom:10px;">적용 중: 약한 신호 <b>${num(weakAmt)}원</b> · 강한 신호 <b>${num(strongAmt)}원</b></div>
+    <div class="desc buy-unit-won" style="margin-bottom:10px;">적용 중: 약한 신호 <b>${num(weakAmt)}원</b> · 강한 신호 <b>${num(strongAmt)}원</b></div>
+    <div class="desc buy-unit-pct" style="margin-bottom:10px;">예수금 비중으로 환산됩니다. (예: 3천만 × 10% = 300만)</div>
     <div class="sizing-ladder">
       <div class="sizing-row">
         <span class="sr-label">약한 신호</span>
         <span class="sr-eq">등락</span>
         <input type="number" class="w-rate" id="set_signal_min_threshold" value="${esc(smin)}" step="any" placeholder="2">
         <span class="sr-unit">% 이상 →</span>
-        <input type="number" class="w-amt" id="set_initial_max_amount" value="${esc(weakAmt)}" step="any" placeholder="5000000">
-        <span class="sr-unit" style="grid-column:auto;">원 (큰 금액)</span>
+        <input type="number" class="w-amt buy-unit-won" id="set_initial_max_amount" value="${esc(weakAmt)}" step="any" placeholder="5000000">
+        <span class="sr-unit buy-unit-won" style="grid-column:auto;">원 (큰 금액)</span>
+        <input type="number" class="w-amt buy-unit-pct" id="set_initial_max_deposit_pct" value="${esc(weakPct)}" step="0.1" min="0" max="100" placeholder="10" data-pct-preview="pyramid_weak">
+        <span class="sr-unit buy-unit-pct" style="grid-column:auto;">% (큰 비중)</span>
       </div>
+      <div class="hint buy-unit-pct" data-pct-preview-label="pyramid_weak" style="margin:4px 0 8px;"></div>
       <div class="sizing-between">↓ 등락률이 올라갈수록 매수 금액 감소 (자동 비례) ↓</div>
       <div class="sizing-row strong">
         <span class="sr-label">강한 신호</span>
         <span class="sr-eq">등락</span>
         <input type="number" class="w-rate" id="set_signal_max_threshold" value="${esc(smax)}" step="any" placeholder="10">
         <span class="sr-unit">% 이상 →</span>
-        <input type="number" class="w-amt" id="set_initial_min_amount" value="${esc(strongAmt)}" step="any" placeholder="2000000">
-        <span class="sr-unit" style="grid-column:auto;">원 (작은 금액)</span>
+        <input type="number" class="w-amt buy-unit-won" id="set_initial_min_amount" value="${esc(strongAmt)}" step="any" placeholder="2000000">
+        <span class="sr-unit buy-unit-won" style="grid-column:auto;">원 (작은 금액)</span>
+        <input type="number" class="w-amt buy-unit-pct" id="set_initial_min_deposit_pct" value="${esc(strongPct)}" step="0.1" min="0" max="100" placeholder="5" data-pct-preview="pyramid_strong">
+        <span class="sr-unit buy-unit-pct" style="grid-column:auto;">% (작은 비중)</span>
       </div>
+      <div class="hint buy-unit-pct" data-pct-preview-label="pyramid_strong" style="margin:4px 0 8px;"></div>
     </div>${spreadHint}
     <div class="sizing-add-section">
       <div class="box-title">추가매수 — 이미 보유 중일 때</div>
@@ -1923,15 +2511,19 @@ function fieldSizingPyramiding(s) {
         <span class="sr-label">수익률</span>
         <input type="number" class="w-rate" id="set_add_buy_trigger" value="${esc(_v(s, 'add_buy_trigger') || '0.7')}" step="any">
         <span class="sr-unit">% 이상 →</span>
-        <input type="number" class="w-amt" id="set_add_buy_amount" value="${esc(_v(s, 'add_buy_amount') || '1000000')}" step="any">
-        <span class="sr-unit">원 추가</span>
+        <input type="number" class="w-amt buy-unit-won" id="set_add_buy_amount" value="${esc(_v(s, 'add_buy_amount') || '1000000')}" step="any">
+        <span class="sr-unit buy-unit-won">원 추가</span>
+        <input type="number" class="w-amt buy-unit-pct" id="set_add_buy_deposit_pct" value="${esc(addPct)}" step="0.1" min="0" max="100" placeholder="3" data-pct-preview="add_buy">
+        <span class="sr-unit buy-unit-pct">% 추가</span>
       </div>
+      <div class="hint buy-unit-pct" data-pct-preview-label="add_buy" style="margin-top:4px;"></div>
     </div>
   </div>`;
 }
 
 function fieldSizingFixed(s) {
   const amt = _v(s, 'initial_max_amount') || _v(s, 'max_invest_amount') || '5000000';
+  const pct = _v(s, 'initial_max_deposit_pct') !== '' ? _v(s, 'initial_max_deposit_pct') : '';
   const smin = _v(s, 'signal_min_threshold') !== '' ? _v(s, 'signal_min_threshold') : '2';
   return `<div class="box-soft sizing-panel-hidden" id="sizingFixedPanel">
     <div class="box-title">고정 금액 매수</div>
@@ -1941,16 +2533,19 @@ function fieldSizingFixed(s) {
       <span class="sr-eq">등락</span>
       <input type="number" class="w-rate" id="set_signal_min_threshold_fixed" value="${esc(smin)}" step="any">
       <span class="sr-unit">% 이상 →</span>
-      <input type="number" class="w-amt" id="set_initial_max_amount_fixed" value="${esc(amt)}" step="any">
-      <span class="sr-unit">원</span>
+      <input type="number" class="w-amt buy-unit-won" id="set_initial_max_amount_fixed" value="${esc(amt)}" step="any">
+      <span class="sr-unit buy-unit-won">원</span>
+      <input type="number" class="w-amt buy-unit-pct" id="set_initial_max_deposit_pct_fixed" value="${esc(pct)}" step="0.1" min="0" max="100" placeholder="10" data-pct-preview="fixed">
+      <span class="sr-unit buy-unit-pct">%</span>
     </div>
+    <div class="hint buy-unit-pct" data-pct-preview-label="fixed"></div>
   </div>`;
 }
 
 function fieldExitRules(s) {
   const hasAtr = _v(s, 'atr_mult_stop') !== '' || _v(s, 'atr_mult_trail') !== '';
   return `<div class="exit-stack">
-    <div class="exit-note">📌 <b>레거시(거래대금·스크리너) 포지션 전용</b> 청산입니다. 상따·과매도 돌파는 각 전략 카드의 매도 규칙을 씁니다. ATR을 입력하면 아래 % 방식을 대체합니다.</div>
+    <div class="exit-note">📌 <b>레거시(거래대금·스크리너) 포지션 전용</b> 청산입니다. 상따·수급 돌파는 각 전략 카드의 매도 규칙을 씁니다. ATR을 입력하면 아래 % 방식을 대체합니다.</div>
 
     <div class="exit-card">
       <h5><span class="exit-num">1</span> 손절 — 손실 한도</h5>
@@ -2053,20 +2648,47 @@ function renderSettingsForm(s) {
   let h = '';
 
   const sangBuy = _v(s, 'sangtta_buy_amount') !== '' ? _v(s, 'sangtta_buy_amount') : '500000';
+  const sangBuyPct = _v(s, 'sangtta_buy_deposit_pct') !== '' ? _v(s, 'sangtta_buy_deposit_pct') : '';
   const sangSlots = _v(s, 'sangtta_max_slots') !== '' ? _v(s, 'sangtta_max_slots') : '2';
   const sangStart = _v(s, 'sangtta_trade_start_time') || '09:05';
   const sangEnd = _v(s, 'sangtta_trade_end_time') || '11:00';
   const sangChgMin = _v(s, 'sangtta_change_min') !== '' ? _v(s, 'sangtta_change_min') : '12';
   const sangChgMax = _v(s, 'sangtta_change_max') !== '' ? _v(s, 'sangtta_change_max') : '15';
   const breakoutBuy = _v(s, 'breakout_buy_amount') !== '' ? _v(s, 'breakout_buy_amount') : '1000000';
+  const breakoutBuyPct = _v(s, 'breakout_buy_deposit_pct') !== '' ? _v(s, 'breakout_buy_deposit_pct') : '';
   const breakoutSlots = _v(s, 'breakout_max_slots') !== '' ? _v(s, 'breakout_max_slots') : '1';
   const breakoutStart = _v(s, 'breakout_trade_start_time') || '11:00';
+  if (s.buy_amount_unit == null || s.buy_amount_unit === '') s.buy_amount_unit = 'WON';
   if (s.breakout_entry_hard == null) s.breakout_entry_hard = true;
   if (s.breakout_entry_soft == null) s.breakout_entry_soft = true;
-  if (s.breakout_entry_soft_polls == null || s.breakout_entry_soft_polls === '') s.breakout_entry_soft_polls = 2;
+  if (s.breakout_entry_soft_polls == null || s.breakout_entry_soft_polls === '') s.breakout_entry_soft_polls = 3;
+  if (s.breakout_entry_hold == null) s.breakout_entry_hold = true;
+  if (s.breakout_hold_expire_bars == null || s.breakout_hold_expire_bars === '') s.breakout_hold_expire_bars = 3;
+  if (s.breakout_hold_rsi_min == null || s.breakout_hold_rsi_min === '') s.breakout_hold_rsi_min = 30;
+  if (s.breakout_rsi_period == null || s.breakout_rsi_period === '') s.breakout_rsi_period = 10;
+  if (s.breakout_body_pct == null || s.breakout_body_pct === '') s.breakout_body_pct = 2;
+  if (s.breakout_range_mult == null || s.breakout_range_mult === '') s.breakout_range_mult = 0;
+  if (s.breakout_require_ma20_cross == null) s.breakout_require_ma20_cross = true;
+  if (!s.breakout_ma20_mode) s.breakout_ma20_mode = 'above';
+  if (s.breakout_ma20_grace_bars == null || s.breakout_ma20_grace_bars === '') s.breakout_ma20_grace_bars = 3;
   const breakoutEnd = _v(s, 'breakout_trade_end_time') || '14:30';
-  const screenerLimit = _v(s, 'screener_candidate_limit') || '70';
-  const softPolls = Math.max(1, parseInt(_v(s, 'soft_confirm_polls') || '2', 10) || 2);
+  const ymgpBuy1 = _v(s, 'ymgp_buy_amount_1') !== '' ? _v(s, 'ymgp_buy_amount_1') : '500000';
+  const ymgpBuy2 = _v(s, 'ymgp_buy_amount_2') !== '' ? _v(s, 'ymgp_buy_amount_2') : '500000';
+  const ymgpBuyPct1 = _v(s, 'ymgp_buy_deposit_pct_1') !== '' ? _v(s, 'ymgp_buy_deposit_pct_1') : '';
+  const ymgpBuyPct2 = _v(s, 'ymgp_buy_deposit_pct_2') !== '' ? _v(s, 'ymgp_buy_deposit_pct_2') : '';
+  const ymgpSlots = _v(s, 'ymgp_max_slots') !== '' ? _v(s, 'ymgp_max_slots') : '1';
+  const ymgpStart = _v(s, 'ymgp_trade_start_time') || '09:30';
+  const ymgpEnd = _v(s, 'ymgp_trade_end_time') || '14:30';
+  const jonggaBuy = _v(s, 'jongga_buy_amount') !== '' ? _v(s, 'jongga_buy_amount') : '1000000';
+  const jonggaBuyPct = _v(s, 'jongga_buy_deposit_pct') !== '' ? _v(s, 'jongga_buy_deposit_pct') : '';
+  const jonggaSlots = _v(s, 'jongga_max_slots') !== '' ? _v(s, 'jongga_max_slots') : '1';
+  const jonggaStart = _v(s, 'jongga_trade_start_time') || '14:30';
+  const jonggaPickEnd = _v(s, 'jongga_pick_end_time') || '14:40';
+  const jonggaEnd = _v(s, 'jongga_trade_end_time') || jonggaPickEnd;
+  const screenerLimit = _v(s, 'screener_candidate_limit') || '50';
+  const screenerMinChg = _v(s, 'screener_min_change_rate') || '3.3';
+  const screenerMaxChg = _v(s, 'screener_max_change_rate') || '15';
+  const softPolls = Math.max(1, parseInt(_v(s, 'soft_confirm_polls') || '3', 10) || 3);
   const softHint = `SOFT ${softPolls}회 연속 확인 후 매도`;
   const hardHint = 'HARD 1회(즉시) 매도 · 확인 대기 없음';
   const engineDetail = linkedSessionWindowDetail(s);
@@ -2090,6 +2712,7 @@ function renderSettingsForm(s) {
         <span class="fhint" id="engineSessionBreakdown">${esc(engineBreak)}</span>
       </div>
       <div class="form-grid" style="margin-top:12px;">
+        ${field('매수금액 기준', fSelect('buy_amount_unit', s, [['WON', '고정 금액(원)'], ['DEPOSIT_PCT', '예수금 비중(%)']]), '예: 예수금 3천만 × 10% = 300만')}
         ${field('예수금 현금 보유율(%)', fNum('cash_reserve_pct', s, '10'), '0=전액 사용')}
         ${field('최대 동시 보유 종목 (0=자동)', fNum('max_concurrent_positions', s, '0'))}
         ${field('1일 최대 매수 횟수', fNum('max_daily_buys', s, '20'))}
@@ -2098,11 +2721,32 @@ function renderSettingsForm(s) {
         ${field('재주문 쿨다운(초)', fNum('reorder_cooldown_sec', s, '300'))}
         ${field('매매 주기(초)', fNum('scan_interval_sec', s, '60'), '스캐너·매수 폴링 · 15~600 · 기본 60')}
         ${field('매수 주문 방식', fSelect('order_method', s, [['MARKET', '시장가 (권장)'], ['LIMIT', '지정가 (현재가)']]))}
-        ${field('SOFT 연속 확인 횟수', fNum('soft_confirm_polls', s, '2'), `SOFT=${softPolls}회 · HARD=1회(즉시) · 상따·돌파 공통`)}
+        ${field('SOFT 연속 확인 횟수', fNum('soft_confirm_polls', s, '3'), `SOFT=${softPolls}회 · HARD=1회(즉시) · 상따·돌파 공통`)}
+      </div>
+      <div class="desc" id="buyAmountUnitHint" style="margin-top:8px;"></div>
+      <div class="box-title" style="margin-top:14px;">장세 악화 시 매수 제한</div>
+      <div class="desc">예: 코스피 ≤ -2% 이면 체크한 전략은 <b>금일 신규매수 N회</b>까지만. 보유 청산·추가매수는 그대로입니다. N=0이면 전면 차단.</div>
+      ${fCheck('market_risk_enabled', s, '장세 게이트 사용')}
+      <div class="form-grid" style="margin-top:8px;">
+        ${field('판정 지수', fSelect('market_risk_index', s, [
+          ['kospi', '코스피만'],
+          ['kosdaq', '코스닥만'],
+          ['either', '코스피 또는 코스닥 (하나라도)'],
+          ['both', '코스피·코스닥 둘 다'],
+        ]))}
+        ${field('나쁜 기준 등락(%)', fNum('market_risk_change_pct', s, '-2.0'), '예: -2 = 2% 이상 하락 시 나쁨')}
+        ${field('전략당 금일 매수 한도', fNum('market_risk_max_buys_per_strategy', s, '2'), '나쁠 때 전략별 신규매수 상한 · 0=전면차단')}
+      </div>
+      <div style="margin-top:8px;">
+        ${fCheck('market_risk_block_legacy', s, '나쁠 때 레거시에 한도 적용')}
+        ${fCheck('market_risk_block_sangtta', s, '나쁠 때 상따에 한도 적용')}
+        ${fCheck('market_risk_block_breakout', s, '나쁠 때 돌파에 한도 적용')}
+        ${fCheck('market_risk_block_ymgp', s, '나쁠 때 역매공파에 한도 적용')}
+        ${fCheck('market_risk_block_jongga', s, '나쁠 때 종가배팅에 한도 적용')}
       </div>
       <div class="box-title" style="margin-top:12px;">장마감 전량 청산</div>
       ${fCheck('liquidate_before_close', s, '장 마감 전 전량 청산 (오버나잇 방지)')}
-      <div class="desc">지정 시각 이후 레거시·상따 보유를 시장가 정리합니다. 과매도 돌파는 적용하지 않습니다.</div>
+      <div class="desc">지정 시각 이후 레거시·상따 보유를 시장가 정리합니다. 수급 돌파는 적용하지 않습니다.</div>
       ${field('청산 시작 시각', fTime('liquidate_time', s))}
     </div>
   </div>`;
@@ -2110,7 +2754,7 @@ function renderSettingsForm(s) {
   // ===== 레거시 =====
   h += `<div class="form-section strategy-card strategy-legacy">
     <h4>레거시 · 거래대금 / 스크리너</h4>
-    <div class="desc">거래대금 상위·조건식 후보의 <b>매수·진입·청산</b>입니다. 상따·돌파와 규칙을 공유하지 않습니다.</div>
+    <div class="desc">거래대금 상위 후보의 <b>매수·진입·청산</b>입니다. 상따·돌파와 규칙을 공유하지 않습니다.</div>
     <div class="box-soft screener-policy">
       <div class="box-title">매수 시간</div>
       <div class="desc">레거시 신규매수에만 적용됩니다. (공통란 매매시간은 전략별 시간을 합친 표시값)</div>
@@ -2121,16 +2765,9 @@ function renderSettingsForm(s) {
 
       <div class="box-title" style="margin-top:14px;">종목 선정</div>
       <ul class="policy-list">
-        <li><span class="policy-tag on">포함</span> 거래대금 상위 ${esc(screenerLimit)} · KRX · 당일 20만주 이상</li>
-        <li><span class="policy-tag on">포함</span> 선택한 조건식 편입 종목</li>
-        <li><span class="policy-tag off">제외</span> ETF · ETN · 레버리지 · 인버스 · 곱버스 · SPAC · 우선주</li>
+        <li><span class="policy-tag on">포함</span> 거래대금 상위 <b>${esc(screenerLimit)}</b> · 등락 <b>${esc(screenerMinChg)}</b>~&lt;<b>${esc(screenerMaxChg)}</b>% · KRX · 당일 20만주 이상</li>
+        <li><span class="policy-tag off">제외</span> ETF · ETN · 레버리지 · 인버스 · 곱버스 · SPAC · 우선주 · 등락 과열(≥${esc(screenerMaxChg)}%)</li>
       </ul>
-      <div id="screenerCondPicker" class="cond-picker"><div class="skeleton">조건식 목록 불러오는 중...</div></div>
-      <input type="hidden" id="set_screener_condition_names" value="${esc(_v(s, 'screener_condition_names'))}">
-      <div class="box-title" style="margin-top:12px;">검증 전용 조건식 <span class="fhint">주문 없음</span></div>
-      <div class="desc">예: <code>검증(눌림목)</code> — 실매매 스크리너와 분리 · 전략 시뮬 「당일 검증」용</div>
-      <div id="screenerVerifyCondPicker" class="cond-picker"><div class="skeleton">조건식 목록 불러오는 중...</div></div>
-      <input type="hidden" id="set_screener_verify_condition_names" value="${esc(_v(s, 'screener_verify_condition_names'))}">
 
       <div class="box-title" style="margin-top:14px;">진입 타이밍</div>
       <div class="desc">스크리너 통과 후 아래를 만족할 때만 신규 진입. (데이터 없으면 통과)</div>
@@ -2141,6 +2778,8 @@ function renderSettingsForm(s) {
         ${field('당일 위치 하한 (0~1)', fNum('day_position_min', s, '0.5'))}
         ${field('당일 위치 상한 (0~1)', fNum('day_position_max', s, '비우면 미적용'))}
         ${field('전일대비 거래량비율(%) 하한', fNum('volume_ratio_min', s, '비우면 미적용'))}
+        ${field('일봉 RSI(14) 하한', fNum('legacy_rsi_min', s, '비우면 미적용'), '미만이면 매수 안 함')}
+        ${field('일봉 RSI(14) 상한', fNum('legacy_rsi_max', s, '75'), '초과면 매수 안 함 (예: 75)')}
       </div>
 
       <div class="box-title" style="margin-top:14px;">매수 사이징</div>
@@ -2158,28 +2797,26 @@ function renderSettingsForm(s) {
   // ===== 상따 =====
   h += `<div class="form-section strategy-card strategy-sangtta">
     <h4>상따</h4>
-    <div class="desc">전용 조건식 유니버스 · 소액 매수 · <b>상한가 이탈 / 급락</b> 청산. 레거시 손절·트레일과 별개입니다.</div>
+    <div class="desc">등락률상위(ka10027) 풀 → <b>거래대금순 상위 후보</b> · 소액 매수 · <b>상한가 이탈 / 급락</b> 청산. 레거시 손절·트레일과 별개입니다.</div>
     <div class="box-soft screener-policy">
       <div class="box-title">종목 선정 · 매수</div>
       <ul class="policy-list">
-        <li><span class="policy-tag on">포함</span> 상따 전용 조건식 편입 종목</li>
-        <li><span class="policy-tag on">관찰</span> 등락 ${esc(sangChgMin)}~${esc(sangChgMax)}% · 시총≤3000억</li>
-        <li><span class="policy-tag off">제외</span> 상한가 도달 · ETF·파생</li>
+        <li><span class="policy-tag on">포함</span> 전일대비등락률상위(ka10027) · 등락 ≥13%</li>
+        <li><span class="policy-tag on">포함</span> 현재가 1천원↑ · 당일 거래대금 10억↑ · KRX</li>
+        <li><span class="policy-tag on">제한</span> 위 풀에서 <b>거래대금순 상위 ${esc(_v(s, 'sangtta_candidate_limit') || 20)}</b>만 스캔</li>
+        <li><span class="policy-tag on">관찰</span> 게이트 등락 ${esc(sangChgMin)}~${esc(sangChgMax)}% · 시총≤3000억</li>
+        <li><span class="policy-tag off">제외</span> 관리종목 · ETF·ETN·파생 · 상한가 도달</li>
       </ul>
-      <div id="sangttaCondPicker" class="cond-picker"><div class="skeleton">조건식 목록 불러오는 중...</div></div>
-      <input type="hidden" id="set_sangtta_condition_names" value="${esc(_v(s, 'sangtta_condition_names'))}">
-      <div class="box-title" style="margin-top:12px;">검증 전용 조건식 <span class="fhint">주문 없음</span></div>
-      <div class="desc">예: <code>검증(상따)</code> — 실매매 상따 조건식과 분리 · 당일 검증 전용</div>
-      <div id="sangttaVerifyCondPicker" class="cond-picker"><div class="skeleton">조건식 목록 불러오는 중...</div></div>
-      <input type="hidden" id="set_sangtta_verify_condition_names" value="${esc(_v(s, 'sangtta_verify_condition_names'))}">
       <div class="form-grid" style="margin-top:12px;">
-        ${field('1회 매수 금액(원)', `<input type="number" id="set_sangtta_buy_amount" value="${esc(sangBuy)}" step="10000" min="0" placeholder="500000">`, '기본 50만원')}
+        ${field('1회 매수 금액(원)', `<input type="number" class="buy-unit-won" id="set_sangtta_buy_amount" value="${esc(sangBuy)}" step="10000" min="0" placeholder="500000">`, '기본 50만원')}
+        ${field('1회 매수 비중(%)', `<input type="number" class="buy-unit-pct" id="set_sangtta_buy_deposit_pct" value="${esc(sangBuyPct)}" step="0.1" min="0" max="100" placeholder="10" data-pct-preview="sangtta">`, '예수금 대비')}
         ${field('동시 보유 슬롯', `<input type="number" id="set_sangtta_max_slots" value="${esc(sangSlots)}" step="1" min="0" placeholder="2">`)}
         ${field('매수 시작', `<input type="time" id="set_sangtta_trade_start_time" value="${esc(sangStart)}">`)}
         ${field('매수 종료', `<input type="time" id="set_sangtta_trade_end_time" value="${esc(sangEnd)}">`)}
         ${field('진입 등락 하한(%)', `<input type="number" id="set_sangtta_change_min" value="${esc(sangChgMin)}" step="0.5" min="0" max="30" placeholder="12">`, '전일대비 최소 등락')}
         ${field('진입 등락 상한(%)', `<input type="number" id="set_sangtta_change_max" value="${esc(sangChgMax)}" step="0.5" min="0" max="30" placeholder="15">`, '전일대비 최대 등락 · 상한가 미도달')}
       </div>
+      <div class="hint buy-unit-pct" data-pct-preview-label="sangtta" style="margin-top:4px;"></div>
 
       <div class="box-title" style="margin-top:14px;">상따 청산 (매도)</div>
       <div class="desc">우선순위: 상한가 이탈 HARD/SOFT → 급락 HARD/SOFT. · ${esc(softHint)} · ${esc(hardHint)}</div>
@@ -2205,62 +2842,225 @@ function renderSettingsForm(s) {
     </div>
   </div>`;
 
-  // ===== 과매도 돌파 =====
+  // ===== 수급 돌파 =====
   h += `<div class="form-section strategy-card strategy-breakout">
-    <h4>과매도 돌파</h4>
-    <div class="desc">전용 조건식 유니버스(5분봉 RSI) · 5분봉 돌파 진입 · <b>구조 이탈 → 고정손절 → 트레일</b>. 장마감 강제청산 제외.</div>
+    <h4>수급 돌파</h4>
+    <div class="desc">조건식 유니버스(5분 RSI 전환·완화) · 5분봉 <b>장대+거래량+MA20</b> 돌파 진입(MA20은 돌파봉 포함 N봉 유예 가능) · <b>구조 이탈 → 고정손절 → 트레일</b>. 장마감 강제청산 제외 · 분봉은 통합(_AL).</div>
     <div class="box-soft screener-policy">
-      ${fCheck('use_breakout', s, '과매도 돌파 전략 사용')}
+      ${fCheck('use_breakout', s, '수급 돌파 전략 사용')}
       <div class="box-title" style="margin-top:8px;">종목 선정 · 매수</div>
-      <div class="desc">과매도 이력은 조건식이 담당합니다. (5분봉 RSI(10) 18→28 등) 서버 RSI 전수 스캔 없음.</div>
+      <div class="desc">유니버스는 조건식(예: 5분 RSI 35 상향 전환). “극단 과매도”가 아니라 <b>RSI 회복·전환 후보</b>를 모읍니다. 실제 매수는 서버 돌파 게이트.</div>
       <div id="breakoutCondPicker" class="cond-picker"><div class="skeleton">조건식 목록 불러오는 중...</div></div>
       <input type="hidden" id="set_breakout_condition_names" value="${esc(_v(s, 'breakout_condition_names'))}">
-      <div class="box-title" style="margin-top:12px;">검증 전용 조건식 <span class="fhint">주문 없음</span></div>
-      <div class="desc">예: <code>검증(과매도돌파)</code> — 실매매 돌파 조건식과 분리</div>
-      <div id="breakoutVerifyCondPicker" class="cond-picker"><div class="skeleton">조건식 목록 불러오는 중...</div></div>
-      <input type="hidden" id="set_breakout_verify_condition_names" value="${esc(_v(s, 'breakout_verify_condition_names'))}">
       <div class="form-grid" style="margin-top:12px;">
-        ${field('1회 매수 금액(원)', `<input type="number" id="set_breakout_buy_amount" value="${esc(breakoutBuy)}" step="10000" min="0">`)}
+        ${field('1회 매수 금액(원)', `<input type="number" class="buy-unit-won" id="set_breakout_buy_amount" value="${esc(breakoutBuy)}" step="10000" min="0">`)}
+        ${field('1회 매수 비중(%)', `<input type="number" class="buy-unit-pct" id="set_breakout_buy_deposit_pct" value="${esc(breakoutBuyPct)}" step="0.1" min="0" max="100" placeholder="10" data-pct-preview="breakout">`)}
         ${field('동시 보유 슬롯', `<input type="number" id="set_breakout_max_slots" value="${esc(breakoutSlots)}" step="1" min="1">`)}
         ${field('매수 시작', `<input type="time" id="set_breakout_trade_start_time" value="${esc(breakoutStart)}">`)}
         ${field('매수 종료', `<input type="time" id="set_breakout_trade_end_time" value="${esc(breakoutEnd)}">`)}
       </div>
+      <div class="hint buy-unit-pct" data-pct-preview-label="breakout" style="margin-top:4px;"></div>
 
       <div class="box-title" style="margin-top:14px;">진입 게이트</div>
       <div class="form-grid">
         ${field('돌파 레벨', fSelect('breakout_level_mode', s, [['prev_high', '직전 5분봉 고가'], ['n_day_high', '최근 N봉 고가(5분)']]))}
         <div id="breakoutNDayField">${field('N봉 고가 기간', fNum('breakout_n_day', s, '10'), '5분봉 N개 (예: 10=50분)')}</div>
-        ${field('분봉 거래량 배수', fNum('breakout_vol_mult', s, '1.5'), '현재 5분봉 ÷ 직전 N봉 평균')}
+        ${field('분봉 거래량 배수', fNum('breakout_vol_mult', s, '1.5'), '확인봉 ÷ 직전 N봉 평균 (파세코형 권장 2.5~3)')}
+        ${field('장대 몸통(%)', fNum('breakout_body_pct', s, '2'), '확인봉 (종가/시가-1)×100 · 0=비활성')}
+        ${field('범위 확장 배수', fNum('breakout_range_mult', s, '0'), '고저÷직전12봉 평균 · 0=비활성')}
+        ${fCheck('breakout_require_ma20_cross', s, 'MA20 필터 필수', '끄면 MA20·유예 모두 비활성 · 켤 때만 아래 판정/유예 적용')}
+        ${field('MA20 판정', fSelect('breakout_ma20_mode', s, [['above', '상회(종가>MA20)'], ['cross', '상향돌파(아래에서 뚫기)']]), '갭 장초는 상회 권장 · 유예창에도 동일 판정')}
+        ${field('MA20 유예(봉)', fNum('breakout_ma20_grace_bars', s, '3'), '돌파봉 포함 N봉(5분). 3=돌파+후속2 · 대기 시 WATCHING(슬롯 미점유·유니버스 이탈무관) → 통과 시 PENDING · 장대·거래량 돌파봉 상속')}
         ${field('과열 컷 등락률(%)', fNum('breakout_max_change_pct', s, '12'), '이 이상이면 매수 금지')}
       </div>
+      <div class="desc" style="margin-top:6px;">MA20 유예: 레벨 돌파 직후 종가가 아직 MA20 아래여도 설정 봉 수 안에 상회하면 매수. 대기 중에는 <b>WATCHING</b>으로 추적하고, 통과 시 <b>PENDING</b>으로 승격합니다.</div>
       <div class="box-title" style="margin-top:10px;">진입 확인</div>
       <div class="desc">레벨 위 + 거래량 통과 후 HARD 또는 SOFT 중 하나면 매수. 둘 다 끄면 터치(기존) 진입.</div>
       <div class="form-grid">
-        ${fCheck('breakout_entry_hard', s, 'HARD — 직전 5분봉 종가 > 레벨 시 즉시', '가짜 돌파 완화')}
-        ${fCheck('breakout_entry_soft', s, 'SOFT — 레벨 위 연속 스캔', '스캔 간격마다 +1, 이탈 시 리셋')}
-        ${field('SOFT 필요 횟수', fNum('breakout_entry_soft_polls', s, '2'), '예: 2 = 약 2스캔 연속 레벨 위')}
+        ${fCheck('breakout_entry_hard', s, 'HARD — 직전 완성봉 고가/종가 > 레벨 시 즉시', '확인봉 기준(레벨은 확인봉 이전)')}
+        ${fCheck('breakout_entry_soft', s, 'SOFT — 레벨 위 연속 확인', '스캔 횟수 또는 5분봉 연속')}
+        ${field('SOFT 필요 횟수', fNum('breakout_entry_soft_polls', s, '3'), '스캐너 1분 간격 N회 연속 유지(또는 레벨 위 완성봉 N개)')}
+        ${fCheck('breakout_entry_hold', s, 'HOLD — 전봉 RSI교차 + 현재봉 양봉', '되돌림 허용 · 다음봉 유지')}
+        ${field('HOLD 만료(봉)', fNum('breakout_hold_expire_bars', s, '3'), '다음봉 확인 전 N봉 지나면 해제')}
+        ${field('HOLD RSI 임계', fNum('breakout_hold_rsi_min', s, '30'), '전봉에서 직전≤임계 < 전봉, 현재봉은 임계 위 유지')}
+        ${field('RSI 기간', fNum('breakout_rsi_period', s, '10'), '5분봉 RSI 기간 (조건식과 맞춤)')}
       </div>
 
       <div class="box-title" style="margin-top:14px;">돌파 청산 (매도)</div>
-      <div class="desc">구조 이탈(돌파 레벨 기준) → 고정손절(매수가) → 트레일링(고점). · ${esc(softHint)} · ${esc(hardHint)}</div>
+      <div class="desc">우선순위: <b>구조 이탈</b> → <b>고정손절(매수가 −%)</b> → <b>트레일(고점 −%, +시작% 이후만)</b>. · ${esc(softHint)} · ${esc(hardHint)}</div>
       <div class="exit-stack">
         <div class="exit-card">
           <h5><span class="exit-num">1</span> 구조 이탈</h5>
+          <div class="exit-desc">돌파 레벨(또는 돌파봉 저가) 기준. 테제가 깨지면 고정손절·트레일보다 먼저 청산.</div>
           <div class="exit-fields">
             ${field('구조 SOFT (%)', fNum('struct_break_soft_pct', s, '1'), softHint)}
             ${field('구조 HARD (%)', fNum('struct_break_hard_pct', s, '2'), hardHint)}
           </div>
         </div>
         <div class="exit-card alt">
-          <h5><span class="exit-num">2</span> 고정손절 · 트레일</h5>
+          <h5><span class="exit-num">2</span> 고정 손절</h5>
+          <div class="exit-desc">매수가 기준. 진입 직후부터 적용. 예: 3%면 매수가×0.97 이하 시 손절. <b>고점과 무관</b>.</div>
           <div class="exit-fields">
-            ${field('고정 손절(%)', fNum('breakout_stop_loss_pct', s, '3'))}
-            ${field('트레일링 시작 수익률(%)', fNum('breakout_trailing_start_pct', s, '10'), '고점 수익률 도달 시 활성화')}
-            ${field('활성 후 고점 하락폭(%)', fNum('breakout_trailing_pct', s, '4'))}
+            ${field('고정 손절(%)', fNum('breakout_stop_loss_pct', s, '3'), '매수가 대비 하락폭')}
+          </div>
+        </div>
+        <div class="exit-card">
+          <h5><span class="exit-num">3</span> 트레일링 (익절 보호)</h5>
+          <div class="exit-desc">고점 수익률이 <b>시작%</b>에 도달한 뒤에만 켜짐. 이후 <b>고점 − 하락폭%</b>에서 청산. 시작%를 못 찍으면 트레일은 동작하지 않고 ② 고정손절만 유효.</div>
+          <div class="exit-fields">
+            ${field('트레일 시작 — 고점 수익률(%)', fNum('breakout_trailing_start_pct', s, '10'), '이 % 도달 시 트레일 ON (즉시 전량매도 아님)')}
+            ${field('트레일 폭 — 고점 대비 하락(%)', fNum('breakout_trailing_pct', s, '4'), 'armed 후 고점×(1−이%) 이탈 시 청산')}
           </div>
         </div>
       </div>
-      <div class="exit-note">우선순위: 상따 &gt; 과매도 돌파 &gt; 레거시 · ${esc(breakoutStart)}~${esc(breakoutEnd)} · ${esc(breakoutBuy)}원 · 슬롯 ${esc(breakoutSlots)}</div>
+      <div class="exit-note">우선순위: 상따 &gt; 수급 돌파 &gt; 레거시 · ${esc(breakoutStart)}~${esc(breakoutEnd)} · ${esc(breakoutBuy)}원 · 슬롯 ${esc(breakoutSlots)}</div>
+    </div>
+  </div>`;
+
+  // ===== 역매공파 =====
+  h += `<div class="form-section strategy-card strategy-ymgp">
+    <h4>역매공파</h4>
+    <div class="desc">역배열 → 바닥(박스/지지) → 매집봉·공구리 → 기준봉 고점 돌파(1차) · 눌림 추가(2차) · 기준선 손절 · 저항/224/448 분할익절. 수급 돌파와 별도 전략.</div>
+    <div class="box-soft screener-policy">
+      ${fCheck('use_ymgp', s, '역매공파 전략 사용')}
+      <div class="box-title" style="margin-top:8px;">종목 선정 · 매수</div>
+      <div class="desc">역배열·바닥·매집 단계는 일봉 엔진이 자체 판정합니다. 조건식은 유니버스(관찰 대상)만 좁힙니다.</div>
+      <div id="ymgpCondPicker" class="cond-picker"><div class="skeleton">조건식 목록 불러오는 중...</div></div>
+      <input type="hidden" id="set_ymgp_condition_names" value="${esc(_v(s, 'ymgp_condition_names'))}">
+      <div class="form-grid" style="margin-top:12px;">
+        ${field('1차 매수 금액(원)', `<input type="number" class="buy-unit-won" id="set_ymgp_buy_amount_1" value="${esc(ymgpBuy1)}" step="10000" min="0" placeholder="500000">`, '기준봉 고점 돌파 시')}
+        ${field('1차 매수 비중(%)', `<input type="number" class="buy-unit-pct" id="set_ymgp_buy_deposit_pct_1" value="${esc(ymgpBuyPct1)}" step="0.1" min="0" max="100" placeholder="10" data-pct-preview="ymgp1">`, '예수금 대비')}
+        ${field('2차 매수 금액(원)', `<input type="number" class="buy-unit-won" id="set_ymgp_buy_amount_2" value="${esc(ymgpBuy2)}" step="10000" min="0" placeholder="500000">`, '눌림 추가 시')}
+        ${field('2차 매수 비중(%)', `<input type="number" class="buy-unit-pct" id="set_ymgp_buy_deposit_pct_2" value="${esc(ymgpBuyPct2)}" step="0.1" min="0" max="100" placeholder="10" data-pct-preview="ymgp2">`, '예수금 대비')}
+        ${field('동시 보유 슬롯', `<input type="number" id="set_ymgp_max_slots" value="${esc(ymgpSlots)}" step="1" min="1">`)}
+        ${field('매수 시작', `<input type="time" id="set_ymgp_trade_start_time" value="${esc(ymgpStart)}">`)}
+        ${field('매수 종료', `<input type="time" id="set_ymgp_trade_end_time" value="${esc(ymgpEnd)}">`)}
+      </div>
+      <div class="hint buy-unit-pct" data-pct-preview-label="ymgp1" style="margin-top:4px;"></div>
+      <div class="hint buy-unit-pct" data-pct-preview-label="ymgp2" style="margin-top:2px;"></div>
+
+      <div class="box-title" style="margin-top:14px;">일봉 단계 판정 (이동평균)</div>
+      <div class="desc">역배열 판정·지지 근접에 쓰는 이동평균 기간(일)입니다.</div>
+      <div class="form-grid">
+        ${field('단기 MA', fNum('ymgp_ma_fast', s, '120'))}
+        ${field('중기 MA', fNum('ymgp_ma_mid', s, '240'))}
+        ${field('장기 MA', fNum('ymgp_ma_slow', s, '480'))}
+      </div>
+
+      <div class="box-title" style="margin-top:14px;">바닥(박스·지지) 판정</div>
+      <div class="form-grid">
+        ${field('박스 기간(일)', fNum('ymgp_box_days', s, '15'))}
+        ${field('박스 폭 상한(%)', fNum('ymgp_box_width_pct', s, '15.5'), '(고-저)÷중간가 · 최근 박스일수')}
+        ${field('매집봉 몸통(%)', fNum('ymgp_accum_body_pct', s, '7.0'), '장대 양봉 · (종가-시가)/시가')}
+        ${field('매집봉 거래량 배수', fNum('ymgp_accum_vol_mult', s, '2.0'), '양봉 경로 · 직전 20일 평균 대비')}
+        ${field('윗꼬리 매집 거래량', fNum('ymgp_accum_wick_vol_mult', s, '4.0'), '장대 윗꼬리 경로 · 양봉 배수보다 크게')}
+        ${field('윗꼬리/몸통 배수', fNum('ymgp_accum_wick_body_mult', s, '1.5'), '윗꼬리 ≥ 몸통×이 값')}
+        ${field('MA 근접 허용(%)', fNum('ymgp_ma_near_pct', s, '3.0'), '60/112일선 지지 판정')}
+        ${field('이중저점 허용오차(%)', fNum('ymgp_pivot_tol_pct', s, '2.0'))}
+      </div>
+
+      <div class="box-title" style="margin-top:14px;">급락 이력 (역배열 보조 판정)</div>
+      <div class="form-grid">
+        ${field('급락 조회기간(봉)', fNum('ymgp_drop_lookback', s, '60'))}
+        ${field('급락 기준(%)', fNum('ymgp_drop_pct', s, '-20'), '음수 · 이 이상 급락 후 횡보')}
+      </div>
+
+      <div class="box-title" style="margin-top:14px;">진입 (1차/2차)</div>
+      <div class="form-grid">
+        ${field('1차 진입 기준', fSelect('ymgp_entry_mode', s, [['ref_high', '기준봉 고점 돌파'], ['prev_high', '직전봉 고가 돌파'], ['either', '둘 중 하나']]))}
+        ${field('과열 컷 등락률(%)', fNum('ymgp_max_change_pct', s, '10'), '이 이상이면 매수 금지')}
+        ${field('2차 눌림 허용오차(%)', fNum('ymgp_pullback_tol_pct', s, '2.0'), '기준봉 시가/저점 근접')}
+      </div>
+
+      <div class="box-title" style="margin-top:14px;">역매공파 청산 (매도)</div>
+      <div class="desc">손절 → 분할익절 → 트레일 순. 분할익절은 <b>목표가 도달 시</b> 비중만큼 매도합니다.</div>
+      <div class="form-grid">
+        ${field('기준선 손절 MA', fSelect('ymgp_stop_ma_mode', s, [['ma60', '60일선'], ['ma112', '112일선'], ['either', '둘 중 하나']]), '종가가 해당 이평 아래면 전량 손절')}
+        ${field('고정 손절(%)', fNum('ymgp_stop_loss_pct', s, '4'), '매수가 대비 백업 손절 (기준봉 저점 이탈도 손절)')}
+        ${field('재진입 락(일)', fNum('ymgp_reentry_lock_days', s, '5'), '손절 후 동일 종목 재진입 금지 기간')}
+      </div>
+      ${fCheck('ymgp_enable_pullback_add', s, '눌림 추가매수(2차) 사용')}
+      ${fCheck('ymgp_enable_partial_tp', s, '분할 익절 사용')}
+      <div class="exit-stack" style="margin-top:10px;">
+        <div class="exit-card">
+          <h5><span class="exit-num">T1</span> 박스 고점 (최근 저항)</h5>
+          <div class="desc">목표가 = 최근 박스권(<code>박스 일수</code>)의 <b>최고가</b>. 현재가 ≥ 목표가 시 아래 비중 매도.</div>
+          <div class="exit-fields">
+            ${field('T1 청산 비중', fNum('ymgp_tp1_pct_of_pos', s, '0.35'), '보유수량 × 비중 (0~1, 기본 35%)')}
+          </div>
+        </div>
+        <div class="exit-card">
+          <h5><span class="exit-num">T2</span> MA224</h5>
+          <div class="desc">목표가 = <b>224일 이동평균</b>. T1 이후 현재가 ≥ MA224 시 비중 매도.</div>
+          <div class="exit-fields">
+            ${field('T2 청산 비중', fNum('ymgp_tp2_pct_of_pos', s, '0.35'), '남은 보유수량 × 비중 (기본 35%)')}
+          </div>
+        </div>
+        <div class="exit-card alt">
+          <h5><span class="exit-num">T3</span> MA448 · 잔량</h5>
+          <div class="desc">목표가 = <b>448일 이동평균</b>. 도달 시 <b>잔량 전량</b> 매도. (비중 설정 없음)</div>
+        </div>
+        <div class="exit-card alt">
+          <h5><span class="exit-num">T4</span> 트레일 (선택)</h5>
+          <div class="desc">고점 수익률이 시작%에 도달하면 트레일 무장. 이후 고점 대비 하락폭%면 잔량 청산.</div>
+          <div class="exit-fields">
+            ${field('트레일링 시작 수익률(%)', fNum('ymgp_trailing_start_pct', s, '15'))}
+            ${field('활성 후 고점 하락폭(%)', fNum('ymgp_trailing_pct', s, '5'))}
+          </div>
+        </div>
+      </div>
+      <div class="exit-note">분할익절 OFF면 T1~T3 생략 · 손절·트레일만 동작 · ${esc(ymgpStart)}~${esc(ymgpEnd)} · 1차 ${esc(ymgpBuy1)}원 · 2차 ${esc(ymgpBuy2)}원 · 슬롯 ${esc(ymgpSlots)}</div>
+    </div>
+  </div>`;
+
+  // ===== 종가배팅 =====
+  h += `<div class="form-section strategy-card strategy-jongga">
+    <h4>종가배팅</h4>
+    <div class="desc">장 마감 전 거래대금순 → 테마 매핑 → <b>당일 최강 테마</b> 1종. 돼지물량 반응형(20/30/50) 분할매수 · 청산은 익일 고정손절+트레일.</div>
+    <div class="box-soft screener-policy">
+      ${fCheck('use_jongga', s, '종가배팅 전략 사용')}
+      <div class="box-title" style="margin-top:8px;">종목 선정 · 매수</div>
+      <div class="form-grid" style="margin-top:12px;">
+        ${field('총 매수 금액(원)', `<input type="number" class="buy-unit-won" id="set_jongga_buy_amount" value="${esc(jonggaBuy)}" step="10000" min="0" placeholder="1000000">`, '분할 비중 합산 기준')}
+        ${field('총 매수 비중(%)', `<input type="number" class="buy-unit-pct" id="set_jongga_buy_deposit_pct" value="${esc(jonggaBuyPct)}" step="0.1" min="0" max="100" placeholder="10" data-pct-preview="jongga">`, '예수금 대비')}
+        ${field('동시 보유 슬롯', `<input type="number" id="set_jongga_max_slots" value="${esc(jonggaSlots)}" step="1" min="1" max="1">`, '당일 1종 권장')}
+        ${field('선택 시작', `<input type="time" id="set_jongga_trade_start_time" value="${esc(jonggaStart)}">`)}
+        ${field('선택 종료(자동)', `<input type="time" id="set_jongga_pick_end_time" value="${esc(jonggaPickEnd)}">`)}
+        ${field('매수 종료(표시)', `<input type="time" id="set_jongga_trade_end_time" value="${esc(jonggaEnd)}">`, '분할 ON이면 3차 종료까지 실제 매수')}
+        ${field('거래대금순 상위 N', fNum('jongga_rank_limit', s, '50'))}
+      </div>
+      <div class="hint buy-unit-pct" data-pct-preview-label="jongga" style="margin-top:4px;"></div>
+
+      <div class="box-title" style="margin-top:14px;">돼지물량 반응형 분할</div>
+      <div class="desc">1차 씨드 → 2차(14:50+ 저점지지·프로그램 순매수) → 3차(동시호가 매수벽만). OFF면 1회 전량.</div>
+      ${fCheck('jongga_pig_split', { ...s, jongga_pig_split: s.jongga_pig_split !== false }, '돼지물량 분할매수 사용')}
+      <div class="form-grid" style="margin-top:8px;">
+        ${field('1차 비중(%)', fNum('jongga_leg1_pct', s, '20'), '씨드')}
+        ${field('2차 비중(%)', fNum('jongga_leg2_pct', s, '30'), '14:50+')}
+        ${field('3차 비중(%)', fNum('jongga_leg3_pct', s, '50'), '동시호가')}
+        ${field('2차 시작', `<input type="time" id="set_jongga_leg2_start_time" value="${esc(_v(s,'jongga_leg2_start_time')||'14:50')}">`)}
+        ${field('3차 시작', `<input type="time" id="set_jongga_leg3_start_time" value="${esc(_v(s,'jongga_leg3_start_time')||'15:20')}">`)}
+        ${field('3차 종료', `<input type="time" id="set_jongga_leg3_end_time" value="${esc(_v(s,'jongga_leg3_end_time')||'15:28')}">`)}
+        ${field('돼지 잔량비', fNum('jongga_pig_bid_ask_ratio', s, '1.5'), '매수잔량/매도잔량 ≥')}
+        ${field('호가 단계 수', fNum('jongga_pig_levels', s, '5'), '상위 N호가 합')}
+      </div>
+
+      <div class="box-title" style="margin-top:14px;">자동선택 가중치</div>
+      <div class="desc">미선택 시 스코어 = 눌림(고가대비↓) · 거래대금 · 등락률 min-max 가중합.</div>
+      <div class="form-grid">
+        ${field('눌림 가중', fNum('jongga_w_pullback', s, '1.0'))}
+        ${field('대금 가중', fNum('jongga_w_amount', s, '1.0'))}
+        ${field('등락 가중', fNum('jongga_w_change', s, '1.0'))}
+      </div>
+
+      <div class="box-title" style="margin-top:14px;">익일 청산</div>
+      <div class="desc">매수 당일은 손절/트레일 미적용 · 장마감 강제청산 제외(오버나잇). 익일부터 아래 규칙.</div>
+      <div class="form-grid">
+        ${field('고정 손절(%)', fNum('jongga_stop_loss_pct', s, '3'))}
+        ${field('트레일 시작 수익률(%)', fNum('jongga_trailing_start_pct', s, '5'))}
+        ${field('트레일 폭(%)', fNum('jongga_trailing_pct', s, '2'), '고점 대비 하락')}
+      </div>
+      <div class="exit-note">${esc(jonggaStart)}~${esc(jonggaPickEnd)} 선택 · 총 ${esc(jonggaBuy)}원 · 슬롯 ${esc(jonggaSlots)} · 분할 20/30/50</div>
     </div>
   </div>`;
 
@@ -2293,6 +3093,7 @@ function renderSettingsForm(s) {
   $('settingsForm').innerHTML = h;
   updateAutoTradeButtons(on);
   bindSizingModeToggle();
+  bindBuyAmountUnitToggle();
   // 고정금액 모드: 별도 id → 저장 시 initial_max_amount 로 복사
   const fixedAmt = $('set_initial_max_amount_fixed');
   if (fixedAmt) {
@@ -2303,17 +3104,107 @@ function renderSettingsForm(s) {
       if (hidden) hidden.value = fixedAmt.value;
     });
   }
+  const fixedPct = $('set_initial_max_deposit_pct_fixed');
+  if (fixedPct) {
+    fixedPct.addEventListener('input', () => {
+      const main = $('set_initial_max_deposit_pct');
+      if (main) main.value = fixedPct.value;
+      refreshDepositPctPreviews();
+    });
+  }
   $('btnSaveSettings').onclick = () => saveSettings(null);
   bindAutoTradeToggle();
   bindTradeTimePreview();
   loadHolidaySection();
-  loadScreenerConditionPicker(s);
-  loadSangttaConditionPicker(s);
+  // 레거시 유니버스는 거래대금순 — 조건식 피커 없음
   loadBreakoutConditionPicker(s);
-  loadScreenerVerifyConditionPicker(s);
-  loadSangttaVerifyConditionPicker(s);
-  loadBreakoutVerifyConditionPicker(s);
+  loadYmgpConditionPicker(s);
   bindBreakoutLevelModeToggle();
+}
+
+function formatDepositPctPreview(pct) {
+  const d = Number(window._lastDeposit || 0);
+  const p = parseNum(pct);
+  if (!d) return '예수금 조회 후 환산액 표시';
+  if (!p || p <= 0) return `예수금 ${won(d)} 기준`;
+  return `${won(d)} × ${p}% = ${won(Math.floor(d * Math.min(p, 100) / 100))}`;
+}
+
+function refreshDepositPctPreviews() {
+  const map = {
+    pyramid_weak: 'set_initial_max_deposit_pct',
+    pyramid_strong: 'set_initial_min_deposit_pct',
+    add_buy: 'set_add_buy_deposit_pct',
+    fixed: 'set_initial_max_deposit_pct_fixed',
+    sangtta: 'set_sangtta_buy_deposit_pct',
+    breakout: 'set_breakout_buy_deposit_pct',
+    ymgp1: 'set_ymgp_buy_deposit_pct_1',
+    ymgp2: 'set_ymgp_buy_deposit_pct_2',
+    jongga: 'set_jongga_buy_deposit_pct',
+  };
+  Object.entries(map).forEach(([key, inputId]) => {
+    const label = document.querySelector(`[data-pct-preview-label="${key}"]`);
+    if (!label) return;
+    const el = $(inputId);
+    label.textContent = formatDepositPctPreview(el ? el.value : '');
+  });
+  const hint = $('buyAmountUnitHint');
+  if (hint) {
+    const unit = ($('set_buy_amount_unit')?.value || 'WON').toUpperCase();
+    const d = Number(window._lastDeposit || 0);
+    if (unit === 'DEPOSIT_PCT') {
+      hint.textContent = d
+        ? `현재 예수금 ${won(d)} 기준으로 비중(%) → 매수금액이 환산됩니다.`
+        : '예수금 비중 모드 — 잔고 조회 후 환산 미리보기가 표시됩니다.';
+    } else {
+      hint.textContent = '고정 금액(원) 모드 — 예수금이 바뀌어도 매수금액은 그대로입니다.';
+    }
+  }
+}
+
+function _fillPctFromWonIfEmpty(pctId, wonId) {
+  const pctEl = $(pctId);
+  const wonEl = $(wonId);
+  if (!pctEl || !wonEl) return;
+  if (pctEl.value !== '') return;
+  const d = Number(window._lastDeposit || 0);
+  const w = parseNum(wonEl.value);
+  if (d > 0 && w > 0) pctEl.value = (w / d * 100).toFixed(1);
+}
+
+function bindBuyAmountUnitToggle() {
+  const sel = $('set_buy_amount_unit');
+  if (!sel) return;
+  const sync = () => {
+    const pctMode = (sel.value || 'WON').toUpperCase() === 'DEPOSIT_PCT';
+    document.querySelectorAll('.buy-unit-won').forEach((el) => {
+      const field = el.closest('.field');
+      if (field) field.style.display = pctMode ? 'none' : '';
+      else el.style.display = pctMode ? 'none' : '';
+    });
+    document.querySelectorAll('.buy-unit-pct').forEach((el) => {
+      const field = el.closest('.field');
+      if (field) field.style.display = pctMode ? '' : 'none';
+      else el.style.display = pctMode ? '' : 'none';
+    });
+    if (pctMode) {
+      _fillPctFromWonIfEmpty('set_initial_max_deposit_pct', 'set_initial_max_amount');
+      _fillPctFromWonIfEmpty('set_initial_min_deposit_pct', 'set_initial_min_amount');
+      _fillPctFromWonIfEmpty('set_add_buy_deposit_pct', 'set_add_buy_amount');
+      _fillPctFromWonIfEmpty('set_initial_max_deposit_pct_fixed', 'set_initial_max_amount_fixed');
+      _fillPctFromWonIfEmpty('set_sangtta_buy_deposit_pct', 'set_sangtta_buy_amount');
+      _fillPctFromWonIfEmpty('set_breakout_buy_deposit_pct', 'set_breakout_buy_amount');
+      _fillPctFromWonIfEmpty('set_ymgp_buy_deposit_pct_1', 'set_ymgp_buy_amount_1');
+      _fillPctFromWonIfEmpty('set_ymgp_buy_deposit_pct_2', 'set_ymgp_buy_amount_2');
+      _fillPctFromWonIfEmpty('set_jongga_buy_deposit_pct', 'set_jongga_buy_amount');
+    }
+    refreshDepositPctPreviews();
+  };
+  sel.onchange = sync;
+  document.querySelectorAll('[data-pct-preview]').forEach((el) => {
+    el.addEventListener('input', refreshDepositPctPreviews);
+  });
+  sync();
 }
 
 function bindBreakoutLevelModeToggle() {
@@ -2335,74 +3226,8 @@ function parseConditionNameList(raw) {
   return String(raw).split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
 }
 
-function syncScreenerConditionNamesField() {
-  const hidden = $('set_screener_condition_names');
-  if (!hidden) return;
-  const names = [...document.querySelectorAll('.screener-cond-check:checked')]
-    .map((el) => el.value.trim())
-    .filter(Boolean);
-  hidden.value = names.join(', ');
-}
-
-async function loadScreenerConditionPicker(settings) {
-  const box = $('screenerCondPicker');
-  if (!box) return;
-  const selected = new Set(parseConditionNameList(settings?.screener_condition_names));
-  try {
-    const conds = await fetchConditionsList();
-    if (!conds.length) {
-      box.innerHTML = '<div class="desc">키움 조건식이 없습니다. HTS에서 조건식을 등록한 뒤 새로고침하세요.</div>';
-      syncScreenerConditionNamesField();
-      return;
-    }
-    box.innerHTML = conds.map((c) => {
-      const name = c.condition_name || '';
-      const checked = selected.has(name) ? 'checked' : '';
-      return `<label class="check cond-pick"><input type="checkbox" class="screener-cond-check" value="${esc(name)}" ${checked}>${esc(name)} <span class="fhint">API ${esc(c.api_id)}</span></label>`;
-    }).join('');
-    document.querySelectorAll('.screener-cond-check').forEach((el) => {
-      el.addEventListener('change', syncScreenerConditionNamesField);
-    });
-    syncScreenerConditionNamesField();
-  } catch (e) {
-    box.innerHTML = emptyRow('조건식 목록을 불러오지 못했습니다.', '⚠️');
-  }
-}
-
-// 상따 조건식 선택기 (스크리너와 동일한 /conditions/ API 사용)
-async function loadSangttaConditionPicker(settings) {
-  const box = $('sangttaCondPicker');
-  if (!box) return;
-  const selected = new Set(parseConditionNameList(settings?.sangtta_condition_names));
-  try {
-    const conds = await fetchConditionsList();
-    if (!conds.length) {
-      box.innerHTML = '<div class="desc">키움 조건식이 없습니다. HTS에서 조건식을 등록한 뒤 새로고침하세요.</div>';
-      syncSangttaConditionNamesField();
-      return;
-    }
-    box.innerHTML = conds.map((c) => {
-      const name = c.condition_name || '';
-      const checked = selected.has(name) ? 'checked' : '';
-      return `<label class="check cond-pick"><input type="checkbox" class="sangtta-cond-check" value="${esc(name)}" ${checked}>${esc(name)} <span class="fhint">API ${esc(c.api_id)}</span></label>`;
-    }).join('');
-    document.querySelectorAll('.sangtta-cond-check').forEach((el) => {
-      el.addEventListener('change', syncSangttaConditionNamesField);
-    });
-    syncSangttaConditionNamesField();
-  } catch (e) {
-    box.innerHTML = emptyRow('조건식 목록을 불러오지 못했습니다.', '⚠️');
-  }
-}
-
-function syncSangttaConditionNamesField() {
-  const hidden = $('set_sangtta_condition_names');
-  if (!hidden) return;
-  const names = [...document.querySelectorAll('.sangtta-cond-check:checked')]
-    .map((el) => el.value.trim())
-    .filter(Boolean);
-  hidden.value = names.join(', ');
-}
+// 레거시 유니버스는 거래대금순 — 조건식 피커 없음
+// 상따 유니버스는 ka10027(등락률상위) — 조건식 피커 없음
 
 async function loadBreakoutConditionPicker(settings) {
   const box = $('breakoutCondPicker');
@@ -2438,51 +3263,38 @@ function syncBreakoutConditionNamesField() {
     .join(', ');
 }
 
-async function _loadVerifyCondPicker(boxId, hiddenId, checkClass, selectedRaw) {
-  const box = $(boxId);
+async function loadYmgpConditionPicker(settings) {
+  const box = $('ymgpCondPicker');
   if (!box) return;
-  const selected = new Set(parseConditionNameList(selectedRaw));
+  const selected = new Set(parseConditionNameList(settings?.ymgp_condition_names));
   try {
     const conds = await fetchConditionsList();
     if (!conds.length) {
       box.innerHTML = '<div class="desc">키움 조건식이 없습니다.</div>';
+      syncYmgpConditionNamesField();
       return;
     }
     box.innerHTML = conds.map((c) => {
       const name = c.condition_name || '';
       const checked = selected.has(name) ? 'checked' : '';
-      return `<label class="check cond-pick"><input type="checkbox" class="${checkClass}" value="${esc(name)}" ${checked}>${esc(name)} <span class="fhint">API ${esc(c.api_id)}</span></label>`;
+      return `<label class="check cond-pick"><input type="checkbox" class="ymgp-cond-check" value="${esc(name)}" ${checked}>${esc(name)} <span class="fhint">API ${esc(c.api_id)}</span></label>`;
     }).join('');
-    const sync = () => {
-      const hidden = $(hiddenId);
-      if (!hidden) return;
-      hidden.value = [...document.querySelectorAll(`.${checkClass}:checked`)]
-        .map((el) => el.value.trim()).filter(Boolean).join(', ');
-    };
-    document.querySelectorAll(`.${checkClass}`).forEach((el) => el.addEventListener('change', sync));
-    sync();
+    document.querySelectorAll('.ymgp-cond-check').forEach((el) => {
+      el.addEventListener('change', syncYmgpConditionNamesField);
+    });
+    syncYmgpConditionNamesField();
   } catch (e) {
     box.innerHTML = emptyRow('조건식 목록을 불러오지 못했습니다.', '⚠️');
   }
 }
 
-async function loadScreenerVerifyConditionPicker(settings) {
-  await _loadVerifyCondPicker(
-    'screenerVerifyCondPicker', 'set_screener_verify_condition_names',
-    'screener-verify-cond-check', settings?.screener_verify_condition_names,
-  );
-}
-async function loadSangttaVerifyConditionPicker(settings) {
-  await _loadVerifyCondPicker(
-    'sangttaVerifyCondPicker', 'set_sangtta_verify_condition_names',
-    'sangtta-verify-cond-check', settings?.sangtta_verify_condition_names,
-  );
-}
-async function loadBreakoutVerifyConditionPicker(settings) {
-  await _loadVerifyCondPicker(
-    'breakoutVerifyCondPicker', 'set_breakout_verify_condition_names',
-    'breakout-verify-cond-check', settings?.breakout_verify_condition_names,
-  );
+function syncYmgpConditionNamesField() {
+  const hidden = $('set_ymgp_condition_names');
+  if (!hidden) return;
+  hidden.value = [...document.querySelectorAll('.ymgp-cond-check:checked')]
+    .map((el) => el.value.trim())
+    .filter(Boolean)
+    .join(', ');
 }
 
 async function loadHolidaySection() {
@@ -2583,25 +3395,29 @@ function bindHolidayActions() {
 }
 
 function collectSettings() {
-  syncScreenerConditionNamesField();
-  syncSangttaConditionNamesField();
   syncBreakoutConditionNamesField();
+  syncYmgpConditionNamesField();
   const out = {};
   const sizingMethod = ($('set_sizing_method')?.value || 'PYRAMIDING').toUpperCase();
   // hidden 조건식 필드는 아래에서 체크박스 기준으로 직접 수집
   const skipKeys = new Set([
     'initial_max_amount_fixed',
+    'initial_max_deposit_pct_fixed',
     'signal_min_threshold_fixed',
     'screener_condition_names',
     'sangtta_condition_names',
     'breakout_condition_names',
+    'ymgp_condition_names',
   ]);
   if (sizingMethod === 'FIXED') {
     skipKeys.add('initial_min_amount');
     skipKeys.add('initial_max_amount');
+    skipKeys.add('initial_min_deposit_pct');
+    skipKeys.add('initial_max_deposit_pct');
     skipKeys.add('signal_min_threshold');
     skipKeys.add('signal_max_threshold');
     skipKeys.add('add_buy_amount');
+    skipKeys.add('add_buy_deposit_pct');
     skipKeys.add('add_buy_trigger');
   }
 
@@ -2622,6 +3438,12 @@ function collectSettings() {
       out.initial_max_amount = parseNum(fixedEl.value);
       out.initial_min_amount = parseNum(fixedEl.value);
     }
+    const fixedPct = $('set_initial_max_deposit_pct_fixed');
+    if (fixedPct && fixedPct.value !== '') {
+      const p = parseNum(fixedPct.value);
+      out.initial_max_deposit_pct = p;
+      out.initial_min_deposit_pct = p;
+    }
     const fr = $('set_signal_min_threshold_fixed');
     if (fr && fr.value !== '') out.signal_min_threshold = parseNum(fr.value);
   } else {
@@ -2631,42 +3453,39 @@ function collectSettings() {
       out.initial_max_amount = Math.max(weak, strong);
       out.initial_min_amount = Math.min(weak, strong);
     }
+    const weakPct = parseNum($('set_initial_max_deposit_pct')?.value || 0);
+    const strongPct = parseNum($('set_initial_min_deposit_pct')?.value || 0);
+    if (weakPct > 0 || strongPct > 0) {
+      const hi = Math.max(weakPct || 0, strongPct || 0);
+      const lo = Math.min(
+        weakPct > 0 ? weakPct : hi,
+        strongPct > 0 ? strongPct : hi,
+      );
+      out.initial_max_deposit_pct = hi || null;
+      out.initial_min_deposit_pct = lo || null;
+    }
   }
 
-  // 조건식은 체크박스 상태를 최우선으로 수집 (hidden 값에 의존하지 않음)
-  const condNames = [...document.querySelectorAll('.screener-cond-check:checked')]
-    .map((el) => el.value.trim())
-    .filter(Boolean);
-  out.screener_condition_names = condNames.join(', ');
+  if (!out.buy_amount_unit) out.buy_amount_unit = 'WON';
+  out.buy_amount_unit = String(out.buy_amount_unit).toUpperCase() === 'DEPOSIT_PCT'
+    ? 'DEPOSIT_PCT'
+    : 'WON';
 
-  const sangNames = [...document.querySelectorAll('.sangtta-cond-check:checked')]
-    .map((el) => el.value.trim())
-    .filter(Boolean);
-  out.sangtta_condition_names = sangNames.join(', ');
+  // 조건식은 체크박스 상태를 최우선으로 수집 (hidden 값에 의존하지 않음)
+  // 레거시·상따 유니버스는 조건식 미사용 — screener/sangtta_condition_names는 저장하지 않음(기존값 유지)
   const breakoutNames = [...document.querySelectorAll('.breakout-cond-check:checked')]
     .map((el) => el.value.trim())
     .filter(Boolean);
   out.breakout_condition_names = breakoutNames.join(', ');
+  const ymgpNames = [...document.querySelectorAll('.ymgp-cond-check:checked')]
+    .map((el) => el.value.trim())
+    .filter(Boolean);
+  out.ymgp_condition_names = ymgpNames.join(', ');
 
-  out.screener_verify_condition_names = [...document.querySelectorAll('.screener-verify-cond-check:checked')]
-    .map((el) => el.value.trim()).filter(Boolean).join(', ');
-  out.sangtta_verify_condition_names = [...document.querySelectorAll('.sangtta-verify-cond-check:checked')]
-    .map((el) => el.value.trim()).filter(Boolean).join(', ');
-  out.breakout_verify_condition_names = [...document.querySelectorAll('.breakout-verify-cond-check:checked')]
-    .map((el) => el.value.trim()).filter(Boolean).join(', ');
-
-  const hiddenCond = $('set_screener_condition_names');
-  if (hiddenCond) hiddenCond.value = out.screener_condition_names;
-  const hiddenSang = $('set_sangtta_condition_names');
-  if (hiddenSang) hiddenSang.value = out.sangtta_condition_names;
   const hiddenBreakout = $('set_breakout_condition_names');
   if (hiddenBreakout) hiddenBreakout.value = out.breakout_condition_names;
-  const hv1 = $('set_screener_verify_condition_names');
-  if (hv1) hv1.value = out.screener_verify_condition_names;
-  const hv2 = $('set_sangtta_verify_condition_names');
-  if (hv2) hv2.value = out.sangtta_verify_condition_names;
-  const hv3 = $('set_breakout_verify_condition_names');
-  if (hv3) hv3.value = out.breakout_verify_condition_names;
+  const hiddenYmgp = $('set_ymgp_condition_names');
+  if (hiddenYmgp) hiddenYmgp.value = out.ymgp_condition_names;
 
   // 상따 소액/슬롯 기본값
   if (out.sangtta_buy_amount == null || out.sangtta_buy_amount === '' || Number(out.sangtta_buy_amount) <= 0) {
@@ -2692,7 +3511,16 @@ function collectSettings() {
   if (out.sharp_drop_soft_pct == null || out.sharp_drop_soft_pct === '') out.sharp_drop_soft_pct = 3;
   if (out.sharp_drop_hard_pct == null || out.sharp_drop_hard_pct === '') out.sharp_drop_hard_pct = 5;
   if (out.soft_confirm_polls == null || out.soft_confirm_polls === '' || Number(out.soft_confirm_polls) <= 0) {
-    out.soft_confirm_polls = 2;
+    out.soft_confirm_polls = 3;
+  }
+  if (out.market_risk_index == null || out.market_risk_index === '') {
+    out.market_risk_index = 'kospi';
+  }
+  if (out.market_risk_change_pct == null || out.market_risk_change_pct === '') {
+    out.market_risk_change_pct = -2.0;
+  }
+  if (out.market_risk_max_buys_per_strategy == null || out.market_risk_max_buys_per_strategy === '') {
+    out.market_risk_max_buys_per_strategy = 2;
   }
   if (out.scan_interval_sec == null || out.scan_interval_sec === '' || Number(out.scan_interval_sec) <= 0) {
     out.scan_interval_sec = 60;
@@ -2706,8 +3534,32 @@ function collectSettings() {
   if (out.breakout_entry_hard == null) out.breakout_entry_hard = true;
   if (out.breakout_entry_soft == null) out.breakout_entry_soft = true;
   if (out.breakout_entry_soft_polls == null || Number(out.breakout_entry_soft_polls) <= 0) {
-    out.breakout_entry_soft_polls = 2;
+    out.breakout_entry_soft_polls = 3;
   }
+  if (out.breakout_entry_hold == null) out.breakout_entry_hold = true;
+  if (out.breakout_hold_expire_bars == null || Number(out.breakout_hold_expire_bars) <= 0) {
+    out.breakout_hold_expire_bars = 3;
+  }
+  if (out.breakout_hold_rsi_min == null || out.breakout_hold_rsi_min === '') {
+    out.breakout_hold_rsi_min = 30;
+  }
+  if (out.breakout_body_pct == null || out.breakout_body_pct === '') out.breakout_body_pct = 2;
+  if (out.breakout_range_mult == null || out.breakout_range_mult === '') out.breakout_range_mult = 0;
+  if (out.breakout_require_ma20_cross == null) out.breakout_require_ma20_cross = true;
+  if (!out.breakout_ma20_mode) out.breakout_ma20_mode = 'above';
+  if (out.breakout_ma20_grace_bars == null || out.breakout_ma20_grace_bars === '') out.breakout_ma20_grace_bars = 3;
+  if (out.breakout_rsi_period == null || Number(out.breakout_rsi_period) <= 0) {
+    out.breakout_rsi_period = 10;
+  }
+  if (out.ymgp_buy_amount_1 == null || Number(out.ymgp_buy_amount_1) <= 0) out.ymgp_buy_amount_1 = 500000;
+  if (out.ymgp_buy_amount_2 == null || Number(out.ymgp_buy_amount_2) <= 0) out.ymgp_buy_amount_2 = 500000;
+  if (out.jongga_buy_amount == null || Number(out.jongga_buy_amount) <= 0) out.jongga_buy_amount = 1000000;
+  if (out.jongga_max_slots == null || Number(out.jongga_max_slots) <= 0) out.jongga_max_slots = 1;
+  if (!out.jongga_trade_end_time) out.jongga_trade_end_time = out.jongga_pick_end_time || '14:40';
+  if (!out.jongga_pick_end_time) out.jongga_pick_end_time = out.jongga_trade_end_time || '14:40';
+  if (out.ymgp_max_slots == null || Number(out.ymgp_max_slots) <= 0) out.ymgp_max_slots = 1;
+  if (!out.ymgp_trade_start_time) out.ymgp_trade_start_time = '09:30';
+  if (!out.ymgp_trade_end_time) out.ymgp_trade_end_time = '14:30';
 
   return out;
 }
@@ -2729,12 +3581,19 @@ async function saveSettings(enableOverride) {
   payload.profit_lock_floor = null;
   if (!payload.order_method) payload.order_method = 'MARKET';
   try {
-    await postJSON('/trading/settings', payload);
-    toast(enableOverride === true ? '자동매매를 시작했습니다.' : (enableOverride === false ? '자동매매를 중지했습니다.' : '설정을 저장했습니다.'));
+    const data = await postJSON('/trading/settings', payload);
+    toast(
+      data && data.resumed_from_daily_halt
+        ? '일일 한도 완화로 자동매매를 다시 시작했습니다.'
+        : (enableOverride === true ? '자동매매를 시작했습니다.' : (enableOverride === false ? '자동매매를 중지했습니다.' : '설정을 저장했습니다.'))
+    );
     await loadSettings();
     await loadStatus();
     if (isAutoTabActive()) loadPositions(true, { silent: true });
-  } catch (e) { toast('설정 저장 실패', true); }
+  } catch (e) {
+    const msg = (e && e.message) ? String(e.message) : '';
+    toast(msg ? `설정 저장 실패 (${msg})` : '설정 저장 실패', true);
+  }
 }
 
 /* ===== Tabs ===== */
@@ -2799,12 +3658,14 @@ const refreshMap = {
   positions: () => loadPositions(true), sells: loadSells, orders: loadOrders, conditions: loadConditions,
 };
 const ACTIVITY_REFRESH_MS = 5000;
+const LOG_REFRESH_EVERY_N_ACTIVITY = 3; // 활동 로그 3회(~15초)마다 체결 로그도 갱신
 const POSITION_LIVE_REFRESH_MS = 10000;
 const AUTO_REFRESH_MS = 60000;
 
 let autoTimer = null;
 let activityTimer = null;
 let positionsLiveTimer = null;
+let _activityPollCount = 0;
 
 function isAutoTabActive() {
   const pane = $('pane-auto');
@@ -2841,7 +3702,15 @@ function startActivityPolling() {
   if (activityTimer) clearInterval(activityTimer);
   if (!$('activityBody')) return;
   activityTimer = setInterval(() => {
-    if (isAutoTabActive() && isAutoMonitorSubActive()) loadActivity();
+    if (isAutoTabActive() && isAutoMonitorSubActive()) {
+      loadActivity();
+      _activityPollCount += 1;
+      // 매수 실패가 PENDING→FAILED로 바뀌면 체결 로그에 바로 보이도록
+      if (_activityPollCount % LOG_REFRESH_EVERY_N_ACTIVITY === 0) {
+        loadLog();
+        loadOrders();
+      }
+    }
   }, ACTIVITY_REFRESH_MS);
 }
 
@@ -2863,6 +3732,8 @@ document.addEventListener('DOMContentLoaded', () => {
   $('scrRefresh').onclick = loadScreener;
   if ($('sangRefresh')) $('sangRefresh').onclick = loadSangtta;
   if ($('breakoutRefresh')) $('breakoutRefresh').onclick = loadBreakout;
+  if ($('ymgpRefresh')) $('ymgpRefresh').onclick = loadYmgp;
+  if ($('jonggaRefresh')) $('jonggaRefresh').onclick = () => loadJongga(true);
   document.querySelectorAll('[data-refresh]').forEach(btn => { btn.onclick = () => { $('lastUpdated').textContent = new Date().toLocaleTimeString('ko-KR'); (refreshMap[btn.dataset.refresh] || (() => {}))(); }; });
   setupAutoRefresh();
   startActivityPolling();

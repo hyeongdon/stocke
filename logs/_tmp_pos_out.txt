@@ -1,0 +1,10 @@
+﻿strategy_key positions:
+{'stock_code': '322000', 'stock_name': 'HD현대에너지솔루션', 'status': 'STOP_LOSS', 'strategy_key': 'legacy'}
+{'stock_code': '097230', 'stock_name': 'HJ중공업', 'status': 'STOP_LOSS', 'strategy_key': 'legacy'}
+{'stock_code': '004310', 'stock_name': '현대약품', 'status': 'STOP_LOSS', 'strategy_key': 'sangtta'}
+{'stock_code': '100090', 'stock_name': 'SK오션플랜트', 'status': 'STOP_LOSS', 'strategy_key': 'legacy'}
+{'stock_code': '413630', 'stock_name': '씨피시스템', 'status': 'STOP_LOSS', 'strategy_key': 'sangtta'}
+{'stock_code': '037070', 'stock_name': '파세코', 'status': 'TRAILING', 'strategy_key': 'legacy'}
+{'stock_code': '176750', 'stock_name': '듀켐바이오', 'status': 'STOP_LOSS', 'strategy_key': 'sangtta'}
+{'stock_code': '200710', 'stock_name': '에이디테크놀로지', 'status': 'HOLDING', 'strategy_key': 'legacy'}
+breakout filled today 0

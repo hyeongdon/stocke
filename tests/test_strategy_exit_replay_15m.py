@@ -150,6 +150,53 @@ def test_15m_sangtta_band_cross_entry():
     assert 14.5 <= float(result["entry"]["change_rate"]) <= 15.5
 
 
+def test_15m_sangtta_band_cross_ignores_pre_fill_wick():
+    """급등 봉: 시가=저가에서 밴드 횡단 진입 후, 같은 봉 진입 전 low로 급락 HARD 내면 안 됨."""
+    # 전일 1800 → 12~15% 밴드 = 2016~2070 (기본 설정을 12~15로)
+    daily = [
+        _dbar("2026-01-02", 1700, 1850, 1680, 1800),
+        _dbar("2026-01-05", 1739, 2340, 1739, 2340),
+    ]
+    mbars = [
+        # O=L=1739 → 밴드 2016 횡단 → H=2085 (상한가 전)
+        _mbar("2026-01-05 10:20:00", 1739, 2085, 1739, 2085),
+        # 이후 상한가 안착
+        _mbar("2026-01-05 10:35:00", 2200, 2340, 2180, 2340),
+        _mbar("2026-01-05 10:40:00", 2340, 2340, 2340, 2340),
+        _mbar("2026-01-05 14:50:00", 2340, 2340, 2340, 2340),
+    ]
+    result = asyncio.run(run_stock_exit_replay_15m_async(
+        "131760",
+        "2026-01-05",
+        strategy="sangtta",
+        days=1,
+        bar_minutes=5,
+        settings_override=_settings(
+            use_entry_gate=True,
+            sangtta_trade_start_time="09:00",
+            sangtta_trade_end_time="15:00",
+            sangtta_change_min=12.0,
+            sangtta_change_max=15.0,
+            sharp_drop_hard_pct=5.0,
+            sharp_drop_soft_pct=3.0,
+            liquidate_before_close=True,
+            liquidate_time="15:10",
+        ),
+        daily_bars_override=daily,
+        intraday_bars_override=mbars,
+    ))
+    assert result["success"]
+    assert result["entry"]["passed"] is True
+    assert result["entry"]["fill_mode"] == "band_cross"
+    assert result["entry"]["price"] == 2016
+    # 같은 봉 저가 급락 손절이면 안 됨
+    assert not (
+        result["exit"]["time"] == "2026-01-05 10:20:00"
+        and "급락" in str(result["exit"].get("detail") or "")
+    )
+    assert float(result["exit"]["profit_loss_rate_pct"]) > 0
+
+
 def test_5m_resolution_label_and_load_path():
     """단일 종목 5분봉 시뮬 — resolution 라벨·종가 체결 모드."""
     daily = [

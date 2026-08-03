@@ -149,6 +149,35 @@ def entry_gate_check_items(
             key="volume_ratio_min",
         ))
 
+    rsi_min = settings.get("legacy_rsi_min")
+    rsi_max = settings.get("legacy_rsi_max")
+    if rsi_min is not None or rsi_max is not None:
+        rsi = ctx.get("rsi14")
+        computed = None
+        actual = "—"
+        if rsi is not None:
+            try:
+                rv = float(rsi)
+                actual = f"{rv:.1f}"
+                ok = True
+                if rsi_min is not None and rv < float(rsi_min):
+                    ok = False
+                if rsi_max is not None and rv > float(rsi_max):
+                    ok = False
+                computed = ok
+            except (TypeError, ValueError):
+                computed = None
+        lo = f"{float(rsi_min):g}" if rsi_min is not None else "—"
+        hi = f"{float(rsi_max):g}" if rsi_max is not None else "—"
+        items.append(_chk(
+            "진입 게이트", "일봉 RSI(14)",
+            passed=_pass_or_infer(computed),
+            actual=actual,
+            required=f"{lo} ~ {hi}",
+            note=_note(computed),
+            key="legacy_rsi",
+        ))
+
     if not items:
         items.append(_chk(
             "진입 게이트", "진입 게이트",
@@ -206,19 +235,19 @@ def build_buy_condition_checklist(
             "condition": "조건식 스크리너",
             "both": "거래대금+조건식",
             "watchlist": "관심종목",
-            "sangtta": "상따 전용 조건식",
-            "breakout": "과매도 돌파 전용 조건식",
+            "sangtta": "상따 등락률상위(ka10027)",
+            "breakout": "수급 돌파 전용 조건식",
         }
         src_label = src_map.get(source) or "자동매매 스캐너"
         if meta.get("strategy") == "sangtta" or source == "sangtta":
-            src_label = "상따 전용 조건식"
+            src_label = "상따 등락률상위(ka10027)"
         elif meta.get("strategy") == "breakout" or source == "breakout":
-            src_label = "과매도 돌파 전용 조건식"
+            src_label = "수급 돌파 전용 조건식"
         items.append(_chk(
             "매수 경로", "후보 종목",
             passed=infer,
             actual=src_label,
-            required="관심종목·스크리너(거래대금/조건식)·상따·ETF 제외",
+            required="관심종목·스크리너(거래대금/조건식)·상따(등락률상위)·ETF 제외",
             key="candidate_source",
         ))
     elif signal:
@@ -261,7 +290,7 @@ def build_buy_condition_checklist(
         level_price = int(meta.get("breakout_level_price") or meta.get("level_price") or 0)
         level_ok = bool(price and level_price and int(price) > level_price)
         items.append(_chk(
-            "돌파 게이트", "과매도 조건식 유니버스",
+            "돌파 게이트", "수급 돌파 조건식 유니버스",
             passed=infer,
             actual="전용 조건식 통과",
             required="breakout_condition_names 편입",
@@ -291,6 +320,38 @@ def build_buy_condition_checklist(
             required=f"< {max_change:g}%",
             key="breakout_overheat",
         ))
+        confirm_mode = meta.get("entry_confirm_mode")
+        hold_rsi = meta.get("hold_rsi")
+        rsi_min = settings.get("breakout_hold_rsi_min")
+        if rsi_min is None:
+            rsi_min = 30.0
+        items.append(_chk(
+            "돌파 게이트", "진입 확인(HARD/SOFT/HOLD)",
+            passed=infer if not confirm_mode else True,
+            actual=str(confirm_mode or "—"),
+            required="HARD ∨ SOFT ∨ HOLD",
+            key="breakout_entry_confirm",
+        ))
+        if hold_rsi is not None or str(confirm_mode or "").startswith("HOLD") or "HOLD" in str(confirm_mode or ""):
+            hold_cross = meta.get("hold_rsi_cross")
+            hold_prev = meta.get("hold_rsi_prev")
+            hold_bull = meta.get("hold_bullish_ok")
+            items.append(_chk(
+                "돌파 게이트", "HOLD RSI 전봉교차+양봉",
+                passed=(
+                    bool(hold_cross) and bool(hold_bull)
+                    if hold_cross is not None and hold_bull is not None
+                    else infer
+                ),
+                actual=(
+                    f"전봉교차 {float(hold_prev):.1f}→… / 현재 {float(hold_rsi):.1f}"
+                    f"{' · 양봉' if hold_bull else ' · 양봉아님'}"
+                    if hold_rsi is not None and hold_prev is not None
+                    else (f"RSI {float(hold_rsi):.1f}" if hold_rsi is not None else "—")
+                ),
+                required=f"전봉 ≤{float(rsi_min):g}<교차 · 현재봉 양봉·RSI>{float(rsi_min):g}",
+                key="breakout_hold_rsi",
+            ))
         items.append(_chk(
             "돌파 게이트", "oversold_breakout 패키지",
             passed=infer,

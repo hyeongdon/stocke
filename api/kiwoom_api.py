@@ -41,10 +41,26 @@ SCREENER_VOLUME_RANK_FILTERS = {
     "crd_tp": "0",           # 0:전체
     "trde_qty_tp": "200",    # 200:20만주 이상
     "pric_tp": "0",          # 0:전체
-    "trde_prica_tp": "0",    # 0:전체
+    "trde_prica_tp": "0",    # 0:전체 — screener 시 대금하한≥10억이면 get_volume_rank가 100으로 상향
     "mrkt_open_tp": "0",     # 0:전체 (1장중 2장전 3장후)
     "stex_tp": "1",          # 1:KRX (3:통합)
 }
+
+# ka10027 전일대비등락률상위 — 상따 유니버스 기본 필터 (공식: openapi.kiwoom.com ka10027)
+# stk_cnd: 0전체, 1관리종목제외, 3우선주제외, 4우선주+관리주제외, …
+# pric_cnd: 8=1천원이상 / trde_prica_cnd: 100=10억원이상
+# ETF 제외 옵션은 없어 후처리(_is_etf_family_item / _is_screener_stock)로 제거
+SANGTTA_CHANGE_RATE_RANK_FILTERS = {
+    "sort_tp": "1",          # 1:상승률
+    "trde_qty_cnd": "0",     # 0:전체
+    "stk_cnd": "1",          # 1:관리종목제외
+    "crd_cnd": "0",          # 0:전체
+    "updown_incls": "1",     # 1:상하한 포함 (게이트에서 상한가 진입 금지)
+    "pric_cnd": "8",         # 8:1천원이상
+    "trde_prica_cnd": "100", # 100:10억원이상
+    "stex_tp": "1",          # 1:KRX
+}
+SANGTTA_UNIVERSE_MIN_CHANGE_RATE = 13.0  # 유니버스 등락률 하한(%) — 게이트 밴드와 별개
 
 # 계좌 잔고 — KiwoomAPI 인스턴스 간 공유 캐시·동시 요청 합치기
 _account_balance_cache: dict = {"at": 0.0, "data": None}
@@ -211,11 +227,23 @@ class KiwoomAPI:
 
     @staticmethod
     def normalize_stock_code(stock_code: str) -> str:
-        """키움 종목코드 정규화 — A 접두사·_L/_K 거래소 접미사 제거."""
+        """키움 종목코드 정규화 — A 접두사·거래소 접미사(_NX/_AL/_L/_K 등) 제거."""
         code = str(stock_code or "").strip().replace("A", "")
         if "_" in code:
             code = code.split("_", 1)[0]
         return code.strip()
+
+    @staticmethod
+    def minute_chart_stk_cd(stock_code: str) -> str:
+        """분봉 조회용 종목코드 — KRX+NXT 통합(_AL).
+
+        HTS 통합/NXT 차트와 MA·거래량을 맞추기 위해 분봉(ka10080)은
+        기본 6자리가 아니라 `{code}_AL` 로 요청한다. 일봉·주문은 기존 6자리.
+        """
+        base = KiwoomAPI.normalize_stock_code(stock_code)
+        if not base or len(base) != 6:
+            return base
+        return f"{base}_AL"
 
     async def _acquire_api_slot(
         self,
@@ -231,12 +259,17 @@ class KiwoomAPI:
             should_yield_low_priority,
         )
         pri = priority if priority is not None else APIPriority.NORMAL
-        if pri == APIPriority.LOW and should_yield_low_priority():
-            return False
         if max_wait is None:
             max_wait = effective_max_wait(pri)
         deadline = time.time() + max_wait
         while time.time() < deadline:
+            # LOW는 스캔 버스트 중 양보하되, max_wait 안에서는 대기 후 재시도
+            if pri == APIPriority.LOW and should_yield_low_priority():
+                wait_sec = min(0.5, deadline - time.time())
+                if wait_sec <= 0:
+                    return False
+                await asyncio.sleep(wait_sec)
+                continue
             if not api_rate_limiter.is_api_available():
                 wait_sec = min(
                     max(api_rate_limiter.seconds_until_available(), 0.2),
@@ -828,7 +861,16 @@ class KiwoomAPI:
         stock_code = self.normalize_stock_code(stock_code)
         normalized = (period or "1D").strip().upper()
         is_daily = normalized in {"1D", "D", "DAY", "DAILY"}
-        cache_key = f"{stock_code}:{normalized}"
+        is_minute_chart = normalized in {
+            "5M", "5MIN", "M5", "5MINUTE", "5",
+            "1M", "M1", "1MIN", "3M", "M3", "3MIN",
+            "10M", "M10", "10MIN", "15M", "M15",
+            "30M", "M30", "60M", "M60", "60MIN", "1H",
+        }
+        # 분봉은 통합(_AL) 시세 — 캐시 키에 venue 구분
+        cache_key = (
+            f"{stock_code}:AL:{normalized}" if is_minute_chart else f"{stock_code}:{normalized}"
+        )
         ttl = self._daily_chart_cache_ttl if is_daily else self._chart_cache_ttl
         cached = self._chart_cache.get(cache_key)
         if cached:
@@ -837,7 +879,8 @@ class KiwoomAPI:
                 logger.debug(f"💾 [CHART_CACHE_HIT] {cache_key}")
                 return data[-max_bars:] if max_bars and data else data
 
-        if not is_krx_session() and not (allow_off_hours and is_daily):
+        # 분봉도 검증·시뮬용 allow_off_hours 허용
+        if not is_krx_session() and not (allow_off_hours and (is_daily or is_minute_chart)):
             if cached:
                 logger.debug(f"장외 시간 — 차트 캐시 사용: {cache_key}")
                 data = cached[0]
@@ -862,8 +905,6 @@ class KiwoomAPI:
             endpoint = '/api/dostk/chart'
             url = host + endpoint
             
-            is_minute_chart = normalized in {"5M", "5MIN", "M5", "5MINUTE", "5", "1M", "M1", "1MIN", "3M", "M3", "3MIN", "10M", "M10", "10MIN", "15M", "M15", "30M", "M30", "60M", "M60", "60MIN", "1H"}
-            
             if is_minute_chart:
                 api_id = 'ka10080'
                 if normalized in {"5M", "5MIN", "M5", "5MINUTE", "5"}:
@@ -883,7 +924,7 @@ class KiwoomAPI:
                 else:
                     tic_scope = "5"
                 request_data = {
-                    "stk_cd": stock_code,
+                    "stk_cd": self.minute_chart_stk_cd(stock_code),
                     "tic_scope": tic_scope,
                     "upd_stkpc_tp": "1",
                 }
@@ -988,7 +1029,8 @@ class KiwoomAPI:
             return {"success": False, "error": "날짜 형식이 올바르지 않습니다 (YYYY-MM-DD)", "bars": []}
 
         yyyymmdd = target.strftime("%Y%m%d")
-        cache_key = f"{stock_code}:M{tic_scope}:{yyyymmdd}"
+        # 분봉 검증/시뮬은 통합(_AL) 시세
+        cache_key = f"{stock_code}:AL:M{tic_scope}:{yyyymmdd}"
         today_kst = kst_today().strftime("%Y%m%d")
         ttl = self._chart_cache_ttl if yyyymmdd == today_kst else 86400
 
@@ -1017,7 +1059,7 @@ class KiwoomAPI:
             "api-id": "ka10080",
         }
         body = {
-            "stk_cd": stock_code,
+            "stk_cd": self.minute_chart_stk_cd(stock_code),
             "tic_scope": str(tic_scope),
             "upd_stkpc_tp": "1",
             "date": yyyymmdd,
@@ -1285,7 +1327,30 @@ class KiwoomAPI:
             # 1504(해당 URI에서 지원하지 않는 API ID) 발생 시 다음 URI로 재시도한다.
             endpoint_candidates = ["/api/dostk/stkinfo", "/api/dostk/chart", "/api/dostk/iteminfo"]
             if api_id == "ka10004":
-                endpoint_candidates = ["/api/dostk/hoga", "/api/dostk/stkinfo", "/api/dostk/chart", "/api/dostk/iteminfo"]
+                # 주식호가 — 공식 URI는 /api/dostk/mrkcond (hoga/stkinfo 등은 1504)
+                endpoint_candidates = [
+                    "/api/dostk/mrkcond",
+                    "/api/dostk/hoga",
+                    "/api/dostk/stkinfo",
+                ]
+            elif api_id in ("ka10008", "ka10009", "ka10131"):
+                endpoint_candidates = ["/api/dostk/frgnistt", "/api/dostk/stkinfo", "/api/dostk/mrkcond"]
+            elif api_id in ("ka10045", "ka10063", "ka10066"):
+                endpoint_candidates = ["/api/dostk/mrkcond", "/api/dostk/stkinfo"]
+            elif api_id in ("ka90005", "ka90006", "ka90007", "ka90008", "ka90010", "ka90013"):
+                endpoint_candidates = ["/api/dostk/mrkcond", "/api/dostk/stkinfo"]
+            elif api_id in ("ka90003", "ka90004"):
+                endpoint_candidates = ["/api/dostk/stkinfo", "/api/dostk/mrkcond"]
+            elif api_id in ("ka90001", "ka90002"):
+                endpoint_candidates = ["/api/dostk/thme"]
+            elif api_id == "ka10006":
+                # 주식시분요청도 시세(mrkcond) 계열
+                endpoint_candidates = [
+                    "/api/dostk/mrkcond",
+                    "/api/dostk/stkinfo",
+                    "/api/dostk/chart",
+                    "/api/dostk/iteminfo",
+                ]
 
             headers = {
                 "Content-Type": "application/json;charset=UTF-8",
@@ -1414,17 +1479,6 @@ class KiwoomAPI:
         return True
 
     @staticmethod
-    def _is_screener_per_eligible(per: Optional[float], max_per: float = 100.0) -> bool:
-        """스크리너 PER 필터 — 음수 또는 max_per 이상이면 제외. 데이터 없으면 통과."""
-        if per is None:
-            return True
-        try:
-            p = float(per)
-        except (TypeError, ValueError):
-            return True
-        return p >= 0 and p < max_per
-
-    @staticmethod
     def _post_filter_screener_items(items: List[Dict]) -> Tuple[List[Dict], int]:
         """스크리너 — 개별 주식만 남김 (ETF/ETN/레버리지/인버스/곱버스·SPAC·우선주·정리매매 제외).
 
@@ -1467,6 +1521,10 @@ class KiwoomAPI:
         limit: int = 50,
         *,
         screener_filters: bool = True,
+        positive_change_only: Optional[bool] = None,
+        min_change_rate: Optional[float] = None,
+        max_change_rate: Optional[float] = None,
+        min_trade_amount_eok: Optional[float] = None,
         mang_stk_incls: Optional[str] = None,
         crd_tp: Optional[str] = None,
         trde_qty_tp: Optional[str] = None,
@@ -1480,9 +1538,50 @@ class KiwoomAPI:
         market: 000 전체 / 001 코스피 / 101 코스닥
         sort_tp: 1 거래량 / 2 거래회전율 / 3 거래대금
         screener_filters: True면 KRX·20만주+·관리/우선주 제외 등 스크리너 기본값 적용
+        positive_change_only: True면 등락률>0만 채움(기본: screener_filters와 동일).
+            API에 등락 필터가 없어 후처리하며, limit개 채울 때까지 페이징한다.
+        min_change_rate: 지정 시 등락률>=이 값만 채움. screener_filters면
+            Config.SCREENER_MIN_CHANGE_RATE(기본 3.3)를 쓰고, 0이면 플러스(>0)만.
+        max_change_rate: 지정 시 등락률>=이 값은 과열로 제외. screener_filters면
+            Config.SCREENER_MAX_CHANGE_RATE(기본 15). 0이면 상한 미적용.
+        min_trade_amount_eok: 당일 거래대금 하한(억원). screener_filters면
+            Config.SCREENER_MIN_TRADE_AMOUNT_EOK(기본 20). 0이면 하한 미적용.
+            trde_amt 단위는 백만원이므로 내부에서 ×100 변환한다.
         """
+        if positive_change_only is None:
+            positive_change_only = bool(screener_filters)
+        if min_change_rate is None and screener_filters:
+            try:
+                min_change_rate = float(Config.SCREENER_MIN_CHANGE_RATE)
+            except (TypeError, ValueError, AttributeError):
+                min_change_rate = 0.0
+        if max_change_rate is None and screener_filters:
+            try:
+                max_change_rate = float(Config.SCREENER_MAX_CHANGE_RATE)
+            except (TypeError, ValueError, AttributeError):
+                max_change_rate = 0.0
+        if min_trade_amount_eok is None and screener_filters:
+            try:
+                min_trade_amount_eok = float(Config.SCREENER_MIN_TRADE_AMOUNT_EOK)
+            except (TypeError, ValueError, AttributeError):
+                min_trade_amount_eok = 0.0
+        # 0 이하면 플러스(>0) 규칙으로 폴백
+        change_floor: Optional[float] = None
+        if min_change_rate is not None and float(min_change_rate) > 0:
+            change_floor = float(min_change_rate)
+        change_ceil: Optional[float] = None
+        if max_change_rate is not None and float(max_change_rate) > 0:
+            change_ceil = float(max_change_rate)
+        # 억원 → 백만원 (ka10030 trde_amt)
+        amount_floor_m: Optional[float] = None
+        if min_trade_amount_eok is not None and float(min_trade_amount_eok) > 0:
+            amount_floor_m = float(min_trade_amount_eok) * 100.0
         if screener_filters:
             filt = dict(SCREENER_VOLUME_RANK_FILTERS)
+            # API 거래대금구분에 20억 단계는 없음(10억=100, 30억=300).
+            # 10억 이상으로 1차 축소 후 후처리로 정확한 하한 적용.
+            if amount_floor_m is not None and amount_floor_m >= 1000 and trde_prica_tp is None:
+                filt["trde_prica_tp"] = "100"
         else:
             filt = {
                 "mang_stk_incls": "0",
@@ -1527,10 +1626,19 @@ class KiwoomAPI:
                 kept: List[Dict] = []
                 raw_count = 0
                 excluded_etf_count = 0
+                excluded_negative_count = 0
+                excluded_overheat_count = 0
+                excluded_low_amount_count = 0
                 seen_codes: set[str] = set()
                 cont_yn, next_key = "N", ""
                 pages = 0
-                max_pages = 12 if screener_filters else 1
+                # 등락·대금 필터 시 비중이 크면 페이지가 더 필요할 수 있음
+                need_paging = (
+                    screener_filters or positive_change_only
+                    or change_floor is not None or change_ceil is not None
+                    or amount_floor_m is not None
+                )
+                max_pages = 12 if need_paging else 1
                 retry_auth = False
 
                 async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -1591,6 +1699,22 @@ class KiwoomAPI:
                                     continue
                                 if not self._is_screener_stock(it.get("stock_name", ""), it.get("product_type")):
                                     continue
+                            chg = float(it.get("change_rate") or 0)
+                            if change_floor is not None:
+                                if chg < change_floor:
+                                    excluded_negative_count += 1
+                                    continue
+                            elif positive_change_only and chg <= 0:
+                                excluded_negative_count += 1
+                                continue
+                            if change_ceil is not None and chg >= change_ceil:
+                                excluded_overheat_count += 1
+                                continue
+                            if amount_floor_m is not None:
+                                amt = float(it.get("trade_amount") or 0)
+                                if amt < amount_floor_m:
+                                    excluded_low_amount_count += 1
+                                    continue
                             kept.append(it)
                             if len(kept) >= limit:
                                 break
@@ -1607,20 +1731,565 @@ class KiwoomAPI:
 
                 items = kept[:limit]
                 logger.info(
-                    f"[VOLUME_RANK] success count={len(items)} raw={raw_count} excluded_etf={excluded_etf_count} "
-                    f"pages={pages} market={market} sort={sort_tp} screener={screener_filters} body={body}"
+                    f"[VOLUME_RANK] success count={len(items)} raw={raw_count} "
+                    f"excluded_etf={excluded_etf_count} excluded_neg={excluded_negative_count} "
+                    f"excluded_oh={excluded_overheat_count} excluded_amt={excluded_low_amount_count} "
+                    f"pages={pages} market={market} sort={sort_tp} screener={screener_filters} "
+                    f"pos_only={positive_change_only} min_chg={change_floor} "
+                    f"max_chg={change_ceil} min_amt_eok="
+                    f"{(amount_floor_m / 100.0) if amount_floor_m is not None else None} "
+                    f"body={body}"
                 )
                 return {
                     "success": True,
                     "items": items,
                     "raw_count": raw_count,
                     "excluded_etf_count": excluded_etf_count,
+                    "excluded_negative_count": excluded_negative_count,
+                    "excluded_overheat_count": excluded_overheat_count,
+                    "excluded_low_amount_count": excluded_low_amount_count,
+                    "positive_change_only": positive_change_only,
+                    "min_change_rate": change_floor,
+                    "max_change_rate": change_ceil,
+                    "min_trade_amount_eok": (
+                        (amount_floor_m / 100.0) if amount_floor_m is not None else None
+                    ),
                     "api_filters": body,
                 }
 
             return {"success": False, "error": "토큰 재인증 후에도 조회 실패", "items": []}
         except Exception as e:
             logger.exception(f"[VOLUME_RANK] error={e}")
+            return {"success": False, "error": str(e), "items": []}
+
+    @staticmethod
+    def _parse_change_rate_rank_row(r: Dict) -> Dict:
+        name = r.get("stk_nm", "")
+        trade_amt_raw = (
+            r.get("trde_amt")
+            or r.get("acc_trde_amt")
+            or r.get("trde_prica")
+            or r.get("now_trde_prica")
+            or "0"
+        )
+        return {
+            "stock_code": KiwoomAPI.normalize_stock_code(str(r.get("stk_cd", ""))),
+            "stock_name": name,
+            "current_price": abs(_parse_kiwoom_int(r.get("cur_prc", "0"))),
+            "price_diff": _parse_kiwoom_int(r.get("pred_pre", "0")),
+            "change_rate": _parse_kiwoom_float(r.get("flu_rt", "0")),
+            "volume": abs(_parse_kiwoom_int(r.get("now_trde_qty", "0"))),
+            "trade_amount": abs(_parse_kiwoom_int(trade_amt_raw)),
+            "product_type": KiwoomAPI.classify_product_type(name),
+            "stock_class": (r.get("stk_cls") or "").strip() or None,
+        }
+
+    @staticmethod
+    def cap_by_trade_amount(items: List[Dict], limit: int) -> List[Dict]:
+        """거래대금(없으면 거래량×현재가) 내림차순으로 상위 limit개."""
+        n = max(1, int(limit or 1))
+
+        def _amt(it: Dict) -> float:
+            try:
+                v = it.get("trade_amount")
+                if v is not None and str(v).strip() != "" and float(v) > 0:
+                    return float(v)
+            except (TypeError, ValueError):
+                pass
+            try:
+                return float(it.get("volume") or 0) * float(it.get("current_price") or 0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        return sorted(items or [], key=_amt, reverse=True)[:n]
+
+    @staticmethod
+    def _parse_theme_group_row(r: Dict) -> Dict:
+        return {
+            "theme_code": str(r.get("thema_grp_cd") or "").strip(),
+            "theme_name": str(r.get("thema_nm") or "").strip(),
+            "stock_count": abs(_parse_kiwoom_int(r.get("stk_num", "0"))),
+            "change_rate": _parse_kiwoom_float(r.get("flu_rt", "0")),
+            "rising_count": abs(_parse_kiwoom_int(r.get("rising_stk_num", "0"))),
+            "fall_count": abs(_parse_kiwoom_int(r.get("fall_stk_num", "0"))),
+            "period_return": _parse_kiwoom_float(r.get("dt_prft_rt", "0")),
+            "main_stocks": str(r.get("main_stk") or "").strip(),
+            "flu_sig": str(r.get("flu_sig") or "").strip(),
+        }
+
+    @staticmethod
+    def _parse_theme_stock_row(r: Dict) -> Dict:
+        name = str(r.get("stk_nm") or "").strip()
+        return {
+            "stock_code": KiwoomAPI.normalize_stock_code(str(r.get("stk_cd", ""))),
+            "stock_name": name,
+            "current_price": abs(_parse_kiwoom_int(r.get("cur_prc", "0"))),
+            "price_diff": _parse_kiwoom_int(r.get("pred_pre", "0")),
+            "change_rate": _parse_kiwoom_float(r.get("flu_rt", "0")),
+            "volume": abs(_parse_kiwoom_int(r.get("acc_trde_qty", "0"))),
+            "period_return": _parse_kiwoom_float(r.get("dt_prft_rt_n", "0")),
+            "product_type": KiwoomAPI.classify_product_type(name),
+        }
+
+    async def get_theme_group_list(
+        self,
+        *,
+        qry_tp: str = "0",
+        stk_cd: str = "",
+        date_tp: str = "1",
+        thema_nm: str = "",
+        flu_pl_amt_tp: str = "3",
+        stex_tp: str = "3",
+        max_pages: int = 20,
+    ) -> Dict:
+        """테마그룹별요청 (ka90001, /api/dostk/thme).
+
+        qry_tp: 0전체검색 / 1테마검색 / 2종목검색
+        date_tp: 기간수익률 기준 일수 (1~99)
+        flu_pl_amt_tp: 1상위기간수익 2하위기간수익 3상위등락률 4하위등락률
+        stex_tp: 1KRX / 2NXT / 3통합
+        """
+        body: Dict = {
+            "qry_tp": str(qry_tp or "0"),
+            "date_tp": str(date_tp or "1"),
+            "flu_pl_amt_tp": str(flu_pl_amt_tp or "3"),
+            "stex_tp": str(stex_tp or "3"),
+        }
+        code = self.normalize_stock_code(stk_cd) if stk_cd else ""
+        if code:
+            body["stk_cd"] = code
+        if thema_nm:
+            body["thema_nm"] = str(thema_nm)
+
+        try:
+            timeout = aiohttp.ClientTimeout(total=30)
+            use_mock = Config.KIWOOM_USE_MOCK_ACCOUNT
+            host = Config.KIWOOM_MOCK_API_URL if use_mock else Config.KIWOOM_REAL_API_URL
+            url = host + "/api/dostk/thme"
+
+            for auth_try in range(2):
+                token = self.token_manager.get_valid_token()
+                if not token:
+                    if not self.authenticate():
+                        return {"success": False, "error": "토큰 없음", "items": []}
+                    token = self.token_manager.get_valid_token()
+                if not token:
+                    return {"success": False, "error": "토큰 없음", "items": []}
+
+                headers_base = {
+                    "Content-Type": "application/json;charset=UTF-8",
+                    "authorization": f"Bearer {token}",
+                    "api-id": "ka90001",
+                }
+                items: List[Dict] = []
+                seen: set[str] = set()
+                cont_yn, next_key = "N", ""
+                pages = 0
+                retry_auth = False
+
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    while pages < max(1, int(max_pages or 1)):
+                        pages += 1
+                        if not await self._acquire_api_slot(
+                            "ka90001", max_wait=30.0, priority=APIPriority.LOW
+                        ):
+                            if items:
+                                break
+                            return {"success": False, "error": "API 호출 제한", "items": []}
+
+                        headers = {**headers_base, "cont-yn": cont_yn, "next-key": next_key}
+                        async with session.post(url, headers=headers, json=body) as resp:
+                            body_text = await resp.text()
+                            resp_cont = resp.headers.get("cont-yn") or resp.headers.get("Cont-Yn") or "N"
+                            resp_next = resp.headers.get("next-key") or resp.headers.get("Next-Key") or ""
+
+                            if resp.status == 429:
+                                api_rate_limiter.handle_api_error(Exception("429 Too Many Requests"))
+                                continue
+                            if resp.status != 200:
+                                if self._is_kiwoom_token_invalid(body_text) and auth_try == 0:
+                                    retry_auth = True
+                                    break
+                                return {
+                                    "success": False,
+                                    "error": f"HTTP {resp.status}",
+                                    "items": items,
+                                }
+
+                            try:
+                                data = json.loads(body_text)
+                            except json.JSONDecodeError:
+                                return {
+                                    "success": False,
+                                    "error": "JSON 파싱 실패",
+                                    "items": items,
+                                }
+
+                            ok = (data.get("return_code") == 0) or (data.get("rt_cd") == "0")
+                            if not ok:
+                                msg = data.get("return_msg") or data.get("msg1") or "ka90001 실패"
+                                if self._is_kiwoom_token_invalid(msg, data) and auth_try == 0:
+                                    retry_auth = True
+                                    break
+                                if any(
+                                    k in str(msg).lower()
+                                    for k in ["rate limit", "too many", "요청 한도", "429", "제한", "초과"]
+                                ):
+                                    api_rate_limiter.handle_api_error(Exception(msg))
+                                    continue
+                                return {"success": False, "error": msg, "items": items, "raw": data}
+
+                            for raw in data.get("thema_grp") or []:
+                                parsed = self._parse_theme_group_row(raw if isinstance(raw, dict) else {})
+                                tc = parsed.get("theme_code") or ""
+                                if not tc or tc in seen:
+                                    continue
+                                seen.add(tc)
+                                items.append(parsed)
+
+                            cont_yn = (resp_cont or data.get("cont_yn") or data.get("cont-yn") or "N").upper()
+                            next_key = data.get("next_key") or data.get("next-key") or resp_next or ""
+                            if cont_yn != "Y" or not next_key:
+                                break
+
+                if retry_auth:
+                    await self._reauthenticate_async()
+                    continue
+
+                logger.info("[THEME_GROUP] pages=%s items=%s", pages, len(items))
+                return {"success": True, "items": items, "pages": pages}
+
+            return {"success": False, "error": "토큰 재인증 실패", "items": []}
+        except Exception as e:
+            logger.exception(f"[THEME_GROUP] error={e}")
+            return {"success": False, "error": str(e), "items": []}
+
+    async def get_theme_component_stocks(
+        self,
+        thema_grp_cd: str,
+        *,
+        date_tp: str = "1",
+        stex_tp: str = "3",
+        max_pages: int = 10,
+    ) -> Dict:
+        """테마구성종목요청 (ka90002, /api/dostk/thme)."""
+        theme_code = str(thema_grp_cd or "").strip()
+        if not theme_code:
+            return {"success": False, "error": "thema_grp_cd 필요", "items": []}
+
+        body = {
+            "thema_grp_cd": theme_code,
+            "date_tp": str(date_tp or "1"),
+            "stex_tp": str(stex_tp or "3"),
+        }
+
+        try:
+            timeout = aiohttp.ClientTimeout(total=30)
+            use_mock = Config.KIWOOM_USE_MOCK_ACCOUNT
+            host = Config.KIWOOM_MOCK_API_URL if use_mock else Config.KIWOOM_REAL_API_URL
+            url = host + "/api/dostk/thme"
+
+            for auth_try in range(2):
+                token = self.token_manager.get_valid_token()
+                if not token:
+                    if not self.authenticate():
+                        return {"success": False, "error": "토큰 없음", "items": []}
+                    token = self.token_manager.get_valid_token()
+                if not token:
+                    return {"success": False, "error": "토큰 없음", "items": []}
+
+                headers_base = {
+                    "Content-Type": "application/json;charset=UTF-8",
+                    "authorization": f"Bearer {token}",
+                    "api-id": "ka90002",
+                }
+                items: List[Dict] = []
+                seen: set[str] = set()
+                cont_yn, next_key = "N", ""
+                pages = 0
+                theme_flu_rt = None
+                theme_period_return = None
+                retry_auth = False
+
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    while pages < max(1, int(max_pages or 1)):
+                        pages += 1
+                        if not await self._acquire_api_slot(
+                            "ka90002", max_wait=30.0, priority=APIPriority.LOW
+                        ):
+                            if items:
+                                break
+                            return {"success": False, "error": "API 호출 제한", "items": []}
+
+                        headers = {**headers_base, "cont-yn": cont_yn, "next-key": next_key}
+                        async with session.post(url, headers=headers, json=body) as resp:
+                            body_text = await resp.text()
+                            resp_cont = resp.headers.get("cont-yn") or resp.headers.get("Cont-Yn") or "N"
+                            resp_next = resp.headers.get("next-key") or resp.headers.get("Next-Key") or ""
+
+                            if resp.status == 429:
+                                api_rate_limiter.handle_api_error(Exception("429 Too Many Requests"))
+                                continue
+                            if resp.status != 200:
+                                if self._is_kiwoom_token_invalid(body_text) and auth_try == 0:
+                                    retry_auth = True
+                                    break
+                                return {
+                                    "success": False,
+                                    "error": f"HTTP {resp.status}",
+                                    "items": items,
+                                }
+
+                            try:
+                                data = json.loads(body_text)
+                            except json.JSONDecodeError:
+                                return {
+                                    "success": False,
+                                    "error": "JSON 파싱 실패",
+                                    "items": items,
+                                }
+
+                            ok = (data.get("return_code") == 0) or (data.get("rt_cd") == "0")
+                            if not ok:
+                                msg = data.get("return_msg") or data.get("msg1") or "ka90002 실패"
+                                if self._is_kiwoom_token_invalid(msg, data) and auth_try == 0:
+                                    retry_auth = True
+                                    break
+                                if any(
+                                    k in str(msg).lower()
+                                    for k in ["rate limit", "too many", "요청 한도", "429", "제한", "초과"]
+                                ):
+                                    api_rate_limiter.handle_api_error(Exception(msg))
+                                    continue
+                                return {"success": False, "error": msg, "items": items, "raw": data}
+
+                            if theme_flu_rt is None and data.get("flu_rt") is not None:
+                                theme_flu_rt = _parse_kiwoom_float(data.get("flu_rt", "0"))
+                            if theme_period_return is None and data.get("dt_prft_rt") is not None:
+                                theme_period_return = _parse_kiwoom_float(data.get("dt_prft_rt", "0"))
+
+                            for raw in data.get("thema_comp_stk") or []:
+                                parsed = self._parse_theme_stock_row(raw if isinstance(raw, dict) else {})
+                                sc = parsed.get("stock_code") or ""
+                                if not sc or len(sc) != 6 or sc in seen:
+                                    continue
+                                seen.add(sc)
+                                items.append(parsed)
+
+                            cont_yn = (resp_cont or data.get("cont_yn") or data.get("cont-yn") or "N").upper()
+                            next_key = data.get("next_key") or data.get("next-key") or resp_next or ""
+                            if cont_yn != "Y" or not next_key:
+                                break
+
+                if retry_auth:
+                    await self._reauthenticate_async()
+                    continue
+
+                return {
+                    "success": True,
+                    "items": items,
+                    "theme_code": theme_code,
+                    "change_rate": theme_flu_rt,
+                    "period_return": theme_period_return,
+                    "pages": pages,
+                }
+
+            return {"success": False, "error": "토큰 재인증 실패", "items": []}
+        except Exception as e:
+            logger.exception(f"[THEME_STOCKS] theme={theme_code} error={e}")
+            return {"success": False, "error": str(e), "items": []}
+
+    async def get_change_rate_rank(
+        self,
+        market: str = "000",
+        limit: int = 100,
+        *,
+        sangtta_filters: bool = True,
+        min_change_rate: Optional[float] = None,
+        exclude_etf: bool = True,
+        sort_tp: Optional[str] = None,
+        trde_qty_cnd: Optional[str] = None,
+        stk_cnd: Optional[str] = None,
+        crd_cnd: Optional[str] = None,
+        updown_incls: Optional[str] = None,
+        pric_cnd: Optional[str] = None,
+        trde_prica_cnd: Optional[str] = None,
+        stex_tp: Optional[str] = None,
+    ) -> Dict:
+        """전일대비등락률상위 조회 (ka10027, /api/dostk/rkinfo).
+
+        market: 000 전체 / 001 코스피 / 101 코스닥
+        sangtta_filters: True면 상따 기본 필터(관리제외·천원↑·대금10억↑·KRX) 적용
+        min_change_rate: 등락률 하한(%). sangtta_filters면 기본 13.0
+        exclude_etf: True면 ETF/ETN/파생·스팩·우선주 후처리 제외
+        """
+        if min_change_rate is None and sangtta_filters:
+            min_change_rate = float(SANGTTA_UNIVERSE_MIN_CHANGE_RATE)
+        change_floor: Optional[float] = None
+        if min_change_rate is not None and float(min_change_rate) > 0:
+            change_floor = float(min_change_rate)
+
+        if sangtta_filters:
+            filt = dict(SANGTTA_CHANGE_RATE_RANK_FILTERS)
+        else:
+            filt = {
+                "sort_tp": "1",
+                "trde_qty_cnd": "0",
+                "stk_cnd": "0",
+                "crd_cnd": "0",
+                "updown_incls": "1",
+                "pric_cnd": "0",
+                "trde_prica_cnd": "0",
+                "stex_tp": "1",
+            }
+        for key, val in (
+            ("sort_tp", sort_tp),
+            ("trde_qty_cnd", trde_qty_cnd),
+            ("stk_cnd", stk_cnd),
+            ("crd_cnd", crd_cnd),
+            ("updown_incls", updown_incls),
+            ("pric_cnd", pric_cnd),
+            ("trde_prica_cnd", trde_prica_cnd),
+            ("stex_tp", stex_tp),
+        ):
+            if val is not None:
+                filt[key] = val
+
+        body = {"mrkt_tp": market, **filt}
+        try:
+            timeout = aiohttp.ClientTimeout(total=30)
+            use_mock = Config.KIWOOM_USE_MOCK_ACCOUNT
+            host = Config.KIWOOM_MOCK_API_URL if use_mock else Config.KIWOOM_REAL_API_URL
+            url = host + "/api/dostk/rkinfo"
+
+            for auth_try in range(2):
+                token = self.token_manager.get_valid_token()
+                if not token:
+                    return {"success": False, "error": "토큰 없음", "items": []}
+
+                headers = {
+                    "Content-Type": "application/json;charset=UTF-8",
+                    "authorization": f"Bearer {token}",
+                    "cont-yn": "N",
+                    "next-key": "",
+                    "api-id": "ka10027",
+                }
+                kept: List[Dict] = []
+                raw_count = 0
+                excluded_etf_count = 0
+                excluded_low_chg_count = 0
+                seen_codes: set[str] = set()
+                cont_yn, next_key = "N", ""
+                pages = 0
+                max_pages = 8 if (exclude_etf or change_floor is not None) else 1
+                retry_auth = False
+                # 상승률 정렬이면 하한 미만이 연속으로 나오면 이후도 더 낮음 → 조기 종료
+                hit_below_floor = False
+
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    while pages < max_pages and not hit_below_floor:
+                        pages += 1
+                        if not await self._acquire_api_slot(
+                            "ka10027",
+                            max_wait=20.0 if limit > 20 else 8.0,
+                            priority=APIPriority.HIGH,
+                        ):
+                            logger.warning("[CHANGE_RATE_RANK] rate limit slot timeout")
+                            if kept:
+                                break
+                            return {"success": False, "error": "API 호출 제한", "items": []}
+                        req_headers = {
+                            **headers,
+                            "cont-yn": cont_yn,
+                            "next-key": next_key,
+                        }
+                        async with session.post(url, headers=req_headers, json=body) as resp:
+                            text = await resp.text()
+                            resp_cont = resp.headers.get("cont-yn") or resp.headers.get("Cont-Yn") or "N"
+                            resp_next = resp.headers.get("next-key") or resp.headers.get("Next-Key") or ""
+                            if resp.status == 429:
+                                api_rate_limiter.handle_api_error(Exception("429 Too Many Requests"))
+                                logger.warning(f"[CHANGE_RATE_RANK] HTTP 429, body={text[:300]}")
+                                if kept:
+                                    break
+                                return {"success": False, "error": "HTTP 429", "items": []}
+                            if resp.status != 200:
+                                logger.warning(f"[CHANGE_RATE_RANK] HTTP {resp.status}, body={text[:300]}")
+                                if kept:
+                                    break
+                                return {"success": False, "error": f"HTTP {resp.status}", "items": []}
+                            data = json.loads(text)
+
+                        ok = (data.get("return_code") == 0) or (data.get("returnCode") == 0) or (data.get("rt_cd") == "0")
+                        if not ok:
+                            msg = data.get("return_msg") or data.get("returnMsg") or "조회 실패"
+                            logger.warning(f"[CHANGE_RATE_RANK] 실패 msg={msg}")
+                            if kept:
+                                break
+                            if auth_try == 0 and self._is_kiwoom_token_invalid(msg, data):
+                                logger.warning("🔑 [TOKEN] CHANGE_RATE_RANK 토큰 무효 — 재인증 후 재시도")
+                                if await self._reauthenticate_async():
+                                    retry_auth = True
+                                    break
+                            return {"success": False, "error": msg, "items": []}
+
+                        rows = data.get("pred_pre_flu_rt_upper") or []
+                        raw_count += len(rows)
+                        for r in rows:
+                            it = self._parse_change_rate_rank_row(r)
+                            code = it.get("stock_code", "")
+                            if code and code in seen_codes:
+                                continue
+                            if code:
+                                seen_codes.add(code)
+                            chg = float(it.get("change_rate") or 0)
+                            if change_floor is not None and chg < change_floor:
+                                excluded_low_chg_count += 1
+                                # sort_tp=1(상승률)이면 이후 행도 하한 미만
+                                if str(filt.get("sort_tp") or "1") == "1":
+                                    hit_below_floor = True
+                                    break
+                                continue
+                            if exclude_etf:
+                                if self._is_etf_family_item(it.get("stock_name", ""), it.get("product_type")):
+                                    excluded_etf_count += 1
+                                    continue
+                                if not self._is_screener_stock(it.get("stock_name", ""), it.get("product_type")):
+                                    continue
+                            kept.append(it)
+                            if len(kept) >= limit:
+                                break
+
+                        if len(kept) >= limit or hit_below_floor:
+                            break
+                        next_key = data.get("next_key") or data.get("next-key") or resp_next or ""
+                        cont_yn = "Y" if (resp_cont or "").upper() == "Y" and next_key else "N"
+                        if cont_yn != "Y":
+                            break
+
+                if retry_auth:
+                    continue
+
+                items = kept[:limit]
+                logger.info(
+                    f"[CHANGE_RATE_RANK] success count={len(items)} raw={raw_count} "
+                    f"excluded_etf={excluded_etf_count} excluded_low_chg={excluded_low_chg_count} "
+                    f"pages={pages} market={market} min_chg={change_floor} "
+                    f"sangtta={sangtta_filters} body={body}"
+                )
+                return {
+                    "success": True,
+                    "items": items,
+                    "raw_count": raw_count,
+                    "excluded_etf_count": excluded_etf_count,
+                    "excluded_low_chg_count": excluded_low_chg_count,
+                    "min_change_rate": change_floor,
+                    "api_filters": body,
+                }
+
+            return {"success": False, "error": "토큰 재인증 후에도 조회 실패", "items": []}
+        except Exception as e:
+            logger.exception(f"[CHANGE_RATE_RANK] error={e}")
             return {"success": False, "error": str(e), "items": []}
 
     async def get_executions(
@@ -1868,6 +2537,92 @@ class KiwoomAPI:
                 return str(row.get(key))
         return default
 
+    @staticmethod
+    def _ka10004_level_keys(level: int) -> Dict[str, List[str]]:
+        """ka10004(REST) 호가 레벨별 필드명. 1호가는 *_fpr_*, 2~10은 *_{n}th_pre_*."""
+        if level == 1:
+            return {
+                "ask_price": ["sel_fpr_bid", "askp1", "offerho1", "sel_prc1"],
+                "ask_qty": ["sel_fpr_req", "askp_rsqn1", "offerrem1", "sel_qty1"],
+                "bid_price": ["buy_fpr_bid", "bidp1", "bidho1", "buy_prc1"],
+                "bid_qty": ["buy_fpr_req", "bidp_rsqn1", "bidrem1", "buy_qty1"],
+            }
+        return {
+            "ask_price": [
+                f"sel_{level}th_pre_bid",
+                f"askp{level}",
+                f"offerho{level}",
+                f"sel_prc{level}",
+            ],
+            "ask_qty": [
+                f"sel_{level}th_pre_req",
+                f"askp_rsqn{level}",
+                f"offerrem{level}",
+                f"sel_qty{level}",
+            ],
+            "bid_price": [
+                f"buy_{level}th_pre_bid",
+                f"bidp{level}",
+                f"bidho{level}",
+                f"buy_prc{level}",
+            ],
+            "bid_qty": [
+                f"buy_{level}th_pre_req",
+                f"bidp_rsqn{level}",
+                f"bidrem{level}",
+                f"buy_qty{level}",
+            ],
+        }
+
+    @classmethod
+    def _extract_quote_row(cls, quote_data: Dict) -> Dict:
+        """ka10004 응답에서 호가 행 dict 추출 (flat 본문 또는 stk_hoga[0])."""
+        if not isinstance(quote_data, dict) or not quote_data:
+            return {}
+        # REST flat 응답: sel_fpr_bid / buy_fpr_bid 가 본문에 직접 있음
+        if any(
+            k in quote_data
+            for k in ("sel_fpr_bid", "buy_fpr_bid", "askp1", "bidp1", "bid_req_base_tm")
+        ):
+            return quote_data
+        rows = (
+            quote_data.get("stk_hoga")
+            or quote_data.get("output")
+            or quote_data.get("data")
+            or []
+        )
+        if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+            return rows[0]
+        if isinstance(rows, dict):
+            return rows
+        return {}
+
+    @classmethod
+    def parse_ka10004_orderbook(cls, quote_data: Dict) -> List[Dict]:
+        """ka10004 응답 → [{level, ask_price, ask_qty, bid_price, bid_qty}, ...]."""
+        quote_row = cls._extract_quote_row(quote_data or {})
+        if not quote_row:
+            return []
+        out: List[Dict] = []
+        for level in range(1, 11):
+            keys = cls._ka10004_level_keys(level)
+            ask_px = cls._pick_int(quote_row, keys["ask_price"])
+            bid_px = cls._pick_int(quote_row, keys["bid_price"])
+            ask_qty = cls._pick_int(quote_row, keys["ask_qty"])
+            bid_qty = cls._pick_int(quote_row, keys["bid_qty"])
+            if ask_px == 0 and bid_px == 0 and ask_qty == 0 and bid_qty == 0:
+                continue
+            out.append(
+                {
+                    "level": level,
+                    "ask_price": ask_px,
+                    "ask_qty": ask_qty,
+                    "bid_price": bid_px,
+                    "bid_qty": bid_qty,
+                }
+            )
+        return out
+
     async def get_stock_snapshot(self, stock_code: str) -> Dict:
         """현재가(ka10006) + 10호가(ka10004) 스냅샷 조회."""
         code = self.normalize_stock_code(stock_code)
@@ -1910,15 +2665,15 @@ class KiwoomAPI:
             or basic_data.get("data")
             or []
         )
-        quote_rows = (
-            quote_data.get("stk_hoga")
-            or quote_data.get("output")
-            or quote_data.get("data")
-            or []
-        )
+        # ka10006도 flat 본문일 수 있음
+        if isinstance(basic_data, dict) and basic_data.get("cur_prc") not in (None, "") and not (
+            isinstance(basic_rows, list) and basic_rows
+        ):
+            basic_row = basic_data
+        else:
+            basic_row = basic_rows[0] if isinstance(basic_rows, list) and basic_rows else {}
 
-        basic_row = basic_rows[0] if isinstance(basic_rows, list) and basic_rows else {}
-        quote_row = quote_rows[0] if isinstance(quote_rows, list) and quote_rows else {}
+        quote_row = self._extract_quote_row(quote_data)
         logger.info(
             f"[SNAPSHOT_RAW] stock_code={code}, basic_endpoint={basic_resp.get('endpoint','')}, "
             f"quote_endpoint={quote_resp.get('endpoint','')}, basic_keys={list(basic_data.keys())[:20]}, "
@@ -1930,6 +2685,9 @@ class KiwoomAPI:
             f"quote_row_keys={list(quote_row.keys())[:40] if isinstance(quote_row, dict) else []}"
         )
 
+        orderbook = self.parse_ka10004_orderbook(quote_data)
+        orderbook_live = bool(orderbook) and bool(quote_resp.get("success"))
+
         snapshot = {
             "stock_code": code,
             "stock_name": self._pick_str(basic_row, ["stk_nm", "stock_name", "name", "302"], ""),
@@ -1937,8 +2695,13 @@ class KiwoomAPI:
             "price_diff": self._pick_int(basic_row, ["pred_pre", "diff", "11"]),
             "change_rate": self._pick_str(basic_row, ["flu_rt", "change_rate", "12"], "0"),
             "volume": self._pick_int(basic_row, ["trde_qty", "volume", "13"]),
-            "orderbook_time": self._pick_str(quote_row, ["hotime", "hoga_time", "time"], now_kst().strftime("%H:%M:%S")),
-            "orderbook": [],
+            "orderbook_time": self._pick_str(
+                quote_row,
+                ["bid_req_base_tm", "hotime", "hoga_time", "time"],
+                now_kst().strftime("%H:%M:%S"),
+            ),
+            "orderbook": orderbook,
+            "orderbook_live": orderbook_live,
             "raw_basic": basic_row,
             "raw_quote": quote_row,
         }
@@ -1957,24 +2720,7 @@ class KiwoomAPI:
             except Exception:
                 pass
 
-        for level in range(1, 11):
-            ask_px = self._pick_int(quote_row, [f"askp{level}", f"offerho{level}", f"sel_prc{level}"])
-            bid_px = self._pick_int(quote_row, [f"bidp{level}", f"bidho{level}", f"buy_prc{level}"])
-            ask_qty = self._pick_int(quote_row, [f"askp_rsqn{level}", f"offerrem{level}", f"sel_qty{level}"])
-            bid_qty = self._pick_int(quote_row, [f"bidp_rsqn{level}", f"bidrem{level}", f"buy_qty{level}"])
-            if ask_px == 0 and bid_px == 0 and ask_qty == 0 and bid_qty == 0:
-                continue
-            snapshot["orderbook"].append(
-                {
-                    "level": level,
-                    "ask_price": ask_px,
-                    "ask_qty": ask_qty,
-                    "bid_price": bid_px,
-                    "bid_qty": bid_qty,
-                }
-            )
-
-        # 호가 TR 실패 시, 화면 표시는 유지할 수 있도록 3단계 기본값 생성
+        # 호가 TR 실패 시, 화면 표시용 가짜 호가(잔량 0). 돼지 판정에는 쓰지 않음.
         if not snapshot["orderbook"] and snapshot["current_price"] > 0:
             tick = self._calc_tick_size(snapshot["current_price"])
             base = snapshot["current_price"]
@@ -1988,6 +2734,7 @@ class KiwoomAPI:
                         "bid_qty": 0,
                     }
                 )
+            snapshot["orderbook_live"] = False
             logger.warning(f"[SNAPSHOT_ORDERBOOK_FALLBACK] stock_code={code}, reason=empty_orderbook_from_tr")
 
         warnings = []
@@ -1995,6 +2742,8 @@ class KiwoomAPI:
             warnings.append("ka10006 unavailable; current_price from fallback")
         if not quote_resp.get("success"):
             warnings.append(f"ka10004 unavailable: {quote_resp.get('error', 'unknown error')}")
+        elif not orderbook_live:
+            warnings.append("ka10004 returned empty orderbook")
         if warnings:
             snapshot["warnings"] = warnings
 
@@ -2002,9 +2751,248 @@ class KiwoomAPI:
             f"[SNAPSHOT_DONE] stock_code={code}, stock_name={snapshot.get('stock_name','')}, "
             f"current_price={snapshot.get('current_price',0)}, price_diff={snapshot.get('price_diff',0)}, "
             f"change_rate={snapshot.get('change_rate','0')}, volume={snapshot.get('volume',0)}, "
-            f"orderbook_rows={len(snapshot.get('orderbook', []))}, warnings={snapshot.get('warnings', [])}"
+            f"orderbook_rows={len(snapshot.get('orderbook', []))}, "
+            f"orderbook_live={snapshot.get('orderbook_live')}, warnings={snapshot.get('warnings', [])}"
         )
         return {"success": True, "snapshot": snapshot}
+
+    async def get_stock_institution_foreign_net(self, stock_code: str) -> Dict:
+        """종목별 기관·외인 일별 순매매 (ka10009, 필요 시 ka10045 보정).
+
+        Returns:
+            success, foreign_net, institution_net, date, source, raw
+            순매매 수량은 양수=순매수, 음수=순매도.
+        """
+        code = self.normalize_stock_code(stock_code)
+        if not code:
+            return {"success": False, "error": "종목코드가 비어 있습니다."}
+
+        def _to_int(v) -> int:
+            try:
+                s = str(v or "").replace(",", "").replace("+", "").strip()
+                if not s or s in ("-", "--"):
+                    return 0
+                return int(float(s))
+            except (TypeError, ValueError):
+                return 0
+
+        # 1) ka10009 — 주식기관요청 (종목 1건, 기관·외인 순매매)
+        resp = await self._request_stockinfo_tr("ka10009", {"stk_cd": code})
+        if resp.get("success"):
+            data = resp.get("data") or {}
+            rows = data.get("stk_orgn") or data.get("output") or data.get("data")
+            row = None
+            if isinstance(rows, list) and rows:
+                row = rows[0] if isinstance(rows[0], dict) else None
+            elif isinstance(data, dict):
+                # 단일 객체 응답
+                if data.get("orgn_daly_nettrde") is not None or data.get("frgnr_daly_nettrde") is not None:
+                    row = data
+            if row:
+                foreign = _to_int(
+                    row.get("frgnr_daly_nettrde")
+                    or row.get("frgnr_daly_nettrde_qty")
+                    or row.get("for_daly_nettrde_qty")
+                )
+                institution = _to_int(
+                    row.get("orgn_daly_nettrde")
+                    or row.get("orgn_daly_nettrde_qty")
+                    or row.get("orgn_daly_nettrde")
+                )
+                # 빈 문자열만 온 경우(모의/장마감 전)는 fallback
+                has_any = any(
+                    str(row.get(k) or "").strip() not in ("",)
+                    for k in (
+                        "orgn_daly_nettrde",
+                        "frgnr_daly_nettrde",
+                        "orgn_daly_nettrde_qty",
+                        "frgnr_daly_nettrde_qty",
+                        "for_daly_nettrde_qty",
+                    )
+                )
+                if has_any:
+                    return {
+                        "success": True,
+                        "stock_code": code,
+                        "foreign_net": foreign,
+                        "institution_net": institution,
+                        "date": self._pick_str(row, ["date", "dt"], ""),
+                        "source": "ka10009",
+                        "raw": row,
+                    }
+
+        # 2) ka10045 — 종목별기관매매추이 (당일 구간)
+        from utils.datetime_kst import kst_today
+
+        today = kst_today().strftime("%Y%m%d")
+        resp45 = await self._request_stockinfo_tr(
+            "ka10045",
+            {
+                "stk_cd": code,
+                "strt_dt": today,
+                "end_dt": today,
+                "orgn_prsm_unp_tp": "1",
+                "for_prsm_unp_tp": "1",
+            },
+        )
+        if resp45.get("success"):
+            data = resp45.get("data") or {}
+            rows = (
+                data.get("stk_orgn_trde_trnsn")
+                or data.get("output")
+                or data.get("data")
+                or []
+            )
+            if isinstance(rows, dict):
+                rows = [rows]
+            if isinstance(rows, list) and rows:
+                # 최신 일자 우선
+                def _dt_key(r):
+                    return str((r or {}).get("dt") or "")
+
+                row = sorted(
+                    [r for r in rows if isinstance(r, dict)],
+                    key=_dt_key,
+                    reverse=True,
+                )[0]
+                foreign = _to_int(
+                    row.get("for_daly_nettrde_qty")
+                    or row.get("frgnr_daly_nettrde")
+                    or row.get("for_dt_acc")
+                )
+                institution = _to_int(
+                    row.get("orgn_daly_nettrde_qty")
+                    or row.get("orgn_daly_nettrde")
+                    or row.get("orgn_dt_acc")
+                )
+                return {
+                    "success": True,
+                    "stock_code": code,
+                    "foreign_net": foreign,
+                    "institution_net": institution,
+                    "date": self._pick_str(row, ["dt", "date"], today),
+                    "source": "ka10045",
+                    "raw": row,
+                }
+
+        err = (resp45.get("error") if not resp45.get("success") else None) or (
+            resp.get("error") if not resp.get("success") else "기관/외인 순매매 없음"
+        )
+        return {"success": False, "error": err, "stock_code": code}
+
+    async def get_stock_program_net(self, stock_code: str) -> Dict:
+        """종목별 프로그램 순매수 (장중 가능).
+
+        Primary: ka90013 종목일별프로그램매매추이 (`/api/dostk/mrkcond`)
+        Fallback: ka90008 종목시간별 최신 봉
+
+        Returns:
+            success, net_qty, buy_qty, sell_qty, net_amt, date, source, raw
+            양수=프로그램 순매수.
+        """
+        code = self.normalize_stock_code(stock_code)
+        if not code:
+            return {"success": False, "error": "종목코드가 비어 있습니다."}
+
+        def _to_int(v) -> int:
+            try:
+                s = str(v or "").replace(",", "").replace("+", "").strip()
+                if not s or s in ("-", "--"):
+                    return 0
+                return int(float(s))
+            except (TypeError, ValueError):
+                return 0
+
+        from utils.datetime_kst import kst_today
+
+        today = kst_today().strftime("%Y%m%d")
+
+        # 1) ka90013 — 일별(당일 누적 포함, 장중에도 값 있음)
+        resp = await self._request_stockinfo_tr(
+            "ka90013",
+            {"amt_qty_tp": "2", "stk_cd": code},
+        )
+        if resp.get("success"):
+            data = resp.get("data") or {}
+            rows = (
+                data.get("stk_daly_prm_trde_trnsn")
+                or data.get("output")
+                or data.get("data")
+                or []
+            )
+            if isinstance(rows, dict):
+                rows = [rows]
+            if isinstance(rows, list) and rows:
+                dict_rows = [r for r in rows if isinstance(r, dict)]
+
+                def _dt_key(r):
+                    return str(r.get("dt") or r.get("date") or "")
+
+                today_rows = [r for r in dict_rows if _dt_key(r) == today]
+                row = (today_rows or sorted(dict_rows, key=_dt_key, reverse=True) or [None])[0]
+                if row:
+                    net_qty = _to_int(
+                        row.get("prm_netprps_qty") or row.get("prm_netprps_amt")
+                    )
+                    return {
+                        "success": True,
+                        "stock_code": code,
+                        "net_qty": net_qty,
+                        "buy_qty": _to_int(row.get("prm_buy_qty")),
+                        "sell_qty": _to_int(row.get("prm_sell_qty")),
+                        "net_amt": _to_int(row.get("prm_netprps_amt")),
+                        "buy_amt": _to_int(row.get("prm_buy_amt")),
+                        "sell_amt": _to_int(row.get("prm_sell_amt")),
+                        "date": _dt_key(row) or today,
+                        "source": "ka90013",
+                        "raw": row,
+                    }
+
+        # 2) ka90008 — 시간별 최신 구간
+        resp8 = await self._request_stockinfo_tr(
+            "ka90008",
+            {"amt_qty_tp": "2", "stk_cd": code, "date": today},
+        )
+        if resp8.get("success"):
+            data = resp8.get("data") or {}
+            rows = (
+                data.get("stk_tm_prm_trde_trnsn")
+                or data.get("output")
+                or data.get("data")
+                or []
+            )
+            if isinstance(rows, dict):
+                rows = [rows]
+            if isinstance(rows, list) and rows:
+                dict_rows = [r for r in rows if isinstance(r, dict)]
+                # 최신 시간 우선
+                row = sorted(
+                    dict_rows,
+                    key=lambda r: str(r.get("tm") or ""),
+                    reverse=True,
+                )[0]
+                net_qty = _to_int(
+                    row.get("prm_netprps_qty") or row.get("prm_netprps_amt")
+                )
+                return {
+                    "success": True,
+                    "stock_code": code,
+                    "net_qty": net_qty,
+                    "buy_qty": _to_int(row.get("prm_buy_qty")),
+                    "sell_qty": _to_int(row.get("prm_sell_qty")),
+                    "net_amt": _to_int(row.get("prm_netprps_amt")),
+                    "buy_amt": _to_int(row.get("prm_buy_amt")),
+                    "sell_amt": _to_int(row.get("prm_sell_amt")),
+                    "date": today,
+                    "time": str(row.get("tm") or ""),
+                    "source": "ka90008",
+                    "raw": row,
+                }
+
+        err = (resp8.get("error") if not resp8.get("success") else None) or (
+            resp.get("error") if not resp.get("success") else "프로그램 매매 없음"
+        )
+        return {"success": False, "error": err, "stock_code": code}
 
     @staticmethod
     def _calc_tick_size(price: int) -> int:
@@ -2052,11 +3040,12 @@ class KiwoomAPI:
                     cntr_tm = str(item.get('cntr_tm', '') or '')
                     if trade_yyyymmdd and len(cntr_tm) >= 8 and cntr_tm[:8] != trade_yyyymmdd:
                         continue
-                    open_price = abs(int(item.get('open_pric', 0)))
-                    high_price = abs(int(item.get('high_pric', 0)))
-                    low_price = abs(int(item.get('low_pric', 0)))
-                    close_price = abs(int(item.get('cur_prc', 0)))
-                    volume = int(item.get('trde_qty', 0))
+                    open_price = abs(_parse_kiwoom_int(item.get('open_pric', 0)))
+                    high_price = abs(_parse_kiwoom_int(item.get('high_pric', 0)))
+                    low_price = abs(_parse_kiwoom_int(item.get('low_pric', 0)))
+                    close_price = abs(_parse_kiwoom_int(item.get('cur_prc', 0)))
+                    # 일봉과 동일: 부호·제로패딩 문자열 → 절대 거래량
+                    volume = abs(_parse_kiwoom_int(item.get('trde_qty', 0)))
                     
                     if len(cntr_tm) >= 12:
                         formatted_date = f"{cntr_tm[:4]}-{cntr_tm[4:6]}-{cntr_tm[6:8]} {cntr_tm[8:10]}:{cntr_tm[10:12]}:00"
@@ -2444,8 +3433,18 @@ class KiwoomAPI:
                 "error": str(e)
             }
 
-    async def get_account_balance(self, account_number: str = None) -> Dict:
-        """계좌 잔고 정보 조회 - 키움 API kt00004 (동시 호출은 하나로 합침)"""
+    async def get_account_balance(
+        self,
+        account_number: str = None,
+        *,
+        priority: Optional[APIPriority] = None,
+        max_wait: float = 8.0,
+    ) -> Dict:
+        """계좌 잔고 정보 조회 - 키움 API kt00004 (동시 호출은 하나로 합침).
+
+        매수/손절 등 주문 경로에서는 priority=HIGH·max_wait를 넉넉히 넘겨
+        스캐너 LOW 트래픽에 밀려 '계좌 정보 조회 실패'로 매수가 지연되지 않게 한다.
+        """
         now = time.monotonic()
         cached = _account_balance_cache.get("data")
         if cached and now - _account_balance_cache.get("at", 0.0) < _ACCOUNT_BALANCE_FRESH_SEC:
@@ -2466,7 +3465,13 @@ class KiwoomAPI:
             if _balance_inflight is not None and not _balance_inflight.done():
                 task = _balance_inflight
             else:
-                task = asyncio.create_task(self._fetch_account_balance(account_number))
+                task = asyncio.create_task(
+                    self._fetch_account_balance(
+                        account_number,
+                        priority=priority,
+                        max_wait=max_wait,
+                    )
+                )
                 _balance_inflight = task
 
         try:
@@ -2476,7 +3481,13 @@ class KiwoomAPI:
                 if _balance_inflight is task:
                     _balance_inflight = None
 
-    async def _fetch_account_balance(self, account_number: str = None) -> Dict:
+    async def _fetch_account_balance(
+        self,
+        account_number: str = None,
+        *,
+        priority: Optional[APIPriority] = None,
+        max_wait: float = 8.0,
+    ) -> Dict:
         """계좌 잔고 실제 조회 (get_account_balance에서 단일 inflight로만 호출)."""
         if not self.token_manager.get_valid_token():
             stale = _stale_account_balance("token_missing")
@@ -2485,8 +3496,14 @@ class KiwoomAPI:
             logger.error("키움 API 토큰이 없습니다")
             return {"_error": "no_token", "_error_msg": "토큰 없음"}
 
+        slot_priority = priority if priority is not None else APIPriority.NORMAL
+        slot_wait = max(1.0, float(max_wait or 8.0))
         try:
-            if not await self._acquire_api_slot("get_account_balance", max_wait=8.0, priority=APIPriority.LOW):
+            if not await self._acquire_api_slot(
+                "get_account_balance",
+                max_wait=slot_wait,
+                priority=slot_priority,
+            ):
                 stale = _stale_account_balance("rate_limit")
                 if stale:
                     return stale
@@ -2593,7 +3610,11 @@ class KiwoomAPI:
                         break
 
                     # 재시도 전에 슬롯/레이트리밋 다시 확인
-                    if not await self._acquire_api_slot("get_account_balance", max_wait=3.0, priority=APIPriority.LOW):
+                    if not await self._acquire_api_slot(
+                        "get_account_balance",
+                        max_wait=min(slot_wait, 8.0),
+                        priority=slot_priority,
+                    ):
                         break
                     continue
 

@@ -418,10 +418,14 @@ def _settings_dict(s: Optional[AutoTradeSettings]) -> Dict[str, Any]:
         "profit_lock_trigger", "profit_lock_floor",
         "use_entry_gate", "require_above_open", "require_above_vwap",
         "day_position_min", "day_position_max", "volume_ratio_min",
+        "legacy_rsi_min", "legacy_rsi_max",
         "sizing_method", "initial_min_amount", "initial_max_amount",
         "signal_min_threshold", "signal_max_threshold",
         "add_buy_amount", "add_buy_trigger", "max_concurrent_positions",
         "cash_reserve_pct", "max_daily_buys", "daily_loss_limit", "daily_profit_target",
+        "market_risk_enabled", "market_risk_index", "market_risk_change_pct",
+        "market_risk_max_buys_per_strategy",
+        "market_risk_block_legacy", "market_risk_block_sangtta", "market_risk_block_breakout",
         "liquidate_before_close", "liquidate_time", "order_method",
         "trade_start_time", "trade_end_time", "watchlist_codes", "scan_interval_sec",
         "limit_break_soft_pct", "limit_break_hard_pct",
@@ -478,6 +482,12 @@ def _build_buy_condition_text(
                 gates.append(f"당일위치 ≤ {settings['day_position_max']}")
             if settings.get("volume_ratio_min") is not None:
                 gates.append(f"거래량비 ≥ {settings['volume_ratio_min']}%")
+            if settings.get("legacy_rsi_min") is not None or settings.get("legacy_rsi_max") is not None:
+                lo = settings.get("legacy_rsi_min")
+                hi = settings.get("legacy_rsi_max")
+                gates.append(
+                    f"RSI(14) {lo if lo is not None else '—'}~{hi if hi is not None else '—'}"
+                )
             if gates:
                 buy_bits.append("진입게이트: " + ", ".join(gates))
         sizing = (settings.get("sizing_method") or "FIXED").upper()
@@ -1196,7 +1206,7 @@ async def build_verification_report(
             "strategy_key": strategy_key,
             "strategy_label": (
                 "상따" if strategy_key == "sangtta"
-                else ("과매도 돌파" if strategy_key == "breakout"
+                else ("수급 돌파" if strategy_key == "breakout"
                 else ("레거시" if strategy_key in ("legacy", "scanner", "screener", "condition", "both") else (strategy_key or None))
                 )
             ),

@@ -121,6 +121,12 @@ def _build_buy_condition_text(
                 gates.append(f"당일위치 ≤ {settings['day_position_max']}")
             if settings.get("volume_ratio_min") is not None:
                 gates.append(f"거래량비 ≥ {settings['volume_ratio_min']}%")
+            if settings.get("legacy_rsi_min") is not None or settings.get("legacy_rsi_max") is not None:
+                lo = settings.get("legacy_rsi_min")
+                hi = settings.get("legacy_rsi_max")
+                gates.append(
+                    f"RSI(14) {lo if lo is not None else '—'}~{hi if hi is not None else '—'}"
+                )
             if gates:
                 buy_bits.append("진입게이트: " + ", ".join(gates))
         sizing = (settings.get("sizing_method") or "FIXED").upper()

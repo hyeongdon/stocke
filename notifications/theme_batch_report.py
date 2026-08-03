@@ -101,6 +101,30 @@ def _count_naver_edges(session: Session, biz: date) -> int:
     )
 
 
+def _count_kiwoom_edges(session: Session, biz: date) -> int:
+    return int(
+        session.query(func.count(ThemeTagEdge.id))
+        .filter(
+            ThemeTagEdge.source == "kiwoom_theme",
+            ThemeTagEdge.biz_date == biz,
+        )
+        .scalar()
+        or 0
+    )
+
+
+def _count_kiwoom_themes(session: Session, biz: date) -> int:
+    return int(
+        session.query(func.count(func.distinct(ThemeTagEdge.tag_id)))
+        .filter(
+            ThemeTagEdge.source == "kiwoom_theme",
+            ThemeTagEdge.biz_date == biz,
+        )
+        .scalar()
+        or 0
+    )
+
+
 def _count_scores(session: Session, biz: date) -> Tuple[int, int]:
     """(scores_written, distinct stocks)."""
     scores = int(
@@ -157,7 +181,17 @@ def collect_theme_batch_report_stats(
     if not today_edges:
         today_edges = _count_naver_edges(session, biz)
 
+    kiwoom = result.get("kiwoom") if isinstance(result.get("kiwoom"), dict) else {}
+    kiwoom_themes = int(kiwoom.get("themes") or 0)
+    kiwoom_edges = int(kiwoom.get("edges") or 0)
+    kiwoom_api_calls = int(kiwoom.get("api_calls") or 0)
+    if not kiwoom_themes:
+        kiwoom_themes = _count_kiwoom_themes(session, biz)
+    if not kiwoom_edges:
+        kiwoom_edges = _count_kiwoom_edges(session, biz)
+
     prev_edges = _count_naver_edges(session, prev) if prev else None
+    prev_kiwoom_edges = _count_kiwoom_edges(session, prev) if prev else None
     prev_scores, prev_stocks = _count_scores(session, prev) if prev else (None, None)
     prev_kw = None
     if prev:
@@ -195,6 +229,12 @@ def collect_theme_batch_report_stats(
         warnings.append(f"편입 엣지 적음 ({today_edges:,} < {_EXPECTED_EDGES_MIN:,})")
     if today_kw <= 0:
         warnings.append("키워드 0건 — KeyBERT/추출 경로 확인")
+    if kiwoom and kiwoom.get("skipped"):
+        pass
+    elif kiwoom and result.get("kiwoom_ok") is False:
+        warnings.append(f"키움 테마 수집 실패: {kiwoom.get('error') or 'unknown'}")
+    elif kiwoom_themes <= 0 and result.get("kiwoom_ok") is not None:
+        warnings.append("키움 테마 0건 — ka90001/인증·한도 확인")
     if prev_edges and today_edges and prev_edges > 0:
         drop_pct = (prev_edges - today_edges) / prev_edges * 100
         if drop_pct >= 10:
@@ -214,12 +254,16 @@ def collect_theme_batch_report_stats(
             "scores": today_scores,
             "stocks": today_stocks,
             "scores_ok": bool(scores.get("ok", True)) if scores else today_scores > 0,
+            "kiwoom_themes": kiwoom_themes,
+            "kiwoom_edges": kiwoom_edges,
+            "kiwoom_api_calls": kiwoom_api_calls,
         },
         "prev": {
             "edges": prev_edges,
             "keywords": prev_kw,
             "scores": prev_scores,
             "stocks": prev_stocks,
+            "kiwoom_edges": prev_kiwoom_edges,
         },
         "top_keywords": [
             {
@@ -276,12 +320,17 @@ def _summary_table(stats: Dict[str, Any]) -> str:
     lines = [
         f"{_pad('항목', 10)}{_pad('오늘', 8, right=True)}  {_pad('전일', 8, right=True)}  {_pad('증감', 8, right=True)}",
         "-" * 38,
-        row("테마", today.get("themes"), None),
-        row("편입엣지", today.get("edges"), prev.get("edges")),
+        row("테마(N)", today.get("themes"), None),
+        row("편입(N)", today.get("edges"), prev.get("edges")),
+        row("테마(K)", today.get("kiwoom_themes"), None),
+        row("편입(K)", today.get("kiwoom_edges"), prev.get("kiwoom_edges")),
         row("키워드", today.get("keywords"), prev.get("keywords")),
         row("스코어행", today.get("scores"), prev.get("scores")),
         row("종목수", today.get("stocks"), prev.get("stocks")),
     ]
+    api_calls = today.get("kiwoom_api_calls")
+    if api_calls:
+        lines.append(row("K API", int(api_calls), None))
     return "\n".join(lines)
 
 

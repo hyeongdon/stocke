@@ -1,0 +1,25 @@
+Message: '📈 [AUTO_SCANNER] [상따] 평가 리파인(377450) 가격=11,950 등락=+13.92%'
+Message: '📈 [AUTO_SCANNER] 매수 신호 생성 [상따]: 리파인(377450) 가격=11,950 등락=13.92%'
+Message: '📈 [AUTO_SCANNER] [상따] 평가 에이유브랜즈(481070) 가격=17,170 등락=+13.63%'
+    from utils.auto_trade_engine import _count_strategy_slots, effective_sangtta_max_slots
+Message: '📈 [AUTO_SCANNER] 진입 보류 [상따] [게이트] 에이유브랜즈(481070): 상따 슬롯 포화 (1/1)'
+Message: '📈 [AUTO_SCANNER] [상따] 평가 삼양컴텍(484590) 가격=5,650 등락=+8.24%'
+    from utils.auto_trade_engine import _count_strategy_slots, effective_sangtta_max_slots
+Message: '📈 [AUTO_SCANNER] 진입 보류 [상따] [게이트] 삼양컴텍(484590): 상따 슬롯 포화 (1/1)'
+    return await _eval_sangtta_breakout(
+  File "C:\Users\MiniPC\stocke\utils\auto_trade_engine.py", line 1989, in _eval_sangtta_breakout
+Message: "키움 API 원본 조건식 데이터: [['0', '분봉 거래량 1000% 상승'], ['1', '상따'], ['2', '돌파'], ['3', '검증(상따)'], ['4', '검증(돌파)'], ['5', '역매공파'], ['6', '종산']]"
+Message: "원본 아이템 1: ['1', '상따'] (타입: <class 'list'>, 길이: 2)"
+Message: '조건식 추가: ID=1, 이름=상따'
+Message: "원본 아이템 3: ['3', '검증(상따)'] (타입: <class 'list'>, 길이: 2)"
+Message: '조건식 추가: ID=3, 이름=검증(상따)'
+Message: '  2. 상따 (API ID: 1)'
+Message: '  4. 검증(상따) (API ID: 3)'
+Message: '📈 [AUTO_SCANNER] 스캔 요약 — 전체 대상 80 · 신호 1 · 거래대금 눌림목 39 · 상따 33 · 수급 돌파 1 · 역매공파 7 · 최소등락 3.5%'
+Message: '📈 [AUTO_SCANNER] 스캔 요약 · [상따] 대상 33 · 게이트 32 · 신호 1'
+Message: '조건식 검색 성공: 상따, 종목 수: 42개'
+Message: '📈 [AUTO_SCANNER] 상따 후보 수집 — 42개 (설정: 상따)'
+    f"📈 [AUTO_SCANNER] 상따 후보 수집 — {n}개 "
+Message: '📈 [AUTO_SCANNER] [상따] 편입 42종목: 고려산업(002140) 2,055 +9.89%, SNT다이내믹스(003570) 32,100 +10.69%, 포스코퓨처엠(003670) 133,400 +9.25%, 한국공항(005430) 84,500 +8.33%, DB손해보험(005830) 169,600 +9.63%, 이수화학(005950) 12,000 +8.21%, 삼아알미늄(006110) 30,400 +12.59%, HD한국조선해양(009540) 368,000 +9.85%, 한화솔루션(009830) 24,750 +8.32%, OCI홀딩스(010060) 190,700 +12.11%, 삼성중공업(010140) 21,200 +9.28%, 현대코퍼레이션(011760) 24,550 +12.87%, 한화에어로스페이스(012450) 898,000 +10.86%, HDC(012630) 20,450 +11.75%, 동신건설(025950) 9,870 +9.30%, 삼성물산(028260) 319,000 +11.73%, 한화오션(042660) 80,900 +8.45%, 태웅(044490) 22,700 +8.35%, 에이치엔에스하이텍(044990) 10,040 +8.89%, LG생활건강(051900) 290,500 +10.46% …외 22개'
+    if code and by_code.get(code, {}).get("source") != "sangtta":
+    if code and src not in ("sangtta", "breakout"):

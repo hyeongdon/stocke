@@ -31,12 +31,16 @@ class ThemeBatchReportFormatTests(unittest.TestCase):
                 "scores": 6840,
                 "stocks": 2342,
                 "scores_ok": True,
+                "kiwoom_themes": 180,
+                "kiwoom_edges": 5100,
+                "kiwoom_api_calls": 185,
             },
             "prev": {
                 "edges": 6425,
                 "keywords": 50,
                 "scores": 6844,
                 "stocks": 2342,
+                "kiwoom_edges": 5080,
             },
             "top_keywords": [
                 {
@@ -66,7 +70,8 @@ class ThemeBatchReportFormatTests(unittest.TestCase):
         self.assertIn("반도체", html)
         self.assertIn("특이사항 없음", html)
         text = format_theme_batch_report_text(stats)
-        self.assertIn("편입엣지", text)
+        self.assertIn("편입(N)", text)
+        self.assertIn("편입(K)", text)
         self.assertNotIn("<pre>", text)
 
     def test_failure_status_in_html(self):

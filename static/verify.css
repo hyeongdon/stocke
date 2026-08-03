@@ -231,6 +231,7 @@
 .pill.verdict-fail { background: var(--down-soft); color: var(--down); }
 .pill.strategy-sangtta { background: rgba(14, 116, 144, 0.14); color: #0e7490; }
 .pill.strategy-breakout { background: rgba(124, 58, 237, 0.14); color: #7c3aed; }
+.pill.strategy-ymgp { background: rgba(180, 83, 9, 0.14); color: #b45309; }
 .pill.strategy-legacy { background: rgba(100, 116, 139, 0.14); color: #64748b; }
 .pill.strategy-sangtta-exit { background: rgba(180, 83, 9, 0.14); color: #b45309; }
 

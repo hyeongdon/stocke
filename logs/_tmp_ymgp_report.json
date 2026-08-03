@@ -1,0 +1,185 @@
+{
+  "ymgp_log_lines": 1424,
+  "candidate_scans": 303,
+  "candidate_peak": 6,
+  "candidate_zero": 48,
+  "hourly": {
+    "09": {
+      "scans": 72,
+      "avg": 1.2,
+      "max": 4,
+      "zero": 48
+    },
+    "10": {
+      "scans": 51,
+      "avg": 4.6,
+      "max": 5,
+      "zero": 0
+    },
+    "11": {
+      "scans": 54,
+      "avg": 5.6,
+      "max": 6,
+      "zero": 0
+    },
+    "12": {
+      "scans": 42,
+      "avg": 5.9,
+      "max": 6,
+      "zero": 0
+    },
+    "13": {
+      "scans": 36,
+      "avg": 5.5,
+      "max": 6,
+      "zero": 0
+    },
+    "14": {
+      "scans": 39,
+      "avg": 5.9,
+      "max": 6,
+      "zero": 0
+    },
+    "15": {
+      "scans": 9,
+      "avg": 5.7,
+      "max": 6,
+      "zero": 0
+    }
+  },
+  "gate_kind": {
+    "게이트": 406
+  },
+  "gate_buckets": [
+    [
+      "기타",
+      360
+    ],
+    [
+      "시간외",
+      46
+    ]
+  ],
+  "gate_raw_top": [
+    [
+      "단계 미달 (FILTERED)",
+      293
+    ],
+    [
+      "단계 미달 (NONE)",
+      67
+    ],
+    [
+      "역매공파 시간대 외 (09:30~14:30)",
+      46
+    ]
+  ],
+  "sample_by_reason": {
+    "기타": [
+      {
+        "t": "09:40:27",
+        "stock": "신일전자(002700)",
+        "reason": "단계 미달 (FILTERED)"
+      },
+      {
+        "t": "09:40:33",
+        "stock": "모나리자(012690)",
+        "reason": "단계 미달 (FILTERED)"
+      },
+      {
+        "t": "09:43:17",
+        "stock": "LS네트웍스(000680)",
+        "reason": "단계 미달 (FILTERED)"
+      },
+      {
+        "t": "09:43:23",
+        "stock": "폴라리스오피스(041020)",
+        "reason": "단계 미달 (FILTERED)"
+      }
+    ],
+    "시간외": [
+      {
+        "t": "14:30:05",
+        "stock": "셀바스AI(108860)",
+        "reason": "역매공파 시간대 외 (09:30~14:30)"
+      },
+      {
+        "t": "14:30:11",
+        "stock": "엠아이텍(179290)",
+        "reason": "역매공파 시간대 외 (09:30~14:30)"
+      },
+      {
+        "t": "14:35:50",
+        "stock": "LS네트웍스(000680)",
+        "reason": "역매공파 시간대 외 (09:30~14:30)"
+      },
+      {
+        "t": "14:35:57",
+        "stock": "폴라리스오피스(041020)",
+        "reason": "역매공파 시간대 외 (09:30~14:30)"
+      }
+    ]
+  },
+  "db_n": 0,
+  "db_status": {},
+  "db_fail_buckets": [],
+  "db_fail_raw_top": [],
+  "filled": [],
+  "watching": [],
+  "top_stocks": [],
+  "settings": {
+    "is_enabled": 1,
+    "market_risk_enabled": 1,
+    "use_ymgp": 1,
+    "ymgp_condition_names": "역매공파",
+    "ymgp_verify_condition_names": null,
+    "ymgp_max_slots": 1,
+    "ymgp_buy_amount_1": 500000,
+    "ymgp_buy_amount_2": 800000,
+    "ymgp_buy_deposit_pct_1": null,
+    "ymgp_buy_deposit_pct_2": null,
+    "ymgp_trade_start_time": "09:30",
+    "ymgp_trade_end_time": "14:30",
+    "ymgp_ma_fast": 120,
+    "ymgp_ma_mid": 240,
+    "ymgp_ma_slow": 480,
+    "ymgp_box_days": 15,
+    "ymgp_box_width_pct": 15.5,
+    "ymgp_accum_vol_mult": 2.0,
+    "ymgp_ma_near_pct": 3.0,
+    "ymgp_pivot_tol_pct": 2.0,
+    "ymgp_drop_lookback": 60,
+    "ymgp_drop_pct": -20.0,
+    "ymgp_stop_ma_mode": "ma60",
+    "ymgp_stop_loss_pct": 4.0,
+    "ymgp_entry_mode": "ref_high",
+    "ymgp_max_change_pct": 10.0,
+    "ymgp_pullback_tol_pct": 2.0,
+    "ymgp_reentry_lock_days": 5,
+    "ymgp_tp1_pct_of_pos": 0.35,
+    "ymgp_tp2_pct_of_pos": 0.35,
+    "ymgp_enable_pullback_add": 1,
+    "ymgp_enable_partial_tp": 1,
+    "ymgp_trailing_start_pct": 15.0,
+    "ymgp_trailing_pct": 5.0,
+    "market_risk_block_ymgp": 0,
+    "ymgp_accum_wick_vol_mult": 4.0,
+    "ymgp_accum_wick_body_mult": 1.5,
+    "ymgp_accum_body_pct": 7.0
+  },
+  "pos_ymgp": [],
+  "buys_today_sample": [
+    "2026-07-27 09:04:54,466 - managers.buy_order_executor - INFO - 💰 [BUY_EXECUTOR] 매수 주문 시도 1/3 - 파세코",
+    "2026-07-27 09:04:54,513 - api.kiwoom_api - INFO - 매수 주문 성공: 037070 - 주문번호: 0012759",
+    "2026-07-27 09:04:54,513 - managers.buy_order_executor - INFO - 💰 [BUY_EXECUTOR] 매수 주문 성공(시장가) 파세코 63주 @ 7,910원",
+    "2026-07-27 10:35:03,599 - managers.buy_order_executor - INFO - 💰 [BUY_EXECUTOR] 매수 주문 시도 1/3 - 듀켐바이오",
+    "2026-07-27 10:35:03,649 - api.kiwoom_api - INFO - 매수 주문 성공: 176750 - 주문번호: 0068311",
+    "2026-07-27 10:35:03,650 - managers.buy_order_executor - INFO - 💰 [BUY_EXECUTOR] 매수 주문 성공(시장가) 듀켐바이오 120주 @ 8,290원",
+    "2026-07-27 14:50:00,823 - managers.buy_order_executor - INFO - 💰 [BUY_EXECUTOR] 매수 주문 시도 1/3 - 에이디테크놀로지",
+    "2026-07-27 14:50:00,886 - api.kiwoom_api - INFO - 매수 주문 성공: 200710 - 주문번호: 0124400",
+    "2026-07-27 14:50:00,887 - managers.buy_order_executor - INFO - 💰 [BUY_EXECUTOR] 매수 주문 성공(시장가) 에이디테크놀로지 44주 @ 29,150원"
+  ],
+  "slot_sample": [],
+  "sigs_sample": [],
+  "order_ready_true": []
+}

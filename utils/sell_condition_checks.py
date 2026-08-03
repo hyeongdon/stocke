@@ -139,7 +139,7 @@ def sangtta_exit_check_items(
     lim_hard = float(settings.get("limit_break_hard_pct") if settings.get("limit_break_hard_pct") is not None else 3.0)
     drop_soft = float(settings.get("sharp_drop_soft_pct") if settings.get("sharp_drop_soft_pct") is not None else 3.0)
     drop_hard = float(settings.get("sharp_drop_hard_pct") if settings.get("sharp_drop_hard_pct") is not None else 5.0)
-    soft_n = int(settings.get("soft_confirm_polls") if settings.get("soft_confirm_polls") is not None else 2)
+    soft_n = int(settings.get("soft_confirm_polls") if settings.get("soft_confirm_polls") is not None else 3)
     soft_px = int(peak * (1 - drop_soft / 100.0)) if peak else None
     hard_px = int(peak * (1 - drop_hard / 100.0)) if peak else None
     trig = (trigger_reason or "").upper()
@@ -228,7 +228,7 @@ def breakout_exit_check_items(
     kind = getattr(pos, "breakout_level_kind", None) or settings.get("breakout_level_mode") or "prev_high"
     soft = float(settings.get("struct_break_soft_pct") or 1.0)
     hard = float(settings.get("struct_break_hard_pct") or 2.0)
-    polls = int(settings.get("soft_confirm_polls") or 2)
+    polls = int(settings.get("soft_confirm_polls") or 3)
     exit_kind = classify_breakout_exit_detail(reason_detail)
 
     def passed(target: str) -> Optional[bool]:
@@ -400,7 +400,7 @@ def build_sell_condition_checklist(
                 "장마감", "전량 청산",
                 passed=True if closed and trig != "MARKET_CLOSE" else None,
                 actual="오버나잇 허용 (breakout 제외)",
-                required="과매도 돌파 포지션은 장마감 강제청산 비적용",
+                required="수급 돌파 포지션은 장마감 강제청산 비적용",
                 note="PRD §10 확정",
                 key="market_close",
                 enabled=False,

@@ -19,12 +19,43 @@ def holdings_by_code(balance: Optional[dict]) -> Dict[str, dict]:
     return out
 
 
+def resolve_purchase_amount(
+    qty: int,
+    avg: int,
+    api_pur: int,
+    fallback: int = 0,
+) -> int:
+    """키움 pur_amt가 평균단가×수량과 크게 어긋나면 재계산/폴백 사용.
+
+    매수 직후 kt00004가 수량·단가는 맞는데 매입금액만 일부(미결제)로 오는 경우가 있다.
+    """
+    qty = int(qty or 0)
+    avg = int(avg or 0)
+    api_pur = int(api_pur or 0)
+    fallback = int(fallback or 0)
+    expected = avg * qty if avg > 0 and qty > 0 else 0
+    if api_pur <= 0:
+        return expected or fallback
+    ref = expected or fallback
+    if ref > 0:
+        tol = max(int(ref * 0.02), avg if avg > 0 else 1000, 10_000)
+        if abs(api_pur - ref) > tol:
+            return expected or fallback
+    return api_pur
+
+
 def pl_from_holding(holding: dict) -> Tuple[int, float]:
     """키움 보유종목 row → (평가손익, 수익률%). lspft_amt 없으면 evlt_amt−pur_amt."""
     pl = _parse_kiwoom_int(holding.get("lspft_amt") or holding.get("pl_amt"))
     rate = _parse_kiwoom_float(holding.get("lspft_rt") or holding.get("pl_rt"))
     if pl == 0:
-        pur = _parse_kiwoom_int(holding.get("pur_amt"))
+        qty = _parse_kiwoom_int(holding.get("qty"))
+        avg = _parse_kiwoom_int(holding.get("avg_pr"))
+        pur = resolve_purchase_amount(
+            qty,
+            avg,
+            _parse_kiwoom_int(holding.get("pur_amt")),
+        )
         evlt = _parse_kiwoom_int(holding.get("evlt_amt"))
         if pur > 0 and evlt > 0:
             pl = evlt - pur
@@ -54,11 +85,23 @@ def pl_from_amounts(
 
 def apply_holding_to_position(position, holding: dict) -> None:
     """키움 kt00004 보유 1종목 → Position 금액·수량·손익 전체 동기화."""
-    pur = _parse_kiwoom_int(holding.get("pur_amt"))
     qty = _parse_kiwoom_int(holding.get("qty"))
     cur = _parse_kiwoom_int(holding.get("cur_pr"))
     avg = _parse_kiwoom_int(holding.get("avg_pr"))
-    pl, rate = pl_from_holding(holding)
+    raw_pur = _parse_kiwoom_int(holding.get("pur_amt"))
+    fallback = int(
+        getattr(position, "actual_buy_amount", None)
+        or getattr(position, "buy_amount", None)
+        or 0
+    )
+    pur = resolve_purchase_amount(qty, avg, raw_pur, fallback=fallback)
+    pur_corrected = pur > 0 and raw_pur > 0 and pur != raw_pur
+
+    if pur_corrected:
+        evlt = _parse_kiwoom_int(holding.get("evlt_amt"))
+        pl, rate = pl_from_amounts(pur, qty, cur, evlt_amt=evlt or None)
+    else:
+        pl, rate = pl_from_holding(holding)
 
     if qty > 0:
         position.buy_quantity = qty

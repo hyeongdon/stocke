@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <title>지표 · 수출입</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/dashboard.css?v=95">
+  <link rel="stylesheet" href="/static/indicators.css?v=2">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <h1>지표</h1>
+        <span class="sub">매크로 · 수출입 (품목무역 기준)</span>
+      </div>
+      <nav class="tabs">
+        <a href="/dashboard" class="tab">대시보드</a>
+        <a href="/theme-map" class="tab-link">테마맵 ↗</a>
+        <a href="/indicators" class="tab active">지표</a>
+        <a href="/verify" class="tab-link">검증 ↗</a>
+      </nav>
+      <div class="topbar-actions">
+        <button id="btnRefresh" class="btn primary sm" type="button">새로고침</button>
+        <span class="updated">기준월 <span id="latestPeriod">-</span></span>
+      </div>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <section class="card compact-card">
+      <div class="card-head">
+        <div>
+          <h3>수출입 지표</h3>
+          <div class="hint">관세청 OpenAPI(주요국 합산) → HS → 산업코드/테마. 단위: <b>USD</b>. 산업코드는 stocke 임시 분류(공식 MTI 연계 전).</div>
+        </div>
+        <div class="ind-grain-switch" role="tablist" aria-label="집계 단위">
+          <button type="button" class="ind-grain-btn active" data-grain="mti">산업코드</button>
+          <button type="button" class="ind-grain-btn" data-grain="tag">테마 태그</button>
+          <button type="button" class="ind-grain-btn" data-grain="hs">HS 품목</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="hint" id="tradeHint" style="margin-bottom:10px;">-</div>
+        <div class="ind-layout">
+          <div class="ind-table-wrap" id="tradeTableBody">불러오는 중...</div>
+          <div class="ind-chart-wrap">
+            <canvas id="tradeChart" height="220"></canvas>
+            <div class="hint" id="chartHint">행을 클릭하면 시계열이 표시됩니다.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script src="/static/indicators.js?v=2"></script>
+</body>
+</html>

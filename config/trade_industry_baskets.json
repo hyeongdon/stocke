@@ -1,0 +1,27 @@
+{
+  "version": "manual_v2",
+  "note": "수동 HS→산업코드 바스켓. mti_code는 stocke 임시 산업분류키(공식 MTI 연계표 확보 전). 동일 tag에 여러 mti를 두어 세분화.",
+  "partner_countries": ["CN", "US", "VN", "JP", "TW", "HK", "IN", "SG", "AU", "DE"],
+  "baskets": [
+    {"tag": "반도체", "mti_code": "8131", "mti_name": "전자집적회로", "hs_codes": ["8542"], "note": "HS 8542"},
+    {"tag": "반도체", "mti_code": "8132", "mti_name": "반도체소자", "hs_codes": ["8541"], "note": "HS 8541"},
+    {"tag": "디스플레이", "mti_code": "8121", "mti_name": "평판디스플레이 모듈", "hs_codes": ["8524"], "note": "HS 8524"},
+    {"tag": "디스플레이", "mti_code": "8122", "mti_name": "광학기기·액정소자", "hs_codes": ["9013"], "note": "HS 9013"},
+    {"tag": "자동차", "mti_code": "7410", "mti_name": "승용차", "hs_codes": ["8703"], "note": "HS 8703"},
+    {"tag": "자동차부품", "mti_code": "7420", "mti_name": "자동차 부품", "hs_codes": ["8708"], "note": "HS 8708"},
+    {"tag": "조선", "mti_code": "7460", "mti_name": "선박", "hs_codes": ["8901"], "note": "HS 8901"},
+    {"tag": "철강", "mti_code": "6131", "mti_name": "열연강판", "hs_codes": ["7208"], "note": "HS 7208"},
+    {"tag": "철강", "mti_code": "6132", "mti_name": "도금강판", "hs_codes": ["7210"], "note": "HS 7210"},
+    {"tag": "철강", "mti_code": "6133", "mti_name": "기타합금강 평판", "hs_codes": ["7225"], "note": "HS 7225"},
+    {"tag": "석유화학", "mti_code": "2141", "mti_name": "폴리에틸렌", "hs_codes": ["3901"], "note": "HS 3901"},
+    {"tag": "석유화학", "mti_code": "2142", "mti_name": "폴리프로필렌", "hs_codes": ["3902"], "note": "HS 3902"},
+    {"tag": "석유화학", "mti_code": "2110", "mti_name": "환식탄화수소", "hs_codes": ["2902"], "note": "HS 2902"},
+    {"tag": "2차전지", "mti_code": "8350", "mti_name": "축전지", "hs_codes": ["8507"], "note": "HS 8507"},
+    {"tag": "바이오", "mti_code": "2261", "mti_name": "혈액·면역제품", "hs_codes": ["3002"], "note": "HS 3002"},
+    {"tag": "바이오", "mti_code": "2262", "mti_name": "의약품(소매포장)", "hs_codes": ["3004"], "note": "HS 3004"},
+    {"tag": "통신장비", "mti_code": "8210", "mti_name": "전화·통신기기", "hs_codes": ["8517"], "note": "HS 8517"},
+    {"tag": "화장품", "mti_code": "2270", "mti_name": "미용·메이크업", "hs_codes": ["3304"], "note": "HS 3304"},
+    {"tag": "기계", "mti_code": "7111", "mti_name": "기타 일반기계", "hs_codes": ["8479"], "note": "HS 8479"},
+    {"tag": "기계", "mti_code": "7112", "mti_name": "탭·밸브", "hs_codes": ["8481"], "note": "HS 8481"}
+  ]
+}

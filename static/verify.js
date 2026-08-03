@@ -310,10 +310,10 @@ function verdictPill(v) {
 function strategyPill(t) {
   const key = t.strategy_key || (t.signal && (t.signal.strategy || t.signal.source));
   if (!key) return '';
-  const label = t.strategy_label || (key === 'sangtta' ? '상따' : (key === 'breakout' ? '과매도 돌파' : key));
+  const label = t.strategy_label || (key === 'sangtta' ? '상따' : (key === 'breakout' ? '수급 돌파' : (key === 'ymgp' ? '역매공파' : key)));
   const cls = key === 'sangtta'
     ? 'strategy-sangtta'
-    : (key === 'breakout' ? 'strategy-breakout' : 'strategy-legacy');
+    : (key === 'breakout' ? 'strategy-breakout' : (key === 'ymgp' ? 'strategy-ymgp' : 'strategy-legacy'));
   return `<span class="pill ${cls}" title="strategy=${esc(key)}">${esc(label)}</span>`;
 }
 

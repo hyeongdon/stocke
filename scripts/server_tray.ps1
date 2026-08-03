@@ -13,6 +13,8 @@ $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $ErrorLog = Join-Path $Root 'logs\tray_error.log'
 $CpuAlertLog = Join-Path $Root 'logs\cpu_alert.log'
+$TrayNotifyFile = Join-Path $Root 'logs\_tray_notify.jsonl'
+$TrayNotifyProcessing = Join-Path $Root 'logs\_tray_notify.processing.jsonl'
 
 # CPU alert (env override)
 $CpuThreshold = 90
@@ -64,6 +66,58 @@ function Send-CpuTelegram([int]$Cpu, [int]$SustainSec) {
         ) -WorkingDirectory $Root -WindowStyle Hidden | Out-Null
     } catch {
         Write-TrayError ("cpu telegram spawn failed: {0}" -f $_.Exception.Message)
+    }
+}
+
+function Show-TradeTrayAlerts($notifyIcon) {
+    # 매수/매도 큐(JSONL) → 시스템 트레이 풍선
+    try {
+        if (-not (Test-Path $TrayNotifyFile)) { return }
+        Move-Item -LiteralPath $TrayNotifyFile -Destination $TrayNotifyProcessing -Force -ErrorAction Stop
+        $lines = @(Get-Content -LiteralPath $TrayNotifyProcessing -Encoding UTF8 -ErrorAction SilentlyContinue)
+        Remove-Item -LiteralPath $TrayNotifyProcessing -Force -ErrorAction SilentlyContinue
+        if (-not $lines -or $lines.Count -eq 0) { return }
+
+        $nowEpoch = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        $shown = 0
+        foreach ($line in $lines) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            try {
+                $obj = $line | ConvertFrom-Json
+            } catch {
+                continue
+            }
+            $age = $null
+            if ($null -ne $obj.ts) {
+                try { $age = $nowEpoch - [double]$obj.ts } catch { $age = 0 }
+            }
+            # 15분 이상 된 알림은 스킵 (트레이 재시작 시 오래된 스팸 방지)
+            if ($null -ne $age -and $age -gt 900) { continue }
+
+            $title = if ($obj.title) { [string]$obj.title } else { 'Stocke' }
+            $body = if ($obj.body) { [string]$obj.body } else { '' }
+            if (-not $body) { continue }
+            if ($title.Length -gt 60) { $title = $title.Substring(0, 60) }
+            if ($body.Length -gt 240) { $body = $body.Substring(0, 237) + '...' }
+
+            $iconKey = ([string]$obj.icon).ToLowerInvariant()
+            $iconType = switch ($iconKey) {
+                'warning' { [System.Windows.Forms.ToolTipIcon]::Warning }
+                'error'   { [System.Windows.Forms.ToolTipIcon]::Error }
+                default   { [System.Windows.Forms.ToolTipIcon]::Info }
+            }
+            $notifyIcon.ShowBalloonTip(4500, $title, $body, $iconType)
+            $shown++
+            if ($shown -ge 3) { break }  # 한 틱에 최대 3건
+            Start-Sleep -Milliseconds 700
+        }
+    } catch {
+        Write-TrayError ("trade tray alert error: {0}" -f $_.Exception.Message)
+        try {
+            if (Test-Path $TrayNotifyProcessing) {
+                Remove-Item -LiteralPath $TrayNotifyProcessing -Force -ErrorAction SilentlyContinue
+            }
+        } catch {}
     }
 }
 
@@ -253,6 +307,9 @@ public static class StockeTrayIcon {
             $notify.ShowBalloonTip(2500, $title, $msg, $iconType)
         }
         $script:lastKey = $state.Key
+
+        # 매수/매도 체결 풍선 (서버가 logs\_tray_notify.jsonl 에 적재)
+        Show-TradeTrayAlerts $notify
 
         # CPU 과부하: 임계치 이상 지속 시 트레이 풍선 + 텔레그램 (쿨다운)
         try {

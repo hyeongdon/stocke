@@ -135,10 +135,5 @@ def should_disarm_trailing(
     buy_price: int,
     peak: int,
 ) -> bool:
-    """실제 고점 수익률이 시작% 미만이면 잘못 활성화된 트레일링."""
-    if not trailing_armed or not trail_start_rate or trail_start_rate <= 0:
-        return False
-    if not buy_price or not peak:
-        return True
-    peak_rate = (peak - buy_price) / buy_price * 100.0
-    return peak_rate < float(trail_start_rate)
+    """하위 호환 — 한 번 armed된 바닥은 유지(고점 보정으로 해제하지 않음)."""
+    return False

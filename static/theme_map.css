@@ -150,3 +150,59 @@
 .manual-map-form .manual-name { width: 120px; }
 .manual-map-form .manual-tag { width: 160px; }
 .manual-map-hint { font-size: 10px; color: var(--muted); margin: 0; }
+.manual-map-hint code {
+  font-size: 10px;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: rgba(0,0,0,0.06);
+}
+
+.manual-bulk {
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(0,0,0,0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.manual-bulk-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.manual-bulk-title {
+  font-size: 12px;
+  font-weight: 600;
+}
+.manual-bulk-text {
+  width: 100%;
+  min-height: 110px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 8px 10px;
+  border: 1px solid rgba(0,0,0,0.12);
+  border-radius: 6px;
+  background: #fff;
+  box-sizing: border-box;
+}
+.manual-bulk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.file-btn { cursor: pointer; }
+.manual-bulk-result {
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(0,0,0,0.04);
+  white-space: pre-wrap;
+}
+.manual-bulk-result.err {
+  background: rgba(180, 40, 40, 0.08);
+  color: #8a1f1f;
+}

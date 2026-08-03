@@ -1,0 +1,298 @@
+{
+  "msg_types": [
+    [
+      "기타로그",
+      410
+    ],
+    [
+      "평가",
+      406
+    ],
+    [
+      "진입보류",
+      406
+    ],
+    [
+      "후보수집",
+      101
+    ],
+    [
+      "편입목록",
+      85
+    ],
+    [
+      "편입없음",
+      16
+    ]
+  ],
+  "gate_reason_heads": [
+    [
+      "[게이트] 단계 미달",
+      360
+    ],
+    [
+      "[게이트] 역매공파 시간대 외",
+      46
+    ]
+  ],
+  "hold_raw_top": [
+    [
+      "단계 미달 (FILTERED)",
+      293
+    ],
+    [
+      "단계 미달 (NONE)",
+      67
+    ],
+    [
+      "역매공파 시간대 외 (09:30~14:30)",
+      46
+    ]
+  ],
+  "samples": {
+    "단계 미달": [
+      {
+        "t": "09:40:27",
+        "stock": "신일전자(002700)",
+        "reason": "단계 미달 (FILTERED)"
+      },
+      {
+        "t": "09:40:33",
+        "stock": "모나리자(012690)",
+        "reason": "단계 미달 (FILTERED)"
+      },
+      {
+        "t": "09:43:17",
+        "stock": "LS네트웍스(000680)",
+        "reason": "단계 미달 (FILTERED)"
+      }
+    ],
+    "역매공파 시간대 외": [
+      {
+        "t": "14:30:05",
+        "stock": "셀바스AI(108860)",
+        "reason": "역매공파 시간대 외 (09:30~14:30)"
+      },
+      {
+        "t": "14:30:11",
+        "stock": "엠아이텍(179290)",
+        "reason": "역매공파 시간대 외 (09:30~14:30)"
+      },
+      {
+        "t": "14:35:50",
+        "stock": "LS네트웍스(000680)",
+        "reason": "역매공파 시간대 외 (09:30~14:30)"
+      }
+    ]
+  },
+  "cand_peak": 6,
+  "cand_scans": 117,
+  "hourly": {
+    "09": {
+      "scans": 40,
+      "avg": 0.8,
+      "max": 4,
+      "zero": 32
+    },
+    "10": {
+      "scans": 17,
+      "avg": 4.6,
+      "max": 5,
+      "zero": 0
+    },
+    "11": {
+      "scans": 18,
+      "avg": 5.6,
+      "max": 6,
+      "zero": 0
+    },
+    "12": {
+      "scans": 14,
+      "avg": 5.9,
+      "max": 6,
+      "zero": 0
+    },
+    "13": {
+      "scans": 12,
+      "avg": 5.5,
+      "max": 6,
+      "zero": 0
+    },
+    "14": {
+      "scans": 13,
+      "avg": 5.9,
+      "max": 6,
+      "zero": 0
+    },
+    "15": {
+      "scans": 3,
+      "avg": 5.7,
+      "max": 6,
+      "zero": 0
+    }
+  },
+  "top_cands": [
+    [
+      "LS네트웍스(000680)",
+      84
+    ],
+    [
+      "폴라리스오피스(041020)",
+      84
+    ],
+    [
+      "이수앱지스(086890)",
+      84
+    ],
+    [
+      "갤럭시아머니트리(094480)",
+      84
+    ],
+    [
+      "셀바스AI(108860)",
+      57
+    ],
+    [
+      "엠아이텍(179290)",
+      57
+    ],
+    [
+      "신일전자(002700)",
+      1
+    ],
+    [
+      "모나리자(012690)",
+      1
+    ]
+  ],
+  "pass_or_buy": [],
+  "errors": [],
+  "stage_sample": [],
+  "eval_sample": [
+    "2026-07-27 09:40:27,733 - managers.auto_trade_scanner - INFO - 📈 [AUTO_SCANNER] [역매공파] 평가 신일전자(002700) 가격=1,118 등락=+6.37%",
+    "2026-07-27 09:40:33,817 - managers.auto_trade_scanner - INFO - 📈 [AUTO_SCANNER] [역매공파] 평가 모나리자(012690) 가격=1,466 등락=+1.73%",
+    "2026-07-27 09:43:16,916 - managers.auto_trade_scanner - INFO - 📈 [AUTO_SCANNER] [역매공파] 평가 LS네트웍스(000680) 가격=2,965 등락=+1.37%",
+    "2026-07-27 09:43:23,677 - managers.auto_trade_scanner - INFO - 📈 [AUTO_SCANNER] [역매공파] 평가 폴라리스오피스(041020) 가격=3,055 등락=+7.38%",
+    "2026-07-27 09:43:29,790 - managers.auto_trade_scanner - INFO - 📈 [AUTO_SCANNER] [역매공파] 평가 이수앱지스(086890) 가격=3,570 등락=-3.12%",
+    "2026-07-27 09:43:36,031 - managers.auto_trade_scanner - INFO - 📈 [AUTO_SCANNER] [역매공파] 평가 갤럭시아머니트리(094480) 가격=5,150 등락=+3.00%",
+    "2026-07-27 09:46:15,722 - managers.auto_trade_scanner - INFO - 📈 [AUTO_SCANNER] [역매공파] 평가 LS네트웍스(000680) 가격=2,955 등락=+1.03%",
+    "2026-07-27 09:46:21,841 - managers.auto_trade_scanner - INFO - 📈 [AUTO_SCANNER] [역매공파] 평가 폴라리스오피스(041020) 가격=3,050 등락=+7.21%",
+    "2026-07-27 09:46:31,207 - managers.auto_trade_scanner - INFO - 📈 [AUTO_SCANNER] [역매공파] 평가 이수앱지스(086890) 가격=3,560 등락=-3.39%",
+    "2026-07-27 09:46:37,450 - managers.auto_trade_scanner - INFO - 📈 [AUTO_SCANNER] [역매공파] 평가 갤럭시아머니트리(094480) 가격=5,140 등락=+2.80%",
+    "2026-07-27 09:49:05,318 - managers.auto_trade_scanner - INFO - 📈 [AUTO_SCANNER] [역매공파] 평가 LS네트웍스(000680) 가격=2,960 등락=+1.20%",
+    "2026-07-27 09:49:11,402 - managers.auto_trade_scanner - INFO - 📈 [AUTO_SCANNER] [역매공파] 평가 폴라리스오피스(041020) 가격=3,050 등락=+7.21%",
+    "2026-07-27 09:49:17,633 - managers.auto_trade_scanner - INFO - 📈 [AUTO_SCANNER] [역매공파] 평가 이수앱지스(086890) 가격=3,560 등락=-3.39%",
+    "2026-07-27 09:49:23,840 - managers.auto_trade_scanner - INFO - 📈 [AUTO_SCANNER] [역매공파] 평가 갤럭시아머니트리(094480) 가격=5,180 등락=+3.60%",
+    "2026-07-27 09:52:50,607 - managers.auto_trade_scanner - INFO - 📈 [AUTO_SCANNER] [역매공파] 평가 LS네트웍스(000680) 가격=2,970 등락=+1.54%",
+    "2026-07-27 09:52:57,191 - managers.auto_trade_scanner - INFO - 📈 [AUTO_SCANNER] [역매공파] 평가 폴라리스오피스(041020) 가격=3,045 등락=+7.03%",
+    "2026-07-27 09:53:03,508 - managers.auto_trade_scanner - INFO - 📈 [AUTO_SCANNER] [역매공파] 평가 이수앱지스(086890) 가격=3,570 등락=-3.12%",
+    "2026-07-27 09:53:09,752 - managers.auto_trade_scanner - INFO - 📈 [AUTO_SCANNER] [역매공파] 평가 갤럭시아머니트리(094480) 가격=5,210 등락=+4.20%",
+    "2026-07-27 09:55:28,182 - managers.auto_trade_scanner - INFO - 📈 [AUTO_SCANNER] [역매공파] 평가 LS네트웍스(000680) 가격=2,950 등락=+0.85%",
+    "2026-07-27 09:55:34,237 - managers.auto_trade_scanner - INFO - 📈 [AUTO_SCANNER] [역매공파] 평가 폴라리스오피스(041020) 가격=3,030 등락=+6.50%"
+  ],
+  "settings": {
+    "is_enabled": 1,
+    "market_risk_enabled": 1,
+    "use_ymgp": 1,
+    "ymgp_condition_names": "역매공파",
+    "ymgp_verify_condition_names": null,
+    "ymgp_max_slots": 1,
+    "ymgp_buy_amount_1": 500000,
+    "ymgp_buy_amount_2": 800000,
+    "ymgp_buy_deposit_pct_1": null,
+    "ymgp_buy_deposit_pct_2": null,
+    "ymgp_trade_start_time": "09:30",
+    "ymgp_trade_end_time": "14:30",
+    "ymgp_ma_fast": 120,
+    "ymgp_ma_mid": 240,
+    "ymgp_ma_slow": 480,
+    "ymgp_box_days": 15,
+    "ymgp_box_width_pct": 15.5,
+    "ymgp_accum_vol_mult": 2.0,
+    "ymgp_ma_near_pct": 3.0,
+    "ymgp_pivot_tol_pct": 2.0,
+    "ymgp_drop_lookback": 60,
+    "ymgp_drop_pct": -20.0,
+    "ymgp_stop_ma_mode": "ma60",
+    "ymgp_stop_loss_pct": 4.0,
+    "ymgp_entry_mode": "ref_high",
+    "ymgp_max_change_pct": 10.0,
+    "ymgp_pullback_tol_pct": 2.0,
+    "ymgp_reentry_lock_days": 5,
+    "ymgp_tp1_pct_of_pos": 0.35,
+    "ymgp_tp2_pct_of_pos": 0.35,
+    "ymgp_enable_pullback_add": 1,
+    "ymgp_enable_partial_tp": 1,
+    "ymgp_trailing_start_pct": 15.0,
+    "ymgp_trailing_pct": 5.0,
+    "market_risk_block_ymgp": 0,
+    "ymgp_accum_wick_vol_mult": 4.0,
+    "ymgp_accum_wick_body_mult": 1.5,
+    "ymgp_accum_body_pct": 7.0
+  },
+  "state_summary": {
+    "n_stocks": 8,
+    "sample": [
+      [
+        "002700",
+        {
+          "stage": "FILTERED",
+          "updated_at": "2026-07-27T09:40:27+09:00"
+        }
+      ],
+      [
+        "012690",
+        {
+          "stage": "FILTERED",
+          "updated_at": "2026-07-27T09:40:33+09:00"
+        }
+      ],
+      [
+        "000680",
+        {
+          "stage": "FILTERED",
+          "updated_at": "2026-07-27T14:29:38+09:00"
+        }
+      ],
+      [
+        "041020",
+        {
+          "stage": "FILTERED",
+          "updated_at": "2026-07-27T14:29:45+09:00"
+        }
+      ],
+      [
+        "086890",
+        {
+          "stage": "FILTERED",
+          "updated_at": "2026-07-27T14:29:51+09:00"
+        }
+      ],
+      [
+        "094480",
+        {
+          "stage": "NONE",
+          "updated_at": "2026-07-27T14:29:57+09:00"
+        }
+      ],
+      [
+        "108860",
+        {
+          "stage": "FILTERED",
+          "updated_at": "2026-07-27T14:19:41+09:00"
+        }
+      ],
+      [
+        "179290",
+        {
+          "stage": "FILTERED",
+          "updated_at": "2026-07-27T14:19:47+09:00"
+        }
+      ]
+    ]
+  },
+  "state_keys": [
+    "stocks",
+    "updated_at"
+  ]
+}

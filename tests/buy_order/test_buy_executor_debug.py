@@ -79,13 +79,16 @@ async def test_buy_executor():
     
     # 4-3. 매수 수량 계산
     print("\n[4-3단계] 매수 수량 계산")
-    quantity = await executor._calculate_buy_quantity(test_signal.stock_code, current_price)
+    quantity, buy_amount = await executor._calculate_buy_quantity(test_signal.stock_code, current_price)
     
     # 브레이크포인트 6: 수량 확인
-    print(f"   - 매수 수량: {quantity}주")
+    print(f"   - 매수 수량: {quantity}주 (예산 {buy_amount:,}원)")
     print(f"   - 총 매수금액: {current_price * quantity:,}원")
     if quantity < 1:
-        print("   - ❌ 매수 수량 부족")
+        if buy_amount > 0 and current_price > 0:
+            print(f"   - ❌ 고가주라 1주도 매수 불가 (예산 {buy_amount:,}원 < 1주 {current_price:,}원)")
+        else:
+            print("   - ❌ 매수 가능 금액/현재가 없음")
         return
     
     # 4-4. 매수 주문 실행 여부 확인

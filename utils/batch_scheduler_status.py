@@ -24,7 +24,7 @@ KNOWN_BATCHES: List[Dict[str, Any]] = [
         "process_needles": ["ensure_server_running.ps1", "MorningServerWatch"],
         "log_file": os.path.join(LOG_DIR, "server_watch.log"),
         "default_schedule": "평일 08:30",
-        "description": "장 시작 전 서버 기동·헬스체크",
+        "description": "장 시작 전 서버 기동·헬스체크 (19:00 이후 서버 자동 종료)",
     },
     {
         "id": "daily_server",
@@ -33,7 +33,7 @@ KNOWN_BATCHES: List[Dict[str, Any]] = [
         "process_needles": ["ensure_server_running.ps1", "DailyServerStart"],
         "log_file": os.path.join(LOG_DIR, "server_start.log"),
         "default_schedule": "매일 08:30",
-        "description": "Stocke 서버 자동 기동",
+        "description": "Stocke 서버 자동 기동 · 야간 19:00 자동 종료(SERVER_AUTO_SHUTDOWN_TIME)",
     },
     {
         "id": "telegram_alert",
@@ -44,6 +44,34 @@ KNOWN_BATCHES: List[Dict[str, Any]] = [
         "default_schedule": "장중 매시 (12:00~)",
         "description": "키움 조건식 조회 → 텔레그램 전송",
     },
+    {
+        "id": "daily_trade_journal",
+        "label": "장마감 매매 일지",
+        "task_name": "stocke-daily-trade-journal",
+        "process_needles": ["daily_trade_journal_batch.py", "run_daily_trade_journal_batch.bat"],
+        "log_file": os.path.join(LOG_DIR, "daily_trade_journal_batch.log"),
+        "default_schedule": "평일 15:40",
+        "description": "당일 매수·매도·실현손익 → 텔레그램 매매 일지",
+    },
+    {
+        "id": "failed_buy_signals",
+        "label": "장마감 매수 실패",
+        "task_name": "stocke-failed-buy-signals",
+        "process_needles": ["failed_buy_signals_batch.py", "run_failed_buy_signals_batch.bat"],
+        "log_file": os.path.join(LOG_DIR, "failed_buy_signals_batch.log"),
+        "default_schedule": "평일 15:42",
+        "description": "당일 FAILED 매수 신호 → 전략/사유 표 텔레그램",
+    },
+    {
+        "id": "ymgp_eod",
+        "label": "장마감 역매공파 단계",
+        "task_name": "stocke-ymgp-eod",
+        "process_needles": ["ymgp_eod_batch.py", "run_ymgp_eod_batch.bat"],
+        "log_file": os.path.join(LOG_DIR, "ymgp_eod_batch.log"),
+        "default_schedule": "평일 15:45",
+        "description": "역매공파 FILTERED/READY · 박스 폭초과·고점差 → 텔레그램",
+    },
+
     {
         "id": "theme_mart",
         "label": "테마/키워드 매핑",

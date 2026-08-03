@@ -1,0 +1,24 @@
+﻿python : test_accum_bull_and_wick_paths (tests.test_ymgp_engine.TestYmgpEngine.test_accum_bull_and_wick_paths) ... ok
+위치 C:\Users\MiniPC\AppData\Local\Temp\ps-script-fc780c15-6e65-4286-b1f8-74c10e0debdc.ps1:110 문자:1
++ python -m unittest tests.test_ymgp_engine -v 2>&1 | Out-File "c:\User ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (test_accum_bull...k_paths) ... ok:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+test_checks_have_numeric_actuals_and_summary (tests.test_ymgp_engine.TestYmgpEngine.test_checks_have_numeric_actuals_an
+d_summary) ... ok
+test_entry1_ref_high (tests.test_ymgp_engine.TestYmgpEngine.test_entry1_ref_high) ... ok
+test_entry2_pullback_ma20 (tests.test_ymgp_engine.TestYmgpEngine.test_entry2_pullback_ma20) ... ok
+test_evaluate_needs_bars (tests.test_ymgp_engine.TestYmgpEngine.test_evaluate_needs_bars) ... ok
+test_evaluate_reverse_filtered_minimal (tests.test_ymgp_engine.TestYmgpEngine.test_evaluate_reverse_filtered_minimal) .
+.. ok
+test_partial_sell_and_tp_targets (tests.test_ymgp_engine.TestYmgpEngine.test_partial_sell_and_tp_targets) ... ok
+test_sma_and_reverse_array (tests.test_ymgp_engine.TestYmgpEngine.test_sma_and_reverse_array) ... ok
+test_stop_ref_low (tests.test_ymgp_engine.TestYmgpEngine.test_stop_ref_low) ... ok
+test_ymgp_entry_helper_and_date_norm (tests.test_ymgp_engine.TestYmgpEngine.test_ymgp_entry_helper_and_date_norm) ... o
+k
+
+----------------------------------------------------------------------
+Ran 10 tests in 0.007s
+
+OK

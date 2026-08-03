@@ -82,6 +82,15 @@ class MarketOpenScheduler:
             await asyncio.sleep(self._poll_sec)
 
     async def _tick(self):
+        # 야간 자동 종료(기본 19:00) — 매매 루프보다 우선
+        try:
+            from utils.server_auto_shutdown import maybe_request_auto_shutdown
+            if await maybe_request_auto_shutdown():
+                self.is_running = False
+                return
+        except Exception as e:
+            logger.warning(f"🕗 [MARKET_OPEN] 서버 자동종료 점검 경고: {e}")
+
         settings = None
         for db in get_db():
             session: Session = db
@@ -105,6 +114,22 @@ class MarketOpenScheduler:
                     logger.info("🕗 [MARKET_OPEN] 매매 종료 이후 자동매매 루프 중지")
                 self._last_auto_stop_date = today
             return
+
+        # 장중: 일일 한도 OFF 등으로 신규매수가 꺼져 있어도 손절/동기화 루프는 유지
+        try:
+            from core.main import _schedule_stop_loss_monitoring
+            from managers.stop_loss_manager import stop_loss_manager
+
+            if not stop_loss_manager.monitoring_task_running():
+                _schedule_stop_loss_monitoring()
+                log_activity(
+                    "SYSTEM",
+                    "장중 손절/동기화 루프 재기동 (자동매매 ON/OFF 무관)",
+                    "warn",
+                )
+                logger.info("🕗 [MARKET_OPEN] 손절/동기화 루프 재기동")
+        except Exception as e:
+            logger.warning(f"🕗 [MARKET_OPEN] 손절 루프 점검 경고: {e}")
 
         if self._last_auto_start_date != today:
             await self._enable_auto_trade(settings, reason="거래일 자동 기동")

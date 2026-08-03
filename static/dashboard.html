@@ -6,7 +6,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <title>stock.daily</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/dashboard.css?v=94">
+  <link rel="stylesheet" href="/static/dashboard.css?v=96">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -25,6 +25,7 @@
         <a href="#" class="tab" data-tab="board">대시보드</a>
         <a href="/analysis" class="tab-link">분석 ↗</a>
         <a href="/theme-map" class="tab-link">테마맵 ↗</a>
+        <a href="/indicators" class="tab-link">지표 ↗</a>
         <a href="/verify" class="tab-link">검증 ↗</a>
         <a href="/static/glossary.html" class="tab-link">용어정리 ↗</a>
         <a href="#" class="tab" data-tab="alert">알림</a>
@@ -73,7 +74,7 @@
       <div class="card compact-card screener-card">
         <div class="card-head">
           <div><h3>스크리너 후보 <span class="hint" id="screenerCount"></span></h3>
-            <div class="hint" style="margin-top:2px;">거래대금순 + 선택 조건식 · 개별주만 · ETF·ETN·파생상품 제외</div></div>
+            <div class="hint" style="margin-top:2px;">거래대금순(등락 3.3%~&lt;15%) · 개별주만 · ETF·ETN·파생·등락미달·과열 제외</div></div>
           <div style="display:flex;gap:8px;align-items:center;">
             <select id="scrMarket" class="select-dark">
               <option value="000">전체</option><option value="001">코스피</option><option value="101">코스닥</option></select>
@@ -81,7 +82,7 @@
           </div>
         </div>
         <div class="card-body scroll auto-screener-body" id="screenerBody">
-          <div class="empty"><span class="ico">🧭</span>조회 버튼을 누르면 거래대금순·조건식 후보를 불러옵니다. (장중에만 데이터가 정확합니다)</div>
+          <div class="empty"><span class="ico">🧭</span>조회 버튼을 누르면 거래대금순 후보를 불러옵니다. (장중에만 데이터가 정확합니다)</div>
         </div>
       </div>
 
@@ -89,25 +90,49 @@
       <div class="card compact-card screener-card">
         <div class="card-head">
           <div><h3>상따 후보 <span class="hint" id="sangttaCount"></span></h3>
-            <div class="hint" style="margin-top:2px;">상따 전용 조건식 기반 후보 · 소형·급등 관찰용(Phase0)</div></div>
+            <div class="hint" style="margin-top:2px;">등락≥13% 풀 → 거래대금순 상위 20 · 천원↑·대금10억↑·관리/ETF제외</div></div>
           <div style="display:flex;gap:8px;align-items:center;">
             <button class="btn primary sm" id="sangRefresh">조회</button>
           </div>
         </div>
         <div class="card-body scroll auto-screener-body" id="sangttaBody">
-          <div class="empty"><span class="ico">🔎</span>조회 버튼을 누르면 상따 조건식 편입 종목을 불러옵니다.</div>
+          <div class="empty"><span class="ico">🔎</span>조회 버튼을 누르면 등락률상위 풀 중 거래대금순 상위 후보를 불러옵니다.</div>
         </div>
       </div>
 
-      <!-- 과매도 돌파 후보 -->
+      <!-- 수급 돌파 후보 -->
       <div class="card compact-card screener-card">
         <div class="card-head">
-          <div><h3>과매도 돌파 후보 <span class="hint" id="breakoutCount"></span></h3>
-            <div class="hint" style="margin-top:2px;">전용 조건식 후보 · 전일/N일 고가 돌파 근접도 관측</div></div>
+          <div><h3>수급 돌파 후보 <span class="hint" id="breakoutCount"></span></h3>
+            <div class="hint" style="margin-top:2px;">조건식 후보 · 가격/거래량/HARD·SOFT·HOLD(전봉 RSI교차·양봉) 조건별 충족 여부</div></div>
           <button class="btn primary sm" id="breakoutRefresh">조회</button>
         </div>
         <div class="card-body scroll auto-screener-body" id="breakoutBody">
-          <div class="empty"><span class="ico">📈</span>조회 버튼을 누르면 과매도 돌파 조건식 후보를 평가합니다.</div>
+          <div class="empty"><span class="ico">📈</span>조회 버튼을 누르면 수급 돌파 조건식 후보를 평가합니다.</div>
+        </div>
+      </div>
+
+      <!-- 역매공파 후보 -->
+      <div class="card compact-card screener-card">
+        <div class="card-head">
+          <div><h3>역매공파 후보 <span class="hint" id="ymgpCount"></span></h3>
+            <div class="hint" style="margin-top:2px;">조건식 유니버스 · 일봉 단계(FILTERED/READY/ARMED) · 1차 돌파/2차 눌림</div></div>
+          <button class="btn primary sm" id="ymgpRefresh">조회</button>
+        </div>
+        <div class="card-body scroll auto-screener-body" id="ymgpBody">
+          <div class="empty"><span class="ico">🧱</span>조회 버튼을 누르면 역매공파 조건식 후보를 평가합니다.</div>
+        </div>
+      </div>
+
+      <!-- 종가배팅 후보 -->
+      <div class="card compact-card screener-card">
+        <div class="card-head">
+          <div><h3>종가배팅 후보 <span class="hint" id="jonggaCount"></span></h3>
+            <div class="hint" style="margin-top:2px;">거래대금순 → 최강테마 · 눌림=15분봉 고가 대비 · 14:30~40 선택 · 미선택 시 자동매수</div></div>
+          <button class="btn primary sm" id="jonggaRefresh">조회</button>
+        </div>
+        <div class="card-body scroll auto-screener-body" id="jonggaBody">
+          <div class="empty"><span class="ico">🕐</span>조회 버튼을 누르면 종가배팅 후보를 불러옵니다.</div>
         </div>
       </div>
 
@@ -115,7 +140,7 @@
       <div class="card compact-card">
         <div class="card-head">
           <div><h3>체결 로그 <span class="hint" id="logCount"></span></h3>
-            <div class="hint" style="margin-top:2px;">실제 매수·매도 체결 내역 (기간별)</div></div>
+            <div class="hint" style="margin-top:2px;">매수·매도 주문/게이트 실패·체결 (관측 만료는 제외 · 기간별)</div></div>
           <div style="display:flex;gap:8px;align-items:center;">
             <select id="logDays" class="select-dark" title="조회 기간">
               <option value="1" selected>최근 1일</option>
@@ -277,6 +302,6 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/static/dashboard.js?v=125"></script>
+  <script src="/static/dashboard.js?v=128"></script>
 </body>
 </html>

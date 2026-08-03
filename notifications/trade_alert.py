@@ -36,6 +36,9 @@ STRATEGY_LABEL_KO = {
     "scanner": "거래대금",
     "sangtta": "상따",
     "breakout": "돌파",
+    "ymgp": "역매공파",
+    "jongga": "종가배팅",
+    "jongga_closing": "종가배팅",
 }
 
 
@@ -161,6 +164,19 @@ def notify_buy(
     strategy: Optional[str] = None,
 ) -> bool:
     try:
+        try:
+            from utils.tray_notify import enqueue_trade_buy_tray
+            enqueue_trade_buy_tray(
+                stock_name=stock_name,
+                stock_code=stock_code,
+                quantity=quantity,
+                price=price,
+                is_add_buy=is_add_buy,
+                strategy=strategy,
+            )
+        except Exception as te:
+            logger.debug(f"매수 트레이 알림 스킵: {te}")
+
         msg = build_buy_message(
             stock_name=stock_name,
             stock_code=stock_code,
@@ -212,21 +228,7 @@ def notify_sell_filled(
     """SellOrder + Position 기준 매도 체결 알림."""
     try:
         snap = sell_fill_snapshot(sell, position)
-        msg = build_sell_message(
-            stock_name=snap["stock_name"],
-            stock_code=snap["stock_code"],
-            quantity=snap["quantity"],
-            sell_price=snap["sell_price"],
-            buy_price=snap["buy_price"],
-            sell_reason=snap["sell_reason"],
-            sell_reason_detail=snap["sell_reason_detail"],
-            profit_loss=snap["profit_loss"],
-            remaining_qty=remaining_qty,
-        )
-        ok = send_trade_alert(msg)
-        if ok:
-            logger.info(f"매도 텔레그램 알림 전송 — {snap['stock_name']}")
-        return ok
+        return notify_sell_filled_from_snapshot(snap, remaining_qty=remaining_qty)
     except Exception as e:
         name = getattr(sell, "stock_name", None) or getattr(position, "stock_name", "?")
         logger.warning(f"매도 텔레그램 알림 오류 — {name}: {e}")
@@ -243,6 +245,32 @@ async def notify_sell_filled_async(snap: dict, *, remaining_qty: Optional[int] =
 
 def notify_sell_filled_from_snapshot(snap: dict, *, remaining_qty: Optional[int] = None) -> bool:
     try:
+        try:
+            from utils.tray_notify import enqueue_trade_sell_tray
+            qty = int(snap.get("quantity") or 0)
+            buy_price = snap.get("buy_price")
+            sell_price = int(snap.get("sell_price") or 0)
+            profit_loss = snap.get("profit_loss")
+            rate = None
+            if (
+                profit_loss is not None
+                and buy_price
+                and qty
+                and int(buy_price) > 0
+            ):
+                rate = float(profit_loss) / (int(buy_price) * qty) * 100.0
+            enqueue_trade_sell_tray(
+                stock_name=str(snap.get("stock_name") or ""),
+                stock_code=str(snap.get("stock_code") or ""),
+                quantity=qty,
+                sell_price=sell_price,
+                sell_reason=str(snap.get("sell_reason") or ""),
+                profit_loss=int(profit_loss) if profit_loss is not None else None,
+                profit_loss_rate=rate,
+            )
+        except Exception as te:
+            logger.debug(f"매도 트레이 알림 스킵: {te}")
+
         msg = build_sell_message(
             stock_name=snap["stock_name"],
             stock_code=snap["stock_code"],

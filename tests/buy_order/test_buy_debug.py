@@ -61,12 +61,15 @@ async def main():
     
     # 5. 매수 수량 계산
     print("\n[5] 매수 수량 계산")
-    quantity = await buy_order_executor._calculate_buy_quantity(signal.stock_code, current_price)
-    print(f"   - 수량: {quantity}주")
+    quantity, buy_amount = await buy_order_executor._calculate_buy_quantity(signal.stock_code, current_price)
+    print(f"   - 수량: {quantity}주 (예산 {buy_amount:,}원)")
     print(f"   - 총액: {current_price * quantity:,}원")
     
     if quantity < 1:
-        print(f"   ❌ 매수 수량 부족")
+        if buy_amount > 0 and current_price > 0:
+            print(f"   ❌ 고가주라 1주도 매수 불가 (예산 {buy_amount:,}원 < 1주 {current_price:,}원)")
+        else:
+            print(f"   ❌ 매수 가능 금액/현재가 없음")
         return
     print(f"   ✅ 매수 가능")
     

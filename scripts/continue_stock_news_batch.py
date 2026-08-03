@@ -139,12 +139,35 @@ def _should_stop(progress: dict, today: str, max_day: int) -> bool:
     return False
 
 
+def _tg(fn, **kwargs) -> None:
+    try:
+        fn(**kwargs)
+    except Exception as e:
+        print(f"AUTO_LOOP_TELEGRAM_ERROR={e}", flush=True)
+
+
 def main() -> int:
     today = _today_kst()
     universe, max_day, chunk = _cfg()
+    started = time.monotonic()
     print(
         f"AUTO_LOOP_TODAY={today} universe={universe} max_per_day={max_day} chunk={chunk}",
         flush=True,
+    )
+
+    from notifications.stock_news_batch_notify import (
+        notify_stock_news_done,
+        notify_stock_news_error,
+        notify_stock_news_start,
+    )
+
+    _tg(
+        notify_stock_news_start,
+        biz_date=today,
+        universe=universe,
+        max_per_day=max_day,
+        chunk=chunk,
+        mode="loop",
     )
 
     while True:
@@ -163,6 +186,18 @@ def main() -> int:
 
         if _should_stop(progress, today, max_day):
             print("AUTO_LOOP_DONE", flush=True)
+            _tg(
+                notify_stock_news_done,
+                biz_date=today,
+                ok=True,
+                universe=universe,
+                status=str(progress.get("status") or "all_done"),
+                done_count=progress.get("done_count"),
+                remaining=progress.get("pending_count") or 0,
+                day_cap=max_day,
+                duration_sec=time.monotonic() - started,
+                mode="loop",
+            )
             return 0
 
         print(
@@ -179,11 +214,19 @@ def main() -> int:
                 str(max_day),
                 "--max-stocks-per-run",
                 str(chunk),
+                "--no-telegram",
             ],
             cwd=str(ROOT),
         )
         print(f"AUTO_LOOP_EXIT_CODE={result.returncode}", flush=True)
         if result.returncode != 0:
+            _tg(
+                notify_stock_news_error,
+                biz_date=today,
+                error=f"청크 실행 실패 exit={result.returncode}",
+                duration_sec=time.monotonic() - started,
+                context="auto_loop_chunk",
+            )
             return result.returncode
         time.sleep(5)
 

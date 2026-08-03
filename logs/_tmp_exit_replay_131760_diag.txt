@@ -1,0 +1,417 @@
+==== entry ====
+{
+  "date": "2026-07-24",
+  "time": "2026-07-24 10:20:00",
+  "requested_date": "2026-07-24",
+  "snapped": false,
+  "snap_note": null,
+  "price_mode": "band_cross",
+  "price_label": "2026-07-24 10:20:00 ë°´ëí¡ë¨ ì¶ì ",
+  "price": 2016,
+  "passed": true,
+  "reason": "ìë° ê²ì´í¸ íµê³¼",
+  "time_approx": "2026-07-24 10:20:00",
+  "time_note": "5ë¶ë´ ê³ ì ê° ë°´ë(2,016~2,070) í¡ë¨ â ì¶ì  ì²´ê²° 2,016",
+  "change_rate": 12.0,
+  "level_price": null,
+  "level_kind": null,
+  "assumed": false,
+  "fill_mode": "band_cross"
+}
+==== exit ====
+{
+  "date": "2026-07-24",
+  "time": "2026-07-24 10:20:00",
+  "reason": "STOP_LOSS",
+  "reason_label": "ê¸ë½",
+  "price": 1739,
+  "profit_loss_rate_pct": -13.74,
+  "bar_low": 1739,
+  "stop_line": 1980,
+  "detail": "ê¸ë½(HARD): 1,739 â¤ 1,980 (ê³ ì  2,085)"
+}
+==== holding ====
+false
+==== summary ====
+{
+  "buy_price": 2016,
+  "sell_price": 1739,
+  "profit_loss_rate_pct": -13.74,
+  "reason": "STOP_LOSS",
+  "reason_label": "ê¸ë½",
+  "peak_price": 2085,
+  "peak_rate_pct": 3.42,
+  "closed": true,
+  "entry_passed": true,
+  "buy_time": "2026-07-24 10:20:00",
+  "sell_time": "2026-07-24 10:20:00"
+}
+==== buy_condition_summary ====
+{
+  "total": 8,
+  "passed": 7,
+  "failed": 0,
+  "unknown": 1,
+  "all_passed": false
+}
+==== sell_condition_summary ====
+{
+  "total": 13,
+  "passed": 6,
+  "failed": 0,
+  "unknown": 7,
+  "all_passed": false
+}
+==== settings relevant ====
+  atr_mult_stop: 0.8
+  breakout_max_change_pct: 12.0
+  breakout_stop_loss_pct: 3.0
+  limit_break_hard_pct: 3.0
+  limit_break_soft_pct: 2.0
+  sangtta_change_max: 15.0
+  sangtta_change_min: 12.0
+  sangtta_trade_end_time: 15:00
+  sangtta_trade_start_time: 09:00
+  sharp_drop_hard_pct: 5.0
+  sharp_drop_soft_pct: 3.0
+  soft_confirm_polls: 3
+  stop_loss_rate: 6
+  struct_break_hard_pct: 2.0
+  struct_break_soft_pct: 1.0
+  take_profit_rate: 7.6
+  trailing_stop_pct: 3.5
+==== sell_condition_checks ====
+[
+  {
+    "group": "ì²­ì° ìí",
+    "key": "position_closed",
+    "label": "í¬ì§ì ì¢ë£",
+    "enabled": true,
+    "passed": true,
+    "actual": "ìì  Â· ê¸ë½ HARD",
+    "required": "ì²­ì° ìë£",
+    "note": ""
+  },
+  {
+    "group": "ì²­ì° ìí",
+    "key": "sell_price",
+    "label": "ë§¤ë ì²´ê²°ê°",
+    "enabled": true,
+    "passed": true,
+    "actual": "1,739ì (-13.74%)",
+    "required": "ì²´ê²°ê° ê¸°ë¡",
+    "note": ""
+  },
+  {
+    "group": "ìë° ì²­ì°",
+    "key": "sangtta_strategy",
+    "label": "ì ëµ íê·¸",
+    "enabled": true,
+    "passed": true,
+    "actual": "sangtta",
+    "required": "strategy_key=sangtta",
+    "note": ""
+  },
+  {
+    "group": "ìë° ì²­ì°",
+    "key": "sangtta_limit_hard",
+    "label": "ìíê° ì´í HARD",
+    "enabled": true,
+    "passed": null,
+    "actual": "ë¯¸ë°ë",
+    "required": "ìíê° í°ì¹ í â¤ ìíê°Ã(1â3%) ì¦ì",
+    "note": "ì²­ì° ì¬ì  ê¸ë½ HARD â ì´ ê·ì¹ ë¯¸ì¬ì©"
+  },
+  {
+    "group": "ìë° ì²­ì°",
+    "key": "sangtta_limit_soft",
+    "label": "ìíê° ì´í SOFT",
+    "enabled": true,
+    "passed": null,
+    "actual": "ë¯¸ë°ë",
+    "required": "â¤ ìíê°Ã(1â2%) Â· ì°ì 3í",
+    "note": "ì²­ì° ì¬ì  ê¸ë½ HARD â ì´ ê·ì¹ ë¯¸ì¬ì©"
+  },
+  {
+    "group": "ìë° ì²­ì°",
+    "key": "sangtta_drop_hard",
+    "label": "ê¸ë½ HARD",
+    "enabled": true,
+    "passed": true,
+    "actual": "ë°ë Â· ê¸ë½(HARD): 1,739 â¤ 1,980 (ê³ ì  2,085)",
+    "required": "ê³ ì  ëë¹ â¤ â5% ì¦ì",
+    "note": "ì²­ì° ì¬ì "
+  },
+  {
+    "group": "ìë° ì²­ì°",
+    "key": "sangtta_drop_soft",
+    "label": "ê¸ë½ SOFT",
+    "enabled": true,
+    "passed": null,
+    "actual": "ë¯¸ë°ë",
+    "required": "ê³ ì  ëë¹ â¤ â3% Â· ì°ì 3í",
+    "note": "ì²­ì° ì¬ì  ê¸ë½ HARD â ì´ ê·ì¹ ë¯¸ì¬ì©"
+  },
+  {
+    "group": "ìë° ì²­ì°",
+    "key": "sangtta_exit_class",
+    "label": "ì²­ì° ë¶ë¥",
+    "enabled": true,
+    "passed": true,
+    "actual": "ê¸ë½ HARD",
+    "required": "ì´í/ê¸ë½ HARDÂ·SOFT",
+    "note": "ê¸ë½(HARD): 1,739 â¤ 1,980 (ê³ ì  2,085)"
+  },
+  {
+    "group": "í¸ë ì¼ë§",
+    "key": "trail_arm",
+    "label": "ìì% (armed)",
+    "enabled": true,
+    "passed": null,
+    "actual": "ê³ ì  3.42%",
+    "required": "â¥ +7.6%",
+    "note": "ì²­ì° ì¬ì  ê¸ë½ HARD â ì´ ê·ì¹ ë¯¸ì¬ì©"
+  },
+  {
+    "group": "í¸ë ì¼ë§",
+    "key": "trailing",
+    "label": "í¸ë ì¼ % ìì ì ",
+    "enabled": true,
+    "passed": null,
+    "actual": "ì  2,012ì Â· ê³ ì  2,085ì",
+    "required": "ê³ ì Ã(1â3.5%), ë°ë¥ ì´ì",
+    "note": "ì²­ì° ì¬ì  ê¸ë½ HARD â ì´ ê·ì¹ ë¯¸ì¬ì©"
+  },
+  {
+    "group": "ìì ",
+    "key": "stop_loss",
+    "label": "ìì  %",
+    "enabled": false,
+    "passed": null,
+    "actual": "ì  1,895ì Â· ì²´ê²° 1,739ì",
+    "required": "ë§¤ìê° â 6.0%",
+    "note": "ì²­ì° ì¬ì  ê¸ë½ HARD â ì´ ê·ì¹ ë¯¸ì¬ì©"
+  },
+  {
+    "group": "ATR",
+    "key": "atr",
+    "label": "ATR(14ì¼) ë°°ì",
+    "enabled": true,
+    "passed": null,
+    "actual": "ì¥ì¤ ì¤ìê° ATR",
+    "required": "ìì Ã0.8 / í¸ë ì¼Ã2.5",
+    "note": "ATR ì¼ë´ ì¡°í ì¤í¨ â í í°Â·API ìí íì¸"
+  },
+  {
+    "group": "ë§¤ë ì¤í",
+    "key": "sell_order_db",
+    "label": "sell_orders ê¸°ë¡",
+    "enabled": true,
+    "passed": null,
+    "actual": "í¬ì§ìë§ ì²­ì° ê¸°ë¡",
+    "required": "sell_orders ì²´ê²°",
+    "note": "ìë®¬ë ì´ì â ì¤ì  ì£¼ë¬¸ ìì"
+  },
+  {
+    "group": "ë§¤ë ì¤í",
+    "key": "trigger_reason",
+    "label": "ì²­ì° ì¬ì  ì¼ì¹",
+    "enabled": true,
+    "passed": true,
+    "actual": "ìì  Â· ê¸ë½ HARD",
+    "required": "ê·ì¹ í¸ë¦¬ê±°",
+    "note": ""
+  }
+]
+==== buy_condition_checks ====
+[
+  {
+    "group": "ì§ì íì ",
+    "key": "entry_gate_pack",
+    "label": "ìë° ê²ì´í¸",
+    "enabled": true,
+    "passed": true,
+    "actual": "ìë° ê²ì´í¸ íµê³¼",
+    "required": "5ë¶ë´ AND íµê³¼",
+    "note": "2026-07-24 10:20:00"
+  },
+  {
+    "group": "ë§¤ì ê²½ë¡",
+    "key": "candidate_source",
+    "label": "íë³´ ì¢ëª©",
+    "enabled": true,
+    "passed": null,
+    "actual": "ì§ì  ì§ì ",
+    "required": "ê´ì¬ì¢ëª©Â·ì¤í¬ë¦¬ë(ê±°ëëê¸/ì¡°ê±´ì)Â·ìë°Â·ETF ì ì¸",
+    "note": "ì¡°ê±´ì ì´ë ¥ ìì â ì¢ëª© ì§ì  ì§ì "
+  },
+  {
+    "group": "ìë° ê²ì´í¸",
+    "key": "sangtta_band",
+    "label": "ë±ë½ ë°´ë 12~15%",
+    "enabled": true,
+    "passed": true,
+    "actual": "+12.00%",
+    "required": "12% ~ 15%",
+    "note": ""
+  },
+  {
+    "group": "ìë° ê²ì´í¸",
+    "key": "sangtta_open",
+    "label": "ìê° ì/ìê°ëë¹â¥3%",
+    "enabled": true,
+    "passed": true,
+    "actual": "ìê°ëë¹ +9.80%",
+    "required": "ìê° ì´ì ëë â¥3%",
+    "note": ""
+  },
+  {
+    "group": "ìë° ê²ì´í¸",
+    "key": "sangtta_not_limit_up",
+    "label": "ìíê° ë¯¸ëë¬",
+    "enabled": true,
+    "passed": true,
+    "actual": "2,016ì",
+    "required": "< ìíê° 2,340ì",
+    "note": ""
+  },
+  {
+    "group": "ìë° ê²ì´í¸",
+    "key": "sangtta_market_cap",
+    "label": "ìì´ â¤3000ìµ",
+    "enabled": true,
+    "passed": true,
+    "actual": "149ìµ",
+    "required": "â¤ 3000ìµ",
+    "note": ""
+  },
+  {
+    "group": "ìë° ê²ì´í¸",
+    "key": "sangtta_breakout",
+    "label": "sangtta_breakout í¨í¤ì§",
+    "enabled": true,
+    "passed": true,
+    "actual": "ìë° ê²ì´í¸ íµê³¼",
+    "required": "AND íµê³¼",
+    "note": ""
+  },
+  {
+    "group": "ì¬ì´ì§",
+    "key": "fixed_size",
+    "label": "ê³ ì  ë§¤ì ê¸ì¡",
+    "enabled": true,
+    "passed": true,
+    "actual": "2,016ì",
+    "required": "â",
+    "note": ""
+  }
+]
+==== simulation ====
+{
+  "days_requested": 1,
+  "bars_simulated": 1,
+  "start_date": "2026-07-24",
+  "end_date": "2026-07-24",
+  "data_through": "2026-07-24",
+  "data_source": "kiwoom_5m",
+  "mart_latest_date": "2026-07-06",
+  "assumptions": [
+    "ì ëµ: ìë° (sangtta)",
+    "í´ìë: 5ë¶ë´ (ì ëµ ìë®¬)",
+    "ì¼ë´ ì¶ì²: kiwoom_api / ë¶ë´: kiwoom_5m",
+    "ì¢ëª© ì§ì  ì§ì  â ì¡°ê±´ì í¸ì ì´ë ¥ ë¯¸ì¬í",
+    "ë§¤ì ìê°ë: 09:00~15:00",
+    "ìµë ë³´ì  1ê±°ëì¼ ë¶ë´ (â¤7ì¼)",
+    "SOFT íì¸ = ì°ì 5ë¶ë´ íì (soft_confirm_polls)",
+    "ê°­ íë½ ì ì²­ì°ê° = min(ìì ì , ìê°)",
+    "ìë°: ì¢ê° ë¯¸ì¶©ì¡±ì´ì´ë ë´ ê³ ì ê°ê° ë±ë½ ë°´ëë¥¼ ê°ë¡ì§ë¥´ë©´ ë°´ë ì§ìê° ì¶ì  ì²´ê²°",
+    "5ë¶ë´ ê³ ì ê° ë°´ë(2,016~2,070) í¡ë¨ â ì¶ì  ì²´ê²° 2,016"
+  ],
+  "resolution": "5m"
+}
+==== timeline count 1 ====
+{"timestamp": "2026-07-24 10:20:00", "date": "2026-07-24", "open": 1739, "high": 2085, "low": 1739, "close": 2085, "peak": 2085, "peak_rate_pct": 3.42, "trailing_armed": false, "trailing_floor": null, "effective_stop": 1895, "effective_stop_reason": "STOP_LOSS", "unrealized_pct": 3.42}
+==== intraday_chart type: dict ====
+chart keys: success, bars, markers, level_lines, date_range, warning
+  success: bool = True
+  bars: list len=74 sample0={'timestamp': '2026-07-24 09:00:00', 'open': 1836, 'high': 1836, 'low': 1752, 'close': 1775, 'volume': 14549}
+  markers: dict = {"buy": {"time": "2026-07-24 10:20:00", "price": 2016, "assumed": false}, "sell": {"time": "2026-07-24 10:20:00", "price": 1739, "assumed": false}}
+  level_lines: list len=1 sample0={'kind': 'stop', 'price': 1895, 'label': 'ì\x86\x90ì\xa0\x88 1,895'}
+  date_range: list len=2 sample0=2026-07-24
+  warning: NoneType = None
+==== bars count 74 ====
+max high: {"timestamp": "2026-07-24 10:35:00", "open": 2120, "high": 2340, "low": 2050, "close": 2330, "volume": 403918}
+min low: {"timestamp": "2026-07-24 10:15:00", "open": 1737, "high": 1739, "low": 1733, "close": 1739, "volume": 2044}
+{"timestamp": "2026-07-24 09:00:00", "open": 1836, "high": 1836, "low": 1752, "close": 1775, "volume": 14549}
+{"timestamp": "2026-07-24 09:05:00", "open": 1792, "high": 1804, "low": 1762, "close": 1774, "volume": 3603}
+{"timestamp": "2026-07-24 09:10:00", "open": 1774, "high": 1805, "low": 1774, "close": 1805, "volume": 1255}
+{"timestamp": "2026-07-24 09:15:00", "open": 1801, "high": 1802, "low": 1769, "close": 1798, "volume": 2114}
+{"timestamp": "2026-07-24 09:20:00", "open": 1798, "high": 1800, "low": 1778, "close": 1778, "volume": 2472}
+{"timestamp": "2026-07-24 09:25:00", "open": 1796, "high": 1802, "low": 1796, "close": 1802, "volume": 757}
+{"timestamp": "2026-07-24 09:35:00", "open": 1786, "high": 1802, "low": 1741, "close": 1741, "volume": 20376}
+{"timestamp": "2026-07-24 09:40:00", "open": 1740, "high": 1758, "low": 1740, "close": 1758, "volume": 7170}
+{"timestamp": "2026-07-24 09:45:00", "open": 1740, "high": 1741, "low": 1740, "close": 1740, "volume": 408}
+{"timestamp": "2026-07-24 09:50:00", "open": 1741, "high": 1745, "low": 1740, "close": 1740, "volume": 624}
+{"timestamp": "2026-07-24 09:55:00", "open": 1742, "high": 1759, "low": 1740, "close": 1759, "volume": 138}
+{"timestamp": "2026-07-24 10:00:00", "open": 1759, "high": 1759, "low": 1746, "close": 1754, "volume": 181}
+{"timestamp": "2026-07-24 10:05:00", "open": 1745, "high": 1760, "low": 1742, "close": 1752, "volume": 4482}
+{"timestamp": "2026-07-24 10:10:00", "open": 1752, "high": 1752, "low": 1737, "close": 1737, "volume": 5570}
+{"timestamp": "2026-07-24 10:15:00", "open": 1737, "high": 1739, "low": 1733, "close": 1739, "volume": 2044}
+{"timestamp": "2026-07-24 10:20:00", "open": 1739, "high": 2085, "low": 1739, "close": 2085, "volume": 84047}
+{"timestamp": "2026-07-24 10:25:00", "open": 2185, "high": 2285, "low": 2025, "close": 2025, "volume": 155250}
+{"timestamp": "2026-07-24 10:30:00", "open": 2065, "high": 2270, "low": 2010, "close": 2125, "volume": 296130}
+{"timestamp": "2026-07-24 10:35:00", "open": 2120, "high": 2340, "low": 2050, "close": 2330, "volume": 403918}
+{"timestamp": "2026-07-24 10:40:00", "open": 2325, "high": 2340, "low": 2315, "close": 2340, "volume": 130079}
+{"timestamp": "2026-07-24 10:45:00", "open": 2340, "high": 2340, "low": 2250, "close": 2330, "volume": 361250}
+{"timestamp": "2026-07-24 10:50:00", "open": 2335, "high": 2340, "low": 2315, "close": 2340, "volume": 68908}
+{"timestamp": "2026-07-24 10:55:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 3608}
+{"timestamp": "2026-07-24 11:00:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 1791}
+{"timestamp": "2026-07-24 11:05:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 4047}
+{"timestamp": "2026-07-24 11:10:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 3770}
+{"timestamp": "2026-07-24 11:15:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 2180}
+{"timestamp": "2026-07-24 11:20:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 239}
+{"timestamp": "2026-07-24 11:25:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 1500}
+{"timestamp": "2026-07-24 11:30:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 3367}
+{"timestamp": "2026-07-24 11:35:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 108}
+{"timestamp": "2026-07-24 11:40:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 550}
+{"timestamp": "2026-07-24 11:45:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 168}
+{"timestamp": "2026-07-24 11:50:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 3332}
+{"timestamp": "2026-07-24 11:55:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 513}
+{"timestamp": "2026-07-24 12:00:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 592}
+{"timestamp": "2026-07-24 12:05:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 299}
+{"timestamp": "2026-07-24 12:10:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 21127}
+{"timestamp": "2026-07-24 12:15:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 48}
+{"timestamp": "2026-07-24 12:20:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 4856}
+{"timestamp": "2026-07-24 12:25:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 4545}
+{"timestamp": "2026-07-24 12:30:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 204}
+{"timestamp": "2026-07-24 12:35:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 1493}
+{"timestamp": "2026-07-24 12:40:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 6178}
+{"timestamp": "2026-07-24 12:45:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 290}
+{"timestamp": "2026-07-24 12:50:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 10121}
+{"timestamp": "2026-07-24 12:55:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 3266}
+{"timestamp": "2026-07-24 13:00:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 5462}
+{"timestamp": "2026-07-24 13:05:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 1130}
+{"timestamp": "2026-07-24 13:10:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 50}
+{"timestamp": "2026-07-24 13:15:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 466}
+{"timestamp": "2026-07-24 13:25:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 35}
+{"timestamp": "2026-07-24 13:30:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 102}
+{"timestamp": "2026-07-24 13:35:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 15}
+{"timestamp": "2026-07-24 13:40:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 11}
+{"timestamp": "2026-07-24 13:50:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 91}
+{"timestamp": "2026-07-24 13:55:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 29}
+{"timestamp": "2026-07-24 14:00:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 401}
+{"timestamp": "2026-07-24 14:05:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 11}
+{"timestamp": "2026-07-24 14:10:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 46}
+{"timestamp": "2026-07-24 14:15:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 4}
+{"timestamp": "2026-07-24 14:25:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 481}
+{"timestamp": "2026-07-24 14:30:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 8}
+{"timestamp": "2026-07-24 14:35:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 10}
+{"timestamp": "2026-07-24 14:40:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 515}
+{"timestamp": "2026-07-24 14:45:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 1}
+{"timestamp": "2026-07-24 14:50:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 13}
+{"timestamp": "2026-07-24 14:55:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 2258}
+{"timestamp": "2026-07-24 15:00:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 1}
+{"timestamp": "2026-07-24 15:05:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 400}
+{"timestamp": "2026-07-24 15:10:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 11137}
+{"timestamp": "2026-07-24 15:15:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 4564}
+{"timestamp": "2026-07-24 15:30:00", "open": 2340, "high": 2340, "low": 2340, "close": 2340, "volume": 1543}

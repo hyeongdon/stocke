@@ -106,7 +106,7 @@ function initFromUrl() {
     $('resolution').value = resolution;
   }
   if (mode) $('entryMode').value = mode;
-  if (strategy && ['legacy', 'sangtta', 'breakout'].includes(strategy)) {
+  if (strategy && ['legacy', 'sangtta', 'breakout', 'ymgp'].includes(strategy)) {
     $('strategy').value = strategy;
   }
   const limit = p.get('limit');
@@ -213,6 +213,15 @@ function renderSettings(settings, strategy) {
       ['트레일 %', settings.breakout_trailing_pct != null ? `${settings.breakout_trailing_pct}%` : '-'],
       ['구조 HARD %', settings.struct_break_hard_pct ?? '-'],
       ['SOFT 확인', settings.soft_confirm_polls ?? '-'],
+      ['시간대', strategy.time_window || '-'],
+    ];
+  } else if (key === 'ymgp') {
+    rows = [
+      ['손절 %', settings.ymgp_stop_loss_pct != null ? `${settings.ymgp_stop_loss_pct}%` : '-'],
+      ['트레일 시작 %', settings.ymgp_trailing_start_pct != null ? `${settings.ymgp_trailing_start_pct}%` : '-'],
+      ['트레일 %', settings.ymgp_trailing_pct != null ? `${settings.ymgp_trailing_pct}%` : '-'],
+      ['손절 MA', settings.ymgp_stop_ma_mode || '-'],
+      ['진입 모드', settings.ymgp_entry_mode || 'ref_high'],
       ['시간대', strategy.time_window || '-'],
     ];
   } else if (key === 'sangtta') {

@@ -103,6 +103,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--force", action="store_true", help="이미 biz_date를 처리한 종목도 강제 재수집")
     p.add_argument("--commit-every", type=int, default=20, help="stock 처리 후 커밋 주기")
     p.add_argument("--timeout", type=int, default=18, help="네이버 API timeout(초)")
+    p.add_argument(
+        "--no-telegram",
+        action="store_true",
+        help="시작/종료/오류 텔레그램 알림 비활성화",
+    )
     return p.parse_args()
 
 
@@ -228,13 +233,39 @@ def _report_progress(**kwargs) -> None:
         pass
 
 
+def _telegram_notify(enabled: bool, fn, log: logging.Logger, **kwargs) -> None:
+    if not enabled:
+        return
+    try:
+        fn(**kwargs)
+    except Exception as e:
+        log.exception("텔레그램 알림 전송 중 오류: %s", e)
+
+
 def main() -> int:
     setup_logging()
     args = parse_args()
     log = logging.getLogger(__name__)
+    telegram_on = not bool(args.no_telegram)
+    started_at = time.time()
+
+    from notifications.stock_news_batch_notify import (
+        notify_stock_news_done,
+        notify_stock_news_error,
+        notify_stock_news_start,
+    )
 
     if not Config.NAVER_CLIENT_ID or not Config.NAVER_CLIENT_SECRET:
         log.error("NAVER_CLIENT_ID/SECRET 설정이 필요합니다. .env 확인.")
+        _telegram_notify(
+            telegram_on,
+            notify_stock_news_error,
+            log,
+            biz_date=None,
+            error="NAVER_CLIENT_ID/SECRET 미설정",
+            duration_sec=time.time() - started_at,
+            context="config",
+        )
         return 2
 
     if args.biz_date:
@@ -242,15 +273,6 @@ def main() -> int:
     else:
         biz = kst_today()
 
-    log.info(
-        "stock_news_daily_batch 시작 biz_date=%s display=%s universe=%s max_per_day=%s",
-        biz.isoformat(),
-        args.display,
-        (args.universe or Config.STOCK_NEWS_UNIVERSE or "theme"),
-        args.max_stocks_per_day if args.max_stocks_per_day is not None else Config.STOCK_NEWS_MAX_STOCKS_PER_DAY,
-    )
-
-    started_at = time.time()
     universe_mode = (args.universe or Config.STOCK_NEWS_UNIVERSE or "theme").strip().lower()
     if universe_mode not in ("theme", "all"):
         universe_mode = "theme"
@@ -261,6 +283,62 @@ def main() -> int:
     )
     max_per_day = max(0, max_per_day)
 
+    log.info(
+        "stock_news_daily_batch 시작 biz_date=%s display=%s universe=%s max_per_day=%s",
+        biz.isoformat(),
+        args.display,
+        universe_mode,
+        max_per_day,
+    )
+    _telegram_notify(
+        telegram_on,
+        notify_stock_news_start,
+        log,
+        biz_date=biz.isoformat(),
+        universe=universe_mode,
+        max_per_day=max_per_day,
+        chunk=int(args.max_stocks_per_run or 0) or None,
+        mode="run",
+    )
+
+    try:
+        return _run_batch(
+            args=args,
+            log=log,
+            biz=biz,
+            universe_mode=universe_mode,
+            max_per_day=max_per_day,
+            started_at=started_at,
+            telegram_on=telegram_on,
+            notify_done=notify_stock_news_done,
+            notify_error=notify_stock_news_error,
+        )
+    except Exception as e:
+        log.exception("stock_news_daily_batch 예외: %s", e)
+        _telegram_notify(
+            telegram_on,
+            notify_stock_news_error,
+            log,
+            biz_date=biz.isoformat(),
+            error=f"{type(e).__name__}: {e}",
+            duration_sec=time.time() - started_at,
+            context="uncaught",
+        )
+        return 1
+
+
+def _run_batch(
+    *,
+    args: argparse.Namespace,
+    log: logging.Logger,
+    biz: date,
+    universe_mode: str,
+    max_per_day: int,
+    started_at: float,
+    telegram_on: bool,
+    notify_done,
+    notify_error,
+) -> int:
     session_gen = get_db()
     for session in session_gen:
         # 처리 완료 스킵(중복 방지)
@@ -294,6 +372,20 @@ def main() -> int:
                 percent=100.0,
                 day_cap=max_per_day,
                 universe_mode=universe_mode,
+            )
+            _telegram_notify(
+                telegram_on,
+                notify_done,
+                log,
+                biz_date=biz.isoformat(),
+                ok=True,
+                universe=universe_mode,
+                status="all_done",
+                done_count=len(done_stock_codes),
+                remaining=0,
+                day_cap=max_per_day,
+                duration_sec=time.time() - started_at,
+                mode="run",
             )
             return 0
 
@@ -355,6 +447,15 @@ def main() -> int:
                 )
                 hb_stop.set()
                 hb_thread.join(timeout=1.0)
+                _telegram_notify(
+                    telegram_on,
+                    notify_error,
+                    log,
+                    biz_date=biz.isoformat(),
+                    error="테마 편입 종목 없음 — 테마 배치를 먼저 실행하거나 --universe all 사용",
+                    duration_sec=time.time() - started_at,
+                    context="universe",
+                )
                 return 1
         else:
             # 종목 유니버스(전체 종목) — 페이지 크롤이라 1~3분 걸릴 수 있음
@@ -435,6 +536,20 @@ def main() -> int:
             )
             hb_stop.set()
             hb_thread.join(timeout=1.0)
+            _telegram_notify(
+                telegram_on,
+                notify_done,
+                log,
+                biz_date=biz.isoformat(),
+                ok=True,
+                universe=universe_mode,
+                status="all_done",
+                done_count=len(done_stock_codes),
+                remaining=0,
+                day_cap=max_per_day or None,
+                duration_sec=time.time() - started_at,
+                mode="run",
+            )
             return 0
 
         _emit_progress(
@@ -856,6 +971,15 @@ def main() -> int:
             log.error("마지막 커밋 실패 err=%s", e)
             hb_stop.set()
             hb_thread.join(timeout=1.0)
+            _telegram_notify(
+                telegram_on,
+                notify_error,
+                log,
+                biz_date=biz.isoformat(),
+                error=f"마지막 커밋 실패: {e}",
+                duration_sec=time.time() - started_at,
+                context="final_commit",
+            )
             return 1
 
         remaining = max(0, pending_total - offset - ok_count)
@@ -882,6 +1006,7 @@ def main() -> int:
             universe_mode=universe_mode,
             day_capped=day_capped or hit_day_cap,
         )
+        elapsed = time.time() - started_at
         log.info(
             "완료 biz_date=%s mode=%s 이번큐=%d ok=%d skip=%d fail=%d remaining≈%d day_cap=%s elapsed=%.1fs",
             biz.isoformat(),
@@ -892,7 +1017,7 @@ def main() -> int:
             fail_count,
             0 if final_status == "all_done" else remaining,
             max_per_day or "none",
-            time.time() - started_at,
+            elapsed,
         )
         if remaining > 0:
             log.info(
@@ -905,8 +1030,35 @@ def main() -> int:
                 log.info("연관도 점수 재계산: %s", score_res)
             except Exception as score_err:
                 log.warning("연관도 점수 재계산 스킵: %s", score_err)
+        _telegram_notify(
+            telegram_on,
+            notify_done,
+            log,
+            biz_date=biz.isoformat(),
+            ok=True,
+            universe=universe_mode,
+            status=final_status,
+            done_count=final_done,
+            ok_count=ok_count,
+            fail_count=fail_count,
+            skip_count=done_count,
+            remaining=0 if final_status == "all_done" else remaining,
+            day_cap=max_per_day or None,
+            duration_sec=elapsed,
+            error=f"종목 실패 {fail_count}건" if fail_count else None,
+            mode="run",
+        )
         return 0
 
+    _telegram_notify(
+        telegram_on,
+        notify_error,
+        log,
+        biz_date=biz.isoformat(),
+        error="DB 세션을 열지 못했습니다.",
+        duration_sec=time.time() - started_at,
+        context="db",
+    )
     return 1
 
 

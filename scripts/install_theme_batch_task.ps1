@@ -65,7 +65,7 @@ if ($Mode -eq "Daily") {
     -Trigger $trigger `
     -Settings $settings `
     -Principal $principal `
-    -Description "stocke 테마/키워드 전체 매핑 (장후 1회) + 텔레그램 일일 리포트" `
+    -Description "stocke 테마/키워드 전체 매핑 (장후 1회: 네이버→키움 dual) + 텔레그램 일일 리포트" `
     -Force | Out-Null
 
   Write-Host "작업 등록 완료(Daily): $TaskName ($At)"

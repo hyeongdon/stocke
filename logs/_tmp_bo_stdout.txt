@@ -1,0 +1,65 @@
+﻿DB files: ['c:\\Users\\MiniPC\\stocke\\stock_pipeline.db']
+SETTINGS from c:\Users\MiniPC\stocke\stock_pipeline.db
+{
+  "is_enabled": 1,
+  "use_entry_gate": 1,
+  "max_concurrent_positions": 6,
+  "max_daily_buys": 10,
+  "use_breakout": 1,
+  "breakout_condition_names": "돌파",
+  "breakout_max_slots": 2,
+  "breakout_buy_amount": 1000000,
+  "breakout_trade_start_time": "09:00",
+  "breakout_trade_end_time": "15:20",
+  "breakout_level_mode": "n_day_high",
+  "breakout_n_day": 4,
+  "breakout_vol_mult": 1.5,
+  "breakout_max_change_pct": 12.0,
+  "breakout_stop_loss_pct": 3.0,
+  "breakout_trailing_pct": 4.0,
+  "breakout_trailing_start_pct": 10.0,
+  "breakout_verify_condition_names": "검증(돌파)",
+  "breakout_entry_hard": 1,
+  "breakout_entry_soft": 1,
+  "breakout_entry_soft_polls": 3,
+  "breakout_buy_deposit_pct": null,
+  "breakout_entry_hold": 1,
+  "breakout_hold_expire_bars": 3,
+  "breakout_hold_rsi_min": 30.0,
+  "breakout_rsi_period": 10,
+  "market_risk_enabled": 1,
+  "market_risk_block_breakout": 0,
+  "breakout_body_pct": 2.0,
+  "breakout_range_mult": 0.0,
+  "breakout_require_ma20_cross": 1,
+  "breakout_ma20_mode": "above",
+  "breakout_ma20_grace_bars": 3
+}
+buckets:
+  252 레벨 미돌파/미유지
+   96 거래량 부족
+   41 장대(몸통) 부족
+   24 MA20 미충족
+    5 시간외
+    4 과열/등락컷
+    4 분봉 데이터
+    3 슬롯
+    2 쿨다운
+    1 HOLD 대기
+soft_complete 11 near 33 buys 0 signals 0
+top raw:
+    7 장대 부족 (몸통 0.44% < 2%)
+    6 거래량 부족 (0.01배 < 1.5배)
+    5 거래량 부족 (0.05배 < 1.5배)
+    5 거래량 부족 (0.16배 < 1.5배)
+    5 돌파 시간대 외 (09:00~15:20)
+    4 돌파 전 (21,950 ≤ 22,450 레벨, -2.23%) · HOLD 대기(직전완성 고가 22,250 ≤ 레벨 22,450)
+    4 5분봉 데이터 없음(돌파)
+    3 돌파 슬롯 포화 (2/2)
+    3 거래량 부족 (0.99배 < 1.5배)
+    3 거래량 부족 (0.87배 < 1.5배)
+    3 장대 부족 (몸통 1.27% < 2%)
+    3 거래량 부족 (0.84배 < 1.5배)
+    3 거래량 부족 (1.26배 < 1.5배)
+    3 거래량 부족 (0.03배 < 1.5배)
+    3 거래량 부족 (0.31배 < 1.5배)

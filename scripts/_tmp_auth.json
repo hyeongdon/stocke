@@ -1,0 +1,66 @@
+{
+  "/api/status": {
+    "running": false,
+    "websocket_connected": false,
+    "token_valid": false,
+    "api_rate_limit": {
+      "status": "normal",
+      "limit_until": null,
+      "warning_count": 0,
+      "recent_calls": 0,
+      "max_calls_per_window": 18,
+      "min_call_interval": 3.0,
+      "remaining_calls": 18,
+      "usage_percent": 0.0,
+      "is_available": true,
+      "seconds_until_available": 0.0,
+      "last_warning_reset": "2026-07-24T08:30:41.063121"
+    }
+  },
+  "/trading/readiness": {
+    "ready": false,
+    "checks": {
+      "api_authenticated": false,
+      "account_configured": true,
+      "settings_exist": true,
+      "buy_conditions_set": true,
+      "auto_trade_enabled": true,
+      "in_trade_hours": true,
+      "is_trading_day": true,
+      "trading_day_block_reason": null,
+      "allows_new_buy": true,
+      "new_buy_block_reason": null,
+      "daily_limit_ok": true,
+      "scanner_running": true,
+      "scanner_loop_alive": true,
+      "buy_executor_running": true,
+      "buy_loop_alive": true,
+      "stop_loss_running": true,
+      "stop_loss_loop_alive": true
+    },
+    "phase2": {
+      "entry_gate": true,
+      "pyramiding": true,
+      "daily_limits": true,
+      "order_method": "MARKET"
+    },
+    "today_realized_pnl": 0,
+    "daily_halt_reason": null,
+    "mock_mode": true,
+    "timestamp": "2026-07-24T10:06:34+09:00"
+  },
+  "/health": {
+    "ok": true,
+    "ts": "2026-07-24T10:06:35+09:00"
+  },
+  "/telegram/status": {
+    "configured": true,
+    "chat_id_masked": "795***18",
+    "condition_filter": [],
+    "interval": 600,
+    "max_stocks": 20,
+    "market_hours_only": true,
+    "alert_allowed_now": true,
+    "alert_block_reason": null
+  }
+}

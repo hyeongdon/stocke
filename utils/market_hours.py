@@ -77,7 +77,60 @@ def _strategy_windows(settings) -> list:
                 _parse_hm(getattr(settings, "breakout_trade_end_time", None), (14, 30)),
             )
         )
+    use_ymgp = bool(getattr(settings, "use_ymgp", False))
+    has_ymgp_conds = bool(str(getattr(settings, "ymgp_condition_names", None) or "").strip())
+    if use_ymgp or has_ymgp_conds:
+        windows.append(
+            (
+                "역매공파",
+                _parse_hm(getattr(settings, "ymgp_trade_start_time", None), (9, 30)),
+                _parse_hm(getattr(settings, "ymgp_trade_end_time", None), (14, 30)),
+            )
+        )
+    if bool(getattr(settings, "use_jongga", False)):
+        if bool(getattr(settings, "jongga_pig_split", True)):
+            j_end = getattr(settings, "jongga_leg3_end_time", None) or "15:28"
+            j_end_default = (15, 28)
+        else:
+            j_end = (
+                getattr(settings, "jongga_pick_end_time", None)
+                or getattr(settings, "jongga_trade_end_time", None)
+            )
+            j_end_default = (14, 40)
+        windows.append(
+            (
+                "종가배팅",
+                _parse_hm(getattr(settings, "jongga_trade_start_time", None), (14, 30)),
+                _parse_hm(j_end, j_end_default),
+            )
+        )
     return windows
+
+
+def should_auto_shutdown_server(
+    now: Optional[datetime] = None,
+    *,
+    enabled: Optional[bool] = None,
+    shutdown_hm: Optional[str] = None,
+) -> bool:
+    """KST 기준 서버 자동 종료 시각 도달 여부 (기본 19:00)."""
+    if enabled is None:
+        try:
+            from core.config import Config
+            enabled = bool(Config.SERVER_AUTO_SHUTDOWN_ENABLED)
+        except Exception:
+            enabled = True
+    if not enabled:
+        return False
+    if shutdown_hm is None:
+        try:
+            from core.config import Config
+            shutdown_hm = str(Config.SERVER_AUTO_SHUTDOWN_TIME or "19:00")
+        except Exception:
+            shutdown_hm = "19:00"
+    kst = as_kst(now)
+    cutoff = _parse_hm(shutdown_hm, (19, 0))
+    return kst.time() >= cutoff
 
 
 def linked_trading_session_bounds(settings, now: Optional[datetime] = None) -> Tuple[dt_time, dt_time]:

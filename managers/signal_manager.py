@@ -21,11 +21,29 @@ class SignalType(Enum):
 
 class SignalStatus(Enum):
     """신호 상태 정의"""
-    PENDING = "PENDING"      # 대기 중
+    WATCHING = "WATCHING"    # 관측(유예·진입확인 대기) — 슬롯 미점유, 주문 전
+    PENDING = "PENDING"      # 매수 대기 (주문 파이프라인)
     PROCESSING = "PROCESSING" # 처리 중
     ORDERED = "ORDERED"      # 주문 완료
     FAILED = "FAILED"        # 실패
     CANCELLED = "CANCELLED"  # 취소됨
+    EXPIRED = "EXPIRED"      # 만료
+    FILLED = "FILLED"        # 체결 확정
+
+
+# 매수 슬롯·동시보유 예약에 포함되는 상태 (WATCHING 제외)
+BUY_SLOT_STATUSES = (
+    SignalStatus.PENDING.value,
+    SignalStatus.PROCESSING.value,
+    SignalStatus.ORDERED.value,
+)
+# 신규 매수 신호 생성 차단 (이미 파이프라인)
+BUY_PIPELINE_STATUSES = BUY_SLOT_STATUSES
+# 관측 갱신·승격 시 덮어쓰면 안 되는 상태
+BUY_TERMINAL_OR_ACTIVE = BUY_PIPELINE_STATUSES + (
+    SignalStatus.FILLED.value,
+    "COMPLETED",
+)
 
 class SignalManager:
     """통합 신호 관리 시스템 - 신호 타입 구분 및 중복 방지"""
@@ -56,25 +74,72 @@ class SignalManager:
         signal_type: SignalType,
         additional_data: Optional[Dict] = None,
     ) -> tuple[bool, str]:
-        """신호 생성. (성공 여부, 사유/결과 메시지)"""
+        """매수대기(PENDING) 신호 생성. WATCHING이 있으면 승격(PENDING)한다."""
         try:
             logger.info(
                 f"📡 [SIGNAL_MANAGER] 신호 생성 요청 - {stock_name}({stock_code}), 타입: {signal_type.value}",
             )
 
-            if await self._is_duplicate_signal(condition_id, stock_code, signal_type):
+            meta = dict(additional_data or {})
+            is_add_buy = bool(meta.get("is_add_buy"))
+            current_date = kst_today()
+            existing_signal = await self._get_existing_signal(stock_code, condition_id, current_date)
+            if existing_signal and existing_signal.status in BUY_TERMINAL_OR_ACTIVE:
+                # 분할/피라미딩 추가매수: 당일 unique(종목) 제약상 FILLED 행을 PENDING으로 재개
+                allow_reopen = is_add_buy and existing_signal.status in (
+                    SignalStatus.FILLED.value,
+                    "COMPLETED",
+                )
+                if not allow_reopen:
+                    if existing_signal.status == SignalStatus.PENDING.value:
+                        return False, "이미 매수대기"
+                    return False, f"이미 {existing_signal.status}"
+
+            # WATCHING → PENDING 승격·추가매수 재개는 TTL 중복 검사 생략
+            upgrading_watching = bool(
+                existing_signal and existing_signal.status == SignalStatus.WATCHING.value
+            )
+            if (
+                not upgrading_watching
+                and not is_add_buy
+                and await self._is_duplicate_signal(condition_id, stock_code, signal_type)
+            ):
                 logger.debug(f"📡 [SIGNAL_MANAGER] 중복 신호 감지 - {stock_name}({stock_code})")
                 return False, "중복 신호(TTL 내)"
 
-            current_date = kst_today()
-            existing_signal = await self._get_existing_signal(stock_code, condition_id, current_date)
+            meta.pop("wait_kind", None)
+            meta.pop("wait_reason", None)
+            meta["order_ready"] = True
+
             if existing_signal:
-                logger.info(f"📡 [SIGNAL_MANAGER] 같은 일자 신호 존재 - 업데이트: {stock_name}({stock_code})")
-                ok = await self._update_existing_signal(existing_signal, signal_type, additional_data)
-                return (True, "기존 신호 갱신") if ok else (False, "기존 신호 갱신 실패")
+                reopen = is_add_buy and existing_signal.status in (
+                    SignalStatus.FILLED.value,
+                    "COMPLETED",
+                )
+                logger.info(
+                    f"📡 [SIGNAL_MANAGER] 같은 일자 신호 존재 - "
+                    f"{'추가매수 재개' if reopen else ('WATCHING→PENDING 승격' if upgrading_watching else '업데이트')}: "
+                    f"{stock_name}({stock_code})"
+                )
+                ok = await self._update_existing_signal(
+                    existing_signal,
+                    signal_type,
+                    meta,
+                    target_status=SignalStatus.PENDING.value,
+                )
+                if not ok:
+                    return False, "기존 신호 갱신 실패"
+                if reopen:
+                    return True, "추가매수 재개"
+                return (True, "WATCHING→PENDING" if upgrading_watching else "기존 신호 갱신")
 
             signal_id = await self._save_signal_to_db(
-                condition_id, stock_code, stock_name, signal_type, additional_data,
+                condition_id,
+                stock_code,
+                stock_name,
+                signal_type,
+                meta,
+                initial_status=SignalStatus.PENDING.value,
             )
 
             if signal_id:
@@ -91,6 +156,114 @@ class SignalManager:
         except Exception as e:
             logger.error(f"📡 [SIGNAL_MANAGER] 신호 생성 오류 - {stock_name}({stock_code}): {e}")
             return False, f"오류: {e}"
+
+    async def create_watching_detail(
+        self,
+        condition_id: int,
+        stock_code: str,
+        stock_name: str,
+        signal_type: SignalType,
+        additional_data: Optional[Dict] = None,
+    ) -> tuple[bool, str]:
+        """관측(WATCHING) 신호 생성/갱신. 슬롯 미점유 · PENDING으로 강등하지 않음."""
+        try:
+            meta = dict(additional_data or {})
+            meta["order_ready"] = False
+            if not meta.get("wait_kind"):
+                meta["wait_kind"] = "gate_wait"
+
+            current_date = kst_today()
+            existing = await self._get_existing_signal(stock_code, condition_id, current_date)
+            if existing and existing.status in BUY_PIPELINE_STATUSES:
+                return False, f"이미 {existing.status}(관측 생략)"
+            if existing and existing.status in (SignalStatus.FILLED.value, "COMPLETED"):
+                return False, "이미 체결"
+
+            if existing and existing.status == SignalStatus.WATCHING.value:
+                ok = await self._update_existing_signal(
+                    existing,
+                    signal_type,
+                    meta,
+                    target_status=SignalStatus.WATCHING.value,
+                    bump_detected_at=False,
+                )
+                return (True, "WATCHING 갱신") if ok else (False, "WATCHING 갱신 실패")
+
+            # FAILED/CANCELLED/EXPIRED/없음 → 신규 또는 재개
+            if existing:
+                ok = await self._update_existing_signal(
+                    existing,
+                    signal_type,
+                    meta,
+                    target_status=SignalStatus.WATCHING.value,
+                    bump_detected_at=True,
+                )
+                return (True, "WATCHING 재개") if ok else (False, "WATCHING 재개 실패")
+
+            signal_id = await self._save_signal_to_db(
+                condition_id,
+                stock_code,
+                stock_name,
+                signal_type,
+                meta,
+                initial_status=SignalStatus.WATCHING.value,
+            )
+            if signal_id:
+                logger.info(
+                    f"📡 [SIGNAL_MANAGER] WATCHING 생성 - ID: {signal_id}, "
+                    f"{stock_name}({stock_code}) kind={meta.get('wait_kind')}"
+                )
+                return True, "WATCHING 생성"
+            return False, "DB 저장 실패"
+        except Exception as e:
+            logger.error(f"📡 [SIGNAL_MANAGER] WATCHING 오류 - {stock_name}({stock_code}): {e}")
+            return False, f"오류: {e}"
+
+    async def promote_watching_to_pending(
+        self,
+        signal_id: int,
+        additional_data: Optional[Dict] = None,
+    ) -> tuple[bool, str]:
+        """WATCHING → PENDING 승격 (매수 실행기)."""
+        try:
+            for db in get_db():
+                session: Session = db
+                signal = session.query(PendingBuySignal).filter(
+                    PendingBuySignal.id == signal_id
+                ).first()
+                if not signal:
+                    return False, "신호 없음"
+                if signal.status != SignalStatus.WATCHING.value:
+                    return False, f"상태={signal.status}"
+                meta = {}
+                raw = signal.additional_data
+                if isinstance(raw, dict):
+                    meta = dict(raw)
+                elif isinstance(raw, str):
+                    try:
+                        import json
+                        meta = json.loads(raw) or {}
+                    except Exception:
+                        meta = {}
+                if additional_data:
+                    meta.update(additional_data)
+                meta.pop("wait_kind", None)
+                meta.pop("wait_reason", None)
+                meta["order_ready"] = True
+                signal.status = SignalStatus.PENDING.value
+                signal.additional_data = meta
+                signal.failure_reason = None
+                signal.detected_at = utc_now_naive()
+                session.commit()
+                logger.info(
+                    f"📡 [SIGNAL_MANAGER] WATCHING→PENDING 승격 - ID: {signal_id} "
+                    f"{signal.stock_name}({signal.stock_code})"
+                )
+                return True, "승격"
+            return False, "DB 없음"
+        except Exception as e:
+            logger.error(f"📡 [SIGNAL_MANAGER] 승격 오류 ID={signal_id}: {e}")
+            return False, str(e)
     
     async def _is_duplicate_signal(self, condition_id: int, stock_code: str, signal_type: SignalType) -> bool:
         """중복 신호 확인"""
@@ -143,12 +316,16 @@ class SignalManager:
             logger.error(f"📡 [SIGNAL_MANAGER] 기존 신호 조회 오류: {e}")
             return None
     
-    async def _save_signal_to_db(self, 
-                                condition_id: int, 
-                                stock_code: str, 
-                                stock_name: str, 
-                                signal_type: SignalType,
-                                additional_data: Optional[Dict] = None) -> Optional[int]:
+    async def _save_signal_to_db(
+        self,
+        condition_id: int,
+        stock_code: str,
+        stock_name: str,
+        signal_type: SignalType,
+        additional_data: Optional[Dict] = None,
+        *,
+        initial_status: str = SignalStatus.PENDING.value,
+    ) -> Optional[int]:
         """신호를 DB에 저장"""
         try:
             for db in get_db():
@@ -159,7 +336,7 @@ class SignalManager:
                     "condition_id": condition_id,
                     "stock_code": stock_code,
                     "stock_name": stock_name,
-                    "status": SignalStatus.PENDING.value,
+                    "status": initial_status,
                     "detected_at": utc_now_naive(),
                     "detected_date": kst_today(),  # KST 일자
                     "signal_type": signal_type.value
@@ -182,7 +359,10 @@ class SignalManager:
                 session.add(pending_signal)
                 session.commit()
                 
-                logger.info(f"📡 [SIGNAL_MANAGER] 신호 DB 저장 완료 - ID: {pending_signal.id}")
+                logger.info(
+                    f"📡 [SIGNAL_MANAGER] 신호 DB 저장 완료 - ID: {pending_signal.id} "
+                    f"status={initial_status}"
+                )
                 return pending_signal.id
                 
         except IntegrityError as e:
@@ -192,21 +372,108 @@ class SignalManager:
             logger.error(f"📡 [SIGNAL_MANAGER] 신호 DB 저장 오류: {e}")
             return None
     
-    async def _update_existing_signal(self, 
-                                    existing_signal: PendingBuySignal, 
-                                    signal_type: SignalType,
-                                    additional_data: Optional[Dict] = None) -> bool:
-        """기존 신호 업데이트 (일자별 관리)"""
+    async def record_failed_signal(
+        self,
+        condition_id: int,
+        stock_code: str,
+        stock_name: str,
+        signal_type: SignalType,
+        failure_reason: str,
+        additional_data: Optional[Dict] = None,
+    ) -> tuple[bool, str]:
+        """매수 미실행·스킵을 FAILED로 남겨 체결 로그에 사유가 보이게 한다.
+
+        이미 PENDING/PROCESSING/ORDERED/FILLED/WATCHING 이면 덮어쓰지 않는다.
+        """
+        reason = (failure_reason or "사유 미기록").strip()[:255] or "사유 미기록"
+        meta = dict(additional_data or {})
+        meta["order_ready"] = False
+        code = (stock_code or "").strip() or "JONGGA"
+        name = (stock_name or "").strip() or "종가배팅"
         try:
+            current_date = kst_today()
+            existing = await self._get_existing_signal(code, condition_id, current_date)
+            if existing and existing.status in BUY_TERMINAL_OR_ACTIVE:
+                return False, f"이미 {existing.status}"
+            if existing and existing.status == SignalStatus.WATCHING.value:
+                return False, "이미 WATCHING"
+
+            if existing:
+                ok = await self._update_existing_signal(
+                    existing,
+                    signal_type,
+                    meta,
+                    target_status=SignalStatus.FAILED.value,
+                    bump_detected_at=True,
+                    failure_reason=reason,
+                )
+                return (True, "실패 이력 갱신") if ok else (False, "실패 이력 갱신 실패")
+
+            signal_id = await self._save_signal_to_db(
+                condition_id,
+                code,
+                name,
+                signal_type,
+                meta,
+                initial_status=SignalStatus.FAILED.value,
+            )
+            if not signal_id:
+                return False, "DB 저장 실패"
             for db in get_db():
                 session: Session = db
-                
-                # 기존 신호 업데이트
-                existing_signal.detected_at = utc_now_naive()
-                existing_signal.signal_type = signal_type.value
-                existing_signal.status = SignalStatus.PENDING.value  # 상태를 PENDING으로 리셋
-                
-                # 추가 데이터 → JSON 컬럼 저장
+                row = (
+                    session.query(PendingBuySignal)
+                    .filter(PendingBuySignal.id == signal_id)
+                    .first()
+                )
+                if row:
+                    row.failure_reason = reason
+                    session.commit()
+                break
+            logger.info(
+                f"📡 [SIGNAL_MANAGER] 실패 이력 저장 - ID: {signal_id}, "
+                f"{name}({code}): {reason}"
+            )
+            return True, "실패 이력 저장"
+        except Exception as e:
+            logger.error(f"📡 [SIGNAL_MANAGER] 실패 이력 저장 오류 - {name}({code}): {e}")
+            return False, f"오류: {e}"
+
+    async def _update_existing_signal(
+        self,
+        existing_signal: PendingBuySignal,
+        signal_type: SignalType,
+        additional_data: Optional[Dict] = None,
+        *,
+        target_status: str = SignalStatus.PENDING.value,
+        bump_detected_at: bool = True,
+        failure_reason: Optional[str] = None,
+    ) -> bool:
+        """기존 신호 업데이트 (일자별 관리)."""
+        try:
+            signal_id = int(getattr(existing_signal, "id", 0) or 0)
+            if signal_id <= 0:
+                return False
+            for db in get_db():
+                session: Session = db
+                # 다른 세션에서 가져온 객체는 detach 될 수 있어 id로 재조회
+                signal = (
+                    session.query(PendingBuySignal)
+                    .filter(PendingBuySignal.id == signal_id)
+                    .first()
+                )
+                if not signal:
+                    return False
+
+                if bump_detected_at:
+                    signal.detected_at = utc_now_naive()
+                signal.signal_type = signal_type.value
+                signal.status = target_status
+                if target_status != SignalStatus.FAILED.value:
+                    signal.failure_reason = None
+                elif failure_reason:
+                    signal.failure_reason = str(failure_reason)[:255]
+
                 if additional_data:
                     allowed_scalar = {
                         "reference_candle_high",
@@ -215,14 +482,17 @@ class SignalManager:
                     }
                     for k, v in additional_data.items():
                         if k in allowed_scalar:
-                            setattr(existing_signal, k, v)
-                    existing_signal.additional_data = additional_data
-                
+                            setattr(signal, k, v)
+                    signal.additional_data = additional_data
+
                 session.commit()
-                
-                logger.info(f"📡 [SIGNAL_MANAGER] 기존 신호 업데이트 완료 - ID: {existing_signal.id}")
+
+                logger.info(
+                    f"📡 [SIGNAL_MANAGER] 기존 신호 업데이트 완료 - ID: {signal.id} "
+                    f"→ {target_status}"
+                )
                 return True
-                
+
         except Exception as e:
             logger.error(f"📡 [SIGNAL_MANAGER] 기존 신호 업데이트 오류: {e}")
             return False

@@ -377,6 +377,79 @@ async function submitManualMapping() {
   }
 }
 
+function showBulkResult(msg, isErr = false) {
+  const el = $("manualBulkResult");
+  if (!el) return;
+  el.hidden = false;
+  el.className = `manual-bulk-result${isErr ? " err" : ""}`;
+  el.textContent = msg;
+}
+
+async function submitManualBulk() {
+  const btn = $("btnManualBulk");
+  const fileInput = $("manualBulkFile");
+  const text = ($("manualBulkText").value || "").trim();
+  const tagType = $("manualBulkTagType").value || "theme";
+  const file = fileInput?.files?.[0];
+
+  if (!file && !text) {
+    toast("텍스트를 붙여넣거나 파일을 선택하세요.", true);
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = "저장 중...";
+  try {
+    let d;
+    if (file) {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("tag_type", tagType);
+      const r = await fetch("/theme-map/manual/upload", { method: "POST", body: fd });
+      const body = await r.json().catch(async () => ({ detail: await r.text() }));
+      if (!r.ok) {
+        const detail = body?.detail;
+        const msg = typeof detail === "object"
+          ? (detail.message || JSON.stringify(detail))
+          : (detail || r.statusText);
+        throw new Error(msg);
+      }
+      d = body;
+    } else {
+      d = await fetchJSON("/theme-map/manual/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, tag_type: tagType }),
+      });
+    }
+
+    const parseErrs = Array.isArray(d.parse_errors) ? d.parse_errors : [];
+    const saveErrs = Array.isArray(d.errors) ? d.errors : [];
+    const summary = [
+      `저장 ${d.edge_count || 0}건 (신규 ${d.added || 0} · 갱신 ${d.updated || 0})`,
+      `종목 ${d.stock_count || 0} · 테마 ${d.tag_count || 0}`,
+      parseErrs.length ? `파싱 스킵 ${parseErrs.length}` : null,
+      saveErrs.length ? `저장 오류 ${saveErrs.length}` : null,
+    ].filter(Boolean).join(" · ");
+
+    const detailLines = [
+      ...parseErrs.slice(0, 8).map((e) => `L${e.line}: ${e.error}${e.raw ? ` (${e.raw})` : ""}`),
+      ...saveErrs.slice(0, 8).map((e) => `${e.stock_code || ""} ${e.theme || ""}: ${e.error}`),
+    ];
+    showBulkResult([summary, ...detailLines].join("\n"), parseErrs.length + saveErrs.length > 0 && !(d.edge_count > 0));
+    toast(summary);
+    if (fileInput) fileInput.value = "";
+    if ($("manualBulkFileName")) $("manualBulkFileName").textContent = "파일 없음";
+    await Promise.all([loadTags(), loadCoverage(false)]);
+  } catch (e) {
+    showBulkResult(`실패: ${e.message}`, true);
+    toast(`일괄 저장 실패: ${e.message}`, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "일괄 저장";
+  }
+}
+
 async function refreshSnapshot() {
   const btn = $("btnRefreshSnapshot");
   btn.disabled = true;
@@ -421,6 +494,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("btnManualMap").onclick = submitManualMapping;
   $("manualTagName").addEventListener("keydown", (e) => {
     if (e.key === "Enter") submitManualMapping();
+  });
+  $("btnManualBulk").onclick = submitManualBulk;
+  $("manualBulkFile")?.addEventListener("change", () => {
+    const f = $("manualBulkFile")?.files?.[0];
+    $("manualBulkFileName").textContent = f ? f.name : "파일 없음";
   });
   await loadAll();
 });

@@ -1,13 +1,15 @@
 # PRD: 과매도 돌파전략 (Oversold Breakout)
 
-> **상태**: Draft — 유니버스 **조건식 확정** (2026-07-17). 나머지 수치·청산은 운영 전 확정  
+> **상태**: Superseded — 표시명 **수급 돌파** (`strategy_key=breakout`). 로직은 [`PRD_BREAKOUT_5M_VOLUME.md`](PRD_BREAKOUT_5M_VOLUME.md)  
+> **후속 PRD**: [`PRD_BREAKOUT_5M_VOLUME.md`](PRD_BREAKOUT_5M_VOLUME.md)  
+> **후속 조건식**: [`BREAKOUT_HTS_CONDITION_EXAMPLE.md`](BREAKOUT_HTS_CONDITION_EXAMPLE.md)  
 > **작성일**: 2026-07-17  
-> **확정**: 유니버스 = **전용 키움 조건식만** (`breakout_condition_names`). 자체 일봉 RSI 전수/배치 스캔 **비범위** (API 비용)  
+> **비고**: 구 명칭 “과매도 돌파”. 유니버스는 RSI≤30 극단이 아니라 **RSI 전환·완화(예: 35)** + 프로그램 수급 돌파.
 
 > **대상 시스템**: stocke 자동매매 (`AutoTradeScanner` → `BuyOrderExecutor` → `StopLossManager`)  
 > **관련 코드**: `utils/auto_trade_engine.py`, `managers/auto_trade_scanner.py`, `managers/stop_loss_manager.py`, `core/models.py` (`AutoTradeSettings`, `Position.strategy_key`)  
 > **선행 PRD**: `docs/PRD_SANGTTA_BREAKOUT.md` (멀티게이트·전략 프로필 골격)  
-> **HTS 조건식 초안**: `docs/OVERSOLD_BREAKOUT_HTS_CONDITION_EXAMPLE.md`
+> **HTS 조건식 초안(구)**: `docs/OVERSOLD_BREAKOUT_HTS_CONDITION_EXAMPLE.md`
 
 ---
 

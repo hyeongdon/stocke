@@ -20,14 +20,15 @@ from utils.auto_trade_engine import (
 )
 from utils.buy_condition_checks import build_buy_condition_checklist, checklist_summary
 from utils.datetime_kst import kst_today
-from utils.position_peak_since_buy import should_disarm_trailing
 from utils.sell_condition_checks import build_sell_condition_checklist, sell_checklist_summary
 from utils.technical_mart_store import get_daily_bars_for_code, latest_as_of_date
 
 STRATEGY_LABELS = {
     "legacy": "거래대금 눌림목",
     "sangtta": "상따",
-    "breakout": "과매도 돌파",
+    "breakout": "수급 돌파",
+    "ymgp": "역매공파",
+    "jongga": "종가배팅",
 }
 
 STRATEGY_ALIASES = {
@@ -37,6 +38,11 @@ STRATEGY_ALIASES = {
     "sangtta_breakout": "sangtta",
     "breakout": "breakout",
     "oversold_breakout": "breakout",
+    "ymgp": "ymgp",
+    "yeokmaegongpa": "ymgp",
+    "jongga": "jongga",
+    "jongga_closing": "jongga",
+    "closing_bet": "jongga",
 }
 
 
@@ -85,13 +91,12 @@ def _resolve_trailing_state(
     peak: int,
     trail_start_rate: Optional[float],
 ) -> Tuple[bool, Optional[int]]:
+    """시작% 도달 시 armed+floor. 한 번 잠긴 바닥은 고점 하락으로 해제하지 않음."""
     if trail_start_rate is None or trail_start_rate <= 0:
         return True, None
 
     peak_rate = _peak_rate_pct(buy_price, peak)
     if trailing_armed:
-        if peak_rate < trail_start_rate:
-            return False, None
         floor = _trailing_floor_for_buy(
             buy_price, trail_start_rate, trailing_floor, peak,
         )
@@ -116,20 +121,24 @@ def _build_stop_candidates(
     candidates: List[Tuple[str, float, str]] = []
     floor = int(trailing_floor_price) if trailing_floor_price else None
     is_breakout = strategy_key == "breakout"
+    is_ymgp = strategy_key == "ymgp"
 
     def _apply_trail_floor(raw: float) -> float:
         if floor is not None:
             return max(raw, float(floor))
         return raw
 
-    sl = _num(
-        settings.get("breakout_stop_loss_pct") if is_breakout else settings.get("stop_loss_rate")
-    )
+    if is_ymgp:
+        sl = _num(settings.get("ymgp_stop_loss_pct"))
+    elif is_breakout:
+        sl = _num(settings.get("breakout_stop_loss_pct"))
+    else:
+        sl = _num(settings.get("stop_loss_rate"))
     if sl:
         candidates.append(("STOP_LOSS", buy_price * (1 - abs(sl) / 100.0), "PCT"))
 
     atr_stop_mult = _num(settings.get("atr_mult_stop"))
-    if not is_breakout and atr and atr_stop_mult:
+    if not is_breakout and not is_ymgp and atr and atr_stop_mult:
         candidates.append(("STOP_LOSS", buy_price - atr * atr_stop_mult, "ATR"))
 
     lock_trigger = _num(settings.get("profit_lock_trigger"))
@@ -141,15 +150,18 @@ def _build_stop_candidates(
             candidates.append(("PROFIT_LOCK", buy_price * (1 + lock_floor / 100.0), "PCT"))
 
     if trailing_armed:
-        tr = _num(
-            settings.get("breakout_trailing_pct") if is_breakout else settings.get("trailing_stop_pct")
-        )
+        if is_ymgp:
+            tr = _num(settings.get("ymgp_trailing_pct"))
+        elif is_breakout:
+            tr = _num(settings.get("breakout_trailing_pct"))
+        else:
+            tr = _num(settings.get("trailing_stop_pct"))
         if tr:
             raw = peak * (1 - tr / 100.0)
             candidates.append(("TRAILING", _apply_trail_floor(raw), "PCT"))
 
         atr_trail_mult = _num(settings.get("atr_mult_trail"))
-        if not is_breakout and atr and atr_trail_mult:
+        if not is_breakout and not is_ymgp and atr and atr_trail_mult:
             raw = peak - atr * atr_trail_mult
             candidates.append(("TRAILING", _apply_trail_floor(raw), "ATR"))
 
@@ -164,18 +176,37 @@ def _settings_to_dict(settings: AutoTradeSettings) -> Dict[str, Any]:
         "liquidate_before_close", "liquidate_time",
         "use_entry_gate", "require_above_open", "require_above_vwap",
         "day_position_min", "day_position_max", "volume_ratio_min",
+        "legacy_rsi_min", "legacy_rsi_max",
         "trade_start_time", "trade_end_time",
         "sangtta_trade_start_time", "sangtta_trade_end_time",
         "sangtta_max_market_cap", "sangtta_change_min", "sangtta_change_max",
         "sangtta_open_rise_min_pct",
         "breakout_trade_start_time", "breakout_trade_end_time",
         "breakout_level_mode", "breakout_n_day", "breakout_vol_mult",
+        "breakout_body_pct", "breakout_range_mult", "breakout_require_ma20_cross",
+        # MA20 유예: 돌파봉 포함 N봉(기본 3). 시뮬도 라이브와 동일 키 사용
+        "breakout_ma20_mode", "breakout_ma20_grace_bars",
+        "breakout_entry_hard", "breakout_entry_soft", "breakout_entry_soft_polls",
+        "breakout_entry_hold", "breakout_hold_expire_bars",
+        "breakout_hold_rsi_min", "breakout_rsi_period",
         "breakout_max_change_pct", "breakout_stop_loss_pct",
         "breakout_trailing_start_pct", "breakout_trailing_pct",
         "struct_break_soft_pct", "struct_break_hard_pct",
         "limit_break_soft_pct", "limit_break_hard_pct",
         "sharp_drop_soft_pct", "sharp_drop_hard_pct",
         "soft_confirm_polls",
+        # 역매공파
+        "ymgp_trade_start_time", "ymgp_trade_end_time",
+        "ymgp_ma_fast", "ymgp_ma_mid", "ymgp_ma_slow",
+        "ymgp_box_days", "ymgp_box_width_pct",
+        "ymgp_accum_vol_mult", "ymgp_accum_body_pct",
+        "ymgp_accum_wick_vol_mult", "ymgp_accum_wick_body_mult",
+        "ymgp_ma_near_pct", "ymgp_pivot_tol_pct",
+        "ymgp_drop_lookback", "ymgp_drop_pct",
+        "ymgp_stop_ma_mode", "ymgp_stop_loss_pct", "ymgp_entry_mode",
+        "ymgp_max_change_pct", "ymgp_pullback_tol_pct",
+        "ymgp_enable_partial_tp", "ymgp_tp1_pct_of_pos", "ymgp_tp2_pct_of_pos",
+        "ymgp_trailing_start_pct", "ymgp_trailing_pct",
     ]
     out: Dict[str, Any] = {}
     for k in keys:
@@ -351,6 +382,7 @@ def _reason_label(reason: str) -> str:
         "SANGTTA_LIMIT": "상한가 이탈",
         "SANGTTA_DROP": "급락",
         "BREAKOUT_STRUCTURE": "돌파 구조 이탈",
+        "YMGP_STRUCTURE": "역매공파 구조 이탈",
     }
     return labels.get(reason, reason)
 
@@ -365,6 +397,11 @@ def _strategy_time_window(settings: Dict[str, Any], strategy: str) -> Tuple[str,
         return (
             str(settings.get("breakout_trade_start_time") or "11:00"),
             str(settings.get("breakout_trade_end_time") or "14:30"),
+        )
+    if strategy == "ymgp":
+        return (
+            str(settings.get("ymgp_trade_start_time") or "09:30"),
+            str(settings.get("ymgp_trade_end_time") or "14:30"),
         )
     return (
         str(settings.get("trade_start_time") or "10:00"),
@@ -425,6 +462,19 @@ def _build_entry_ctx(
         except Exception:
             pass
 
+    if strategy == "legacy":
+        try:
+            from utils.auto_trade_engine import compute_legacy_rsi14
+            ctx["daily_bars"] = bars
+            ctx["rsi_asof_idx"] = entry_idx
+            ctx["rsi14"] = compute_legacy_rsi14(
+                bars,
+                current_price=int(bar.get("close") or 0) or None,
+                asof_idx=entry_idx,
+            )
+        except Exception:
+            pass
+
     return ctx
 
 
@@ -470,6 +520,28 @@ def _evaluate_legacy_entry(
         if ratio < float(vol_ratio_min):
             return False, f"거래량비 부족 ({ratio:.0f}% < {vol_ratio_min}%)"
 
+    rsi_min = _num(settings.get("legacy_rsi_min"))
+    rsi_max = _num(settings.get("legacy_rsi_max"))
+    if rsi_min is not None or rsi_max is not None:
+        rsi = ctx.get("rsi14")
+        if rsi is None:
+            bars = ctx.get("daily_bars") or []
+            asof = ctx.get("rsi_asof_idx")
+            if bars:
+                from utils.auto_trade_engine import compute_legacy_rsi14
+                rsi = compute_legacy_rsi14(
+                    bars,
+                    current_price=price,
+                    asof_idx=asof if asof is not None else len(bars) - 1,
+                )
+        if rsi is None:
+            return False, "RSI(14) 계산 불가"
+        rv = float(rsi)
+        if rsi_min is not None and rv < float(rsi_min):
+            return False, f"RSI 하한 미달 ({rv:.1f} < {float(rsi_min):g})"
+        if rsi_max is not None and rv > float(rsi_max):
+            return False, f"RSI 과열 ({rv:.1f} > {float(rsi_max):g})"
+
     return True, "게이트 통과(일봉 근사, VWAP 제외)"
 
 
@@ -489,7 +561,63 @@ def _evaluate_entry(
         return evaluate_oversold_breakout_from_ctx(
             settings_obj, price, change_rate, ctx, skip_time_check=True,
         )
+    if strategy == "ymgp":
+        from utils.ymgp_engine import evaluate_ymgp_entry_from_daily
+        bars = ctx.get("daily_bars") or []
+        asof = ctx.get("ymgp_asof_idx")
+        ok, reason, meta = evaluate_ymgp_entry_from_daily(
+            bars,
+            settings_obj,
+            current_price=price,
+            change_rate=change_rate,
+            asof_idx=asof,
+        )
+        ctx.update(meta)
+        return ok, reason
     return _evaluate_legacy_entry(settings, price, ctx)
+
+
+def _check_ymgp_structure_exit(
+    settings: Dict[str, Any],
+    *,
+    price: int,
+    bar_low: int,
+    ref: Optional[Dict[str, Any]],
+    mas: Optional[Dict[str, Any]],
+) -> Optional[Tuple[str, float, str]]:
+    """기준봉 저점·손절 MA 이탈 (일봉/분봉 공통 HARD)."""
+    from utils.ymgp_engine import stop_invalidated
+
+    # 저가 기준으로 먼저 HARD 저점 이탈 확인
+    probe = min(int(price or 0), int(bar_low or 0)) if bar_low else int(price or 0)
+    if probe <= 0:
+        return None
+    ok, detail = stop_invalidated(
+        probe, ref or {}, mas or {}, settings, use_close_vs_ma=True,
+    )
+    if not ok:
+        return None
+    return ("STOP_LOSS", float(probe), detail)
+
+
+def _check_ymgp_take_profit(
+    settings: Dict[str, Any],
+    *,
+    bar_high: int,
+    box: Optional[Dict[str, Any]],
+    mas: Optional[Dict[str, Any]],
+) -> Optional[Tuple[str, float, str]]:
+    """시뮬 MVP: T1(박스고점) 도달 시 전량 익절로 단순화."""
+    if not settings.get("ymgp_enable_partial_tp", True):
+        return None
+    from utils.ymgp_engine import take_profit_target
+
+    target, label = take_profit_target(0, box, mas or {})
+    if target is None or bar_high <= 0:
+        return None
+    if bar_high >= float(target):
+        return ("TAKE_PROFIT", float(target), f"{label} 도달 (시뮬 전량)")
+    return None
 
 
 def _change_rate(price: int, prev_close: int) -> Optional[float]:
@@ -650,11 +778,15 @@ async def run_stock_exit_replay_async(
 
     latest = latest_as_of_date("1D")
     end_d = kst_today()
-    # 돌파 N일 고가용 워밍업
+    # 돌파 N일 고가용 워밍업 · 역매공파는 MA480용 장기 일봉 필요
     warmup = max(40, int(settings.get("breakout_n_day") or 10) + 5)
+    if strategy_key == "ymgp":
+        warmup = max(warmup, 800)
     fetch_start = entry_d - timedelta(days=warmup)
     fetch_end = min(end_d, entry_d + timedelta(days=days + 10))
     min_bars = max(20, days // 2)
+    if strategy_key == "ymgp":
+        min_bars = max(min_bars, 120)
 
     bars, data_source = await _load_daily_bars(
         code, fetch_start, fetch_end, min_bars=min_bars,
@@ -701,13 +833,22 @@ async def run_stock_exit_replay_async(
         buy_date_str = str(buy_bar["date"])
 
     gate_ctx = _build_entry_ctx(bars, gate_idx, settings, strategy_key, code)
+    if strategy_key == "ymgp":
+        # 진입일 직전 확정 일봉까지로 단계·기준봉 판정
+        gate_ctx["daily_bars"] = bars
+        gate_ctx["ymgp_asof_idx"] = max(0, gate_idx - 1)
     change_rate = _change_rate(buy_price, int(gate_ctx.get("prev_close") or 0))
     entry_ok, entry_reason = _evaluate_entry(
         strategy_key, settings, settings_obj, buy_price, change_rate, gate_ctx,
     )
 
     win_start, win_end = _strategy_time_window(settings, strategy_key)
-    source_map = {"legacy": "screener", "sangtta": "sangtta", "breakout": "breakout"}
+    source_map = {
+        "legacy": "screener",
+        "sangtta": "sangtta",
+        "breakout": "breakout",
+        "ymgp": "ymgp",
+    }
     buy_meta = {
         "strategy": strategy_key,
         "source": source_map[strategy_key],
@@ -721,7 +862,10 @@ async def run_stock_exit_replay_async(
             "legacy": "legacy_momentum",
             "sangtta": "sangtta_breakout",
             "breakout": "oversold_breakout",
+            "ymgp": "yeokmaegongpa",
         }[strategy_key],
+        "ymgp_stage": gate_ctx.get("ymgp_stage"),
+        "ymgp_ref": gate_ctx.get("ymgp_ref"),
     }
     # breakout 게이트가 volume_ratio를 ctx에 채워 줌
     if strategy_key == "breakout" and gate_ctx.get("volume_ratio") is None:
@@ -768,12 +912,18 @@ async def run_stock_exit_replay_async(
 
     entry_atr = _num(bars[gate_idx].get("atr14"))
     is_breakout = strategy_key == "breakout"
-    trail_start = _num(
-        settings.get("breakout_trailing_start_pct") if is_breakout else settings.get("take_profit_rate")
-    )
+    is_ymgp = strategy_key == "ymgp"
+    if is_ymgp:
+        trail_start = _num(settings.get("ymgp_trailing_start_pct"))
+    elif is_breakout:
+        trail_start = _num(settings.get("breakout_trailing_start_pct"))
+    else:
+        trail_start = _num(settings.get("take_profit_rate"))
     trail_start_val = trail_start if trail_start and trail_start > 0 else None
     level_price = int(gate_ctx.get("level_price") or 0)
     level_kind = gate_ctx.get("level_kind")
+    ymgp_ref = gate_ctx.get("ymgp_ref") or {}
+    ymgp_box = gate_ctx.get("ymgp_box")
 
     # 게이트용 prev_close (상따 상한가) — 진입일 전일
     entry_prev_close = int(gate_ctx.get("prev_close") or 0)
@@ -798,7 +948,12 @@ async def run_stock_exit_replay_async(
     if strategy_key == "legacy" and settings.get("require_above_vwap"):
         assumptions.append("레거시 VWAP 조건은 분봉 필요 → 일봉 MVP에서 스킵")
     if is_breakout:
-        assumptions.append("과매도 돌파: 오버나잇 허용 · ATR 손절/트레일 미적용")
+        assumptions.append("수급 돌파: 오버나잇 허용 · ATR 손절/트레일 미적용")
+    if is_ymgp:
+        assumptions.append(
+            "역매공파: 진입일 직전 일봉으로 ARMED·기준봉 판정 후 당일 고점 돌파 근사(종가/시가)"
+        )
+        assumptions.append("역매공파: 오버나잇 허용 · T1 박스고점은 시뮬에서 전량 익절로 단순화")
     if mode == "close":
         assumptions.append("진입 당일(close 모드)은 다음 거래일부터 청산 판정")
     if snap_note:
@@ -822,13 +977,6 @@ async def run_stock_exit_replay_async(
             peak=state.peak,
             trail_start_rate=trail_start_val,
         )
-        if should_disarm_trailing(
-            trailing_armed=state.trailing_armed or armed,
-            trail_start_rate=trail_start_val,
-            buy_price=buy_price,
-            peak=state.peak,
-        ):
-            armed, floor = False, None
 
         if armed and floor:
             if not state.trailing_armed or (floor and int(floor) > int(state.trailing_floor or 0)):
@@ -846,6 +994,16 @@ async def run_stock_exit_replay_async(
             special = _check_breakout_structure_exit(
                 settings, bar_low=l, level_price=level_price,
             )
+        elif strategy_key == "ymgp":
+            from utils.ymgp_engine import compute_mas, bars_for_ymgp_eval
+            mas_i = compute_mas(bars_for_ymgp_eval(bars[: i + 1]), settings_obj)
+            special = _check_ymgp_structure_exit(
+                settings, price=c, bar_low=l, ref=ymgp_ref, mas=mas_i,
+            )
+            if special is None:
+                special = _check_ymgp_take_profit(
+                    settings, bar_high=h, box=ymgp_box, mas=mas_i,
+                )
 
         atr = _num(bar.get("atr14")) or entry_atr
         candidates = _build_stop_candidates(
@@ -890,7 +1048,11 @@ async def run_stock_exit_replay_async(
             pl_pct = (sell_px - buy_price) / buy_price * 100.0
             reason_detail = sp_detail
             exit_label_key = "SANGTTA_DROP" if "급락" in sp_detail else (
-                "SANGTTA_LIMIT" if "상한가" in sp_detail else "BREAKOUT_STRUCTURE"
+                "SANGTTA_LIMIT" if "상한가" in sp_detail else (
+                    "TAKE_PROFIT" if sp_reason == "TAKE_PROFIT" else (
+                        "YMGP_STRUCTURE" if strategy_key == "ymgp" else "BREAKOUT_STRUCTURE"
+                    )
+                )
             )
             exit_steps.append({
                 "rule": sp_detail,
@@ -950,11 +1112,19 @@ async def run_stock_exit_replay_async(
 
     # 포지션에 전략별 손절·익절 스냅샷
     pos_sl = float(
-        (settings.get("breakout_stop_loss_pct") if is_breakout else settings.get("stop_loss_rate"))
+        (
+            settings.get("ymgp_stop_loss_pct") if is_ymgp
+            else settings.get("breakout_stop_loss_pct") if is_breakout
+            else settings.get("stop_loss_rate")
+        )
         or 0
     )
     pos_tp = float(
-        (settings.get("breakout_trailing_start_pct") if is_breakout else settings.get("take_profit_rate"))
+        (
+            settings.get("ymgp_trailing_start_pct") if is_ymgp
+            else settings.get("breakout_trailing_start_pct") if is_breakout
+            else settings.get("take_profit_rate")
+        )
         or 0
     )
 
@@ -977,8 +1147,8 @@ async def run_stock_exit_replay_async(
         current_profit_loss_rate=sell_pl_rate,
         sell_time=datetime.utcnow() if closed else None,
         strategy_key=strategy_key,
-        breakout_level_kind=level_kind if is_breakout else None,
-        breakout_level_price=level_price if is_breakout else None,
+        breakout_level_kind=level_kind if (is_breakout or is_ymgp) else None,
+        breakout_level_price=level_price if (is_breakout or is_ymgp) else None,
     )
 
     checks = build_sell_condition_checklist(
@@ -1046,8 +1216,10 @@ async def run_stock_exit_replay_async(
             "time_approx": f"{buy_date_str} {win_start}~{win_end}",
             "time_note": "일봉 MVP — 장중 체결 시각은 확정 불가, 전략 시간대로 표기",
             "change_rate": round(change_rate, 2) if change_rate is not None else None,
-            "level_price": level_price if is_breakout else None,
-            "level_kind": level_kind if is_breakout else None,
+            "level_price": level_price if (is_breakout or is_ymgp) else None,
+            "level_kind": level_kind if (is_breakout or is_ymgp) else None,
+            "ymgp_stage": gate_ctx.get("ymgp_stage"),
+            "ymgp_ref": gate_ctx.get("ymgp_ref"),
         },
         "simulation": {
             "days_requested": days,

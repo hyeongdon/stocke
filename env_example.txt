@@ -28,6 +28,20 @@ DATABASE_URL=sqlite:///./stock_pipeline.db
 # 서버 설정
 HOST=0.0.0.0
 PORT=8000
+# 매일 KST 이 시각 이후 서버(uvicorn) 자동 종료. false면 끄기
+SERVER_AUTO_SHUTDOWN_ENABLED=true
+SERVER_AUTO_SHUTDOWN_TIME=19:00
+
+# 레거시 스크리너 — 거래대금 상위 후보 수 (기본 50)
+SCREENER_CANDIDATE_LIMIT=50
+# 상따 — 등락률상위 풀에서 거래대금순으로 남길 후보 수 (기본 20)
+SANGTTA_CANDIDATE_LIMIT=20
+# 스크리너 후보 최소 등락률(%). 0이면 플러스(>0)만. 매수 최소등락보다 약간 낮게(예: 3.5→3.3)
+SCREENER_MIN_CHANGE_RATE=3.3
+# 스크리너 후보 과열 컷(%). 이 이상이면 편입 제외. 0이면 상한 미적용
+SCREENER_MAX_CHANGE_RATE=15
+# 스크리너 후보 최소 당일 거래대금(억원). 0이면 하한 미적용
+SCREENER_MIN_TRADE_AMOUNT_EOK=20
 
 # 조건식 감시 설정
 # CONDITION_CHECK_INTERVAL: (레거시) 신호 중복 방지 등 — 주기 검색과 별개
@@ -52,6 +66,10 @@ WEBSOCKET_PING_TIMEOUT=20
 # 데이터 내보내기 설정
 EXPORT_DIR=./exports
 MAX_EXPORT_ROWS=10000
+
+# 공공데이터포털 관세청 수출입 OpenAPI (지표 > 수출입 섹터)
+# data.go.kr 에서 발급 — Itemtrade는 별도 활용신청 필요할 수 있음
+DATA_GO_KR_SERVICE_KEY=your_service_key_here
 
 # 텔레그램 알림 설정
 # 봇 토큰(@BotFather)과 채팅 ID (필수)

@@ -50,16 +50,14 @@ def test_resolve_peak_keeps_tick_above_intraday():
     assert peak == 103500
 
 
-def test_should_disarm_when_peak_below_start():
+def test_should_not_disarm_once_armed():
+    # 한 번 armed면 고점이 시작% 미만이어도 해제하지 않음
     assert should_disarm_trailing(
         trailing_armed=True,
         trail_start_rate=5.5,
         buy_price=272500,
         peak=278000,
-    ) is True
-
-
-def test_should_not_disarm_when_peak_above_start():
+    ) is False
     assert should_disarm_trailing(
         trailing_armed=True,
         trail_start_rate=5.5,
@@ -68,11 +66,32 @@ def test_should_not_disarm_when_peak_above_start():
     ) is False
 
 
+def test_locked_floor_kept_when_peak_below_start():
+    """armed 후 고점이 시작% 미만이어도 잠긴 바닥·해제가 유지되는 정책."""
+    buy = 1_221_000
+    start = 7.6
+    floor = int(buy * (1 + start / 100.0))
+    peak = 1_299_000  # 6.39% < 7.6%
+    peak_rate = (peak - buy) / buy * 100.0
+    assert peak_rate < start
+    assert should_disarm_trailing(
+        trailing_armed=True,
+        trail_start_rate=start,
+        buy_price=buy,
+        peak=peak,
+    ) is False
+    # _trailing_floor_for_buy와 동일: peak < target이면 기존 바닥 유지
+    target = floor
+    old = floor
+    kept = old if (peak < target and old > 0) else (max(old, target) if old > 0 else target)
+    assert kept == floor
+
+
 if __name__ == "__main__":
     test_buy_time_utc_naive_to_kst()
     test_intraday_excludes_pre_buy_bars()
     test_resolve_peak_caps_inflated_stored()
     test_resolve_peak_keeps_tick_above_intraday()
-    test_should_disarm_when_peak_below_start()
-    test_should_not_disarm_when_peak_above_start()
+    test_should_not_disarm_once_armed()
+    test_locked_floor_kept_when_peak_below_start()
     print("all ok")

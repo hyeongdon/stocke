@@ -7,7 +7,7 @@
   <title>테마/키워드 매핑 스파이크</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/dashboard.css?v=85">
-  <link rel="stylesheet" href="/static/theme_map.css?v=5">
+  <link rel="stylesheet" href="/static/theme_map.css?v=6">
 </head>
 <body>
   <header class="topbar">
@@ -20,6 +20,7 @@
         <a href="/dashboard" class="tab">대시보드</a>
         <a href="/analysis" class="tab-link">분석 ↗</a>
         <a href="/theme-map" class="tab active">테마맵</a>
+        <a href="/indicators" class="tab-link">지표 ↗</a>
       </nav>
       <div class="topbar-actions">
         <button id="btnRefreshSnapshot" class="btn primary sm">스냅샷 갱신</button>
@@ -86,6 +87,28 @@
           <button id="btnManualMap" class="btn sm primary">추가</button>
         </div>
         <p class="manual-map-hint">커버리지 종목 <b>더블클릭</b> 시 코드·종목명이 채워집니다. 테마명만 입력 후 추가하세요.</p>
+
+        <div class="manual-bulk">
+          <div class="manual-bulk-head">
+            <span class="manual-bulk-title">일괄 업로드</span>
+            <span class="hint">종목코드 | 테마1,테마2</span>
+          </div>
+          <textarea id="manualBulkText" class="manual-bulk-text" rows="6" spellcheck="false" placeholder="종목코드 | 테마&#10;000660 | 반도체,SK,&#10;005935 | 반도체,우선주"></textarea>
+          <div class="manual-bulk-actions">
+            <label class="btn sm file-btn">
+              엑셀/CSV 선택
+              <input id="manualBulkFile" type="file" accept=".xlsx,.xls,.csv,.txt,.tsv" hidden>
+            </label>
+            <span id="manualBulkFileName" class="hint">파일 없음</span>
+            <select id="manualBulkTagType" class="theme-select">
+              <option value="theme">테마</option>
+              <option value="keyword">키워드</option>
+            </select>
+            <button id="btnManualBulk" class="btn sm primary">일괄 저장</button>
+          </div>
+          <p class="manual-map-hint">엑셀은 1열=종목코드, 2열=테마(쉼표 구분). 텍스트는 <code>|</code> 구분.</p>
+          <div id="manualBulkResult" class="manual-bulk-result" hidden></div>
+        </div>
       </div>
     </section>
 
@@ -129,6 +152,6 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/static/theme_map.js?v=9"></script>
+  <script src="/static/theme_map.js?v=10"></script>
 </body>
 </html>

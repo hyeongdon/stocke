@@ -221,10 +221,25 @@ def reconcile_position_buy_with_fills(
     api_avg = _parse_kiwoom_int(holding.get("avg_pr")) if holding else 0
 
     if api_qty > 0:
+        from utils.eval_pnl import resolve_purchase_amount
+
         filled_qty = api_qty
-        filled_amt = api_pur if api_pur > 0 else int(position.buy_amount or 0)
+        fallback_amt = int(
+            (agg or {}).get("amount")
+            or getattr(position, "actual_buy_amount", None)
+            or position.buy_amount
+            or 0
+        )
+        filled_amt = resolve_purchase_amount(
+            filled_qty,
+            api_avg,
+            api_pur,
+            fallback=fallback_amt,
+        )
+        if filled_amt <= 0:
+            filled_amt = fallback_amt
         filled_price = api_avg if api_avg > 0 else (
-            int(round(filled_amt / filled_qty)) if filled_qty > 0 else int(position.buy_price or 0)
+            int(round(filled_amt / filled_qty)) if filled_qty > 0 and filled_amt > 0 else int(position.buy_price or 0)
         )
         position.buy_quantity = filled_qty
         position.buy_amount = filled_amt

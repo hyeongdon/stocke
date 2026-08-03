@@ -1,6 +1,7 @@
 """테마/키워드 ↔ 종목 매핑 스토어 (스파이크용)."""
 from __future__ import annotations
 
+import io
 from collections import defaultdict
 from datetime import date, datetime
 from typing import Dict, List, Optional
@@ -24,7 +25,12 @@ from utils.batch_scheduler_status import get_batch_jobs_status
 from utils.datetime_kst import kst_today, utc_now_naive
 from utils.stock_news_progress import get_stock_news_progress
 from utils.theme_keyword_rules import extract_keywords
+from utils.theme_kiwoom_crawler import crawl_kiwoom_theme_snapshot_sync
 from utils.theme_naver_crawler import crawl_theme_list, crawl_theme_stocks
+
+THEME_EDGE_SOURCES = ("naver_theme", "kiwoom_theme")
+SOURCE_KIWOOM_THEME = "kiwoom_theme"
+SOURCE_NAVER_THEME = "naver_theme"
 
 
 def _slug(s: str) -> str:
@@ -110,12 +116,142 @@ def _fetch_news_titles(query: str, display: int = 8) -> List[str]:
         return []
 
 
+def _store_kiwoom_theme_edges(
+    session: Session,
+    *,
+    biz: date,
+    now: datetime,
+    top_n: int = 0,
+) -> Dict:
+    """키움 테마 스냅샷 수집 후 source=kiwoom_theme 엣지 저장 (네이버와 별도 태그키)."""
+    snap = crawl_kiwoom_theme_snapshot_sync(limit=top_n)
+    if not snap.get("ok"):
+        return {
+            "ok": False,
+            "error": snap.get("error") or "키움 테마 수집 실패",
+            "themes": 0,
+            "edges": 0,
+            "api_calls": int(snap.get("api_calls") or 0),
+        }
+
+    session.query(ThemeTagEdge).filter(
+        ThemeTagEdge.source == SOURCE_KIWOOM_THEME,
+        ThemeTagEdge.biz_date == biz,
+    ).delete(synchronize_session=False)
+
+    inserted = 0
+    themes = snap.get("themes") or []
+    for t in themes:
+        theme_code = str(t.get("theme_code") or "").strip()
+        theme_name = str(t.get("theme_name") or "").strip()
+        if not theme_code or not theme_name:
+            continue
+        tag = _upsert_tag(
+            session,
+            tag_key=f"kiwoom_theme_{theme_code}_{_slug(theme_name)}",
+            name_ko=theme_name,
+            tag_type="theme",
+            source=SOURCE_KIWOOM_THEME,
+            meta_json={
+                "kiwoom_theme_code": theme_code,
+                "change_rate": t.get("change_rate"),
+                "period_return": t.get("period_return"),
+                "stock_count": t.get("stock_count"),
+                "main_stocks": t.get("main_stocks"),
+                "valid_from": biz.isoformat(),
+            },
+        )
+        stocks = t.get("stocks") or []
+        for idx, stock in enumerate(stocks):
+            code = str(stock.get("stock_code") or "").strip().zfill(6)
+            if not code or len(code) != 6:
+                continue
+            session.add(
+                ThemeTagEdge(
+                    stock_code=code,
+                    stock_name=stock.get("stock_name") or "",
+                    tag_id=tag.id,
+                    source=SOURCE_KIWOOM_THEME,
+                    role="leader" if idx == 0 else "member",
+                    weight=1.0,
+                    biz_date=biz,
+                    rank=idx + 1,
+                    inclusion_flag=True,
+                    reason_text=f"키움 테마 '{theme_name}' 편입",
+                    observed_at=now,
+                    meta_json={
+                        "kiwoom_theme_code": theme_code,
+                        "change_rate": stock.get("change_rate"),
+                        "period_return": stock.get("period_return"),
+                    },
+                )
+            )
+            inserted += 1
+
+    return {
+        "ok": True,
+        "themes": len(themes),
+        "edges": inserted,
+        "api_calls": int(snap.get("api_calls") or 0),
+        "error_count": int(snap.get("error_count") or 0),
+        "errors": list(snap.get("errors") or [])[:10],
+    }
+
+
+def refresh_kiwoom_theme_mapping_snapshot(
+    session: Session,
+    *,
+    top_n: int = 0,
+    recompute_scores: bool = True,
+) -> Dict:
+    """키움 테마만 수집 (네이버 스냅샷은 유지)."""
+    biz = kst_today()
+    now = utc_now_naive()
+    kiwoom_result = _store_kiwoom_theme_edges(
+        session,
+        biz=biz,
+        now=now,
+        top_n=top_n,
+    )
+    if not kiwoom_result.get("ok"):
+        return {
+            "ok": False,
+            "error": kiwoom_result.get("error") or "키움 테마 수집 실패",
+            "themes": 0,
+            "edges": 0,
+            "keywords": 0,
+            "biz_date": biz.isoformat(),
+            "scores": {"ok": False, "skipped": True},
+            "kiwoom": kiwoom_result,
+            "kiwoom_ok": False,
+            "mode": "kiwoom_only",
+        }
+
+    session.commit()
+    score_result: Dict = {"ok": True, "skipped": True}
+    if recompute_scores:
+        score_result = compute_theme_scores_for_date(session, biz_date=biz)
+
+    return {
+        "ok": True,
+        "themes": 0,
+        "edges": 0,
+        "keywords": 0,
+        "biz_date": biz.isoformat(),
+        "scores": score_result,
+        "kiwoom": kiwoom_result,
+        "kiwoom_ok": True,
+        "mode": "kiwoom_only",
+    }
+
+
 def refresh_theme_mapping_snapshot(
     session: Session,
     *,
     top_n: int = 0,
     include_news_keywords: bool = True,
     news_stock_limit_per_theme: int = 2,
+    include_kiwoom: bool = True,
 ) -> Dict:
     now = utc_now_naive()
     biz = kst_today()
@@ -126,7 +262,7 @@ def refresh_theme_mapping_snapshot(
 
     # 당일 정적 편입 스냅샷 교체
     session.query(ThemeTagEdge).filter(
-        ThemeTagEdge.source == "naver_theme",
+        ThemeTagEdge.source == SOURCE_NAVER_THEME,
         ThemeTagEdge.biz_date == biz,
     ).delete(synchronize_session=False)
 
@@ -134,7 +270,6 @@ def refresh_theme_mapping_snapshot(
     theme_names: List[str] = []
     keyword_stock_sets: Dict[str, set] = defaultdict(set)
     keyword_counter = defaultdict(int)
-    keyword_stock_sets: Dict[str, set] = defaultdict(set)
     for t in themes:
         theme_name = t["theme_name"]
         theme_no = t["theme_no"]
@@ -144,7 +279,7 @@ def refresh_theme_mapping_snapshot(
             tag_key=f"theme_{theme_no}_{_slug(theme_name)}",
             name_ko=theme_name,
             tag_type="theme",
-            source="naver_theme",
+            source=SOURCE_NAVER_THEME,
             meta_json={
                 "naver_theme_no": theme_no,
                 "valid_from": biz.isoformat(),
@@ -157,7 +292,7 @@ def refresh_theme_mapping_snapshot(
                 stock_code=stock["stock_code"],
                 stock_name=stock["stock_name"],
                 tag_id=tag.id,
-                source="naver_theme",
+                source=SOURCE_NAVER_THEME,
                 role="leader" if idx == 0 else "member",
                 weight=1.0,
                 biz_date=biz,
@@ -256,7 +391,30 @@ def refresh_theme_mapping_snapshot(
                 )
             )
 
+    # 네이버 커밋 후 키움 수집 — 장후 배치에서 네이버 다음 단계
     session.commit()
+
+    kiwoom_result: Dict = {"ok": False, "skipped": True, "themes": 0, "edges": 0, "api_calls": 0}
+    if include_kiwoom:
+        try:
+            # 동일 스냅샷 시각으로 dual 표시(당일 biz_date) 정합
+            kiwoom_now = utc_now_naive()
+            kiwoom_result = _store_kiwoom_theme_edges(
+                session,
+                biz=biz,
+                now=kiwoom_now,
+                top_n=top_n,
+            )
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            kiwoom_result = {
+                "ok": False,
+                "error": f"{type(e).__name__}: {e}",
+                "themes": 0,
+                "edges": 0,
+                "api_calls": 0,
+            }
 
     score_result = compute_theme_scores_for_date(session, biz_date=biz)
 
@@ -267,6 +425,9 @@ def refresh_theme_mapping_snapshot(
         "keywords": len(kw_rows),
         "biz_date": biz.isoformat(),
         "scores": score_result,
+        "kiwoom": kiwoom_result,
+        # 키움 실패해도 네이버 스냅샷은 유지 (배치 overall ok)
+        "kiwoom_ok": bool(kiwoom_result.get("ok")) if include_kiwoom else None,
     }
 
 
@@ -551,6 +712,8 @@ def list_articles_by_keyword(
 
 
 _SOURCE_RANK = {
+    # 같은 이름이면 키움·네이버 동등 — 서로 다른 이름이면 dual로 둘 다 노출
+    "kiwoom_theme": 0,
     "naver_theme": 0,
     "news_title": 1,
     "news_keyword": 1,
@@ -820,10 +983,11 @@ def add_manual_stock_mapping(
     tag_name: str,
     tag_type: str = "theme",
     stock_name: Optional[str] = None,
+    commit: bool = True,
 ) -> Dict:
     """종목에 테마/키워드를 수동 연결 (source=manual, 네이버 배치에서 삭제되지 않음)."""
     code = _norm_code(stock_code)
-    if not code or len(code) != 6:
+    if not code or len(code) != 6 or not code.isdigit():
         return {"ok": False, "error": "종목코드 6자리가 필요합니다."}
 
     tag_label = (tag_name or "").strip()
@@ -894,7 +1058,8 @@ def add_manual_stock_mapping(
                 observed_at=now,
             )
         )
-    session.commit()
+    if commit:
+        session.commit()
     return {
         "ok": True,
         "stock_code": code,
@@ -903,6 +1068,245 @@ def add_manual_stock_mapping(
         "tag_name": tag.name_ko,
         "tag_type": tag.tag_type,
         "source": "manual",
+    }
+
+
+def _is_manual_mapping_header(left: str, right: str) -> bool:
+    l = (left or "").strip().lower().replace(" ", "")
+    r = (right or "").strip().lower().replace(" ", "")
+    left_ok = l in ("종목코드", "코드", "code", "stock_code", "stockcode", "종목")
+    right_ok = r in ("테마", "theme", "themes", "태그", "tag", "키워드", "keyword")
+    return left_ok and right_ok
+
+
+def _split_theme_labels(raw: str) -> List[str]:
+    seen = set()
+    out: List[str] = []
+    for part in str(raw or "").replace(";", ",").split(","):
+        label = part.strip()
+        if not label:
+            continue
+        key = label.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(label)
+    return out
+
+
+def parse_manual_theme_mapping_text(text: str) -> Dict:
+    """
+    `종목코드 | 테마` 텍스트 파싱.
+
+    예:
+      종목코드 | 테마
+      000660 | 반도체,SK,
+      005935 | 반도체,우선주
+    """
+    rows: List[Dict] = []
+    errors: List[Dict] = []
+    for line_no, raw in enumerate(str(text or "").splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "|" in line:
+            left, right = line.split("|", 1)
+        elif "\t" in line:
+            left, right = line.split("\t", 1)
+        else:
+            errors.append({"line": line_no, "error": "구분자(|)가 없습니다.", "raw": line[:80]})
+            continue
+        left = left.strip()
+        right = right.strip()
+        if _is_manual_mapping_header(left, right):
+            continue
+        code = _norm_code(left.replace("A", "").replace("a", ""))
+        if not code.isdigit() or len(code) != 6:
+            errors.append({"line": line_no, "error": "종목코드 형식이 아닙니다.", "raw": line[:80]})
+            continue
+        themes = _split_theme_labels(right)
+        if not themes:
+            errors.append({"line": line_no, "error": "테마가 비어 있습니다.", "raw": line[:80]})
+            continue
+        rows.append({"line": line_no, "stock_code": code, "themes": themes})
+    return {"ok": True, "rows": rows, "errors": errors, "row_count": len(rows)}
+
+
+def parse_manual_theme_mapping_table(records: List[Dict]) -> Dict:
+    """엑셀/CSV 행 목록 → 표준 rows. 키: stock_code/종목코드, themes/테마."""
+    rows: List[Dict] = []
+    errors: List[Dict] = []
+    for idx, rec in enumerate(records or [], 1):
+        if not isinstance(rec, dict):
+            errors.append({"line": idx, "error": "행 형식이 올바르지 않습니다."})
+            continue
+        lower = {str(k).strip().lower(): v for k, v in rec.items()}
+        raw_code = (
+            lower.get("stock_code")
+            or lower.get("종목코드")
+            or lower.get("코드")
+            or lower.get("code")
+            or lower.get("종목")
+        )
+        raw_themes = (
+            lower.get("themes")
+            or lower.get("테마")
+            or lower.get("theme")
+            or lower.get("태그")
+            or lower.get("tag")
+            or lower.get("키워드")
+            or lower.get("keyword")
+        )
+        if raw_code is None and raw_themes is None and len(rec) >= 2:
+            vals = list(rec.values())
+            raw_code, raw_themes = vals[0], vals[1]
+        if raw_code is None:
+            errors.append({"line": idx, "error": "종목코드 열이 없습니다."})
+            continue
+        code_s = str(raw_code).strip()
+        if code_s.endswith(".0") and code_s.replace(".", "", 1).isdigit():
+            code_s = code_s[:-2]
+        if _is_manual_mapping_header(str(raw_code), str(raw_themes or "")):
+            continue
+        code = _norm_code(code_s.replace("A", "").replace("a", ""))
+        if not code.isdigit() or len(code) != 6:
+            errors.append({"line": idx, "error": "종목코드 형식이 아닙니다.", "raw": code_s[:40]})
+            continue
+        themes = _split_theme_labels("" if raw_themes is None else str(raw_themes))
+        if not themes:
+            errors.append({"line": idx, "error": "테마가 비어 있습니다.", "raw": code})
+            continue
+        rows.append({"line": idx, "stock_code": code, "themes": themes})
+    return {"ok": True, "rows": rows, "errors": errors, "row_count": len(rows)}
+
+
+def parse_manual_theme_mapping_file(filename: str, content: bytes) -> Dict:
+    """엑셀(.xlsx)/CSV/텍스트 파일 → parse 결과."""
+    name = (filename or "").lower()
+    if not content:
+        return {"ok": False, "rows": [], "errors": [{"line": 0, "error": "파일이 비어 있습니다."}], "row_count": 0}
+
+    if name.endswith((".xlsx", ".xls")):
+        import pandas as pd
+
+        try:
+            df = pd.read_excel(io.BytesIO(content), dtype=str)
+        except Exception as e:
+            return {
+                "ok": False,
+                "rows": [],
+                "errors": [{"line": 0, "error": f"엑셀 읽기 실패: {e}"}],
+                "row_count": 0,
+            }
+        df = df.fillna("")
+        records = df.to_dict(orient="records")
+        # 헤더가 없고 첫 열이 code|themes 한 칸인 경우
+        if len(df.columns) == 1:
+            col = str(df.columns[0])
+            text = "\n".join(
+                str(v).strip() for v in df.iloc[:, 0].tolist() if str(v).strip()
+            )
+            if "|" in col or any("|" in str(v) for v in df.iloc[:, 0].tolist()[:5]):
+                header = col if "|" in col else "종목코드 | 테마"
+                return parse_manual_theme_mapping_text(f"{header}\n{text}" if "|" not in col else f"{col}\n{text}")
+        return parse_manual_theme_mapping_table(records)
+
+    # csv / txt / 기타 → 텍스트
+    text = None
+    for enc in ("utf-8-sig", "utf-8", "cp949", "euc-kr"):
+        try:
+            text = content.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    if text is None:
+        return {
+            "ok": False,
+            "rows": [],
+            "errors": [{"line": 0, "error": "파일 인코딩을 읽을 수 없습니다."}],
+            "row_count": 0,
+        }
+
+    # CSV인데 | 없는 경우: 첫 두 컬럼 사용
+    sample = "\n".join(text.splitlines()[:5])
+    if "|" not in sample and ("\t" in sample or "," in sample):
+        import csv as _csv
+
+        try:
+            dialect = _csv.Sniffer().sniff(sample, delimiters=",\t;")
+        except _csv.Error:
+            dialect = "excel"
+        reader = _csv.DictReader(io.StringIO(text), dialect=dialect)
+        if reader.fieldnames and len(reader.fieldnames) >= 2:
+            return parse_manual_theme_mapping_table(list(reader))
+    return parse_manual_theme_mapping_text(text)
+
+
+def add_manual_stock_mappings_bulk(
+    session: Session,
+    *,
+    rows: List[Dict],
+    tag_type: str = "theme",
+) -> Dict:
+    """여러 종목·테마를 source=manual 로 일괄 저장."""
+    added = 0
+    updated = 0
+    edge_errors: List[Dict] = []
+    stock_codes: List[str] = []
+    tag_names: List[str] = []
+
+    for row in rows or []:
+        code = str(row.get("stock_code") or "")
+        themes = row.get("themes") or []
+        stock_name = row.get("stock_name")
+        line = row.get("line")
+        if not themes:
+            continue
+        stock_codes.append(code)
+        for theme in themes:
+            before = (
+                session.query(ThemeTagEdge.id)
+                .join(ThemeTag, ThemeTag.id == ThemeTagEdge.tag_id)
+                .filter(
+                    ThemeTagEdge.stock_code.in_([code, code.lstrip("0") or "0"]),
+                    ThemeTagEdge.source == "manual",
+                    func.lower(ThemeTag.name_ko) == str(theme).strip().lower(),
+                )
+                .first()
+            )
+            result = add_manual_stock_mapping(
+                session,
+                stock_code=code,
+                tag_name=str(theme),
+                tag_type=tag_type,
+                stock_name=stock_name,
+                commit=False,
+            )
+            if not result.get("ok"):
+                edge_errors.append(
+                    {
+                        "line": line,
+                        "stock_code": code,
+                        "theme": theme,
+                        "error": result.get("error") or "저장 실패",
+                    }
+                )
+                continue
+            tag_names.append(result.get("tag_name") or theme)
+            if before:
+                updated += 1
+            else:
+                added += 1
+
+    session.commit()
+    return {
+        "ok": True,
+        "added": added,
+        "updated": updated,
+        "edge_count": added + updated,
+        "stock_count": len(set(stock_codes)),
+        "tag_count": len({t.lower() for t in tag_names if t}),
+        "errors": edge_errors,
     }
 
 
@@ -984,6 +1388,10 @@ def _query_themes_from_edges(
     query_codes: List[str],
     theme_limit: int,
 ) -> Dict[str, Dict]:
+    """당일(biz_date) 기준으로 네이버·키움 소스를 함께 노출.
+
+    observed_at 초 단위 차이로 한쪽 소스가 탈락하지 않도록 biz_date를 우선한다.
+    """
     rows = (
         sess.query(ThemeTagEdge, ThemeTag)
         .join(ThemeTag, ThemeTag.id == ThemeTagEdge.tag_id)
@@ -993,28 +1401,45 @@ def _query_themes_from_edges(
         .all()
     )
     theme_rows: Dict[str, List[tuple]] = defaultdict(list)
-    freshness_theme: Dict[str, datetime] = {}
+    freshness_biz: Dict[str, date] = {}
+    freshness_obs: Dict[str, datetime] = {}
     for edge, tag in rows:
         code = _norm_code(edge.stock_code)
-        item = (tag.name_ko, edge.weight, edge.source, edge.observed_at)
+        biz = edge.biz_date or (edge.observed_at.date() if edge.observed_at else None)
+        item = (tag.name_ko, edge.weight, edge.source, edge.observed_at, biz)
+        if biz and (code not in freshness_biz or biz > freshness_biz[code]):
+            freshness_biz[code] = biz
         if edge.observed_at and (
-            code not in freshness_theme or edge.observed_at > freshness_theme[code]
+            code not in freshness_obs or edge.observed_at > freshness_obs[code]
         ):
-            freshness_theme[code] = edge.observed_at
+            freshness_obs[code] = edge.observed_at
         theme_rows[code].append(item)
 
     out: Dict[str, Dict] = {}
     for code in codes:
-        obs_theme = freshness_theme.get(code)
-        themes_src = (
-            [it for it in theme_rows.get(code, []) if it[3] == obs_theme] if obs_theme else []
-        )
+        latest_biz = freshness_biz.get(code)
+        if latest_biz is not None:
+            themes_src = [
+                (name, w, src, obs)
+                for name, w, src, obs, biz in theme_rows.get(code, [])
+                if biz == latest_biz
+            ]
+        else:
+            obs_theme = freshness_obs.get(code)
+            themes_src = [
+                (name, w, src, obs)
+                for name, w, src, obs, _biz in theme_rows.get(code, [])
+                if obs_theme is None or obs == obs_theme
+            ]
         themes = _pick_top_names(themes_src, limit=theme_limit)
+        fresh = freshness_obs.get(code)
         out[code] = {
             "themes": themes,
             "theme_items": [{"name": n, "score": None, "tier": "legacy"} for n in themes],
             "theme_text": ", ".join(themes),
-            "tag_freshness": obs_theme.isoformat() if obs_theme else None,
+            "tag_freshness": (
+                latest_biz.isoformat() if latest_biz else (fresh.isoformat() if fresh else None)
+            ),
         }
     return out
 

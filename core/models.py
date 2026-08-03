@@ -40,7 +40,7 @@ class PendingBuySignal(Base):
     stock_name = Column(String(100), nullable=False)
     detected_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
     detected_date = Column(Date, nullable=False, index=True)  # 일자별 관리용 필드
-    status = Column(String(20), nullable=False, default="PENDING")  # PENDING, ORDERED, CANCELED 등
+    status = Column(String(20), nullable=False, default="PENDING")  # WATCHING|PENDING|PROCESSING|ORDERED|FILLED|FAILED|EXPIRED|CANCELLED
     signal_type = Column(String(20), nullable=False, default="condition", index=True)  # 신호 타입: condition, reference, strategy
     failure_reason = Column(String(255), nullable=True)  # 실패 사유 저장
     
@@ -81,7 +81,7 @@ class AutoTradeSettings(Base):
 
     # ===== 관심종목 (자동매매 대상) =====
     watchlist_codes = Column(Text, nullable=True)  # 쉼표 구분 종목코드 (예: "005930, 000660")
-    screener_condition_names = Column(Text, nullable=True)  # 스크리너에 포함할 조건식명 (쉼표 구분)
+    screener_condition_names = Column(Text, nullable=True)  # (legacy) 조건식명 — 실매매 유니버스는 거래대금순
     screener_verify_condition_names = Column(Text, nullable=True)  # 레거시 검증 전용(주문 없음)
 
     # ===== 스크리너 상품 종류 (종목선정 모드) =====
@@ -108,20 +108,40 @@ class AutoTradeSettings(Base):
     day_position_min = Column(Float, nullable=True)        # 당일 위치 하한 (0~1)
     day_position_max = Column(Float, nullable=True)        # 당일 위치 상한 (0~1)
     volume_ratio_min = Column(Float, nullable=True)        # 전일대비 거래량비율(%) 하한
+    # 레거시 진입: 일봉 RSI(14) 밴드 (None=미적용). 예: max=75 → 과열 매수 차단
+    legacy_rsi_min = Column(Float, nullable=True)
+    legacy_rsi_max = Column(Float, nullable=True)
 
     # ===== 매수 사이징 =====
     sizing_method = Column(String(30), nullable=False, default="FIXED")  # FIXED, PYRAMIDING
+    # WON=고정 금액(원) / DEPOSIT_PCT=예수금 대비 비중(%)
+    buy_amount_unit = Column(String(20), nullable=False, default="WON")
     initial_min_amount = Column(Integer, nullable=True, default=2000000) # 초기 진입 최소 금액
     initial_max_amount = Column(Integer, nullable=True, default=5000000) # 초기 최대 / 종목당 상한
+    initial_min_deposit_pct = Column(Float, nullable=True, default=None)  # 예수금 비중(%) — 강한 신호
+    initial_max_deposit_pct = Column(Float, nullable=True, default=None)  # 예수금 비중(%) — 약한 신호
     signal_min_threshold = Column(Float, nullable=True, default=2)       # 신호(등락%) 최소금액 기준
     signal_max_threshold = Column(Float, nullable=True, default=10)      # 신호(등락%) 최대금액 기준
     add_buy_amount = Column(Integer, nullable=True, default=1000000)     # 추가매수 1회 금액
+    add_buy_deposit_pct = Column(Float, nullable=True, default=None)     # 추가매수 예수금 비중(%)
     add_buy_trigger = Column(Float, nullable=True, default=0.7)          # 추가매수 트리거(스텝당 %)
     max_concurrent_positions = Column(Integer, nullable=False, default=2)  # 최대 동시 보유 종목 (0=자동)
     cash_reserve_pct = Column(Float, nullable=False, default=10.0)         # 예수금 중 현금으로 남길 비율(%)
     max_daily_buys = Column(Integer, nullable=False, default=10)         # 1일 최대 매수 횟수
     daily_loss_limit = Column(Integer, nullable=True, default=-200000)   # 1일 손실 한도(원)
     daily_profit_target = Column(Integer, nullable=True, default=150000) # 1일 이익 목표(원)
+    # ===== 장세 악화 시 전략별 매수 제한 =====
+    # 지수 등락률 ≤ market_risk_change_pct 이면 '나쁨'
+    # → 체크된 전략은 금일 신규매수를 전략당 N회로 제한 (0=전면차단)
+    market_risk_enabled = Column(Boolean, nullable=False, default=False)
+    market_risk_index = Column(String(20), nullable=False, default="kospi")  # kospi|kosdaq|either|both
+    market_risk_change_pct = Column(Float, nullable=False, default=-2.0)  # 예: -2.0 = 2% 이상 하락
+    market_risk_max_buys_per_strategy = Column(Integer, nullable=False, default=2)
+    market_risk_block_legacy = Column(Boolean, nullable=False, default=True)
+    market_risk_block_sangtta = Column(Boolean, nullable=False, default=True)
+    market_risk_block_breakout = Column(Boolean, nullable=False, default=False)
+    market_risk_block_ymgp = Column(Boolean, nullable=False, default=False)
+    market_risk_block_jongga = Column(Boolean, nullable=False, default=False)
     reorder_cooldown_sec = Column(Integer, nullable=False, default=300)  # 재주문 콜다운(초)
     trade_start_time = Column(String(5), nullable=False, default="10:00")  # 레거시 매매 시작
     trade_end_time = Column(String(5), nullable=False, default="15:20")    # 레거시 매매 종료
@@ -131,10 +151,11 @@ class AutoTradeSettings(Base):
     auto_start_at_open = Column(Boolean, nullable=False, default=True)   # 평일 장 시작 시 엔진 자동 ON
     auto_start_time = Column(String(5), nullable=False, default="08:00")  # 엔진 자동 시작 시각
     # ===== 상따(Sangtta) 전용 설정 (멀티게이트) =====
-    sangtta_condition_names = Column(Text, nullable=True)  # 쉼표 구분 상따용 조건식명
+    sangtta_condition_names = Column(Text, nullable=True)  # (legacy) 조건식명 — 실매매 유니버스는 ka10027
     sangtta_verify_condition_names = Column(Text, nullable=True)  # 검증 전용(주문 없음)
     sangtta_max_slots = Column(Integer, nullable=False, default=2)  # 상따 동시 쿼터
     sangtta_buy_amount = Column(Integer, nullable=False, default=500000)  # 상따 1회 매수 금액 (소액)
+    sangtta_buy_deposit_pct = Column(Float, nullable=True, default=None)  # 상따 예수금 비중(%)
     sangtta_trade_start_time = Column(String(5), nullable=False, default="09:05")
     sangtta_trade_end_time = Column(String(5), nullable=False, default="11:00")
     sangtta_change_min = Column(Float, nullable=False, default=12.0)  # 진입 등락 밴드 하한(%)
@@ -146,11 +167,22 @@ class AutoTradeSettings(Base):
     breakout_verify_condition_names = Column(Text, nullable=True)  # 검증 전용(주문 없음)
     breakout_max_slots = Column(Integer, nullable=False, default=1)
     breakout_buy_amount = Column(Integer, nullable=False, default=1000000)
+    breakout_buy_deposit_pct = Column(Float, nullable=True, default=None)  # 돌파 예수금 비중(%)
     breakout_trade_start_time = Column(String(5), nullable=False, default="11:00")
     breakout_trade_end_time = Column(String(5), nullable=False, default="14:30")
     breakout_level_mode = Column(String(20), nullable=False, default="prev_high")  # prev_high=직전5분고, n_day_high=최근N봉고
     breakout_n_day = Column(Integer, nullable=False, default=10)  # 5분봉 N개 (레벨·거래량 평균)
     breakout_vol_mult = Column(Float, nullable=False, default=1.5)
+    breakout_body_pct = Column(Float, nullable=False, default=2.0)  # 장대 몸통% (0=비활성)
+    breakout_range_mult = Column(Float, nullable=False, default=0.0)  # 범위확장배수 (0=비활성)
+    # MA20 필터: True면 확인봉 종가가 MA20 조건(mode)을 만족해야 매수
+    breakout_require_ma20_cross = Column(Boolean, nullable=False, default=True)
+    # above=종가>MA20 / cross=아래에서 상향 돌파(classic·봉중·reclaim)
+    breakout_ma20_mode = Column(String(10), nullable=False, default="above")
+    # MA20 유예(5분 완성봉 수). 돌파봉 포함 N봉 안에 MA20 상회하면 통과.
+    # 예: 3 = 돌파봉 + 후속 2봉. 유예 중 장대·거래량은 돌파봉 충족분을 상속.
+    # 대기 중에는 FAILED가 아니라 보류 재시도. 1이면 돌파봉에서 즉시 판정(유예 없음).
+    breakout_ma20_grace_bars = Column(Integer, nullable=False, default=3)
     breakout_max_change_pct = Column(Float, nullable=False, default=12.0)
     breakout_stop_loss_pct = Column(Float, nullable=False, default=3.0)
     breakout_trailing_start_pct = Column(Float, nullable=False, default=10.0)
@@ -158,16 +190,84 @@ class AutoTradeSettings(Base):
     struct_break_soft_pct = Column(Float, nullable=False, default=1.0)
     struct_break_hard_pct = Column(Float, nullable=False, default=2.0)
     # 진입 확인: HARD=직전 5분봉 종가>레벨 즉시 / SOFT=레벨 위 연속 N스캔
+    # HOLD=고가 돌파 후 다음봉 저가 유지 + RSI>임계
     breakout_entry_hard = Column(Boolean, nullable=False, default=True)
     breakout_entry_soft = Column(Boolean, nullable=False, default=True)
-    breakout_entry_soft_polls = Column(Integer, nullable=False, default=2)
+    breakout_entry_soft_polls = Column(Integer, nullable=False, default=3)
+    breakout_entry_hold = Column(Boolean, nullable=False, default=True)
+    breakout_hold_expire_bars = Column(Integer, nullable=False, default=3)
+    breakout_hold_rsi_min = Column(Float, nullable=False, default=30.0)
+    breakout_rsi_period = Column(Integer, nullable=False, default=10)
+
+    # ===== 역매공파(ymgp) 전용 설정 =====
+    use_ymgp = Column(Boolean, nullable=False, default=False)
+    ymgp_condition_names = Column(Text, nullable=True)
+    ymgp_verify_condition_names = Column(Text, nullable=True)
+    ymgp_max_slots = Column(Integer, nullable=False, default=1)
+    ymgp_buy_amount_1 = Column(Integer, nullable=False, default=500000)
+    ymgp_buy_amount_2 = Column(Integer, nullable=False, default=500000)
+    ymgp_buy_deposit_pct_1 = Column(Float, nullable=True, default=None)
+    ymgp_buy_deposit_pct_2 = Column(Float, nullable=True, default=None)
+    ymgp_trade_start_time = Column(String(5), nullable=False, default="09:30")
+    ymgp_trade_end_time = Column(String(5), nullable=False, default="14:30")
+    ymgp_ma_fast = Column(Integer, nullable=False, default=120)
+    ymgp_ma_mid = Column(Integer, nullable=False, default=240)
+    ymgp_ma_slow = Column(Integer, nullable=False, default=480)
+    ymgp_box_days = Column(Integer, nullable=False, default=15)
+    ymgp_box_width_pct = Column(Float, nullable=False, default=15.5)
+    ymgp_accum_vol_mult = Column(Float, nullable=False, default=2.0)
+    ymgp_accum_body_pct = Column(Float, nullable=False, default=7.0)
+    ymgp_accum_wick_vol_mult = Column(Float, nullable=False, default=4.0)
+    ymgp_accum_wick_body_mult = Column(Float, nullable=False, default=1.5)
+    ymgp_ma_near_pct = Column(Float, nullable=False, default=3.0)
+    ymgp_pivot_tol_pct = Column(Float, nullable=False, default=2.0)
+    ymgp_drop_lookback = Column(Integer, nullable=False, default=60)
+    ymgp_drop_pct = Column(Float, nullable=False, default=-20.0)
+    ymgp_stop_ma_mode = Column(String(20), nullable=False, default="ma60")
+    ymgp_stop_loss_pct = Column(Float, nullable=False, default=4.0)
+    ymgp_entry_mode = Column(String(20), nullable=False, default="ref_high")
+    ymgp_max_change_pct = Column(Float, nullable=False, default=10.0)
+    ymgp_pullback_tol_pct = Column(Float, nullable=False, default=2.0)
+    ymgp_reentry_lock_days = Column(Integer, nullable=False, default=5)
+    ymgp_tp1_pct_of_pos = Column(Float, nullable=False, default=0.35)
+    ymgp_tp2_pct_of_pos = Column(Float, nullable=False, default=0.35)
+    ymgp_enable_pullback_add = Column(Boolean, nullable=False, default=True)
+    ymgp_enable_partial_tp = Column(Boolean, nullable=False, default=True)
+    ymgp_trailing_start_pct = Column(Float, nullable=False, default=15.0)
+    ymgp_trailing_pct = Column(Float, nullable=False, default=5.0)
+
+    # ===== 종가배팅(jongga) 전용 설정 =====
+    use_jongga = Column(Boolean, nullable=False, default=False)
+    jongga_max_slots = Column(Integer, nullable=False, default=1)
+    jongga_buy_amount = Column(Integer, nullable=False, default=1000000)
+    jongga_buy_deposit_pct = Column(Float, nullable=True, default=None)
+    jongga_trade_start_time = Column(String(5), nullable=False, default="14:30")
+    jongga_pick_end_time = Column(String(5), nullable=False, default="14:40")
+    jongga_trade_end_time = Column(String(5), nullable=False, default="14:40")
+    jongga_rank_limit = Column(Integer, nullable=False, default=50)
+    jongga_stop_loss_pct = Column(Float, nullable=False, default=3.0)
+    jongga_trailing_start_pct = Column(Float, nullable=False, default=5.0)
+    jongga_trailing_pct = Column(Float, nullable=False, default=2.0)
+    jongga_w_pullback = Column(Float, nullable=False, default=1.0)
+    jongga_w_amount = Column(Float, nullable=False, default=1.0)
+    jongga_w_change = Column(Float, nullable=False, default=1.0)
+    # 돼지물량 반응형 분할 (20/30/50)
+    jongga_pig_split = Column(Boolean, nullable=False, default=True)
+    jongga_leg1_pct = Column(Float, nullable=False, default=20.0)
+    jongga_leg2_pct = Column(Float, nullable=False, default=30.0)
+    jongga_leg3_pct = Column(Float, nullable=False, default=50.0)
+    jongga_leg2_start_time = Column(String(5), nullable=False, default="14:50")
+    jongga_leg3_start_time = Column(String(5), nullable=False, default="15:20")
+    jongga_leg3_end_time = Column(String(5), nullable=False, default="15:28")
+    jongga_pig_bid_ask_ratio = Column(Float, nullable=False, default=1.5)
+    jongga_pig_levels = Column(Integer, nullable=False, default=5)
 
     # ===== 상따 청산/소방 규정 =====
     limit_break_soft_pct = Column(Float, nullable=True, default=2.0)   # 상한가 이탈 soft(%)
     limit_break_hard_pct = Column(Float, nullable=True, default=3.0)   # 상한가 이탈 hard(%)
     sharp_drop_soft_pct = Column(Float, nullable=True, default=3.0)    # 당일고 대비 soft(%)
     sharp_drop_hard_pct = Column(Float, nullable=True, default=5.0)    # 당일고 대비 hard(%)
-    soft_confirm_polls = Column(Integer, nullable=False, default=2)    # SOFT 연속 확인 회수
+    soft_confirm_polls = Column(Integer, nullable=False, default=3)    # SOFT 연속 확인 회수
 
     # ===== 장 마감 전 전량 청산 =====
     liquidate_before_close = Column(Boolean, nullable=False, default=True)
@@ -306,6 +406,11 @@ class Position(Base):
     strategy_key = Column(String(50), nullable=True, index=True)
     breakout_level_kind = Column(String(20), nullable=True)
     breakout_level_price = Column(Integer, nullable=True)
+    ymgp_ref_high = Column(Integer, nullable=True)
+    ymgp_ref_low = Column(Integer, nullable=True)
+    ymgp_ref_open = Column(Integer, nullable=True)
+    ymgp_entry_leg = Column(Integer, nullable=True, default=1)
+    ymgp_tp_stage = Column(Integer, nullable=True, default=0)
     
     __table_args__ = (
         Index("idx_position_status_stock", "status", "stock_code"),
@@ -633,6 +738,83 @@ class ThemeScoreDaily(Base):
     )
 
 
+class MtiHsMap(Base):
+    """HS ↔ MTI 연계 (버전 고정). v1에서는 수동 바스켓과 병행."""
+    __tablename__ = "mti_hs_map"
+
+    id = Column(Integer, primary_key=True, index=True)
+    mti_code = Column(String(20), nullable=False, index=True)
+    mti_name = Column(String(100), nullable=True)
+    hs_code = Column(String(12), nullable=False, index=True)
+    mti_version = Column(String(20), nullable=False, default="manual_v1")
+    effective_from = Column(String(10), nullable=True)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("mti_code", "hs_code", "mti_version", name="uq_mti_hs_map"),
+    )
+
+
+class TagMtiMap(Base):
+    """stocke 테마 태그 ↔ MTI(또는 수동 바스켓 키)."""
+    __tablename__ = "tag_mti_map"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tag_name = Column(String(80), nullable=False, index=True)
+    mti_code = Column(String(20), nullable=False, index=True)
+    weight = Column(Float, nullable=False, default=1.0)
+    note = Column(String(200), nullable=True)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("tag_name", "mti_code", name="uq_tag_mti_map"),
+    )
+
+
+class TradeHsMonthly(Base):
+    """관심 HS 월별 원시 수출입 (재집계용)."""
+    __tablename__ = "trade_hs_monthly"
+
+    id = Column(Integer, primary_key=True, index=True)
+    period_yyyymm = Column(String(6), nullable=False, index=True)
+    hs_code = Column(String(12), nullable=False, index=True)
+    exp_usd = Column(Float, nullable=False, default=0.0)
+    imp_usd = Column(Float, nullable=False, default=0.0)
+    exp_wgt = Column(Float, nullable=True)
+    imp_wgt = Column(Float, nullable=True)
+    source = Column(String(40), nullable=False, default="data.go.kr")
+    fetched_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("period_yyyymm", "hs_code", "source", name="uq_trade_hs_monthly"),
+        Index("idx_trade_hs_period", "period_yyyymm", "hs_code"),
+    )
+
+
+class TradeIndustryMonthly(Base):
+    """업종(MTI)/태그 월별 수출입 집계."""
+    __tablename__ = "trade_industry_monthly"
+
+    id = Column(Integer, primary_key=True, index=True)
+    period_yyyymm = Column(String(6), nullable=False, index=True)
+    grain = Column(String(10), nullable=False, index=True)  # mti | tag
+    grain_key = Column(String(80), nullable=False, index=True)
+    exp_usd = Column(Float, nullable=False, default=0.0)
+    imp_usd = Column(Float, nullable=False, default=0.0)
+    exp_yoy = Column(Float, nullable=True)
+    imp_yoy = Column(Float, nullable=True)
+    exp_mom = Column(Float, nullable=True)
+    imp_mom = Column(Float, nullable=True)
+    source = Column(String(40), nullable=False, default="data.go.kr")
+    fetched_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    meta_json = Column(JSON, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("period_yyyymm", "grain", "grain_key", name="uq_trade_industry_monthly"),
+        Index("idx_trade_ind_grain_period", "grain", "grain_key", "period_yyyymm"),
+    )
+
+
 def get_db() -> Generator[Session, None, None]:
     db: Session = SessionLocal()
     try:
@@ -774,6 +956,21 @@ def init_db() -> None:
             if pos_columns and 'breakout_level_price' not in pos_columns:
                 conn.execute(text("ALTER TABLE positions ADD COLUMN breakout_level_price INTEGER"))
                 conn.commit()
+            if pos_columns and 'ymgp_ref_high' not in pos_columns:
+                conn.execute(text("ALTER TABLE positions ADD COLUMN ymgp_ref_high INTEGER"))
+                conn.commit()
+            if pos_columns and 'ymgp_ref_low' not in pos_columns:
+                conn.execute(text("ALTER TABLE positions ADD COLUMN ymgp_ref_low INTEGER"))
+                conn.commit()
+            if pos_columns and 'ymgp_ref_open' not in pos_columns:
+                conn.execute(text("ALTER TABLE positions ADD COLUMN ymgp_ref_open INTEGER"))
+                conn.commit()
+            if pos_columns and 'ymgp_entry_leg' not in pos_columns:
+                conn.execute(text("ALTER TABLE positions ADD COLUMN ymgp_entry_leg INTEGER DEFAULT 1"))
+                conn.commit()
+            if pos_columns and 'ymgp_tp_stage' not in pos_columns:
+                conn.execute(text("ALTER TABLE positions ADD COLUMN ymgp_tp_stage INTEGER DEFAULT 0"))
+                conn.commit()
 
             result = conn.execute(text("PRAGMA table_info('position_buy_fills')"))
             pbf_cols2 = {row[1] for row in result} if result else set()
@@ -809,11 +1006,15 @@ def init_db() -> None:
                 ('day_position_max', 'FLOAT'),
                 ('volume_ratio_min', 'FLOAT'),
                 ('sizing_method', 'VARCHAR(30) DEFAULT "FIXED"'),
+                ('buy_amount_unit', 'VARCHAR(20) DEFAULT "WON"'),
                 ('initial_min_amount', 'INTEGER DEFAULT 2000000'),
                 ('initial_max_amount', 'INTEGER DEFAULT 5000000'),
+                ('initial_min_deposit_pct', 'FLOAT'),
+                ('initial_max_deposit_pct', 'FLOAT'),
                 ('signal_min_threshold', 'FLOAT DEFAULT 2'),
                 ('signal_max_threshold', 'FLOAT DEFAULT 10'),
                 ('add_buy_amount', 'INTEGER DEFAULT 1000000'),
+                ('add_buy_deposit_pct', 'FLOAT'),
                 ('add_buy_trigger', 'FLOAT DEFAULT 0.7'),
                 ('max_concurrent_positions', 'INTEGER DEFAULT 2'),
                 ('cash_reserve_pct', 'FLOAT DEFAULT 10'),
@@ -841,6 +1042,7 @@ def init_db() -> None:
                 ('sangtta_verify_condition_names', 'TEXT'),
                 ('sangtta_max_slots', 'INTEGER DEFAULT 2'),
                 ('sangtta_buy_amount', 'INTEGER DEFAULT 500000'),
+                ('sangtta_buy_deposit_pct', 'FLOAT'),
                 ('sangtta_trade_start_time', 'VARCHAR(5) DEFAULT "09:05"'),
                 ('sangtta_trade_end_time', 'VARCHAR(5) DEFAULT "11:00"'),
                 ('sangtta_change_min', 'FLOAT DEFAULT 12.0'),
@@ -849,18 +1051,24 @@ def init_db() -> None:
                 ('limit_break_hard_pct', 'FLOAT DEFAULT 3.0'),
                 ('sharp_drop_soft_pct', 'FLOAT DEFAULT 3.0'),
                 ('sharp_drop_hard_pct', 'FLOAT DEFAULT 5.0'),
-                ('soft_confirm_polls', 'INTEGER DEFAULT 2'),
+                ('soft_confirm_polls', 'INTEGER DEFAULT 3'),
                 ('use_breakout', 'BOOLEAN DEFAULT 0'),
                 ('breakout_condition_names', 'TEXT'),
                 ('breakout_verify_condition_names', 'TEXT'),
                 ('screener_verify_condition_names', 'TEXT'),
                 ('breakout_max_slots', 'INTEGER DEFAULT 1'),
                 ('breakout_buy_amount', 'INTEGER DEFAULT 1000000'),
+                ('breakout_buy_deposit_pct', 'FLOAT'),
                 ('breakout_trade_start_time', 'VARCHAR(5) DEFAULT "11:00"'),
                 ('breakout_trade_end_time', 'VARCHAR(5) DEFAULT "14:30"'),
                 ('breakout_level_mode', 'VARCHAR(20) DEFAULT "prev_high"'),
                 ('breakout_n_day', 'INTEGER DEFAULT 10'),
                 ('breakout_vol_mult', 'FLOAT DEFAULT 1.5'),
+                ('breakout_body_pct', 'FLOAT DEFAULT 2.0'),
+                ('breakout_range_mult', 'FLOAT DEFAULT 0.0'),
+                ('breakout_require_ma20_cross', 'BOOLEAN DEFAULT 1'),
+                ('breakout_ma20_mode', 'VARCHAR(10) DEFAULT "above"'),
+                ('breakout_ma20_grace_bars', 'INTEGER DEFAULT 3'),
                 ('breakout_max_change_pct', 'FLOAT DEFAULT 12.0'),
                 ('breakout_stop_loss_pct', 'FLOAT DEFAULT 3.0'),
                 ('breakout_trailing_start_pct', 'FLOAT DEFAULT 10.0'),
@@ -869,7 +1077,80 @@ def init_db() -> None:
                 ('struct_break_hard_pct', 'FLOAT DEFAULT 2.0'),
                 ('breakout_entry_hard', 'BOOLEAN DEFAULT 1'),
                 ('breakout_entry_soft', 'BOOLEAN DEFAULT 1'),
-                ('breakout_entry_soft_polls', 'INTEGER DEFAULT 2'),
+                ('breakout_entry_soft_polls', 'INTEGER DEFAULT 3'),
+                ('breakout_entry_hold', 'BOOLEAN DEFAULT 1'),
+                ('breakout_hold_expire_bars', 'INTEGER DEFAULT 3'),
+                ('breakout_hold_rsi_min', 'FLOAT DEFAULT 30.0'),
+                ('breakout_rsi_period', 'INTEGER DEFAULT 10'),
+                ('use_ymgp', 'BOOLEAN DEFAULT 0'),
+                ('ymgp_condition_names', 'TEXT'),
+                ('ymgp_verify_condition_names', 'TEXT'),
+                ('ymgp_max_slots', 'INTEGER DEFAULT 1'),
+                ('ymgp_buy_amount_1', 'INTEGER DEFAULT 500000'),
+                ('ymgp_buy_amount_2', 'INTEGER DEFAULT 500000'),
+                ('ymgp_buy_deposit_pct_1', 'FLOAT'),
+                ('ymgp_buy_deposit_pct_2', 'FLOAT'),
+                ('ymgp_trade_start_time', 'VARCHAR(5) DEFAULT "09:30"'),
+                ('ymgp_trade_end_time', 'VARCHAR(5) DEFAULT "14:30"'),
+                ('ymgp_ma_fast', 'INTEGER DEFAULT 120'),
+                ('ymgp_ma_mid', 'INTEGER DEFAULT 240'),
+                ('ymgp_ma_slow', 'INTEGER DEFAULT 480'),
+                ('ymgp_box_days', 'INTEGER DEFAULT 15'),
+                ('ymgp_box_width_pct', 'FLOAT DEFAULT 15.5'),
+                ('ymgp_accum_vol_mult', 'FLOAT DEFAULT 2.0'),
+                ('ymgp_accum_body_pct', 'FLOAT DEFAULT 7.0'),
+                ('ymgp_accum_wick_vol_mult', 'FLOAT DEFAULT 4.0'),
+                ('ymgp_accum_wick_body_mult', 'FLOAT DEFAULT 1.5'),
+                ('ymgp_ma_near_pct', 'FLOAT DEFAULT 3.0'),
+                ('ymgp_pivot_tol_pct', 'FLOAT DEFAULT 2.0'),
+                ('ymgp_drop_lookback', 'INTEGER DEFAULT 60'),
+                ('ymgp_drop_pct', 'FLOAT DEFAULT -20.0'),
+                ('ymgp_stop_ma_mode', 'VARCHAR(20) DEFAULT "ma60"'),
+                ('ymgp_stop_loss_pct', 'FLOAT DEFAULT 4.0'),
+                ('ymgp_entry_mode', 'VARCHAR(20) DEFAULT "ref_high"'),
+                ('ymgp_max_change_pct', 'FLOAT DEFAULT 10.0'),
+                ('ymgp_pullback_tol_pct', 'FLOAT DEFAULT 2.0'),
+                ('ymgp_reentry_lock_days', 'INTEGER DEFAULT 5'),
+                ('ymgp_tp1_pct_of_pos', 'FLOAT DEFAULT 0.35'),
+                ('ymgp_tp2_pct_of_pos', 'FLOAT DEFAULT 0.35'),
+                ('ymgp_enable_pullback_add', 'BOOLEAN DEFAULT 1'),
+                ('ymgp_enable_partial_tp', 'BOOLEAN DEFAULT 1'),
+                ('ymgp_trailing_start_pct', 'FLOAT DEFAULT 15.0'),
+                ('ymgp_trailing_pct', 'FLOAT DEFAULT 5.0'),
+                ('market_risk_enabled', 'BOOLEAN DEFAULT 0'),
+                ('market_risk_index', 'VARCHAR(20) DEFAULT "kospi"'),
+                ('market_risk_change_pct', 'FLOAT DEFAULT -2.0'),
+                ('market_risk_max_buys_per_strategy', 'INTEGER DEFAULT 2'),
+                ('market_risk_block_legacy', 'BOOLEAN DEFAULT 1'),
+                ('market_risk_block_sangtta', 'BOOLEAN DEFAULT 1'),
+                ('market_risk_block_breakout', 'BOOLEAN DEFAULT 0'),
+                ('market_risk_block_ymgp', 'BOOLEAN DEFAULT 0'),
+                ('market_risk_block_jongga', 'BOOLEAN DEFAULT 0'),
+                ('legacy_rsi_min', 'FLOAT'),
+                ('legacy_rsi_max', 'FLOAT'),
+                ('use_jongga', 'BOOLEAN DEFAULT 0'),
+                ('jongga_max_slots', 'INTEGER DEFAULT 1'),
+                ('jongga_buy_amount', 'INTEGER DEFAULT 1000000'),
+                ('jongga_buy_deposit_pct', 'FLOAT'),
+                ('jongga_trade_start_time', 'VARCHAR(5) DEFAULT "14:30"'),
+                ('jongga_pick_end_time', 'VARCHAR(5) DEFAULT "14:40"'),
+                ('jongga_trade_end_time', 'VARCHAR(5) DEFAULT "14:40"'),
+                ('jongga_rank_limit', 'INTEGER DEFAULT 50'),
+                ('jongga_stop_loss_pct', 'FLOAT DEFAULT 3.0'),
+                ('jongga_trailing_start_pct', 'FLOAT DEFAULT 5.0'),
+                ('jongga_trailing_pct', 'FLOAT DEFAULT 2.0'),
+                ('jongga_w_pullback', 'FLOAT DEFAULT 1.0'),
+                ('jongga_w_amount', 'FLOAT DEFAULT 1.0'),
+                ('jongga_w_change', 'FLOAT DEFAULT 1.0'),
+                ('jongga_pig_split', 'BOOLEAN DEFAULT 1'),
+                ('jongga_leg1_pct', 'FLOAT DEFAULT 20.0'),
+                ('jongga_leg2_pct', 'FLOAT DEFAULT 30.0'),
+                ('jongga_leg3_pct', 'FLOAT DEFAULT 50.0'),
+                ('jongga_leg2_start_time', 'VARCHAR(5) DEFAULT "14:50"'),
+                ('jongga_leg3_start_time', 'VARCHAR(5) DEFAULT "15:20"'),
+                ('jongga_leg3_end_time', 'VARCHAR(5) DEFAULT "15:28"'),
+                ('jongga_pig_bid_ask_ratio', 'FLOAT DEFAULT 1.5'),
+                ('jongga_pig_levels', 'INTEGER DEFAULT 5'),
             ]
             for col_name, col_def in ats_extra:
                 if col_name not in ats_columns:
@@ -880,6 +1161,15 @@ def init_db() -> None:
                 conn.execute(text(
                     "UPDATE auto_trade_settings SET sangtta_buy_amount = 500000 "
                     "WHERE sangtta_buy_amount IS NULL OR sangtta_buy_amount <= 0"
+                ))
+                conn.commit()
+            except Exception:
+                pass
+            # 과매도 돌파 SOFT: 스캐너 1분 간격 3회 유지가 기본
+            try:
+                conn.execute(text(
+                    "UPDATE auto_trade_settings SET breakout_entry_soft_polls = 3 "
+                    "WHERE breakout_entry_soft_polls IS NULL OR breakout_entry_soft_polls <= 0"
                 ))
                 conn.commit()
             except Exception:
