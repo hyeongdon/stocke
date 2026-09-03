@@ -31,6 +31,9 @@ class BreakoutSettings:
     breakout_hold_expire_bars = 3
     breakout_hold_rsi_min = 30.0
     breakout_rsi_period = 10
+    breakout_require_program_net = False
+    breakout_program_lookback = 5
+    breakout_program_min_buy = 3
 
 
 class OversoldBreakoutTests(unittest.TestCase):
@@ -54,6 +57,45 @@ class OversoldBreakoutTests(unittest.TestCase):
         self.assertIn("HARD", reason)
         self.assertEqual(ctx["entry_confirm_mode"], "HARD")
         self.assertEqual(ctx["volume_ratio"], 1.8)
+
+    def test_gate_blocks_high_pullback_from_day_high(self):
+        s = BreakoutSettings()
+        s.crash_sync_pullback_cap_pct = 2.0
+        ctx = {
+            "level_kind": "prev_high",
+            "level_price": 10_000,
+            "confirm_close": 10_050,
+            "day_volume": 180_000,
+            "prev_volume": 100_000,
+            "entry_soft_streak": 0,
+            "day_high": 10_800,
+            "prev_close": 10_000,
+        }
+        ok, reason = evaluate_oversold_breakout_from_ctx(
+            s, 10_500, 5.0, ctx, skip_time_check=True,
+        )
+        self.assertFalse(ok)
+        self.assertIn("눌림 과다", reason)
+        self.assertFalse(ctx["pullback_ok"])
+
+    def test_gate_allows_shallow_high_pullback(self):
+        s = BreakoutSettings()
+        s.crash_sync_pullback_cap_pct = 2.0
+        ctx = {
+            "level_kind": "prev_high",
+            "level_price": 10_000,
+            "confirm_close": 10_050,
+            "day_volume": 180_000,
+            "prev_volume": 100_000,
+            "entry_soft_streak": 0,
+            "day_high": 10_150,
+            "prev_close": 10_000,
+        }
+        ok, reason = evaluate_oversold_breakout_from_ctx(
+            s, 10_100, 1.0, ctx, skip_time_check=True,
+        )
+        self.assertTrue(ok)
+        self.assertTrue(ctx["pullback_ok"])
 
     def test_gate_waits_without_hard_or_soft(self):
         ctx = {
@@ -533,6 +575,86 @@ class BreakoutHoldTests(unittest.TestCase):
         self.assertNotIn("비교 거래량 없음", reason)
         # 확인봉 09:10 vol 5000 / avg(1000,2000)=1500 → 통과 가능
         self.assertTrue(ok, reason)
+
+    def test_eval_skips_program_api_until_five_min_gates_pass(self):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from utils.auto_trade_engine import _eval_oversold_breakout
+
+        api = MagicMock()
+        api.normalize_stock_code = lambda c: c
+        api.get_stock_chart_data = AsyncMock(return_value=[])
+        api.get_stock_program_time_series = AsyncMock(return_value={"success": True, "rows": []})
+        s = BreakoutSettings()
+        s.breakout_require_program_net = True
+        ctx = {
+            "level_kind": "prev_high",
+            "level_price": 10_000,
+            "confirm_close": 10_100,
+            "confirm_high": 10_150,
+            "day_volume": 50_000,
+            "prev_volume": 100_000,
+            "entry_soft_streak": 0,
+        }
+
+        async def _run():
+            return await _eval_oversold_breakout(
+                api, s, "005930", 10_100, change_rate=8.0,
+                ctx=ctx, skip_time_check=True, update_soft_streak=False,
+            )
+
+        ok, reason = asyncio.run(_run())
+        self.assertFalse(ok)
+        self.assertIn("거래량 부족", reason)
+        api.get_stock_program_time_series.assert_not_awaited()
+
+    def test_eval_program_net_5_of_3_on_final_pass(self):
+        import asyncio
+        from datetime import datetime
+        from unittest.mock import AsyncMock, MagicMock
+
+        from utils.auto_trade_engine import _eval_oversold_breakout
+
+        api = MagicMock()
+        api.normalize_stock_code = lambda c: c
+        api.get_stock_chart_data = AsyncMock(return_value=[])
+        api.get_stock_program_time_series = AsyncMock(return_value={
+            "success": True,
+            "rows": [
+                {"tm": "1235", "net_qty": 10},
+                {"tm": "1236", "net_qty": 0},
+                {"tm": "1237", "net_qty": 5},
+                {"tm": "1238", "net_qty": -2},
+                {"tm": "1239", "net_qty": 8},
+            ],
+        })
+        s = BreakoutSettings()
+        s.breakout_require_program_net = True
+        s.breakout_entry_soft = False
+        s.breakout_entry_hold = False
+        ctx = {
+            "level_kind": "prev_high",
+            "level_price": 10_000,
+            "confirm_close": 10_100,
+            "confirm_high": 10_150,
+            "day_volume": 200_000,
+            "prev_volume": 100_000,
+            "entry_soft_streak": 0,
+        }
+
+        async def _run():
+            return await _eval_oversold_breakout(
+                api, s, "005930", 10_100, change_rate=8.0,
+                ctx=ctx, skip_time_check=True, update_soft_streak=False,
+                now=datetime(2026, 8, 14, 12, 40, 10),
+            )
+
+        ok, reason = asyncio.run(_run())
+        self.assertTrue(ok, reason)
+        self.assertIn("프로그램 순매수", reason)
+        api.get_stock_program_time_series.assert_awaited_once()
+        self.assertEqual(ctx.get("program_buy_count"), 3)
 
     def test_ma20_grace_waits_then_passes_with_inherit(self):
         """돌파 직후 MA20 미상회면 유예 대기, 이후 상회+상속으로 통과."""

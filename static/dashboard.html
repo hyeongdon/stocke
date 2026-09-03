@@ -6,7 +6,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <title>stock.daily</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/dashboard.css?v=96">
+  <link rel="stylesheet" href="/static/dashboard.css?v=114">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -23,11 +23,13 @@
       <nav class="tabs tabs-scroll" aria-label="메인 메뉴">
         <a href="#" class="tab active" data-tab="auto">자동매매</a>
         <a href="#" class="tab" data-tab="board">대시보드</a>
+        <a href="#" class="tab" data-tab="trades">거래내역</a>
         <a href="/analysis" class="tab-link">분석 ↗</a>
         <a href="/theme-map" class="tab-link">테마맵 ↗</a>
         <a href="/indicators" class="tab-link">지표 ↗</a>
         <a href="/verify" class="tab-link">검증 ↗</a>
         <a href="/static/glossary.html" class="tab-link">용어정리 ↗</a>
+        <a href="#" class="tab" data-tab="settings">설정</a>
         <a href="#" class="tab" data-tab="alert">알림</a>
       </nav>
       <div class="topbar-actions">
@@ -39,6 +41,7 @@
         </label>
         <a class="btn sm topbar-legacy" href="/static/index.html">기존 화면</a>
         <button class="btn primary sm" id="refreshAll">새로고침</button>
+        <a class="btn sm topbar-logout" href="/auth/logout" title="로그아웃">로그아웃</a>
       </div>
     </div>
   </header>
@@ -56,115 +59,171 @@
           <span class="market-index-skeleton">지수 불러오는 중…</span>
         </div>
       </div>
-
       <div class="auto-subpane active" id="auto-sub-monitor">
         <div class="auto-layout">
 
-      <!-- 보유 포지션 (ATR·손절선) -->
-      <div class="card compact-card positions-card">
-        <div class="card-head">
-          <div><h3>보유 포지션 <span class="hint" id="autoHoldingCount"></span></h3>
-            <div class="hint" style="margin-top:2px;">현재가·ATR·손절선 10초 갱신 · 비중=평가금액÷주식총평가</div></div>
-          <button class="btn sm" id="autoPosRefresh">새로고침</button>
-        </div>
-        <div class="card-body scroll positions-card-body" id="autoPositionsBody"><div class="empty"><span class="ico">💼</span>로딩 중...</div></div>
-      </div>
+        <!-- 1행: 수급 흐름(왼쪽) + 후보(오른쪽) -->
+        <div class="auto-row-2 auto-row-top">
 
-      <!-- 스크리너 후보 -->
-      <div class="card compact-card screener-card">
-        <div class="card-head">
-          <div><h3>스크리너 후보 <span class="hint" id="screenerCount"></span></h3>
-            <div class="hint" style="margin-top:2px;">거래대금순(등락 3.3%~&lt;15%) · 개별주만 · ETF·ETN·파생·등락미달·과열 제외</div></div>
-          <div style="display:flex;gap:8px;align-items:center;">
-            <select id="scrMarket" class="select-dark">
-              <option value="000">전체</option><option value="001">코스피</option><option value="101">코스닥</option></select>
-            <button class="btn primary sm" id="scrRefresh">조회</button>
+          <!-- 수급 흐름 (좌측) -->
+          <div class="investor-flow" id="investorFlow" style="display:none;">
+            <div class="if-head">
+              <span class="if-title">당일 수급 흐름 <span class="if-sub">시간대별 누적 순매수 (억원, 잠정) · 선이 내려가면 매도 누적</span></span>
+              <button type="button" class="btn sm if-toggle" id="investorFlowToggle" aria-expanded="true">접기</button>
+            </div>
+            <div class="if-body" id="investorFlowBody"></div>
           </div>
-        </div>
-        <div class="card-body scroll auto-screener-body" id="screenerBody">
-          <div class="empty"><span class="ico">🧭</span>조회 버튼을 누르면 거래대금순 후보를 불러옵니다. (장중에만 데이터가 정확합니다)</div>
-        </div>
-      </div>
 
-      <!-- 상따 후보 -->
-      <div class="card compact-card screener-card">
-        <div class="card-head">
-          <div><h3>상따 후보 <span class="hint" id="sangttaCount"></span></h3>
-            <div class="hint" style="margin-top:2px;">등락≥13% 풀 → 거래대금순 상위 20 · 천원↑·대금10억↑·관리/ETF제외</div></div>
-          <div style="display:flex;gap:8px;align-items:center;">
-            <button class="btn primary sm" id="sangRefresh">조회</button>
+          <!-- 후보 (우측) -->
+          <div class="card compact-card screener-card cand-tabs-card">
+            <div class="card-head cand-tabs-head">
+              <div class="cand-tabs-title">
+                <h3>후보</h3>
+                <nav class="cand-tabs" aria-label="후보 종류">
+                  <button type="button" class="cand-tab active" data-cand="screener">스크리너</button>
+                  <button type="button" class="cand-tab" data-cand="sangtta">상따</button>
+                  <button type="button" class="cand-tab" data-cand="breakout">수급 돌파</button>
+                  <button type="button" class="cand-tab" data-cand="fractal">스캘핑</button>
+                  <button type="button" class="cand-tab" data-cand="jongga">종가배팅</button>
+                  <button type="button" class="cand-tab" data-cand="ma1592">1592매매</button>
+                </nav>
+              </div>
+            </div>
+
+            <div class="cand-pane active" data-cand-pane="screener">
+              <div class="cand-pane-bar">
+                <div class="hint">거래대금순(등락 3.3%~&lt;12%) · 개별주만 · ETF·ETN·파생·등락미달·과열 제외 <span id="screenerCount"></span></div>
+                <div class="cand-pane-actions">
+                  <select id="scrMarket" class="select-dark">
+                    <option value="000">전체</option><option value="001">코스피</option><option value="101">코스닥</option></select>
+                  <button class="btn primary sm" id="scrRefresh">조회</button>
+                </div>
+              </div>
+              <div class="card-body scroll auto-screener-body" id="screenerBody">
+                <div class="empty"><span class="ico">🧭</span>조회 버튼을 누르면 거래대금순 후보를 불러옵니다. (장중에만 데이터가 정확합니다)</div>
+              </div>
+            </div>
+
+            <div class="cand-pane" data-cand-pane="sangtta">
+              <div class="cand-pane-bar">
+                <div class="hint">등락≥13% 풀 → 거래대금순 상위 20 · 천원↑·대금10억↑·관리/ETF제외 <span id="sangttaCount"></span></div>
+                <div class="cand-pane-actions">
+                  <button class="btn primary sm" id="sangRefresh">조회</button>
+                </div>
+              </div>
+              <div class="card-body scroll auto-screener-body" id="sangttaBody">
+                <div class="empty"><span class="ico">🔎</span>조회 버튼을 누르면 등락률상위 풀 중 거래대금순 상위 후보를 불러옵니다.</div>
+              </div>
+            </div>
+
+            <div class="cand-pane" data-cand-pane="breakout">
+              <div class="cand-pane-bar">
+                <div class="hint">조건식 후보 · 가격/거래량/HARD·SOFT·HOLD(전봉 RSI교차·양봉) 조건별 충족 여부 <span id="breakoutCount"></span></div>
+                <div class="cand-pane-actions">
+                  <button class="btn primary sm" id="breakoutRefresh">조회</button>
+                </div>
+              </div>
+              <div class="card-body scroll auto-screener-body" id="breakoutBody">
+                <div class="empty"><span class="ico">📈</span>조회 버튼을 누르면 수급 돌파 조건식 후보를 평가합니다.</div>
+              </div>
+            </div>
+
+            <div class="cand-pane" data-cand-pane="fractal">
+              <div class="cand-pane-bar">
+                <div class="hint">조건식 유니버스 · 1분 EMA 정배열 · 20EMA 눌림 · 확정 프랙탈 · 종가 재돌파 <span id="fractalCount"></span></div>
+                <div class="cand-pane-actions">
+                  <button class="btn primary sm" id="fractalRefresh">조회</button>
+                </div>
+              </div>
+              <div class="card-body scroll auto-screener-body" id="fractalBody">
+                <div class="empty"><span class="ico">⚡</span>조회 버튼을 누르면 프랙탈 스캘핑 조건식 후보를 평가합니다.</div>
+              </div>
+            </div>
+
+            <div class="cand-pane" data-cand-pane="jongga">
+              <div class="cand-pane-bar">
+                <div class="hint">거래대금순 → 최강테마 · 눌림=15분봉 고가 대비 · 14:30~40 선택 · 미선택 시 자동매수 <span id="jonggaCount"></span></div>
+                <div class="cand-pane-actions">
+                  <button class="btn primary sm" id="jonggaRefresh">조회</button>
+                </div>
+              </div>
+              <div class="card-body scroll auto-screener-body" id="jonggaBody">
+                <div class="empty"><span class="ico">🕐</span>조회 버튼을 누르면 종가배팅 후보를 불러옵니다.</div>
+              </div>
+            </div>
+
+            <div class="cand-pane" data-cand-pane="ma1592">
+              <div class="cand-pane-bar">
+                <div class="hint">장부(스티키) + 조건편입 관측 · 편입 시 EMA15/92 스냅샷 · 게이트 상태 <span id="ma1592Count"></span></div>
+                <div class="cand-pane-actions">
+                  <button class="btn primary sm" id="ma1592Refresh">조회</button>
+                </div>
+              </div>
+              <div class="card-body scroll auto-screener-body" id="ma1592Body">
+                <div class="empty"><span class="ico">📐</span>조회 버튼을 누르면 15/92 장부 종목만 불러옵니다.</div>
+              </div>
+            </div>
+          </div><!-- /.cand-tabs-card -->
+
+        </div><!-- /.auto-row-2 (수급+후보) -->
+
+        <!-- 2행: 보유 포지션 (전체 너비) -->
+        <div class="card compact-card positions-card">
+          <div class="card-head">
+            <div><h3>보유 포지션 <span class="hint" id="autoHoldingCount"></span></h3>
+              <div class="hint" style="margin-top:2px;">현재가·ATR·손절선 10초 갱신 · 비중=평가금액÷주식총평가</div></div>
+            <button class="btn sm" id="autoPosRefresh">새로고침</button>
           </div>
+          <div class="card-body scroll positions-card-body" id="autoPositionsBody"><div class="empty"><span class="ico">💼</span>로딩 중...</div></div>
         </div>
-        <div class="card-body scroll auto-screener-body" id="sangttaBody">
-          <div class="empty"><span class="ico">🔎</span>조회 버튼을 누르면 등락률상위 풀 중 거래대금순 상위 후보를 불러옵니다.</div>
-        </div>
-      </div>
 
-      <!-- 수급 돌파 후보 -->
-      <div class="card compact-card screener-card">
-        <div class="card-head">
-          <div><h3>수급 돌파 후보 <span class="hint" id="breakoutCount"></span></h3>
-            <div class="hint" style="margin-top:2px;">조건식 후보 · 가격/거래량/HARD·SOFT·HOLD(전봉 RSI교차·양봉) 조건별 충족 여부</div></div>
-          <button class="btn primary sm" id="breakoutRefresh">조회</button>
-        </div>
-        <div class="card-body scroll auto-screener-body" id="breakoutBody">
-          <div class="empty"><span class="ico">📈</span>조회 버튼을 누르면 수급 돌파 조건식 후보를 평가합니다.</div>
-        </div>
-      </div>
+        <!-- 3행: 체결 로그 + 실시간 활동 로그 -->
+        <div class="auto-row-2 auto-row-logs">
 
-      <!-- 역매공파 후보 -->
-      <div class="card compact-card screener-card">
-        <div class="card-head">
-          <div><h3>역매공파 후보 <span class="hint" id="ymgpCount"></span></h3>
-            <div class="hint" style="margin-top:2px;">조건식 유니버스 · 일봉 단계(FILTERED/READY/ARMED) · 1차 돌파/2차 눌림</div></div>
-          <button class="btn primary sm" id="ymgpRefresh">조회</button>
-        </div>
-        <div class="card-body scroll auto-screener-body" id="ymgpBody">
-          <div class="empty"><span class="ico">🧱</span>조회 버튼을 누르면 역매공파 조건식 후보를 평가합니다.</div>
-        </div>
-      </div>
-
-      <!-- 종가배팅 후보 -->
-      <div class="card compact-card screener-card">
-        <div class="card-head">
-          <div><h3>종가배팅 후보 <span class="hint" id="jonggaCount"></span></h3>
-            <div class="hint" style="margin-top:2px;">거래대금순 → 최강테마 · 눌림=15분봉 고가 대비 · 14:30~40 선택 · 미선택 시 자동매수</div></div>
-          <button class="btn primary sm" id="jonggaRefresh">조회</button>
-        </div>
-        <div class="card-body scroll auto-screener-body" id="jonggaBody">
-          <div class="empty"><span class="ico">🕐</span>조회 버튼을 누르면 종가배팅 후보를 불러옵니다.</div>
-        </div>
-      </div>
-
-      <!-- 체결 로그 -->
-      <div class="card compact-card">
-        <div class="card-head">
-          <div><h3>체결 로그 <span class="hint" id="logCount"></span></h3>
-            <div class="hint" style="margin-top:2px;">매수·매도 주문/게이트 실패·체결 (관측 만료는 제외 · 기간별)</div></div>
-          <div style="display:flex;gap:8px;align-items:center;">
-            <select id="logDays" class="select-dark" title="조회 기간">
-              <option value="1" selected>최근 1일</option>
-              <option value="3">최근 3일</option>
-              <option value="7">최근 7일</option>
-            </select>
-            <button class="btn sm" id="logRefresh">새로고침</button>
+          <!-- 체결 로그 -->
+          <div class="card compact-card">
+            <div class="card-head">
+              <div><h3>체결 로그 <span class="hint" id="logCount"></span></h3>
+                <div class="hint" style="margin-top:2px;">매수·매도 주문/게이트 실패·체결 (관측 만료 제외 · 기간별) · 손익합산=표시 기간 매도 실현손익 · 익절·손절·장마감 행 더블클릭 → 검증</div></div>
+              <div style="display:flex;gap:8px;align-items:center;">
+                <select id="logDays" class="select-dark" title="조회 기간">
+                  <option value="1" selected>최근 1일</option>
+                  <option value="3">최근 3일</option>
+                  <option value="7">최근 7일</option>
+                </select>
+                <button class="btn sm" id="logRefresh">새로고침</button>
+              </div>
+            </div>
+            <div class="card-body scroll auto-log-body" id="logBody"><div class="skeleton">불러오는 중...</div></div>
           </div>
-        </div>
-        <div class="card-body scroll auto-log-body" id="logBody"><div class="skeleton">불러오는 중...</div></div>
-      </div>
 
-      <!-- 실시간 활동 로그 -->
-      <div class="card compact-card activity-card">
-        <div class="card-head">
-          <div><h3>실시간 활동 로그 <span class="hint" id="activityHint">3초마다 갱신</span></h3>
-            <div class="hint" style="margin-top:2px;">스캐너·매수·손절 실행기 동작</div></div>
-          <button class="btn sm" id="activityRefresh">새로고침</button>
-        </div>
-        <div class="card-body" style="padding-top:0;">
-          <div id="activityBanner" class="activity-banner"><div class="skeleton">상태 확인 중...</div></div>
-          <div class="activity-console" id="activityBody"><div class="activity-line info">로그 불러오는 중...</div></div>
-        </div>
-      </div>
+          <!-- 실시간 활동 로그 -->
+          <div class="card compact-card activity-card">
+            <div class="card-head">
+              <div><h3>실시간 활동 로그 <span class="hint" id="activityHint">3초마다 갱신</span></h3>
+                <div class="hint" style="margin-top:2px;">스캐너·매수·손절 실행기 동작</div></div>
+              <button class="btn sm" id="activityRefresh">새로고침</button>
+            </div>
+            <div class="card-body" style="padding-top:0;">
+              <div id="activityBanner" class="activity-banner"><div class="skeleton">상태 확인 중...</div></div>
+              <div class="activity-filters" id="activityFilters" aria-label="활동 로그 전략 필터">
+                <span class="hint">전략</span>
+                <div class="activity-strat-tabs">
+                  <button type="button" class="activity-filter-tab active" data-filter="all">전체</button>
+                  <button type="button" class="activity-filter-tab" data-filter="legacy">레거시</button>
+                  <button type="button" class="activity-filter-tab" data-filter="sangtta">상따</button>
+                  <button type="button" class="activity-filter-tab" data-filter="breakout">돌파</button>
+                  <button type="button" class="activity-filter-tab" data-filter="fractal">프랙탈</button>
+                  <button type="button" class="activity-filter-tab" data-filter="jongga">종가배팅</button>
+                  <button type="button" class="activity-filter-tab" data-filter="ma1592">15/92</button>
+                  <button type="button" class="activity-filter-tab" data-filter="system">시스템</button>
+                </div>
+              </div>
+              <div class="activity-console" id="activityBody"><div class="activity-line info">로그 불러오는 중...</div></div>
+            </div>
+          </div>
+
+        </div><!-- /.auto-row-2 (체결+활동) -->
 
         </div><!-- /.auto-layout -->
       </div>
@@ -213,12 +272,11 @@
             <div><h3>성과 통계 <span class="hint">실현손익 · 청산 기준</span></h3>
               <div class="hint" id="perfSourceHint" style="margin-top:2px;"></div></div>
             <div class="perf-inputs">
-              <label>시드(원)<input type="number" id="pfSeed" value="10000000"></label>
               <button class="btn primary sm" id="pfRefresh">새로고침</button>
             </div>
           </div>
           <div class="card-body perf-card-body">
-            <div class="grid cols-4 perf-stat-grid board-perf-stat-grid" id="perfCards"><div class="skeleton">불러오는 중...</div></div>
+            <div class="grid perf-stat-grid board-perf-stat-grid" id="perfCards"><div class="skeleton">불러오는 중...</div></div>
           </div>
         </div>
         <div class="grid cols-2 board-split board-perf-split">
@@ -227,36 +285,78 @@
             <div class="card-body"><div class="board-perf-chart"><canvas id="perfChart"></canvas></div></div>
           </div>
           <div class="card compact-card">
-            <div class="card-head"><h3>청산 사유별 분포</h3></div>
-            <div class="card-body scroll board-perf-scroll" id="byReasonBody"><div class="skeleton">불러오는 중...</div></div>
+            <div class="card-head"><h3>일별 손익</h3><span class="hint">청산일(KST) 기준 · 포지션 단위</span></div>
+            <div class="card-body scroll board-perf-scroll board-perf-daily" id="dailyBody"><div class="skeleton">불러오는 중...</div></div>
           </div>
-        </div>
-        <div class="card compact-card">
-          <div class="card-head"><h3>일별 손익</h3><span class="hint">청산일(KST) 기준 · 포지션 단위</span></div>
-          <div class="card-body scroll board-perf-scroll board-perf-daily" id="dailyBody"><div class="skeleton">불러오는 중...</div></div>
-        </div>
-      </div>
-
-      <div class="board-block">
-        <div class="section-title">가동 상태</div>
-        <div class="grid cols-2 board-split">
-          <div class="card compact-card"><div class="card-head"><h3>가동 상태</h3><span class="hint" id="statusTime"></span></div>
-            <div class="card-body board-status-body" id="statusBody"><div class="skeleton">불러오는 중...</div></div></div>
-          <div class="card compact-card"><div class="card-head"><h3>신호 통계</h3></div>
-            <div class="card-body board-status-body" id="signalStatBody"><div class="skeleton">불러오는 중...</div></div></div>
         </div>
       </div>
 
       <div class="board-block">
         <div class="section-title">테마/키워드</div>
-        <div class="grid cols-2 board-split">
-          <div class="card compact-card">
-            <div class="card-head">
-              <h3>오늘의 키워드 <span class="hint" id="todayKeywordHint"></span></h3>
-              <a class="btn sm" href="/theme-map">테마맵 열기</a>
-            </div>
-            <div class="card-body scroll board-scroll-body" id="todayKeywordBody"><div class="skeleton">불러오는 중...</div></div>
+        <div class="card compact-card">
+          <div class="card-head">
+            <h3>오늘의 키워드 <span class="hint" id="todayKeywordHint"></span></h3>
+            <a class="btn sm" href="/theme-map">테마맵 열기</a>
           </div>
+          <div class="card-body scroll board-scroll-body" id="todayKeywordBody"><div class="skeleton">불러오는 중...</div></div>
+        </div>
+      </div>
+
+      </div><!-- /.board-layout -->
+    </section>
+
+    <!-- ============ 거래내역 탭 (거래내역 / 주문) ============ -->
+    <section class="pane" id="pane-trades">
+      <div class="auto-subtabs-bar history-subtabs-bar">
+        <nav class="auto-subtabs" aria-label="거래내역 하위 메뉴">
+          <button type="button" class="auto-subtab history-subtab active" data-history-sub="fills">거래내역</button>
+          <button type="button" class="auto-subtab history-subtab" data-history-sub="orders">주문</button>
+        </nav>
+      </div>
+
+      <div class="history-subpane active" id="history-sub-fills">
+        <div class="history-layout">
+          <div class="card compact-card history-card">
+            <div class="card-head">
+              <div>
+                <h3>최근 매도 체결 <span class="hint" id="sellCount"></span></h3>
+                <div class="hint" style="margin-top:2px;">체결된 매도만 표시 · 매수/매도 시각 · 매매차익=(매도가−매수가)×수량 · 순손익=매매차익−수수료−거래세 · 수수료·거래세가 `-`면 키움 동기화 전</div>
+              </div>
+              <button class="btn sm" data-refresh="sells">새로고침</button>
+            </div>
+            <div class="card-body scroll history-body" id="sellsBody"><div class="skeleton">불러오는 중...</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="history-subpane" id="history-sub-orders">
+        <div class="history-layout">
+          <div class="card compact-card history-card">
+            <div class="card-head">
+              <div>
+                <h3>주문 내역 <span class="hint" id="ordersCount"></span></h3>
+                <div class="hint" style="margin-top:2px;">매수·매도 주문 상태 · 실패·취소 사유</div>
+              </div>
+              <button class="btn sm" data-refresh="orders">새로고침</button>
+            </div>
+            <div class="card-body scroll history-body" id="ordersBody"><div class="skeleton">불러오는 중...</div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 설정 탭 ============ -->
+    <section class="pane" id="pane-settings">
+      <div class="board-layout">
+        <div class="board-block">
+          <div class="section-title">가동 상태</div>
+          <div class="card compact-card">
+            <div class="card-head"><h3>가동 상태</h3><span class="hint" id="statusTime"></span></div>
+            <div class="card-body board-status-body" id="statusBody"><div class="skeleton">불러오는 중...</div></div>
+          </div>
+        </div>
+        <div class="board-block">
+          <div class="section-title">배치 상태</div>
           <div class="card compact-card">
             <div class="card-head"><h3>배치 상태 <span class="hint" id="themeBatchHint"></span></h3></div>
             <div class="card-body board-status-body" id="themeBatchBody">
@@ -265,29 +365,6 @@
           </div>
         </div>
       </div>
-
-      <div class="board-block">
-        <div class="section-title">최근 매매 내역</div>
-        <div class="grid cols-2 board-split">
-          <div class="card compact-card"><div class="card-head"><h3>최근 매도 체결 <span class="hint" id="sellCount"></span></h3><button class="btn sm" data-refresh="sells">새로고침</button></div>
-            <div class="card-body scroll board-scroll-body" id="sellsBody"><div class="skeleton">불러오는 중...</div></div></div>
-          <div class="card compact-card"><div class="card-head"><h3>주문 내역 <span class="hint" id="ordersCount"></span></h3>
-            <button class="btn sm" data-refresh="orders">새로고침</button></div>
-            <div class="card-body scroll board-scroll-body" id="ordersBody"><div class="skeleton">불러오는 중...</div></div></div>
-        </div>
-      </div>
-
-      <div class="board-block">
-        <div class="section-title">조건식</div>
-        <div class="grid board-cond-grid">
-          <div class="card compact-card"><div class="card-head"><h3>조건식 목록 <span class="hint" id="condCount"></span></h3><button class="btn sm" data-refresh="conditions">새로고침</button></div>
-            <div class="card-body scroll board-cond-list" id="conditionsBody"><div class="empty">「새로고침」을 눌러 조건식 목록을 불러오세요.</div></div></div>
-          <div class="card compact-card"><div class="card-head"><h3 id="condStockTitle">편입 종목</h3><span class="hint" id="condStockHint">조건식을 선택하세요</span></div>
-            <div class="card-body scroll board-cond-list" id="condStocksBody"><div class="empty"><span class="ico">🔍</span>왼쪽에서 조건식을 선택하면 편입 종목이 표시됩니다.</div></div></div>
-        </div>
-      </div>
-
-      </div><!-- /.board-layout -->
     </section>
 
     <!-- ============ 알림 탭 ============ -->
@@ -302,6 +379,6 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/static/dashboard.js?v=128"></script>
+  <script src="/static/dashboard.js?v=163"></script>
 </body>
 </html>

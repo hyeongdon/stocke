@@ -19,6 +19,7 @@ VERIFY_FIELD_BY_STRATEGY = {
     "sangtta": "sangtta_verify_condition_names",
     "breakout": "breakout_verify_condition_names",
     "ymgp": "ymgp_verify_condition_names",
+    "fractal": "fractal_verify_condition_names",
 }
 
 # 종목 간 기본 텀 — API_MIN_CALL_INTERVAL(기본 3초)보다 여유 있게
@@ -54,6 +55,7 @@ def list_verify_conditions(strategy: str) -> Dict[str, Any]:
         "sangtta": "sangtta_condition_names",
         "breakout": "breakout_condition_names",
         "ymgp": "ymgp_condition_names",
+        "fractal": "fractal_condition_names",
     }[strategy_key]
     live_names = parse_condition_names(getattr(settings, live_field, None) if settings else None)
     return {

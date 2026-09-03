@@ -152,13 +152,36 @@ async def send_condition_alert(
 
     results = await collect_condition_results(api, names)
     if not results:
-        message = "📊 조건식 조회 결과\n\n조건식 목록이 비어 있습니다."
-        ok = notifier.send_message(message)
-        return {"sent": ok, "condition_count": 0, "stock_count": 0, "message": message}
+        msg = "조건식 목록이 비어 있습니다 — 알림 미전송"
+        logger.info(f"조건식 텔레그램 알림 스킵: {msg}")
+        return {
+            "sent": False,
+            "skipped": True,
+            "skip_reason": msg,
+            "condition_count": 0,
+            "stock_count": 0,
+            "message": msg,
+        }
+
+    stock_count = sum(len(s) for _, s in results)
+    if stock_count <= 0:
+        names_txt = ", ".join(
+            str(c.get("condition_name") or c.get("condition_id") or "?")
+            for c, _ in results
+        ) or "대상 조건식"
+        msg = f"편입 종목 없음 ({names_txt}) — 알림 미전송"
+        logger.info(f"조건식 텔레그램 알림 스킵: {msg}")
+        return {
+            "sent": False,
+            "skipped": True,
+            "skip_reason": msg,
+            "condition_count": len(results),
+            "stock_count": 0,
+            "message": msg,
+        }
 
     message = build_message(results, max_stocks)
     ok = notifier.send_message(message)
-    stock_count = sum(len(s) for _, s in results)
     return {
         "sent": ok,
         "condition_count": len(results),

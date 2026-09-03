@@ -511,6 +511,66 @@ class StrategyManager {
                     </div>
                 `;
                 break;
+            case 'MA1592':
+                configHtml = `
+                    <div class="alert alert-info small">15/92 홀드 — <b>3분봉 EMA15가 EMA92 상향돌파</b> 후 분할 매수. 익절=전고 50%.</div>
+                    <div class="mb-3">
+                        <label class="form-label">MA 소스 / 타입</label>
+                        <select class="form-select" id="ma1592MaSource">
+                            <option value="bar" ${(parameters.ma_source || 'bar') === 'bar' ? 'selected' : ''}>bar (5분봉)</option>
+                            <option value="daily_overlay" ${parameters.ma_source === 'daily_overlay' ? 'selected' : ''}>daily_overlay (일봉 오버레이·예비)</option>
+                        </select>
+                        <input type="hidden" id="ma1592MaType" value="${parameters.ma_type || 'ema'}">
+                        <div class="form-text">기본: 3분 EMA15 / EMA92</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">최소 거래대금 (원)</label>
+                        <input type="number" class="form-control" id="ma1592MinValue"
+                               value="${parameters.min_trading_value || 5000000000}" step="100000000">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">홀드 봉수 (5분)</label>
+                        <input type="number" class="form-control" id="ma1592HoldBars"
+                               value="${parameters.hold_bars || 6}" min="1" max="30">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">매수 전 15선 이탈 %</label>
+                        <input type="number" class="form-control" id="ma1592BreakPre"
+                               value="${parameters.break_before_entry_pct || 0.4}" step="0.1">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">전고 lookback (일)</label>
+                        <input type="number" class="form-control" id="ma1592PrevHighDays"
+                               value="${parameters.prev_high_lookback_days || 20}" min="5" max="60">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">TP1 비율</label>
+                        <input type="number" class="form-control" id="ma1592Tp1Frac"
+                               value="${parameters.tp1_frac || 0.5}" min="0.1" max="0.9" step="0.1">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">하드/큰이탈/급락 % · 손절%</label>
+                        <div class="input-group">
+                            <input type="number" class="form-control" id="ma1592Hard" value="${parameters.hard_break_pct || 1.0}" step="0.1" title="hard">
+                            <input type="number" class="form-control" id="ma1592Large" value="${parameters.large_break_pct ?? 0.7}" step="0.1" title="impulse 후 EMA92 이탈%">
+                            <input type="number" class="form-control" id="ma1592Crash" value="${parameters.crash_pct ?? 1.8}" step="0.1" title="고점 대비 급락%">
+                            <input type="number" class="form-control" id="ma1592Stop" value="${parameters.stop_pct || 4.0}" step="0.1" title="stop">
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">장부 TTL / 최대보유 (일)</label>
+                        <div class="input-group">
+                            <input type="number" class="form-control" id="ma1592Expire" value="${parameters.setup_expire_days || 8}">
+                            <input type="number" class="form-control" id="ma1592MaxHold" value="${parameters.max_hold_days || 10}">
+                        </div>
+                    </div>
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" id="ma1592Flatten"
+                               ${(parameters.flatten_eod ? 'checked' : '')}>
+                        <label class="form-check-label" for="ma1592Flatten">장종료 전량청산 (flatten_eod)</label>
+                    </div>
+                `;
+                break;
         }
 
         const modalHtml = `
@@ -592,6 +652,24 @@ class StrategyManager {
                     long_period: parseInt(document.getElementById('longPeriod').value),
                     buy_threshold: parseFloat(document.getElementById('buyThreshold').value),
                     sell_threshold: parseFloat(document.getElementById('sellThreshold').value)
+                };
+                break;
+            case 'MA1592':
+                parameters = {
+                    ma_source: document.getElementById('ma1592MaSource').value,
+                    ma_type: document.getElementById('ma1592MaType')?.value || 'ema',
+                    min_trading_value: parseInt(document.getElementById('ma1592MinValue').value),
+                    hold_bars: parseInt(document.getElementById('ma1592HoldBars').value),
+                    break_before_entry_pct: parseFloat(document.getElementById('ma1592BreakPre').value),
+                    prev_high_lookback_days: parseInt(document.getElementById('ma1592PrevHighDays').value),
+                    tp1_frac: parseFloat(document.getElementById('ma1592Tp1Frac').value),
+                    hard_break_pct: parseFloat(document.getElementById('ma1592Hard').value),
+                    large_break_pct: parseFloat(document.getElementById('ma1592Large').value),
+                    crash_pct: parseFloat(document.getElementById('ma1592Crash').value),
+                    stop_pct: parseFloat(document.getElementById('ma1592Stop').value),
+                    setup_expire_days: parseInt(document.getElementById('ma1592Expire').value),
+                    max_hold_days: parseInt(document.getElementById('ma1592MaxHold').value),
+                    flatten_eod: document.getElementById('ma1592Flatten').checked,
                 };
                 break;
         }
@@ -680,19 +758,55 @@ class StrategyManager {
 
     async loadStrategySignals() {
         try {
-            // 모든 전략의 신호를 가져오기 위해 각 전략별로 요청
-            const signalsPromises = this.strategies.map(strategy => 
-                fetch(`/signals/by-strategy/${strategy.id}?limit=10`)
+            // 1) 기존 방식: DB의 TradingStrategy별 신호 조회
+            const signalsPromises = this.strategies.map(strategy =>
+                fetch(`/signals/by-strategy/${strategy.id}?limit=20`)
                     .then(response => response.json())
                     .then(data => ({ strategy, signals: data.signals || [] }))
-                    .catch(error => ({ strategy, signals: [] }))
+                    .catch(() => ({ strategy, signals: [] }))
             );
 
             const results = await Promise.all(signalsPromises);
-            this.strategySignals = results.flatMap(result => 
-                result.signals.map(signal => ({ ...signal, strategy_name: result.strategy.strategy_name }))
+            let byStrategy = results.flatMap(result =>
+                result.signals.map(signal => ({ ...signal, strategy_key: result.strategy.strategy_type, strategy_name: result.strategy.strategy_name }))
             );
 
+            // 2) 추가: 매수대기(PENDING)/관측(WATCHING) 신호도 가져와서 'additional_data.strategy' 키로 그룹에 포함
+            try {
+                const pendingRes = await fetch('/signals/pending?limit=200');
+                const pendingJson = await pendingRes.json();
+                const pendingItems = pendingJson.items || pendingJson.signals || [];
+                // Normalize pending items into same shape
+                const normalized = (pendingItems || []).map(it => {
+                    const additional = it.additional_data || {};
+                    let strat = null;
+                    try {
+                        if (typeof additional === 'string') {
+                            const parsed = JSON.parse(additional || '{}');
+                            strat = parsed.strategy;
+                        } else {
+                            strat = additional.strategy;
+                        }
+                    } catch (_) {
+                        strat = additional.strategy || null;
+                    }
+                    return {
+                        id: it.id || it.signal_id || null,
+                        stock_code: it.stock_code,
+                        stock_name: it.stock_name,
+                        signal_type: it.status || it.signal_type || 'BUY',
+                        detected_at: it.detected_at,
+                        status: it.status,
+                        additional_data: additional,
+                        strategy_name: strat || 'auto_trade'
+                    };
+                });
+                byStrategy = byStrategy.concat(normalized);
+            } catch (e) {
+                console.warn('전략 신호에 PENDING 병합 실패:', e);
+            }
+
+            this.strategySignals = byStrategy;
             this.renderStrategySignals();
         } catch (error) {
             console.error('전략 신호 로드 오류:', error);
@@ -701,7 +815,8 @@ class StrategyManager {
 
     renderStrategySignals() {
         const container = document.getElementById('strategySignalsContainer');
-        
+        if (!container) return;
+
         if (this.strategySignals.length === 0) {
             container.innerHTML = `
                 <div class="text-center text-muted py-4">
@@ -712,33 +827,63 @@ class StrategyManager {
             return;
         }
 
-        // 최신 신호부터 정렬
-        const sortedSignals = this.strategySignals.sort((a, b) => 
-            new Date(b.detected_at) - new Date(a.detected_at)
-        );
+        // 그룹화: strategy_name을 키로 사용
+        const groups = {};
+        this.strategySignals.forEach(s => {
+            const key = (s.strategy_name || s.additional_data?.strategy || 'unknown') || 'unknown';
+            if (!groups[key]) groups[key] = [];
+            groups[key].push(s);
+        });
 
-        const signalsHtml = sortedSignals.slice(0, 20).map(signal => {
-            const signalClass = signal.signal_type === 'BUY' ? 'text-success' : 'text-danger';
-            const signalIcon = signal.signal_type === 'BUY' ? 'fa-arrow-up' : 'fa-arrow-down';
-            const detectedTime = new Date(signal.detected_at).toLocaleString('ko-KR');
-            
-            return `
-                <div class="d-flex justify-content-between align-items-center mb-2 p-2 border rounded">
+        // 탭 헤더 생성
+        const strategyKeys = Object.keys(groups).sort((a,b) => a.localeCompare(b));
+        let tabsHtml = '<ul class="nav nav-tabs mb-2" id="strategySignalTabs" role="tablist">';
+        strategyKeys.forEach((k, idx) => {
+            const count = groups[k].length;
+            tabsHtml += `<li class="nav-item" role="presentation">
+                <button class="nav-link ${idx===0?'active':''}" id="tab-${esc(k)}" data-bs-toggle="tab" data-key="${esc(k)}" type="button" role="tab">${esc(k)} <span class="badge bg-secondary ms-1">${count}</span></button>
+            </li>`;
+        });
+        tabsHtml += '</ul>';
+
+        // 탭 콘텐츠: 첫 탭만 보이도록
+        let contentHtml = '<div id="strategySignalsTabsContent">';
+        strategyKeys.forEach((k, idx) => {
+            const items = groups[k].sort((a,b) => new Date(b.detected_at) - new Date(a.detected_at)).slice(0, 50);
+            const listHtml = items.map(signal => {
+                const signalClass = (signal.signal_type || signal.status || 'BUY') === 'BUY' ? 'text-success' : 'text-danger';
+                const signalIcon = (signal.signal_type || signal.status || 'BUY') === 'BUY' ? 'fa-arrow-up' : 'fa-arrow-down';
+                const detectedTime = signal.detected_at ? new Date(signal.detected_at).toLocaleString('ko-KR') : '';
+                return `<div class="d-flex justify-content-between align-items-center mb-2 p-2 border rounded">
                     <div class="flex-grow-1">
-                        <div class="fw-bold">${signal.stock_name}</div>
-                        <small class="text-muted">${signal.stock_code} • ${signal.strategy_name}</small>
+                        <div class="fw-bold">${esc(signal.stock_name)}</div>
+                        <small class="text-muted">${esc(signal.stock_code)} • ${esc(k)}</small>
                     </div>
                     <div class="text-end">
                         <div class="${signalClass}">
-                            <i class="fas ${signalIcon}"></i> ${signal.signal_type}
+                            <i class="fas ${signalIcon}"></i> ${esc(signal.signal_type || signal.status || '')}
                         </div>
                         <small class="text-muted">${detectedTime}</small>
                     </div>
-                </div>
-            `;
-        }).join('');
+                </div>`;
+            }).join('');
+            contentHtml += `<div class="tab-pane ${idx===0?'active show':''}" id="pane-${esc(k)}" data-key="${esc(k)}">${listHtml}</div>`;
+        });
+        contentHtml += '</div>';
 
-        container.innerHTML = signalsHtml;
+        container.innerHTML = tabsHtml + contentHtml;
+
+        // 탭 버튼 클릭으로 컨텐츠 스와이치
+        document.querySelectorAll('#strategySignalTabs button[data-key]').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const key = btn.getAttribute('data-key');
+                document.querySelectorAll('#strategySignalsTabsContent .tab-pane').forEach(p => {
+                    p.classList.remove('active','show');
+                });
+                const pane = document.querySelector(`#pane-${CSS.escape(key)}`);
+                if (pane) pane.classList.add('active','show');
+            });
+        });
     }
 
     async toggleWatchlistSync(isEnabled) {

@@ -183,6 +183,38 @@
   color: var(--accent-bright);
 }
 
+.company-profile-section {
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.company-profile-overview {
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+.company-profile-peers {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.company-profile-peer {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: rgba(124, 108, 240, 0.12);
+  color: var(--text);
+  border: 1px solid rgba(124, 108, 240, 0.22);
+}
+.company-profile-meta {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
 .analysis-chart-wrap {
   position: relative;
   border: 1px solid var(--border);

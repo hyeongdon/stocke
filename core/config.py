@@ -72,15 +72,22 @@ class Config:
     API_MIN_CALL_INTERVAL = float(os.getenv("API_MIN_CALL_INTERVAL", "3.0"))
     API_MAX_CALLS_PER_MIN = int(os.getenv("API_MAX_CALLS_PER_MIN", "18"))
     API_LIMIT_DURATION_MIN = int(os.getenv("API_LIMIT_DURATION_MIN", "3"))
+    # 스캔 종목 간 추가 대기(초). API 여유 있으면 이보다 짧게(적응형). 게이트 OFF면 절반.
+    SCAN_GATE_PAUSE_SEC = float(os.getenv("SCAN_GATE_PAUSE_SEC", "3.0"))
 
-    # 자동매매 스크리너 — 거래대금 상위 후보 종목 수
-    SCREENER_CANDIDATE_LIMIT = int(os.getenv("SCREENER_CANDIDATE_LIMIT", "50"))
+    # 1회 스캔 총 대상 상한. 초과분은 레거시(거래대금 상위)부터 줄인다.
+    SCAN_TARGET_TOTAL_LIMIT = int(os.getenv("SCAN_TARGET_TOTAL_LIMIT", "60"))
+    # 레거시 스크리너 — 거래대금 상위 후보 상한(단독 시). 타 전략 편입 시 잔여 자리에 맞춰 축소.
+    SCREENER_CANDIDATE_LIMIT = int(os.getenv("SCREENER_CANDIDATE_LIMIT", "20"))
     # 상따 — 등락률상위 풀에서 거래대금순으로 남길 후보 수
     SANGTTA_CANDIDATE_LIMIT = int(os.getenv("SANGTTA_CANDIDATE_LIMIT", "20"))
+    # 프랙탈 스캘핑 — 동시 1분봉 조회(WATCHING) 상한
+    FRACTAL_CANDIDATE_LIMIT = int(os.getenv("FRACTAL_CANDIDATE_LIMIT", "5"))
+    FRACTAL_CHART_CACHE_TTL = float(os.getenv("FRACTAL_CHART_CACHE_TTL", "45"))
     # 스크리너 후보 최소 등락률(%). 0이면 기존처럼 플러스(>0)만. 매수 최소등락(예: 3.5)보다 약간 낮게.
     SCREENER_MIN_CHANGE_RATE = float(os.getenv("SCREENER_MIN_CHANGE_RATE", "3.3"))
     # 스크리너 후보 과열 컷(%). 이 이상이면 편입 제외. 0이면 상한 미적용.
-    SCREENER_MAX_CHANGE_RATE = float(os.getenv("SCREENER_MAX_CHANGE_RATE", "15"))
+    SCREENER_MAX_CHANGE_RATE = float(os.getenv("SCREENER_MAX_CHANGE_RATE", "12"))
     # 스크리너 후보 최소 당일 거래대금(억원). 0이면 하한 미적용.
     SCREENER_MIN_TRADE_AMOUNT_EOK = float(os.getenv("SCREENER_MIN_TRADE_AMOUNT_EOK", "20"))
 
@@ -92,7 +99,19 @@ class Config:
     PORT = int(os.getenv("PORT", 8000))
     # 매일 KST 이 시각 이후 uvicorn 프로세스 자동 종료 (장마감 배치·테마 마트는 별도 스케줄)
     SERVER_AUTO_SHUTDOWN_ENABLED = os.getenv("SERVER_AUTO_SHUTDOWN_ENABLED", "true").lower() == "true"
-    SERVER_AUTO_SHUTDOWN_TIME = os.getenv("SERVER_AUTO_SHUTDOWN_TIME", "19:00")
+    SERVER_AUTO_SHUTDOWN_TIME = os.getenv("SERVER_AUTO_SHUTDOWN_TIME", "19:30")
+
+    # ===== 웹 UI 세션 인증 =====
+    # AUTH_PASSWORD는 평문으로 env에 두고, 검증 시 PBKDF2 해시로만 비교한다.
+    AUTH_ENABLED = os.getenv("AUTH_ENABLED", "true").lower() == "true"
+    AUTH_USERNAME = os.getenv("AUTH_USERNAME", "zi5")
+    AUTH_PASSWORD = os.getenv("AUTH_PASSWORD", "zi6")
+    AUTH_SESSION_SECRET = os.getenv(
+        "AUTH_SESSION_SECRET",
+        "stocke-dev-session-secret-change-me",
+    )
+    AUTH_SESSION_HOURS = int(os.getenv("AUTH_SESSION_HOURS", "6"))
+
     
     # 네이버 뉴스 검색 API 설정
     NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID", "")
@@ -113,6 +132,23 @@ class Config:
     TELEGRAM_ALERT_MAX_STOCKS = int(os.getenv("TELEGRAM_ALERT_MAX_STOCKS", 20))
     # true: 조건식·정기 알림은 거래일 장중(09:00~15:30)만 / 매매 체결 알림도 동일
     TELEGRAM_ALERT_MARKET_HOURS_ONLY = os.getenv("TELEGRAM_ALERT_MARKET_HOURS_ONLY", "true").lower() == "true"
+    # 실시간 편입 알림 — 동일 조건·종목 재알림 최소 간격(초)
+    TELEGRAM_CONDITION_REALTIME_DEDUP_SEC = int(
+        os.getenv("TELEGRAM_CONDITION_REALTIME_DEDUP_SEC", "300")
+    )
+
+    # ===== MA1592 (15/92 홀드) =====
+    # HTS 조건식 기본명 — 임진왜란(1592) · 이순신 「죽고자 하면 산다」 집중 매매
+    MA1592_DEFAULT_CONDITION_NAME = (
+        os.getenv("MA1592_DEFAULT_CONDITION_NAME", "1592매매") or "1592매매"
+    ).strip()
+    MA1592_CHART_CACHE_TTL = float(
+        os.getenv(
+            "MA1592_CHART_CACHE_TTL",
+            os.getenv("MA1590_CHART_CACHE_TTL", "60"),
+        )
+        or 60
+    )
 
     # ===== CPU 과부하 알림 (트레이 풍선 + 텔레그램) =====
     CPU_ALERT_THRESHOLD = float(os.getenv("CPU_ALERT_THRESHOLD", "90"))
@@ -133,6 +169,26 @@ class Config:
     # KeyBERT CPU 기준 종목당 ~10~15초 → 120종 ≈ 20~30분
     STOCK_NEWS_MAX_STOCKS_PER_DAY = int(os.getenv("STOCK_NEWS_MAX_STOCKS_PER_DAY", "120"))
     STOCK_NEWS_CHUNK_SIZE = int(os.getenv("STOCK_NEWS_CHUNK_SIZE", "40"))
+
+    # ===== 테마 거래대금 맵 (거래대금순 종목 → 테마 합산, 테마맵) =====
+    THEME_FLOW_STOCK_LIMIT = int(os.getenv("THEME_FLOW_STOCK_LIMIT", "300"))
+    THEME_FLOW_TOP_N = int(os.getenv("THEME_FLOW_TOP_N", "40"))
+    THEME_FLOW_CACHE_SEC = int(os.getenv("THEME_FLOW_CACHE_SEC", "900"))  # 15분
+
+    # ===== 알파스퀘어 테마 (비공식 내부 API, 일 배치용) =====
+    ALPHASQUARE_ENABLED = os.getenv("ALPHASQUARE_ENABLED", "true").lower() == "true"
+    ALPHASQUARE_BASE_URL = (
+        os.getenv("ALPHASQUARE_BASE_URL", "https://api.alphasquare.co.kr") or ""
+    ).rstrip("/")
+    ALPHASQUARE_TIMEOUT_SEC = float(os.getenv("ALPHASQUARE_TIMEOUT_SEC", "20"))
+    ALPHASQUARE_SLEEP_SEC = float(os.getenv("ALPHASQUARE_SLEEP_SEC", "0.35"))
+    # stock→themes 편입사유 보강 (호출 수↑). v1 기본 OFF
+    ALPHASQUARE_FETCH_REASONS = os.getenv("ALPHASQUARE_FETCH_REASONS", "false").lower() == "true"
+    ALPHASQUARE_USER_AGENT = os.getenv(
+        "ALPHASQUARE_USER_AGENT",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    )
     
     # 로그 디렉토리 생성
     Path(LOG_FILE).parent.mkdir(parents=True, exist_ok=True)

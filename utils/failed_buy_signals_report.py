@@ -32,7 +32,7 @@ def signal_strategy_key(sig: PendingBuySignal) -> str:
     """additional_data.strategy / source → 전략 키."""
     meta = sig.additional_data if isinstance(getattr(sig, "additional_data", None), dict) else {}
     raw = str(meta.get("strategy") or meta.get("source") or "").strip().lower()
-    if raw in ("sangtta", "breakout", "ymgp"):
+    if raw in ("sangtta", "breakout", "ymgp", "jongga", "fractal"):
         return raw
     if raw in _LEGACY_KEYS:
         return "legacy"

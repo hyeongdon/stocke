@@ -7,7 +7,7 @@
   <title>테마/키워드 매핑 스파이크</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/dashboard.css?v=85">
-  <link rel="stylesheet" href="/static/theme_map.css?v=6">
+  <link rel="stylesheet" href="/static/theme_map.css?v=10">
 </head>
 <body>
   <header class="topbar">
@@ -30,6 +30,28 @@
   </header>
 
   <div class="wrap">
+    <section class="card compact-card theme-flow-card">
+      <div class="card-head">
+        <div>
+          <h3>실시간 테마지도 <span class="hint" id="themeFlowHint"></span></h3>
+          <div class="hint" style="margin-top:2px;">동일 크기 타일 · 색상=등락률 · 한 종목의 대금은 모든 소속 테마에 중복 반영 · 상위 40</div>
+        </div>
+        <div class="theme-flow-actions">
+          <select id="themeFlowSort" class="theme-select" title="테마 정렬">
+            <option value="trade_amount">거래대금순</option>
+            <option value="change_rate">등락률순</option>
+          </select>
+          <button class="btn sm" id="themeFlowRefresh" type="button">새로고침</button>
+        </div>
+      </div>
+      <div class="card-body theme-flow-body">
+        <div id="themeFlowMap" class="theme-flow-map" aria-label="테마 거래대금 트리맵">
+          <div class="skeleton">불러오는 중...</div>
+        </div>
+        <div id="themeFlowDetail" class="theme-flow-detail muted">타일을 클릭하면 구성 종목이 표시됩니다.</div>
+      </div>
+    </section>
+
     <div class="grid cols-3 theme-grid">
       <section class="card compact-card">
         <div class="card-head">
@@ -42,7 +64,16 @@
       <section class="card compact-card">
         <div class="card-head">
           <h3>테마 목록</h3>
-          <span class="hint" id="tagHint">-</span>
+          <div class="topbar-actions">
+            <select id="tagSourceFilter" class="theme-select" title="소스 필터">
+              <option value="">전체 소스</option>
+              <option value="naver_theme">네이버</option>
+              <option value="kiwoom_theme">키움</option>
+              <option value="alphasquare_theme">알파스퀘어</option>
+              <option value="manual">수동</option>
+            </select>
+            <span class="hint" id="tagHint">-</span>
+          </div>
         </div>
         <div class="card-body scroll theme-body" id="tagBody">불러오는 중...</div>
       </section>
@@ -68,6 +99,17 @@
         <div class="scroll theme-body" id="tagsByStockBody">-</div>
         <div class="scroll theme-body" id="stockArticleBody"><div class="empty"><span class="ico">📰</span>종목을 조회하면 근거 기사가 표시됩니다.</div></div>
       </div>
+    </section>
+
+    <section class="card compact-card cross-card">
+      <div class="card-head">
+        <h3>소스 교차 커버리지</h3>
+        <div class="topbar-actions">
+          <span class="hint" id="crossHint">네이버 · 키움 · 알파스퀘어</span>
+          <button id="btnCrossReload" class="btn sm">조회</button>
+        </div>
+      </div>
+      <div class="card-body" id="crossBody">불러오는 중...</div>
     </section>
 
     <section class="card compact-card manual-map-card">
@@ -152,6 +194,6 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/static/theme_map.js?v=10"></script>
+  <script src="/static/theme_map.js?v=15"></script>
 </body>
 </html>

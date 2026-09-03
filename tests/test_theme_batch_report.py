@@ -34,6 +34,9 @@ class ThemeBatchReportFormatTests(unittest.TestCase):
                 "kiwoom_themes": 180,
                 "kiwoom_edges": 5100,
                 "kiwoom_api_calls": 185,
+                "alphasquare_themes": 454,
+                "alphasquare_edges": 9200,
+                "alphasquare_api_calls": 455,
             },
             "prev": {
                 "edges": 6425,
@@ -41,6 +44,7 @@ class ThemeBatchReportFormatTests(unittest.TestCase):
                 "scores": 6844,
                 "stocks": 2342,
                 "kiwoom_edges": 5080,
+                "alphasquare_edges": 9100,
             },
             "top_keywords": [
                 {
@@ -72,6 +76,7 @@ class ThemeBatchReportFormatTests(unittest.TestCase):
         text = format_theme_batch_report_text(stats)
         self.assertIn("편입(N)", text)
         self.assertIn("편입(K)", text)
+        self.assertIn("편입(AS)", text)
         self.assertNotIn("<pre>", text)
 
     def test_failure_status_in_html(self):

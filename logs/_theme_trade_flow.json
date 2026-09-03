@@ -1,0 +1,2019 @@
+{
+  "success": true,
+  "schema": 4,
+  "biz_date": "2026-08-21",
+  "built_at": "2026-08-21T06:10:47.557947",
+  "built_at_epoch": 1787292647.5579479,
+  "stock_universe": 300,
+  "stock_mapped": 296,
+  "aggregation_mode": "all_themes_full_amount",
+  "sort_by": "trade_amount",
+  "excluded_etf": 7,
+  "theme_count": 40,
+  "top_n": 40,
+  "stock_limit": 300,
+  "unit_hint": "trade_amount=백만원, trade_amount_eok=억원",
+  "items": [
+    {
+      "theme": "코리아 밸류업 지수(Korea Value-up Index)",
+      "trade_amount": 28216011.0,
+      "trade_amount_eok": 282160.11,
+      "stock_count": 63,
+      "avg_change_rate": -1.28,
+      "max_change_rate": 21.56,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "017670",
+          "stock_name": "SK텔레콤",
+          "trade_amount": 290062.0,
+          "trade_amount_eok": 2900.62,
+          "change_rate": 6.0,
+          "current_price": 102400
+        },
+        {
+          "stock_code": "005380",
+          "stock_name": "현대차",
+          "trade_amount": 265261.0,
+          "trade_amount_eok": 2652.61,
+          "change_rate": -0.6,
+          "current_price": 415000
+        },
+        {
+          "stock_code": "012450",
+          "stock_name": "한화에어로스페이스",
+          "trade_amount": 241274.0,
+          "trade_amount_eok": 2412.74,
+          "change_rate": -6.77,
+          "current_price": 1088000
+        }
+      ],
+      "rank": 1
+    },
+    {
+      "theme": "자율주행차",
+      "trade_amount": 27094970.0,
+      "trade_amount_eok": 270949.7,
+      "stock_count": 14,
+      "avg_change_rate": -1.42,
+      "max_change_rate": 6.0,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "009150",
+          "stock_name": "삼성전기",
+          "trade_amount": 1525126.0,
+          "trade_amount_eok": 15251.26,
+          "change_rate": -6.23,
+          "current_price": 1309000
+        },
+        {
+          "stock_code": "035420",
+          "stock_name": "NAVER",
+          "trade_amount": 339411.0,
+          "trade_amount_eok": 3394.11,
+          "change_rate": 1.59,
+          "current_price": 223000
+        },
+        {
+          "stock_code": "017670",
+          "stock_name": "SK텔레콤",
+          "trade_amount": 290062.0,
+          "trade_amount_eok": 2900.62,
+          "change_rate": 6.0,
+          "current_price": 102400
+        }
+      ],
+      "rank": 2
+    },
+    {
+      "theme": "자율주행",
+      "trade_amount": 27080614.0,
+      "trade_amount_eok": 270806.14,
+      "stock_count": 13,
+      "avg_change_rate": -1.05,
+      "max_change_rate": 6.0,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "009150",
+          "stock_name": "삼성전기",
+          "trade_amount": 1525126.0,
+          "trade_amount_eok": 15251.26,
+          "change_rate": -6.23,
+          "current_price": 1309000
+        },
+        {
+          "stock_code": "035420",
+          "stock_name": "NAVER",
+          "trade_amount": 339411.0,
+          "trade_amount_eok": 3394.11,
+          "change_rate": 1.59,
+          "current_price": 223000
+        },
+        {
+          "stock_code": "017670",
+          "stock_name": "SK텔레콤",
+          "trade_amount": 290062.0,
+          "trade_amount_eok": 2900.62,
+          "change_rate": 6.0,
+          "current_price": 102400
+        }
+      ],
+      "rank": 3
+    },
+    {
+      "theme": "S7(삼성전자/SK하이닉스 등)",
+      "trade_amount": 27024294.0,
+      "trade_amount_eok": 270242.94,
+      "stock_count": 6,
+      "avg_change_rate": 2.36,
+      "max_change_rate": 10.27,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "009150",
+          "stock_name": "삼성전기",
+          "trade_amount": 1525126.0,
+          "trade_amount_eok": 15251.26,
+          "change_rate": -6.23,
+          "current_price": 1309000
+        },
+        {
+          "stock_code": "402340",
+          "stock_name": "SK스퀘어",
+          "trade_amount": 968657.0,
+          "trade_amount_eok": 9686.57,
+          "change_rate": -0.53,
+          "current_price": 1117000
+        },
+        {
+          "stock_code": "032830",
+          "stock_name": "삼성생명",
+          "trade_amount": 373325.0,
+          "trade_amount_eok": 3733.25,
+          "change_rate": 10.27,
+          "current_price": 327500
+        }
+      ],
+      "rank": 4
+    },
+    {
+      "theme": "아이폰",
+      "trade_amount": 25887256.0,
+      "trade_amount_eok": 258872.56,
+      "stock_count": 8,
+      "avg_change_rate": -3.06,
+      "max_change_rate": 3.14,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "009150",
+          "stock_name": "삼성전기",
+          "trade_amount": 1525126.0,
+          "trade_amount_eok": 15251.26,
+          "change_rate": -6.23,
+          "current_price": 1309000
+        },
+        {
+          "stock_code": "006400",
+          "stock_name": "삼성SDI",
+          "trade_amount": 212498.0,
+          "trade_amount_eok": 2124.98,
+          "change_rate": -4.3,
+          "current_price": 478000
+        },
+        {
+          "stock_code": "011070",
+          "stock_name": "LG이노텍",
+          "trade_amount": 189423.0,
+          "trade_amount_eok": 1894.23,
+          "change_rate": -6.64,
+          "current_price": 548000
+        }
+      ],
+      "rank": 5
+    },
+    {
+      "theme": "온디바이스 AI",
+      "trade_amount": 25874433.0,
+      "trade_amount_eok": 258744.33,
+      "stock_count": 10,
+      "avg_change_rate": -4.94,
+      "max_change_rate": 3.14,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "009150",
+          "stock_name": "삼성전기",
+          "trade_amount": 1525126.0,
+          "trade_amount_eok": 15251.26,
+          "change_rate": -6.23,
+          "current_price": 1309000
+        },
+        {
+          "stock_code": "222800",
+          "stock_name": "심텍",
+          "trade_amount": 152470.0,
+          "trade_amount_eok": 1524.7,
+          "change_rate": -13.32,
+          "current_price": 99600
+        },
+        {
+          "stock_code": "403870",
+          "stock_name": "HPSP",
+          "trade_amount": 107838.0,
+          "trade_amount_eok": 1078.38,
+          "change_rate": -6.04,
+          "current_price": 45100
+        }
+      ],
+      "rank": 6
+    },
+    {
+      "theme": "온디바이스AI",
+      "trade_amount": 25874433.0,
+      "trade_amount_eok": 258744.33,
+      "stock_count": 10,
+      "avg_change_rate": -4.94,
+      "max_change_rate": 3.14,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "009150",
+          "stock_name": "삼성전기",
+          "trade_amount": 1525126.0,
+          "trade_amount_eok": 15251.26,
+          "change_rate": -6.23,
+          "current_price": 1309000
+        },
+        {
+          "stock_code": "222800",
+          "stock_name": "심텍",
+          "trade_amount": 152470.0,
+          "trade_amount_eok": 1524.7,
+          "change_rate": -13.32,
+          "current_price": 99600
+        },
+        {
+          "stock_code": "403870",
+          "stock_name": "HPSP",
+          "trade_amount": 107838.0,
+          "trade_amount_eok": 1078.38,
+          "change_rate": -6.04,
+          "current_price": 45100
+        }
+      ],
+      "rank": 7
+    },
+    {
+      "theme": "TPU",
+      "trade_amount": 25823196.0,
+      "trade_amount_eok": 258231.96,
+      "stock_count": 9,
+      "avg_change_rate": -5.04,
+      "max_change_rate": 3.14,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "009150",
+          "stock_name": "삼성전기",
+          "trade_amount": 1525126.0,
+          "trade_amount_eok": 15251.26,
+          "change_rate": -6.23,
+          "current_price": 1309000
+        },
+        {
+          "stock_code": "042700",
+          "stock_name": "한미반도체",
+          "trade_amount": 161943.0,
+          "trade_amount_eok": 1619.43,
+          "change_rate": -5.54,
+          "current_price": 213000
+        },
+        {
+          "stock_code": "007660",
+          "stock_name": "이수페타시스",
+          "trade_amount": 73394.0,
+          "trade_amount_eok": 733.94,
+          "change_rate": -5.43,
+          "current_price": 99300
+        }
+      ],
+      "rank": 8
+    },
+    {
+      "theme": "환율상승",
+      "trade_amount": 25299239.0,
+      "trade_amount_eok": 252992.39,
+      "stock_count": 14,
+      "avg_change_rate": -2.58,
+      "max_change_rate": 3.14,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "005380",
+          "stock_name": "현대차",
+          "trade_amount": 265261.0,
+          "trade_amount_eok": 2652.61,
+          "change_rate": -0.6,
+          "current_price": 415000
+        },
+        {
+          "stock_code": "012450",
+          "stock_name": "한화에어로스페이스",
+          "trade_amount": 241274.0,
+          "trade_amount_eok": 2412.74,
+          "change_rate": -6.77,
+          "current_price": 1088000
+        },
+        {
+          "stock_code": "079550",
+          "stock_name": "LIG디펜스앤에어로스페이스",
+          "trade_amount": 232981.0,
+          "trade_amount_eok": 2329.81,
+          "change_rate": -11.69,
+          "current_price": 695000
+        }
+      ],
+      "rank": 9
+    },
+    {
+      "theme": "데이터센터",
+      "trade_amount": 24947063.0,
+      "trade_amount_eok": 249470.63,
+      "stock_count": 12,
+      "avg_change_rate": -2.11,
+      "max_change_rate": 3.14,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "035420",
+          "stock_name": "NAVER",
+          "trade_amount": 339411.0,
+          "trade_amount_eok": 3394.11,
+          "change_rate": 1.59,
+          "current_price": 223000
+        },
+        {
+          "stock_code": "010120",
+          "stock_name": "LS ELECTRIC",
+          "trade_amount": 239685.0,
+          "trade_amount_eok": 2396.85,
+          "change_rate": -6.12,
+          "current_price": 187000
+        },
+        {
+          "stock_code": "329180",
+          "stock_name": "HD현대중공업",
+          "trade_amount": 140197.0,
+          "trade_amount_eok": 1401.97,
+          "change_rate": -4.94,
+          "current_price": 452000
+        }
+      ],
+      "rank": 10
+    },
+    {
+      "theme": "엔 캐리 트레이드",
+      "trade_amount": 24932199.0,
+      "trade_amount_eok": 249321.99,
+      "stock_count": 9,
+      "avg_change_rate": -0.65,
+      "max_change_rate": 6.11,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "066570",
+          "stock_name": "LG전자",
+          "trade_amount": 269107.0,
+          "trade_amount_eok": 2691.07,
+          "change_rate": -4.0,
+          "current_price": 194400
+        },
+        {
+          "stock_code": "005380",
+          "stock_name": "현대차",
+          "trade_amount": 265261.0,
+          "trade_amount_eok": 2652.61,
+          "change_rate": -0.6,
+          "current_price": 415000
+        },
+        {
+          "stock_code": "329180",
+          "stock_name": "HD현대중공업",
+          "trade_amount": 140197.0,
+          "trade_amount_eok": 1401.97,
+          "change_rate": -4.94,
+          "current_price": 452000
+        }
+      ],
+      "rank": 11
+    },
+    {
+      "theme": "호남 반도체",
+      "trade_amount": 24735070.0,
+      "trade_amount_eok": 247350.7,
+      "stock_count": 8,
+      "avg_change_rate": -2.15,
+      "max_change_rate": 8.91,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "002990",
+          "stock_name": "금호건설",
+          "trade_amount": 509460.0,
+          "trade_amount_eok": 5094.6,
+          "change_rate": -6.01,
+          "current_price": 14710
+        },
+        {
+          "stock_code": "001210",
+          "stock_name": "금호전기",
+          "trade_amount": 239202.0,
+          "trade_amount_eok": 2392.02,
+          "change_rate": 8.91,
+          "current_price": 8125
+        },
+        {
+          "stock_code": "073240",
+          "stock_name": "금호타이어",
+          "trade_amount": 45634.0,
+          "trade_amount_eok": 456.34,
+          "change_rate": -1.89,
+          "current_price": 7280
+        }
+      ],
+      "rank": 12
+    },
+    {
+      "theme": "메모리반도체",
+      "trade_amount": 24707430.0,
+      "trade_amount_eok": 247074.3,
+      "stock_count": 19,
+      "avg_change_rate": -5.94,
+      "max_change_rate": 3.14,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "042700",
+          "stock_name": "한미반도체",
+          "trade_amount": 161943.0,
+          "trade_amount_eok": 1619.43,
+          "change_rate": -5.54,
+          "current_price": 213000
+        },
+        {
+          "stock_code": "222800",
+          "stock_name": "심텍",
+          "trade_amount": 152470.0,
+          "trade_amount_eok": 1524.7,
+          "change_rate": -13.32,
+          "current_price": 99600
+        },
+        {
+          "stock_code": "353200",
+          "stock_name": "대덕전자",
+          "trade_amount": 66969.0,
+          "trade_amount_eok": 669.69,
+          "change_rate": -7.94,
+          "current_price": 104400
+        }
+      ],
+      "rank": 13
+    },
+    {
+      "theme": "D램",
+      "trade_amount": 24592081.0,
+      "trade_amount_eok": 245920.81,
+      "stock_count": 14,
+      "avg_change_rate": -6.36,
+      "max_change_rate": 3.14,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "042700",
+          "stock_name": "한미반도체",
+          "trade_amount": 161943.0,
+          "trade_amount_eok": 1619.43,
+          "change_rate": -5.54,
+          "current_price": 213000
+        },
+        {
+          "stock_code": "222800",
+          "stock_name": "심텍",
+          "trade_amount": 152470.0,
+          "trade_amount_eok": 1524.7,
+          "change_rate": -13.32,
+          "current_price": 99600
+        },
+        {
+          "stock_code": "353200",
+          "stock_name": "대덕전자",
+          "trade_amount": 66969.0,
+          "trade_amount_eok": 669.69,
+          "change_rate": -7.94,
+          "current_price": 104400
+        }
+      ],
+      "rank": 14
+    },
+    {
+      "theme": "IT 대표주",
+      "trade_amount": 24444665.0,
+      "trade_amount_eok": 244446.65,
+      "stock_count": 6,
+      "avg_change_rate": -1.12,
+      "max_change_rate": 3.14,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "066570",
+          "stock_name": "LG전자",
+          "trade_amount": 269107.0,
+          "trade_amount_eok": 2691.07,
+          "change_rate": -4.0,
+          "current_price": 194400
+        },
+        {
+          "stock_code": "006400",
+          "stock_name": "삼성SDI",
+          "trade_amount": 212498.0,
+          "trade_amount_eok": 2124.98,
+          "change_rate": -4.3,
+          "current_price": 478000
+        },
+        {
+          "stock_code": "018260",
+          "stock_name": "삼성에스디에스",
+          "trade_amount": 61016.0,
+          "trade_amount_eok": 610.16,
+          "change_rate": -1.72,
+          "current_price": 229000
+        }
+      ],
+      "rank": 15
+    },
+    {
+      "theme": "시스템반도체",
+      "trade_amount": 24440682.0,
+      "trade_amount_eok": 244406.82,
+      "stock_count": 13,
+      "avg_change_rate": -2.72,
+      "max_change_rate": 21.56,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "042700",
+          "stock_name": "한미반도체",
+          "trade_amount": 161943.0,
+          "trade_amount_eok": 1619.43,
+          "change_rate": -5.54,
+          "current_price": 213000
+        },
+        {
+          "stock_code": "000990",
+          "stock_name": "DB하이텍",
+          "trade_amount": 65066.0,
+          "trade_amount_eok": 650.66,
+          "change_rate": -8.15,
+          "current_price": 89000
+        },
+        {
+          "stock_code": "183300",
+          "stock_name": "코미코",
+          "trade_amount": 60724.0,
+          "trade_amount_eok": 607.24,
+          "change_rate": 21.56,
+          "current_price": 26500
+        }
+      ],
+      "rank": 16
+    },
+    {
+      "theme": "엔비디아",
+      "trade_amount": 24364758.0,
+      "trade_amount_eok": 243647.58,
+      "stock_count": 9,
+      "avg_change_rate": -3.6,
+      "max_change_rate": 3.14,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "042700",
+          "stock_name": "한미반도체",
+          "trade_amount": 161943.0,
+          "trade_amount_eok": 1619.43,
+          "change_rate": -5.54,
+          "current_price": 213000
+        },
+        {
+          "stock_code": "000150",
+          "stock_name": "두산",
+          "trade_amount": 117126.0,
+          "trade_amount_eok": 1171.26,
+          "change_rate": -8.83,
+          "current_price": 1074000
+        },
+        {
+          "stock_code": "007660",
+          "stock_name": "이수페타시스",
+          "trade_amount": 73394.0,
+          "trade_amount_eok": 733.94,
+          "change_rate": -5.43,
+          "current_price": 99300
+        }
+      ],
+      "rank": 17
+    },
+    {
+      "theme": "3D낸드",
+      "trade_amount": 24295762.0,
+      "trade_amount_eok": 242957.62,
+      "stock_count": 12,
+      "avg_change_rate": -4.58,
+      "max_change_rate": 3.14,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "222800",
+          "stock_name": "심텍",
+          "trade_amount": 152470.0,
+          "trade_amount_eok": 1524.7,
+          "change_rate": -13.32,
+          "current_price": 99600
+        },
+        {
+          "stock_code": "240810",
+          "stock_name": "원익IPS",
+          "trade_amount": 57962.0,
+          "trade_amount_eok": 579.62,
+          "change_rate": -5.79,
+          "current_price": 107300
+        },
+        {
+          "stock_code": "095610",
+          "stock_name": "테스",
+          "trade_amount": 50836.0,
+          "trade_amount_eok": 508.36,
+          "change_rate": -6.68,
+          "current_price": 132700
+        }
+      ],
+      "rank": 18
+    },
+    {
+      "theme": "HBM",
+      "trade_amount": 24295553.0,
+      "trade_amount_eok": 242955.53,
+      "stock_count": 15,
+      "avg_change_rate": -4.14,
+      "max_change_rate": 3.14,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "042700",
+          "stock_name": "한미반도체",
+          "trade_amount": 161943.0,
+          "trade_amount_eok": 1619.43,
+          "change_rate": -5.54,
+          "current_price": 213000
+        },
+        {
+          "stock_code": "039030",
+          "stock_name": "이오테크닉스",
+          "trade_amount": 47253.0,
+          "trade_amount_eok": 472.53,
+          "change_rate": -2.77,
+          "current_price": 403500
+        },
+        {
+          "stock_code": "095340",
+          "stock_name": "ISC",
+          "trade_amount": 34373.0,
+          "trade_amount_eok": 343.73,
+          "change_rate": -8.06,
+          "current_price": 155100
+        }
+      ],
+      "rank": 19
+    },
+    {
+      "theme": "NPU",
+      "trade_amount": 24244690.0,
+      "trade_amount_eok": 242446.9,
+      "stock_count": 5,
+      "avg_change_rate": -0.53,
+      "max_change_rate": 6.0,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "017670",
+          "stock_name": "SK텔레콤",
+          "trade_amount": 290062.0,
+          "trade_amount_eok": 2900.62,
+          "change_rate": 6.0,
+          "current_price": 102400
+        },
+        {
+          "stock_code": "095340",
+          "stock_name": "ISC",
+          "trade_amount": 34373.0,
+          "trade_amount_eok": 343.73,
+          "change_rate": -8.06,
+          "current_price": 155100
+        },
+        {
+          "stock_code": "058470",
+          "stock_name": "리노공업",
+          "trade_amount": 33945.0,
+          "trade_amount_eok": 339.45,
+          "change_rate": -5.76,
+          "current_price": 65500
+        }
+      ],
+      "rank": 20
+    },
+    {
+      "theme": "소캠(SOCAMM)",
+      "trade_amount": 24232957.0,
+      "trade_amount_eok": 242329.57,
+      "stock_count": 9,
+      "avg_change_rate": -5.88,
+      "max_change_rate": 3.14,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "222800",
+          "stock_name": "심텍",
+          "trade_amount": 152470.0,
+          "trade_amount_eok": 1524.7,
+          "change_rate": -13.32,
+          "current_price": 99600
+        },
+        {
+          "stock_code": "353200",
+          "stock_name": "대덕전자",
+          "trade_amount": 66969.0,
+          "trade_amount_eok": 669.69,
+          "change_rate": -7.94,
+          "current_price": 104400
+        },
+        {
+          "stock_code": "007810",
+          "stock_name": "코리아써키트",
+          "trade_amount": 41136.0,
+          "trade_amount_eok": 411.36,
+          "change_rate": -11.53,
+          "current_price": 54500
+        }
+      ],
+      "rank": 21
+    },
+    {
+      "theme": "HBM(고대역폭메모리)",
+      "trade_amount": 24232660.0,
+      "trade_amount_eok": 242326.6,
+      "stock_count": 12,
+      "avg_change_rate": -3.92,
+      "max_change_rate": 3.14,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "042700",
+          "stock_name": "한미반도체",
+          "trade_amount": 161943.0,
+          "trade_amount_eok": 1619.43,
+          "change_rate": -5.54,
+          "current_price": 213000
+        },
+        {
+          "stock_code": "039030",
+          "stock_name": "이오테크닉스",
+          "trade_amount": 47253.0,
+          "trade_amount_eok": 472.53,
+          "change_rate": -2.77,
+          "current_price": 403500
+        },
+        {
+          "stock_code": "095340",
+          "stock_name": "ISC",
+          "trade_amount": 34373.0,
+          "trade_amount_eok": 343.73,
+          "change_rate": -8.06,
+          "current_price": 155100
+        }
+      ],
+      "rank": 22
+    },
+    {
+      "theme": "반도체생산",
+      "trade_amount": 24131482.0,
+      "trade_amount_eok": 241314.82,
+      "stock_count": 8,
+      "avg_change_rate": -0.6,
+      "max_change_rate": 21.56,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "000990",
+          "stock_name": "DB하이텍",
+          "trade_amount": 65066.0,
+          "trade_amount_eok": 650.66,
+          "change_rate": -8.15,
+          "current_price": 89000
+        },
+        {
+          "stock_code": "183300",
+          "stock_name": "코미코",
+          "trade_amount": 60724.0,
+          "trade_amount_eok": 607.24,
+          "change_rate": 21.56,
+          "current_price": 26500
+        },
+        {
+          "stock_code": "240810",
+          "stock_name": "원익IPS",
+          "trade_amount": 57962.0,
+          "trade_amount_eok": 579.62,
+          "change_rate": -5.79,
+          "current_price": 107300
+        }
+      ],
+      "rank": 23
+    },
+    {
+      "theme": "전력반도체",
+      "trade_amount": 24016441.0,
+      "trade_amount_eok": 240164.41,
+      "stock_count": 5,
+      "avg_change_rate": -0.25,
+      "max_change_rate": 8.45,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "000990",
+          "stock_name": "DB하이텍",
+          "trade_amount": 65066.0,
+          "trade_amount_eok": 650.66,
+          "change_rate": -8.15,
+          "current_price": 89000
+        },
+        {
+          "stock_code": "095610",
+          "stock_name": "테스",
+          "trade_amount": 50836.0,
+          "trade_amount_eok": 508.36,
+          "change_rate": -6.68,
+          "current_price": 132700
+        },
+        {
+          "stock_code": "432470",
+          "stock_name": "케이엔에스",
+          "trade_amount": 14229.0,
+          "trade_amount_eok": 142.29,
+          "change_rate": 8.45,
+          "current_price": 9240
+        }
+      ],
+      "rank": 24
+    },
+    {
+      "theme": "차량용반도체",
+      "trade_amount": 23996432.0,
+      "trade_amount_eok": 239964.32,
+      "stock_count": 5,
+      "avg_change_rate": -3.13,
+      "max_change_rate": 3.14,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "000990",
+          "stock_name": "DB하이텍",
+          "trade_amount": 65066.0,
+          "trade_amount_eok": 650.66,
+          "change_rate": -8.15,
+          "current_price": 89000
+        },
+        {
+          "stock_code": "131970",
+          "stock_name": "두산테스나",
+          "trade_amount": 28585.0,
+          "trade_amount_eok": 285.85,
+          "change_rate": -7.06,
+          "current_price": 76300
+        },
+        {
+          "stock_code": "089030",
+          "stock_name": "테크윙",
+          "trade_amount": 16471.0,
+          "trade_amount_eok": 164.71,
+          "change_rate": -5.58,
+          "current_price": 48250
+        }
+      ],
+      "rank": 25
+    },
+    {
+      "theme": "CXL",
+      "trade_amount": 23985788.0,
+      "trade_amount_eok": 239857.88,
+      "stock_count": 5,
+      "avg_change_rate": -4.67,
+      "max_change_rate": 3.14,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "007810",
+          "stock_name": "코리아써키트",
+          "trade_amount": 41136.0,
+          "trade_amount_eok": 411.36,
+          "change_rate": -11.53,
+          "current_price": 54500
+        },
+        {
+          "stock_code": "356860",
+          "stock_name": "티엘비",
+          "trade_amount": 30863.0,
+          "trade_amount_eok": 308.63,
+          "change_rate": -9.97,
+          "current_price": 31150
+        },
+        {
+          "stock_code": "440110",
+          "stock_name": "파두",
+          "trade_amount": 27479.0,
+          "trade_amount_eok": 274.79,
+          "change_rate": -6.98,
+          "current_price": 61300
+        }
+      ],
+      "rank": 26
+    },
+    {
+      "theme": "CXL(컴퓨트익스프레스링크)",
+      "trade_amount": 23985788.0,
+      "trade_amount_eok": 239857.88,
+      "stock_count": 5,
+      "avg_change_rate": -4.67,
+      "max_change_rate": 3.14,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "007810",
+          "stock_name": "코리아써키트",
+          "trade_amount": 41136.0,
+          "trade_amount_eok": 411.36,
+          "change_rate": -11.53,
+          "current_price": 54500
+        },
+        {
+          "stock_code": "356860",
+          "stock_name": "티엘비",
+          "trade_amount": 30863.0,
+          "trade_amount_eok": 308.63,
+          "change_rate": -9.97,
+          "current_price": 31150
+        },
+        {
+          "stock_code": "440110",
+          "stock_name": "파두",
+          "trade_amount": 27479.0,
+          "trade_amount_eok": 274.79,
+          "change_rate": -6.98,
+          "current_price": 61300
+        }
+      ],
+      "rank": 27
+    },
+    {
+      "theme": "(e)SSD",
+      "trade_amount": 23977885.0,
+      "trade_amount_eok": 239778.85,
+      "stock_count": 5,
+      "avg_change_rate": -2.38,
+      "max_change_rate": 3.14,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "067310",
+          "stock_name": "하나마이크론",
+          "trade_amount": 46263.0,
+          "trade_amount_eok": 462.63,
+          "change_rate": -4.88,
+          "current_price": 35100
+        },
+        {
+          "stock_code": "356860",
+          "stock_name": "티엘비",
+          "trade_amount": 30863.0,
+          "trade_amount_eok": 308.63,
+          "change_rate": -9.97,
+          "current_price": 31150
+        },
+        {
+          "stock_code": "064760",
+          "stock_name": "티씨케이",
+          "trade_amount": 14449.0,
+          "trade_amount_eok": 144.49,
+          "change_rate": -2.18,
+          "current_price": 224500
+        }
+      ],
+      "rank": 28
+    },
+    {
+      "theme": "반도체 대표주(생산)",
+      "trade_amount": 23951376.0,
+      "trade_amount_eok": 239513.76,
+      "stock_count": 3,
+      "avg_change_rate": -1.0,
+      "max_change_rate": 3.14,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "000990",
+          "stock_name": "DB하이텍",
+          "trade_amount": 65066.0,
+          "trade_amount_eok": 650.66,
+          "change_rate": -8.15,
+          "current_price": 89000
+        }
+      ],
+      "rank": 29
+    },
+    {
+      "theme": "반도체_생산",
+      "trade_amount": 23951376.0,
+      "trade_amount_eok": 239513.76,
+      "stock_count": 3,
+      "avg_change_rate": -1.0,
+      "max_change_rate": 3.14,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "000990",
+          "stock_name": "DB하이텍",
+          "trade_amount": 65066.0,
+          "trade_amount_eok": 650.66,
+          "change_rate": -8.15,
+          "current_price": 89000
+        }
+      ],
+      "rank": 30
+    },
+    {
+      "theme": "밸류업(24년 기업가치 제고계획 발표)",
+      "trade_amount": 15584278.0,
+      "trade_amount_eok": 155842.78,
+      "stock_count": 50,
+      "avg_change_rate": -1.28,
+      "max_change_rate": 6.0,
+      "top_stocks": [
+        {
+          "stock_code": "000660",
+          "stock_name": "SK하이닉스",
+          "trade_amount": 11291074.0,
+          "trade_amount_eok": 112910.74,
+          "change_rate": 2.01,
+          "current_price": 1725000
+        },
+        {
+          "stock_code": "402340",
+          "stock_name": "SK스퀘어",
+          "trade_amount": 968657.0,
+          "trade_amount_eok": 9686.57,
+          "change_rate": -0.53,
+          "current_price": 1117000
+        },
+        {
+          "stock_code": "017670",
+          "stock_name": "SK텔레콤",
+          "trade_amount": 290062.0,
+          "trade_amount_eok": 2900.62,
+          "change_rate": 6.0,
+          "current_price": 102400
+        },
+        {
+          "stock_code": "066570",
+          "stock_name": "LG전자",
+          "trade_amount": 269107.0,
+          "trade_amount_eok": 2691.07,
+          "change_rate": -4.0,
+          "current_price": 194400
+        },
+        {
+          "stock_code": "005380",
+          "stock_name": "현대차",
+          "trade_amount": 265261.0,
+          "trade_amount_eok": 2652.61,
+          "change_rate": -0.6,
+          "current_price": 415000
+        }
+      ],
+      "rank": 31
+    },
+    {
+      "theme": "무선충전",
+      "trade_amount": 14414424.0,
+      "trade_amount_eok": 144144.24,
+      "stock_count": 4,
+      "avg_change_rate": -4.07,
+      "max_change_rate": 3.14,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "009150",
+          "stock_name": "삼성전기",
+          "trade_amount": 1525126.0,
+          "trade_amount_eok": 15251.26,
+          "change_rate": -6.23,
+          "current_price": 1309000
+        },
+        {
+          "stock_code": "011070",
+          "stock_name": "LG이노텍",
+          "trade_amount": 189423.0,
+          "trade_amount_eok": 1894.23,
+          "change_rate": -6.64,
+          "current_price": 548000
+        },
+        {
+          "stock_code": "006260",
+          "stock_name": "LS",
+          "trade_amount": 104639.0,
+          "trade_amount_eok": 1046.39,
+          "change_rate": -6.54,
+          "current_price": 293000
+        }
+      ],
+      "rank": 32
+    },
+    {
+      "theme": "폴더블폰",
+      "trade_amount": 14294133.0,
+      "trade_amount_eok": 142941.33,
+      "stock_count": 8,
+      "avg_change_rate": -3.72,
+      "max_change_rate": 3.14,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "009150",
+          "stock_name": "삼성전기",
+          "trade_amount": 1525126.0,
+          "trade_amount_eok": 15251.26,
+          "change_rate": -6.23,
+          "current_price": 1309000
+        },
+        {
+          "stock_code": "096770",
+          "stock_name": "SK이노베이션",
+          "trade_amount": 74419.0,
+          "trade_amount_eok": 744.19,
+          "change_rate": -0.79,
+          "current_price": 124900
+        },
+        {
+          "stock_code": "051910",
+          "stock_name": "LG화학",
+          "trade_amount": 39797.0,
+          "trade_amount_eok": 397.97,
+          "change_rate": -4.36,
+          "current_price": 252500
+        },
+        {
+          "stock_code": "090460",
+          "stock_name": "비에이치",
+          "trade_amount": 18368.0,
+          "trade_amount_eok": 183.68,
+          "change_rate": -6.25,
+          "current_price": 15900
+        }
+      ],
+      "rank": 33
+    },
+    {
+      "theme": "갤럭시 부품주",
+      "trade_amount": 14216254.0,
+      "trade_amount_eok": 142162.54,
+      "stock_count": 5,
+      "avg_change_rate": -5.26,
+      "max_change_rate": 3.14,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "009150",
+          "stock_name": "삼성전기",
+          "trade_amount": 1525126.0,
+          "trade_amount_eok": 15251.26,
+          "change_rate": -6.23,
+          "current_price": 1309000
+        },
+        {
+          "stock_code": "007810",
+          "stock_name": "코리아써키트",
+          "trade_amount": 41136.0,
+          "trade_amount_eok": 411.36,
+          "change_rate": -11.53,
+          "current_price": 54500
+        },
+        {
+          "stock_code": "332570",
+          "stock_name": "PS일렉트로닉스",
+          "trade_amount": 36388.0,
+          "trade_amount_eok": 363.88,
+          "change_rate": -5.45,
+          "current_price": 9030
+        },
+        {
+          "stock_code": "090460",
+          "stock_name": "비에이치",
+          "trade_amount": 18368.0,
+          "trade_amount_eok": 183.68,
+          "change_rate": -6.25,
+          "current_price": 15900
+        }
+      ],
+      "rank": 34
+    },
+    {
+      "theme": "피지컬 AI/휴머노이드 로봇",
+      "trade_amount": 13895335.0,
+      "trade_amount_eok": 138953.35,
+      "stock_count": 14,
+      "avg_change_rate": -1.91,
+      "max_change_rate": 8.45,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "066570",
+          "stock_name": "LG전자",
+          "trade_amount": 269107.0,
+          "trade_amount_eok": 2691.07,
+          "change_rate": -4.0,
+          "current_price": 194400
+        },
+        {
+          "stock_code": "005380",
+          "stock_name": "현대차",
+          "trade_amount": 265261.0,
+          "trade_amount_eok": 2652.61,
+          "change_rate": -0.6,
+          "current_price": 415000
+        },
+        {
+          "stock_code": "011070",
+          "stock_name": "LG이노텍",
+          "trade_amount": 189423.0,
+          "trade_amount_eok": 1894.23,
+          "change_rate": -6.64,
+          "current_price": 548000
+        },
+        {
+          "stock_code": "012330",
+          "stock_name": "현대모비스",
+          "trade_amount": 142842.0,
+          "trade_amount_eok": 1428.42,
+          "change_rate": -2.07,
+          "current_price": 496500
+        }
+      ],
+      "rank": 35
+    },
+    {
+      "theme": "NFT",
+      "trade_amount": 13620603.0,
+      "trade_amount_eok": 136206.03,
+      "stock_count": 8,
+      "avg_change_rate": 0.75,
+      "max_change_rate": 13.35,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "035420",
+          "stock_name": "NAVER",
+          "trade_amount": 339411.0,
+          "trade_amount_eok": 3394.11,
+          "change_rate": 1.59,
+          "current_price": 223000
+        },
+        {
+          "stock_code": "035720",
+          "stock_name": "카카오",
+          "trade_amount": 337751.0,
+          "trade_amount_eok": 3377.51,
+          "change_rate": -8.4,
+          "current_price": 35450
+        },
+        {
+          "stock_code": "055550",
+          "stock_name": "신한지주",
+          "trade_amount": 105732.0,
+          "trade_amount_eok": 1057.32,
+          "change_rate": 3.07,
+          "current_price": 104200
+        },
+        {
+          "stock_code": "064260",
+          "stock_name": "다날",
+          "trade_amount": 105138.0,
+          "trade_amount_eok": 1051.38,
+          "change_rate": 2.55,
+          "current_price": 5220
+        }
+      ],
+      "rank": 36
+    },
+    {
+      "theme": "NFT(대체불가토큰)",
+      "trade_amount": 13460597.0,
+      "trade_amount_eok": 134605.97,
+      "stock_count": 5,
+      "avg_change_rate": 2.45,
+      "max_change_rate": 13.35,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "035420",
+          "stock_name": "NAVER",
+          "trade_amount": 339411.0,
+          "trade_amount_eok": 3394.11,
+          "change_rate": 1.59,
+          "current_price": 223000
+        },
+        {
+          "stock_code": "035720",
+          "stock_name": "카카오",
+          "trade_amount": 337751.0,
+          "trade_amount_eok": 3377.51,
+          "change_rate": -8.4,
+          "current_price": 35450
+        },
+        {
+          "stock_code": "064260",
+          "stock_name": "다날",
+          "trade_amount": 105138.0,
+          "trade_amount_eok": 1051.38,
+          "change_rate": 2.55,
+          "current_price": 5220
+        },
+        {
+          "stock_code": "094480",
+          "stock_name": "갤럭시아머니트리",
+          "trade_amount": 83061.0,
+          "trade_amount_eok": 830.61,
+          "change_rate": 13.35,
+          "current_price": 6200
+        }
+      ],
+      "rank": 37
+    },
+    {
+      "theme": "5G(5세대 이동통신)",
+      "trade_amount": 13428853.0,
+      "trade_amount_eok": 134288.53,
+      "stock_count": 11,
+      "avg_change_rate": -2.55,
+      "max_change_rate": 6.0,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "017670",
+          "stock_name": "SK텔레콤",
+          "trade_amount": 290062.0,
+          "trade_amount_eok": 2900.62,
+          "change_rate": 6.0,
+          "current_price": 102400
+        },
+        {
+          "stock_code": "066570",
+          "stock_name": "LG전자",
+          "trade_amount": 269107.0,
+          "trade_amount_eok": 2691.07,
+          "change_rate": -4.0,
+          "current_price": 194400
+        },
+        {
+          "stock_code": "007660",
+          "stock_name": "이수페타시스",
+          "trade_amount": 73394.0,
+          "trade_amount_eok": 733.94,
+          "change_rate": -5.43,
+          "current_price": 99300
+        },
+        {
+          "stock_code": "353200",
+          "stock_name": "대덕전자",
+          "trade_amount": 66969.0,
+          "trade_amount_eok": 669.69,
+          "change_rate": -7.94,
+          "current_price": 104400
+        }
+      ],
+      "rank": 38
+    },
+    {
+      "theme": "차세대이동통신",
+      "trade_amount": 13428853.0,
+      "trade_amount_eok": 134288.53,
+      "stock_count": 11,
+      "avg_change_rate": -2.55,
+      "max_change_rate": 6.0,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "017670",
+          "stock_name": "SK텔레콤",
+          "trade_amount": 290062.0,
+          "trade_amount_eok": 2900.62,
+          "change_rate": 6.0,
+          "current_price": 102400
+        },
+        {
+          "stock_code": "066570",
+          "stock_name": "LG전자",
+          "trade_amount": 269107.0,
+          "trade_amount_eok": 2691.07,
+          "change_rate": -4.0,
+          "current_price": 194400
+        },
+        {
+          "stock_code": "007660",
+          "stock_name": "이수페타시스",
+          "trade_amount": 73394.0,
+          "trade_amount_eok": 733.94,
+          "change_rate": -5.43,
+          "current_price": 99300
+        },
+        {
+          "stock_code": "353200",
+          "stock_name": "대덕전자",
+          "trade_amount": 66969.0,
+          "trade_amount_eok": 669.69,
+          "change_rate": -7.94,
+          "current_price": 104400
+        }
+      ],
+      "rank": 39
+    },
+    {
+      "theme": "LED",
+      "trade_amount": 13302525.0,
+      "trade_amount_eok": 133025.25,
+      "stock_count": 5,
+      "avg_change_rate": -1.06,
+      "max_change_rate": 8.91,
+      "top_stocks": [
+        {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "trade_amount": 12595236.0,
+          "trade_amount_eok": 125952.36,
+          "change_rate": 3.14,
+          "current_price": 279500
+        },
+        {
+          "stock_code": "066570",
+          "stock_name": "LG전자",
+          "trade_amount": 269107.0,
+          "trade_amount_eok": 2691.07,
+          "change_rate": -4.0,
+          "current_price": 194400
+        },
+        {
+          "stock_code": "001210",
+          "stock_name": "금호전기",
+          "trade_amount": 239202.0,
+          "trade_amount_eok": 2392.02,
+          "change_rate": 8.91,
+          "current_price": 8125
+        },
+        {
+          "stock_code": "011070",
+          "stock_name": "LG이노텍",
+          "trade_amount": 189423.0,
+          "trade_amount_eok": 1894.23,
+          "change_rate": -6.64,
+          "current_price": 548000
+        },
+        {
+          "stock_code": "043260",
+          "stock_name": "성호전자",
+          "trade_amount": 9557.0,
+          "trade_amount_eok": 95.57,
+          "change_rate": -6.7,
+          "current_price": 18100
+        }
+      ],
+      "rank": 40
+    }
+  ],
+  "cached": false
+}

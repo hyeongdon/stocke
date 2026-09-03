@@ -1,7 +1,9 @@
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.sessions import SessionMiddleware
 from contextlib import asynccontextmanager
 import os
 import asyncio
@@ -9,6 +11,7 @@ import time
 from typing import Optional, Dict, Any, List
 import logging
 from datetime import datetime
+from urllib.parse import quote
 import httpx
 import re
 
@@ -40,6 +43,7 @@ from core.models import (
     StrategySignal,
     Position,
     PositionBuyFill,
+    AccountBalanceSnapshot,
 )
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -58,6 +62,8 @@ from managers.stop_loss_manager import stop_loss_manager
 from managers.auto_trade_scanner import auto_trade_scanner
 from managers.scalping_strategy import scalping_manager
 from managers.cleanup_scheduler import cleanup_scheduler
+from managers.investor_flow_scheduler import investor_flow_scheduler
+from managers.ma1592_universe_scheduler import ma1592_universe_scheduler
 from managers.market_open_scheduler import market_open_scheduler, should_auto_start_now
 from utils.debug_tracer import debug_tracer, enable_debug_mode, disable_debug_mode, is_debug_enabled
 from utils.auto_trade_engine import (
@@ -73,15 +79,26 @@ from utils.auto_trade_engine import (
 from utils.market_hours import (
     in_linked_trading_session,
     is_krx_trading_day,
+    is_stop_loss_monitoring_session,
     linked_trading_session_window_str,
+    stop_loss_monitoring_window_str,
     trading_day_block_reason,
 )
-from utils.auto_trade_activity_log import activity_log, log_activity
+from utils.auto_trade_activity_log import activity_log, log_activity, merge_activity_events
 from utils.datetime_kst import kst_today, kst_now_iso, utc_naive_to_api_iso
 from utils.stock_news_progress import get_stock_news_progress
+from utils.web_auth import (
+    clear_session,
+    is_public_path,
+    mark_session_login,
+    session_max_age_seconds,
+    session_username,
+    verify_credentials,
+)
 from utils.theme_map_store import (
     add_manual_stock_mapping,
     add_manual_stock_mappings_bulk,
+    build_theme_source_cross_report,
     get_theme_batch_status,
     get_keywords_today,
     get_latest_map_by_codes as get_theme_map_by_codes,
@@ -290,9 +307,10 @@ async def lifespan(app: FastAPI):
             log_activity("SYSTEM", "서버 시작 — 거래일 자동매매 기동", "info")
             logger.info("💰 [STARTUP] 거래일 자동매매 기동")
         elif settings_row and settings_row.is_enabled:
+            # 매수창 밖이어도 apply — 스캐너/매수는 대기, 손절·동기화는 기동
+            await apply_auto_trade_state(True)
             allowed, off = auto_trade_engines_allowed()
             if allowed:
-                await apply_auto_trade_state(True)
                 log_activity("SYSTEM", "서버 시작 — 자동매매 ON 상태로 기동", "info")
                 logger.info("💰 [STARTUP] 자동매매 ON 상태 → 실행기 가동")
             else:
@@ -301,18 +319,23 @@ async def lifespan(app: FastAPI):
         else:
             logger.info("⏸️ [STARTUP] 자동매매 OFF 상태 → 실행기 미기동 (UI에서 시작)")
 
-        # 장중 세션에서만 보유종목/포지션 동기화 루프를 유지
-        allowed, off_reason = auto_trade_engines_allowed()
-        if allowed:
-            if stop_loss_manager.monitoring_task_running():
-                logger.info("🔄 [STARTUP] 포지션 동기화 루프 — 이미 기동됨 (중복 스킵)")
-            else:
-                _schedule_stop_loss_monitoring()
-                logger.info(f"🔄 [STARTUP] 보유종목·포지션 동기화 루프 시작 ({stop_loss_manager.monitoring_interval}초 주기)")
-                log_activity("SYSTEM", f"포지션 동기화 루프 시작 ({stop_loss_manager.monitoring_interval}초 주기)", "info")
+        # 손절/동기화: 매수창과 무관 — 08:00~19:30(NXT) 세션이면 기동
+        if stop_loss_manager.monitoring_task_running():
+            logger.info("🔄 [STARTUP] 포지션 동기화 루프 — 이미 기동됨 (중복 스킵)")
+        elif is_stop_loss_monitoring_session(settings_row):
+            _schedule_stop_loss_monitoring()
+            logger.info(
+                f"🔄 [STARTUP] 보유종목·손절 모니터 시작 "
+                f"({stop_loss_manager.monitoring_interval}초 주기, {stop_loss_monitoring_window_str()})"
+            )
+            log_activity(
+                "SYSTEM",
+                f"손절 모니터 시작 ({stop_loss_monitoring_window_str()})",
+                "info",
+            )
         else:
-            logger.info(f"🔄 [STARTUP] {off_reason} — 포지션 동기화 루프 미기동")
-            log_activity("SYSTEM", f"{off_reason} — 포지션 동기화 루프 미기동", "warn")
+            logger.info("🔄 [STARTUP] 손절 모니터 세션 외 — 포지션 동기화 루프 미기동")
+            log_activity("SYSTEM", "손절 모니터 세션 외 — 동기화 루프 미기동", "warn")
 
         # 조건식 주기 검색은 기본 중지 (서버 재시작 시 이전 루프 잔존 방지)
         try:
@@ -334,6 +357,18 @@ async def lifespan(app: FastAPI):
         logger.info("🕗 [STARTUP] 장 시작 자동매매 스케줄러 시작")
     except Exception as e:
         logger.error(f"🕗 [STARTUP] 장 시작 자동매매 스케줄러 시작 실패: {e}")
+
+    try:
+        asyncio.create_task(investor_flow_scheduler.start_scheduler())
+        logger.info("📊 [STARTUP] 수급 스냅샷 스케줄러 시작")
+    except Exception as e:
+        logger.error(f"📊 [STARTUP] 수급 스냅샷 스케줄러 시작 실패: {e}")
+
+    try:
+        asyncio.create_task(ma1592_universe_scheduler.start_scheduler())
+        logger.info("📈 [STARTUP] MA1592 장부 정리 스케줄러 시작")
+    except Exception as e:
+        logger.error(f"📈 [STARTUP] MA1592 장부 정리 스케줄러 시작 실패: {e}")
     
     yield
     
@@ -358,6 +393,18 @@ async def lifespan(app: FastAPI):
         logger.info("🛡️ [SHUTDOWN] 손절/익절 모니터링 종료")
     except Exception as e:
         logger.error(f"🛡️ [SHUTDOWN] 손절/익절 모니터링 종료 실패: {e}")
+
+    try:
+        await investor_flow_scheduler.stop_scheduler()
+        logger.info("📊 [SHUTDOWN] 수급 스냅샷 스케줄러 종료")
+    except Exception as e:
+        logger.error(f"📊 [SHUTDOWN] 수급 스냅샷 스케줄러 종료 실패: {e}")
+
+    try:
+        await ma1592_universe_scheduler.stop_scheduler()
+        logger.info("📈 [SHUTDOWN] MA1592 장부 정리 스케줄러 종료")
+    except Exception as e:
+        logger.error(f"📈 [SHUTDOWN] MA1592 장부 정리 스케줄러 종료 실패: {e}")
     
     await condition_monitor.stop_all_monitoring()
     # WebSocket 우아한 종료
@@ -390,6 +437,60 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+class WebAuthMiddleware(BaseHTTPMiddleware):
+    """세션 미로그인 시 HTML은 /login, API는 401."""
+
+    async def dispatch(self, request: Request, call_next):
+        if not Config.AUTH_ENABLED:
+            return await call_next(request)
+        path = request.url.path
+        if is_public_path(path):
+            return await call_next(request)
+        if session_username(request.session):
+            return await call_next(request)
+
+        accept = (request.headers.get("accept") or "").lower()
+        wants_html = (
+            request.method in ("GET", "HEAD")
+            and (
+                "text/html" in accept
+                or path.endswith(".html")
+                or path in {
+                    "/dashboard",
+                    "/glossary",
+                    "/analysis",
+                    "/theme-map",
+                    "/indicators",
+                    "/verify",
+                    "/exit-replay",
+                    "/status",
+                }
+            )
+        )
+        if wants_html:
+            next_path = path if path.startswith("/") else "/dashboard"
+            qs = request.url.query
+            if qs:
+                next_path = f"{next_path}?{qs}"
+            return RedirectResponse(
+                url=f"/login?next={quote(next_path, safe='/?&=')}",
+                status_code=302,
+            )
+        return JSONResponse({"detail": "로그인이 필요합니다."}, status_code=401)
+
+
+# 나중에 추가한 미들웨어가 바깥에서 먼저 실행 → Session이 Auth보다 먼저 동작
+app.add_middleware(WebAuthMiddleware)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=Config.AUTH_SESSION_SECRET,
+    session_cookie="stocke_session",
+    max_age=session_max_age_seconds(),
+    same_site="lax",
+    https_only=False,
+)
+
 # 키움 API 인스턴스
 kiwoom_api = KiwoomAPI()
 
@@ -397,7 +498,6 @@ kiwoom_api = KiwoomAPI()
 discussion_crawler = NaverStockDiscussionCrawler()
 
 
-from fastapi.responses import RedirectResponse
 class ToggleConditionRequest(BaseModel):
     condition_name: str
     is_enabled: bool
@@ -432,6 +532,7 @@ class TradingSettingsRequest(BaseModel):
     watchlist_codes: Optional[str] = None
     screener_condition_names: Optional[str] = None
     screener_verify_condition_names: Optional[str] = None
+    use_sangtta: Optional[bool] = None
     sangtta_condition_names: Optional[str] = None
     sangtta_verify_condition_names: Optional[str] = None
     sangtta_max_slots: Optional[int] = None
@@ -476,41 +577,10 @@ class TradingSettingsRequest(BaseModel):
     breakout_hold_expire_bars: Optional[int] = None
     breakout_hold_rsi_min: Optional[float] = None
     breakout_rsi_period: Optional[int] = None
-    use_ymgp: Optional[bool] = None
-    ymgp_condition_names: Optional[str] = None
-    ymgp_verify_condition_names: Optional[str] = None
-    ymgp_max_slots: Optional[int] = None
-    ymgp_buy_amount_1: Optional[int] = None
-    ymgp_buy_amount_2: Optional[int] = None
-    ymgp_buy_deposit_pct_1: Optional[float] = None
-    ymgp_buy_deposit_pct_2: Optional[float] = None
-    ymgp_trade_start_time: Optional[str] = None
-    ymgp_trade_end_time: Optional[str] = None
-    ymgp_ma_fast: Optional[int] = None
-    ymgp_ma_mid: Optional[int] = None
-    ymgp_ma_slow: Optional[int] = None
-    ymgp_box_days: Optional[int] = None
-    ymgp_box_width_pct: Optional[float] = None
-    ymgp_accum_vol_mult: Optional[float] = None
-    ymgp_accum_body_pct: Optional[float] = None
-    ymgp_accum_wick_vol_mult: Optional[float] = None
-    ymgp_accum_wick_body_mult: Optional[float] = None
-    ymgp_ma_near_pct: Optional[float] = None
-    ymgp_pivot_tol_pct: Optional[float] = None
-    ymgp_drop_lookback: Optional[int] = None
-    ymgp_drop_pct: Optional[float] = None
-    ymgp_stop_ma_mode: Optional[str] = None
-    ymgp_stop_loss_pct: Optional[float] = None
-    ymgp_entry_mode: Optional[str] = None
-    ymgp_max_change_pct: Optional[float] = None
-    ymgp_pullback_tol_pct: Optional[float] = None
-    ymgp_reentry_lock_days: Optional[int] = None
-    ymgp_tp1_pct_of_pos: Optional[float] = None
-    ymgp_tp2_pct_of_pos: Optional[float] = None
-    ymgp_enable_pullback_add: Optional[bool] = None
-    ymgp_enable_partial_tp: Optional[bool] = None
-    ymgp_trailing_start_pct: Optional[float] = None
-    ymgp_trailing_pct: Optional[float] = None
+    # 5분 게이트 통과 종목만 ka90008. True=최근 N칸 중 M칸 이상 프로그램 순매수
+    breakout_require_program_net: Optional[bool] = None
+    breakout_program_lookback: Optional[int] = None  # N칸(1분), 기본 5
+    breakout_program_min_buy: Optional[int] = None  # M칸 순매수, 기본 3
     use_jongga: Optional[bool] = None
     jongga_max_slots: Optional[int] = None
     jongga_buy_amount: Optional[int] = None
@@ -532,8 +602,65 @@ class TradingSettingsRequest(BaseModel):
     jongga_leg2_start_time: Optional[str] = None
     jongga_leg3_start_time: Optional[str] = None
     jongga_leg3_end_time: Optional[str] = None
+    jongga_avg_down_pct: Optional[float] = None
     jongga_pig_bid_ask_ratio: Optional[float] = None
     jongga_pig_levels: Optional[int] = None
+    use_fractal: Optional[bool] = None
+    fractal_condition_names: Optional[str] = None
+    fractal_verify_condition_names: Optional[str] = None
+    fractal_max_slots: Optional[int] = None
+    fractal_watch_slots: Optional[int] = None
+    fractal_trade_start_time: Optional[str] = None
+    fractal_trade_end_time: Optional[str] = None
+    fractal_risk_pct: Optional[float] = None
+    fractal_qty_cap: Optional[int] = None
+    fractal_rr: Optional[float] = None
+    fractal_stop_ema: Optional[int] = None
+    fractal_stop_tick_buffer: Optional[int] = None
+    fractal_watching_timeout_min: Optional[int] = None
+    fractal_liquidate_before_close: Optional[bool] = None
+    fractal_liquidate_time: Optional[str] = None
+    fractal_invalidation_100ema: Optional[bool] = None
+    use_ma1592: Optional[bool] = None
+    ma1592_condition_names: Optional[str] = None
+    ma1592_max_slots: Optional[int] = None
+    ma1592_l1_limit: Optional[int] = None
+    ma1592_ma_source: Optional[str] = None
+    ma1592_require_ma_slope_up: Optional[bool] = None
+    ma1592_min_trading_value: Optional[int] = None
+    ma1592_hold_bars: Optional[int] = None
+    ma1592_break_before_entry_pct: Optional[float] = None
+    ma1592_touch_buffer_pct: Optional[float] = None
+    ma1592_require_bullish_candle: Optional[bool] = None
+    ma1592_prev_high_lookback_days: Optional[int] = None
+    ma1592_tp1_frac: Optional[float] = None
+    ma1592_take_profit_pct: Optional[float] = None
+    ma1592_stop_pct: Optional[float] = None
+    ma1592_hard_break_pct: Optional[float] = None
+    ma1592_large_break_pct: Optional[float] = None
+    ma1592_impulse_min_pct: Optional[float] = None
+    ma1592_crash_pct: Optional[float] = None
+    ma1592_crash_bars: Optional[int] = None
+    ma1592_setup_expire_days: Optional[int] = None
+    ma1592_max_hold_days: Optional[int] = None
+    ma1592_flatten_eod: Optional[bool] = None
+    ma1592_risk_per_trade_pct: Optional[float] = None
+    ma1592_max_invest_amount: Optional[int] = None
+    ma1592_trade_start_time: Optional[str] = None
+    ma1592_trade_end_time: Optional[str] = None
+    ma1592_hold_mode: Optional[str] = None
+    ma1592_exec_tf: Optional[str] = None
+    ma1592_entry_trigger: Optional[str] = None
+    ma1592_price_lead_near_pct: Optional[float] = None
+    ma1592_price_lead_far_pct: Optional[float] = None
+    ma1592_ledger_purge_tf: Optional[str] = None
+    ma1592_leg1_pct: Optional[float] = None
+    ma1592_leg2_pct: Optional[float] = None
+    ma1592_leg3_pct: Optional[float] = None
+    ma1592_scale_gap_pct: Optional[float] = None
+    ma1592_scale_hold_bars: Optional[int] = None
+    market_risk_block_ma1592: Optional[bool] = None
+    market_surge_block_ma1592: Optional[bool] = None
     include_leverage: Optional[bool] = None
     include_inverse: Optional[bool] = None
     include_double_inverse: Optional[bool] = None
@@ -553,6 +680,12 @@ class TradingSettingsRequest(BaseModel):
     volume_ratio_min: Optional[float] = None
     legacy_rsi_min: Optional[float] = None
     legacy_rsi_max: Optional[float] = None
+    legacy_max_slots: Optional[int] = None
+    use_legacy: Optional[bool] = None
+    legacy_ema_exit_enabled: Optional[bool] = None
+    legacy_ema_exit_period: Optional[int] = None
+    legacy_ema_exit_soft_min: Optional[int] = None
+    legacy_ema_exit_band_pct: Optional[float] = None
     sizing_method: Optional[str] = None
     buy_amount_unit: Optional[str] = None
     initial_min_amount: Optional[int] = None
@@ -564,6 +697,7 @@ class TradingSettingsRequest(BaseModel):
     add_buy_amount: Optional[int] = None
     add_buy_deposit_pct: Optional[float] = None
     add_buy_trigger: Optional[float] = None
+    manual_avg_down_pct: Optional[float] = None
     max_concurrent_positions: Optional[int] = None
     cash_reserve_pct: Optional[float] = None
     max_daily_buys: Optional[int] = None
@@ -576,23 +710,37 @@ class TradingSettingsRequest(BaseModel):
     market_risk_block_legacy: Optional[bool] = None
     market_risk_block_sangtta: Optional[bool] = None
     market_risk_block_breakout: Optional[bool] = None
-    market_risk_block_ymgp: Optional[bool] = None
     market_risk_block_jongga: Optional[bool] = None
+    market_risk_block_fractal: Optional[bool] = None
+    market_surge_enabled: Optional[bool] = None
+    market_surge_index: Optional[str] = None
+    market_surge_change_pct: Optional[float] = None
+    market_surge_max_buys_per_strategy: Optional[int] = None
+    market_surge_block_legacy: Optional[bool] = None
+    market_surge_block_sangtta: Optional[bool] = None
+    market_surge_block_breakout: Optional[bool] = None
+    market_surge_block_jongga: Optional[bool] = None
+    market_surge_block_fractal: Optional[bool] = None
+    crash_sync_block_enabled: Optional[bool] = None
+    crash_sync_index_pct: Optional[float] = None
+    crash_sync_error_pct: Optional[float] = None
+    crash_sync_pullback_cap_pct: Optional[float] = None
     reorder_cooldown_sec: Optional[int] = None
     trade_start_time: Optional[str] = None
     trade_end_time: Optional[str] = None
     scan_interval_sec: Optional[int] = None
     liquidate_before_close: Optional[bool] = None
     liquidate_time: Optional[str] = None
+    overnight_keep_slots: Optional[int] = None
+    overnight_max_per_strategy: Optional[int] = None
     order_method: Optional[str] = None
 
 # 자동매매 설정에서 프론트와 주고받는 전체 필드 목록
 AUTO_TRADE_FIELDS = [
     "is_enabled", "max_invest_amount", "stop_loss_rate", "take_profit_rate",
     "watchlist_codes", "screener_condition_names", "screener_verify_condition_names",
-    "sangtta_condition_names", "sangtta_verify_condition_names",
+    "use_sangtta", "sangtta_condition_names", "sangtta_verify_condition_names",
     "use_breakout", "breakout_condition_names", "breakout_verify_condition_names",
-    "use_ymgp", "ymgp_condition_names", "ymgp_verify_condition_names",
     "use_jongga",
     "include_leverage", "include_inverse", "include_double_inverse",
     "buy_below_price", "min_change_rate_buy",
@@ -600,19 +748,27 @@ AUTO_TRADE_FIELDS = [
     "profit_lock_trigger", "profit_lock_floor",
     "use_entry_gate", "require_above_open", "require_above_vwap",
     "day_position_min", "day_position_max", "volume_ratio_min",
-    "legacy_rsi_min", "legacy_rsi_max",
+    "legacy_rsi_min", "legacy_rsi_max", "legacy_max_slots", "use_legacy",
+    "legacy_ema_exit_enabled", "legacy_ema_exit_period", "legacy_ema_exit_soft_min",
+    "legacy_ema_exit_band_pct",
     "sizing_method", "buy_amount_unit",
     "initial_min_amount", "initial_max_amount",
     "initial_min_deposit_pct", "initial_max_deposit_pct",
     "signal_min_threshold", "signal_max_threshold",
-    "add_buy_amount", "add_buy_deposit_pct", "add_buy_trigger",
+    "add_buy_amount", "add_buy_deposit_pct", "add_buy_trigger", "manual_avg_down_pct",
     "max_concurrent_positions", "cash_reserve_pct", "max_daily_buys", "daily_loss_limit", "daily_profit_target",
     "market_risk_enabled", "market_risk_index", "market_risk_change_pct",
     "market_risk_max_buys_per_strategy",
     "market_risk_block_legacy", "market_risk_block_sangtta", "market_risk_block_breakout",
-    "market_risk_block_ymgp", "market_risk_block_jongga",
+    "market_risk_block_jongga", "market_risk_block_fractal", "market_risk_block_ma1592",
+    "market_surge_enabled", "market_surge_index", "market_surge_change_pct",
+    "market_surge_max_buys_per_strategy",
+    "market_surge_block_legacy", "market_surge_block_sangtta", "market_surge_block_breakout",
+    "market_surge_block_jongga", "market_surge_block_fractal", "market_surge_block_ma1592",
+    "crash_sync_block_enabled", "crash_sync_index_pct", "crash_sync_error_pct",
+    "crash_sync_pullback_cap_pct",
     "reorder_cooldown_sec", "trade_start_time", "trade_end_time", "scan_interval_sec",
-    "liquidate_before_close", "liquidate_time", "order_method",
+    "liquidate_before_close", "liquidate_time", "overnight_keep_slots", "overnight_max_per_strategy", "order_method",
     # 상따 전용 설정
     "sangtta_max_slots", "sangtta_buy_amount", "sangtta_buy_deposit_pct",
     "sangtta_trade_start_time", "sangtta_trade_end_time",
@@ -631,21 +787,8 @@ AUTO_TRADE_FIELDS = [
     "breakout_entry_hard", "breakout_entry_soft", "breakout_entry_soft_polls",
     "breakout_entry_hold", "breakout_hold_expire_bars",
     "breakout_hold_rsi_min", "breakout_rsi_period",
-    # 역매공파 전용 설정
-    "ymgp_max_slots", "ymgp_buy_amount_1", "ymgp_buy_amount_2",
-    "ymgp_buy_deposit_pct_1", "ymgp_buy_deposit_pct_2",
-    "ymgp_trade_start_time", "ymgp_trade_end_time",
-    "ymgp_ma_fast", "ymgp_ma_mid", "ymgp_ma_slow",
-    "ymgp_box_days", "ymgp_box_width_pct", "ymgp_accum_vol_mult",
-    "ymgp_accum_body_pct",
-    "ymgp_accum_wick_vol_mult", "ymgp_accum_wick_body_mult",
-    "ymgp_ma_near_pct", "ymgp_pivot_tol_pct",
-    "ymgp_drop_lookback", "ymgp_drop_pct",
-    "ymgp_stop_ma_mode", "ymgp_stop_loss_pct", "ymgp_entry_mode",
-    "ymgp_max_change_pct", "ymgp_pullback_tol_pct", "ymgp_reentry_lock_days",
-    "ymgp_tp1_pct_of_pos", "ymgp_tp2_pct_of_pos",
-    "ymgp_enable_pullback_add", "ymgp_enable_partial_tp",
-    "ymgp_trailing_start_pct", "ymgp_trailing_pct",
+    "breakout_require_program_net", "breakout_program_lookback",
+    "breakout_program_min_buy",
     # 종가배팅 전용 설정
     "use_jongga", "jongga_max_slots", "jongga_buy_amount", "jongga_buy_deposit_pct",
     "jongga_trade_start_time", "jongga_pick_end_time", "jongga_trade_end_time",
@@ -654,7 +797,28 @@ AUTO_TRADE_FIELDS = [
     "jongga_w_pullback", "jongga_w_amount", "jongga_w_change",
     "jongga_pig_split", "jongga_leg1_pct", "jongga_leg2_pct", "jongga_leg3_pct",
     "jongga_leg2_start_time", "jongga_leg3_start_time", "jongga_leg3_end_time",
-    "jongga_pig_bid_ask_ratio", "jongga_pig_levels",
+    "jongga_avg_down_pct", "jongga_pig_bid_ask_ratio", "jongga_pig_levels",
+    "use_fractal", "fractal_condition_names", "fractal_verify_condition_names",
+    "fractal_max_slots", "fractal_watch_slots",
+    "fractal_trade_start_time", "fractal_trade_end_time",
+    "fractal_risk_pct", "fractal_qty_cap", "fractal_rr",
+    "fractal_stop_ema", "fractal_stop_tick_buffer",
+    "fractal_watching_timeout_min",
+    "fractal_liquidate_before_close", "fractal_liquidate_time",
+    "fractal_invalidation_100ema",
+    "use_ma1592", "ma1592_condition_names", "ma1592_max_slots", "ma1592_l1_limit", "ma1592_ma_source",
+    "ma1592_require_ma_slope_up", "ma1592_min_trading_value", "ma1592_hold_bars",
+    "ma1592_break_before_entry_pct", "ma1592_touch_buffer_pct",
+    "ma1592_require_bullish_candle", "ma1592_prev_high_lookback_days",
+    "ma1592_tp1_frac", "ma1592_take_profit_pct", "ma1592_stop_pct",
+    "ma1592_hard_break_pct", "ma1592_large_break_pct", "ma1592_impulse_min_pct",
+    "ma1592_crash_pct", "ma1592_crash_bars", "ma1592_setup_expire_days",
+    "ma1592_max_hold_days", "ma1592_flatten_eod", "ma1592_risk_per_trade_pct",
+    "ma1592_max_invest_amount", "ma1592_trade_start_time", "ma1592_trade_end_time",
+    "ma1592_hold_mode", "ma1592_exec_tf", "ma1592_entry_trigger",
+    "ma1592_price_lead_near_pct", "ma1592_price_lead_far_pct", "ma1592_ledger_purge_tf",
+    "ma1592_leg1_pct", "ma1592_leg2_pct", "ma1592_leg3_pct",
+    "ma1592_scale_gap_pct", "ma1592_scale_hold_bars",
 ]
 
 
@@ -711,8 +875,22 @@ def enrich_balance_cash_reserve(balance_data: dict) -> dict:
     )
 
     settings = None
+    cash_snapshot = None
     for db in get_db():
         settings = db.query(AutoTradeSettings).first()
+        snap = (
+            db.query(AccountBalanceSnapshot)
+            .order_by(AccountBalanceSnapshot.as_of_date.desc())
+            .first()
+        )
+        if snap:
+            cash_snapshot = {
+                "date": snap.as_of_date.isoformat(),
+                "deposit_d0": int(snap.deposit_d0 or 0),
+                "deposit_d2": int(snap.deposit_d2 or 0),
+                "settlement_gap": int(snap.settlement_gap or 0),
+                "synced_at": snap.synced_at.isoformat() if snap.synced_at else None,
+            }
         break
     pct = cash_reserve_pct(settings) if settings else 10.0
     investable_raw, reserve = compute_investable_cash(entr, settings)
@@ -755,6 +933,7 @@ def enrich_balance_cash_reserve(balance_data: dict) -> dict:
         "d2_cap_applied": d2_cap_applied,
         "computed_deposit_plus_stock": computed_total,
         "total_asset_gap": total_gap,
+        "db_cash_snapshot": cash_snapshot,
     }
     return balance_data
 
@@ -856,9 +1035,48 @@ async def health_check():
     """서버 생존 확인 — 키움 API 호출 없이 즉시 응답."""
     return {"ok": True, "ts": kst_now_iso()}
 
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+@app.get("/login")
+async def login_page(request: Request):
+    """로그인 화면. 이미 세션이 있으면 대시보드로."""
+    if not Config.AUTH_ENABLED or session_username(request.session):
+        return RedirectResponse(url="/dashboard")
+    return FileResponse(os.path.join(static_dir, "login.html"))
+
+
+@app.post("/auth/login")
+async def auth_login(body: LoginRequest, request: Request):
+    """아이디/비밀번호 검증 후 세션 발급 (기본 6시간)."""
+    if not Config.AUTH_ENABLED:
+        return {"ok": True, "auth_disabled": True}
+    if not verify_credentials(body.username, body.password):
+        raise HTTPException(status_code=401, detail="아이디 또는 비밀번호가 올바르지 않습니다.")
+    mark_session_login(request.session, body.username.strip())
+    return {"ok": True, "username": body.username.strip()}
+
+
+@app.post("/auth/logout")
+async def auth_logout_post(request: Request):
+    clear_session(request.session)
+    return {"ok": True}
+
+
+@app.get("/auth/logout")
+async def auth_logout_get(request: Request):
+    clear_session(request.session)
+    return RedirectResponse(url="/login", status_code=302)
+
+
 @app.get("/")
-async def root():
-    """메인 페이지 — 통합 대시보드"""
+async def root(request: Request):
+    """메인 — 미로그인 시 로그인, 로그인 시 자동매매 대시보드."""
+    if Config.AUTH_ENABLED and not session_username(request.session):
+        return RedirectResponse(url="/login")
     return RedirectResponse(url="/dashboard")
 
 @app.get("/status")
@@ -877,9 +1095,11 @@ async def glossary_page():
     return RedirectResponse(url="/static/glossary.html")
 
 @app.get("/analysis")
-async def analysis_page():
+async def analysis_page(request: Request):
     """기본적분석 마트 조회 페이지"""
-    return RedirectResponse(url="/static/analysis.html")
+    qs = request.url.query
+    dest = f"/static/analysis.html?{qs}" if qs else "/static/analysis.html"
+    return RedirectResponse(url=dest)
 
 @app.get("/theme-map")
 async def theme_map_page():
@@ -892,9 +1112,11 @@ async def indicators_page():
     return RedirectResponse(url="/static/indicators.html")
 
 @app.get("/verify")
-async def verify_page():
+async def verify_page(request: Request):
     """자동매매 검증 페이지"""
-    return RedirectResponse(url="/static/verify.html")
+    qs = request.url.query
+    dest = f"/static/verify.html?{qs}" if qs else "/static/verify.html"
+    return RedirectResponse(url=dest)
 
 @app.get("/exit-replay")
 async def exit_replay_page():
@@ -929,7 +1151,7 @@ async def api_stock_exit_replay(
     if strat not in STRATEGY_ALIASES:
         raise HTTPException(
             status_code=400,
-            detail="strategy는 legacy | sangtta | breakout | ymgp 중 하나여야 합니다.",
+            detail="strategy는 legacy | sangtta | breakout | ymgp | jongga | fractal 중 하나여야 합니다.",
         )
     res = (resolution or "15m").strip().lower()
     if res not in ("15m", "15", "5m", "5", "intraday", "minute", "1d", "daily", "day"):
@@ -970,7 +1192,7 @@ async def api_strategy_day_verify_conditions(strategy: str = "sangtta"):
     if strat not in STRATEGY_ALIASES:
         raise HTTPException(
             status_code=400,
-            detail="strategy는 legacy | sangtta | breakout | ymgp 중 하나여야 합니다.",
+            detail="strategy는 legacy | sangtta | breakout | ymgp | jongga | fractal 중 하나여야 합니다.",
         )
     result = list_verify_conditions(strat)
     if not result.get("success"):
@@ -1005,7 +1227,7 @@ async def api_strategy_day_verify(
     if strat not in STRATEGY_ALIASES:
         raise HTTPException(
             status_code=400,
-            detail="strategy는 legacy | sangtta | breakout | ymgp 중 하나여야 합니다.",
+            detail="strategy는 legacy | sangtta | breakout | ymgp | jongga | fractal 중 하나여야 합니다.",
         )
     day = (trade_date or "").strip()[:10] or kst_today().isoformat()
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", day):
@@ -1087,18 +1309,24 @@ async def get_verification_intraday_chart(
     stock_code: str,
     date: str,
     end_date: Optional[str] = None,
+    interval: str = "5M",
     buy_time: Optional[str] = None,
     sell_time: Optional[str] = None,
     sell_date: Optional[str] = None,
     buy_price: Optional[int] = None,
     sell_price: Optional[int] = None,
 ):
-    """매매 구간 15분봉 차트 — 매수·매도일 봉을 한 차트로 합침."""
+    """매매 구간 분봉 차트 — 매수·매도일 봉을 한 차트로 합침."""
     import re
     from datetime import timedelta
 
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", (date or "").strip()[:10]):
         raise HTTPException(status_code=400, detail="date는 YYYY-MM-DD 형식이어야 합니다.")
+    interval_key = (interval or "5M").strip().upper()
+    if interval_key not in {"5M", "5", "15M", "15"}:
+        raise HTTPException(status_code=400, detail="interval은 5M 또는 15M")
+    tic_scope = "5" if interval_key in {"5M", "5"} else "15"
+    resolved_interval = f"{tic_scope}M"
 
     start_s = date.strip()[:10]
     end_s = (end_date or sell_date or start_s).strip()[:10]
@@ -1120,14 +1348,24 @@ async def get_verification_intraday_chart(
         fetch_dates.append(cur.strftime("%Y-%m-%d"))
         cur += timedelta(days=1)
 
+    # EMA(90) 예열용 선행 3거래일. 차트에는 기존 매매 구간만 표시한다.
+    warmup_dates: List[str] = []
+    cur = d0 - timedelta(days=1)
+    while len(warmup_dates) < 3:
+        if cur.weekday() < 5:
+            warmup_dates.append(cur.strftime("%Y-%m-%d"))
+        cur -= timedelta(days=1)
+    warmup_dates.reverse()
+
     all_bars: List[Dict[str, Any]] = []
+    ema_seed_bars: List[Dict[str, Any]] = []
     warnings: List[str] = []
     cached_any = False
     last_error = ""
 
-    for fd in fetch_dates:
+    for fd in warmup_dates + fetch_dates:
         result = await kiwoom_api.get_intraday_chart_for_date(
-            stock_code, fd, tic_scope="15", max_pages=1
+            stock_code, fd, tic_scope=tic_scope, max_pages=3 if tic_scope == "5" else 1
         )
         if result.get("cached"):
             cached_any = True
@@ -1135,7 +1373,11 @@ async def get_verification_intraday_chart(
             warnings.append(str(result["warning"]))
         if result.get("error") and not result.get("bars"):
             last_error = str(result["error"])
-        all_bars.extend(result.get("bars") or [])
+        fetched_bars = result.get("bars") or []
+        if fd in warmup_dates:
+            ema_seed_bars.extend(fetched_bars)
+        else:
+            all_bars.extend(fetched_bars)
 
     seen: set = set()
     bars: List[Dict[str, Any]] = []
@@ -1159,8 +1401,12 @@ async def get_verification_intraday_chart(
         "stock_code": stock_code,
         "date": start_s,
         "date_range": date_range,
-        "interval": "15M",
+        "interval": resolved_interval,
         "bars": bars,
+        "ema_seed_closes": [
+            b.get("close") for b in sorted(ema_seed_bars, key=lambda x: x.get("timestamp", ""))
+            if b.get("close") is not None
+        ],
         "bar_count": len(bars),
         "markers": markers,
         "error": None if ok else (last_error or "분봉 데이터가 없습니다"),
@@ -1338,6 +1584,7 @@ async def get_trading_settings():
             result = {f: getattr(settings, f, None) for f in AUTO_TRADE_FIELDS}
             result["updated_at"] = settings.updated_at.isoformat() if settings.updated_at else None
             result["screener_candidate_limit"] = Config.SCREENER_CANDIDATE_LIMIT
+            result["scan_target_total_limit"] = Config.SCAN_TARGET_TOTAL_LIMIT
             result["sangtta_candidate_limit"] = Config.SANGTTA_CANDIDATE_LIMIT
             result["screener_min_change_rate"] = Config.SCREENER_MIN_CHANGE_RATE
             result["screener_max_change_rate"] = Config.SCREENER_MAX_CHANGE_RATE
@@ -1420,11 +1667,15 @@ async def get_trading_activity_log(limit: int = 80):
         session_window = (
             linked_trading_session_window_str(settings) if settings else None
         )
+        from utils.api_traffic_guard import get_traffic_status
+        scan_load = scan.get("scan_load") or auto_trade_scanner.get_scan_load()
         runtime = {
             "auto_trade_enabled": bool(settings and settings.is_enabled),
             "in_trade_hours": in_trade_hours(settings) if settings else False,
             "in_linked_session": in_linked_trading_session(settings) if settings else False,
             "linked_session_window": session_window,
+            "stop_loss_session_window": stop_loss_monitoring_window_str(),
+            "in_stop_loss_session": is_stop_loss_monitoring_session(settings),
             "trade_start_time": settings.trade_start_time if settings else None,
             "trade_end_time": settings.trade_end_time if settings else None,
             "is_trading_day": is_krx_trading_day(),
@@ -1447,19 +1698,22 @@ async def get_trading_activity_log(limit: int = 80):
             "last_scan_targets": scan.get("last_scan_targets", 0),
             "last_scan_created": scan.get("last_scan_created", 0),
             "last_scan_by_strategy": scan.get("last_scan_by_strategy") or {},
+            "last_scan_duration_sec": scan_load.get("last_scan_duration_sec"),
             "scan_interval_sec": scan.get("scan_interval_sec", 120),
+            "scan_load": scan_load,
             "daily_halt_reason": daily_halt,
             "today_realized_pnl": get_today_realized_pnl(),
             "mock_mode": Config.KIWOOM_USE_MOCK_ACCOUNT,
         }
-        from utils.api_traffic_guard import should_defer_dashboard_live
+        traffic = get_traffic_status()
         return {
             "runtime": runtime,
-            "events": activity_log.get_recent(min(max(limit, 1), 200)),
+            "events": merge_activity_events(
+                activity_log.get_recent(min(max(limit, 1), 200)),
+                min(max(limit, 1), 200),
+            ),
             "api_rate_limit": api_rate_limiter.get_status_info(),
-            "api_traffic": {
-                "defer_dashboard_live": should_defer_dashboard_live(),
-            },
+            "api_traffic": traffic,
             "timestamp": kst_now_iso(),
         }
     except Exception as e:
@@ -1499,18 +1753,30 @@ async def save_trading_settings(req: TradingSettingsRequest):
                 "watchlist_codes", "screener_condition_names", "screener_verify_condition_names",
                 "sangtta_condition_names", "sangtta_verify_condition_names",
                 "breakout_condition_names", "breakout_verify_condition_names",
-                "ymgp_condition_names", "ymgp_verify_condition_names",
+                "fractal_condition_names", "fractal_verify_condition_names",
+                "ma1592_condition_names",
             }
             bool_fields = {"is_enabled", "liquidate_before_close", "use_entry_gate",
                            "require_above_open", "require_above_vwap",
                            "include_leverage", "include_inverse", "include_double_inverse",
-                           "use_breakout", "use_ymgp", "use_jongga", "jongga_pig_split",
+                           "use_breakout", "use_jongga", "use_fractal", "use_ma1592", "jongga_pig_split",
+                           "use_legacy", "use_sangtta",
                            "breakout_entry_hard", "breakout_entry_soft", "breakout_entry_hold",
-                           "ymgp_enable_pullback_add", "ymgp_enable_partial_tp",
+                           "breakout_require_ma20_cross", "breakout_require_program_net",
+                           "legacy_ema_exit_enabled",
                            "market_risk_enabled",
                            "market_risk_block_legacy", "market_risk_block_sangtta",
-                           "market_risk_block_breakout", "market_risk_block_ymgp",
-                           "market_risk_block_jongga"}
+                           "market_risk_block_breakout", "market_risk_block_jongga",
+                           "market_risk_block_fractal", "market_risk_block_ma1592",
+                           "market_surge_enabled",
+                           "market_surge_block_legacy", "market_surge_block_sangtta",
+                           "market_surge_block_breakout",
+                           "market_surge_block_jongga", "market_surge_block_fractal",
+                           "market_surge_block_ma1592",
+                           "crash_sync_block_enabled",
+                           "fractal_liquidate_before_close", "fractal_invalidation_100ema",
+                           "ma1592_require_ma_slope_up", "ma1592_require_bullish_candle",
+                           "ma1592_flatten_eod"}
             for f in AUTO_TRADE_FIELDS:
                 if not hasattr(req, f):
                     continue
@@ -1531,9 +1797,13 @@ async def save_trading_settings(req: TradingSettingsRequest):
             ):
                 settings.breakout_level_mode = "prev_high"
             if str(getattr(settings, "market_risk_index", "") or "").lower() not in (
-                "kospi", "kosdaq", "either", "both",
+                "kospi", "kosdaq", "either", "both", "per_market",
             ):
                 settings.market_risk_index = "kospi"
+            if str(getattr(settings, "market_surge_index", "") or "").lower() not in (
+                "kospi", "kosdaq", "either", "both", "per_market",
+            ):
+                settings.market_surge_index = "either"
             if getattr(settings, "market_risk_max_buys_per_strategy", None) is None:
                 settings.market_risk_max_buys_per_strategy = 2
             try:
@@ -1542,6 +1812,50 @@ async def save_trading_settings(req: TradingSettingsRequest):
                 )
             except (TypeError, ValueError):
                 settings.market_risk_max_buys_per_strategy = 2
+            if getattr(settings, "market_surge_max_buys_per_strategy", None) is None:
+                settings.market_surge_max_buys_per_strategy = 0
+            try:
+                settings.market_surge_max_buys_per_strategy = max(
+                    0, int(settings.market_surge_max_buys_per_strategy)
+                )
+            except (TypeError, ValueError):
+                settings.market_surge_max_buys_per_strategy = 0
+            try:
+                settings.overnight_keep_slots = max(
+                    0, min(20, int(getattr(settings, "overnight_keep_slots", None) or 3)),
+                )
+            except (TypeError, ValueError):
+                settings.overnight_keep_slots = 3
+            try:
+                settings.overnight_max_per_strategy = max(
+                    1, min(5, int(getattr(settings, "overnight_max_per_strategy", None) or 1)),
+                )
+            except (TypeError, ValueError):
+                settings.overnight_max_per_strategy = 1
+            if getattr(settings, "legacy_ema_exit_enabled", None) is None:
+                settings.legacy_ema_exit_enabled = True
+            try:
+                settings.legacy_ema_exit_period = max(
+                    5, min(300, int(getattr(settings, "legacy_ema_exit_period", None) or 90)),
+                )
+            except (TypeError, ValueError):
+                settings.legacy_ema_exit_period = 90
+            try:
+                settings.legacy_ema_exit_soft_min = max(
+                    1, min(60, int(getattr(settings, "legacy_ema_exit_soft_min", None) or 10)),
+                )
+            except (TypeError, ValueError):
+                settings.legacy_ema_exit_soft_min = 10
+            try:
+                settings.legacy_ema_exit_band_pct = max(
+                    0.0, min(10.0, float(
+                        getattr(settings, "legacy_ema_exit_band_pct", None)
+                        if getattr(settings, "legacy_ema_exit_band_pct", None) is not None
+                        else 1.0
+                    )),
+                )
+            except (TypeError, ValueError):
+                settings.legacy_ema_exit_band_pct = 1.0
             if float(settings.struct_break_hard_pct or 0) < float(settings.struct_break_soft_pct or 0):
                 settings.struct_break_hard_pct = settings.struct_break_soft_pct
             lo = float(settings.sangtta_change_min if settings.sangtta_change_min is not None else 12.0)
@@ -1738,6 +2052,28 @@ async def get_fundamental_by_code(stock_code: str):
         raise HTTPException(status_code=500, detail="기본적분석 조회 실패")
 
 
+@app.get("/fundamentals/{stock_code}/profile")
+async def get_fundamental_company_profile(stock_code: str):
+    """종목 회사 개요·동종업종 (네이버 온디맨드)."""
+    import asyncio
+
+    try:
+        from utils.naver_company_profile import fetch_company_profile
+
+        row = await asyncio.to_thread(fetch_company_profile, stock_code)
+        if not row.get("ok"):
+            raise HTTPException(
+                status_code=404,
+                detail=row.get("error") or "회사 개요를 찾지 못했습니다",
+            )
+        return row
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"회사 개요 조회 오류 ({stock_code}): {e}")
+        raise HTTPException(status_code=500, detail="회사 개요 조회 실패")
+
+
 def _recent_trading_days(count: int) -> List[str]:
     """최근 N개 KRX 거래일 (YYYY-MM-DD, 오늘 포함·주말 제외)."""
     from datetime import timedelta
@@ -1761,30 +2097,51 @@ def _normalize_chart_interval(interval: str) -> str:
     return "5M"
 
 
+def _sma_series(values: List[float], period: int) -> List[Optional[float]]:
+    """단순이동평균 시리즈 (period 미만 구간은 None)."""
+    out: List[Optional[float]] = []
+    for i in range(len(values)):
+        if i < period - 1:
+            out.append(None)
+            continue
+        window = values[i - period + 1 : i + 1]
+        out.append(sum(window) / period)
+    return out
+
+
 @app.get("/fundamentals/{stock_code}/chart")
 async def get_fundamental_chart(
     stock_code: str,
-    interval: str = "5M",
+    interval: str = "1D",
+    bars: int = 120,
 ):
-    """분석 화면용 차트 — 기본 5분봉(이평선 없음)."""
+    """분석 화면용 차트 — 기본 일봉 + MA120/MA180."""
     try:
         norm_interval = _normalize_chart_interval(interval)
 
         if norm_interval == "1D":
-            cap = min(max(int(bars or 60), 30), 120)
+            try:
+                display_bars = min(max(int(bars or 120), 30), 200)
+            except (TypeError, ValueError):
+                display_bars = 120
+            # MA180 표시를 위해 표시 구간 이전 워밍업 포함
+            fetch_bars = min(display_bars + 200, 400)
             chart_data = await kiwoom_api.get_stock_chart_data(
                 stock_code,
                 "1D",
-                max_bars=cap + 25,
+                max_bars=fetch_bars,
                 allow_off_hours=True,
             )
             if not chart_data:
-                raise HTTPException(status_code=404, detail="차트 데이터를 찾을 수 없습니다")
+                raise HTTPException(
+                    status_code=404,
+                    detail="일봉 데이터를 찾지 못했습니다 (키움 API 빈 응답)",
+                )
 
-            rows = []
-            for item in chart_data[-cap:]:
+            parsed_rows: List[Dict[str, Any]] = []
+            for item in chart_data:
                 try:
-                    rows.append({
+                    parsed_rows.append({
                         "timestamp": item.get("timestamp"),
                         "open": int(float(item.get("open") or 0)),
                         "high": int(float(item.get("high") or 0)),
@@ -1794,13 +2151,29 @@ async def get_fundamental_chart(
                     })
                 except (TypeError, ValueError):
                     continue
-            if not rows:
+            if not parsed_rows:
                 raise HTTPException(status_code=404, detail="차트 데이터를 파싱하지 못했습니다")
 
+            closes = [float(r["close"]) for r in parsed_rows]
+            ma120_all = _sma_series(closes, 120)
+            ma180_all = _sma_series(closes, 180)
+            for i, row in enumerate(parsed_rows):
+                if ma120_all[i] is not None:
+                    row["ma120"] = int(round(ma120_all[i]))
+                if ma180_all[i] is not None:
+                    row["ma180"] = int(round(ma180_all[i]))
+
+            rows = parsed_rows[-display_bars:]
+            last = rows[-1] if rows else {}
             return {
                 "stock_code": stock_code,
                 "interval": "1D",
                 "bars": rows,
+                "display_bars": len(rows),
+                "ma_latest": {
+                    "ma120": last.get("ma120"),
+                    "ma180": last.get("ma180"),
+                },
             }
 
         # 분석 화면 체감속도를 위해 기본은 최근 1거래일만 조회하고,
@@ -1883,19 +2256,46 @@ async def refresh_theme_map(
     top_n: int = 0,
     include_news_keywords: bool = True,
     include_kiwoom: bool = True,
+    include_alphasquare: bool = True,
+    alphasquare_only: bool = False,
+    kiwoom_only: bool = False,
+    fetch_reasons: bool = False,
 ):
-    """네이버 테마 크롤 후(옵션) 키움 ka90001/02 테마 스냅샷 갱신."""
+    """네이버 테마 크롤 후(옵션) 키움·알파스퀘어 테마 스냅샷 갱신."""
     try:
+        from utils.theme_map_store import (
+            refresh_alphasquare_theme_mapping_snapshot,
+            refresh_kiwoom_theme_mapping_snapshot,
+        )
+
         for db in get_db():
             session: Session = db
             capped = top_n if top_n > 0 else 0
             if capped > 0:
-                capped = min(max(capped, 5), 200)
+                capped = min(max(capped, 1), 500)
+            if kiwoom_only and alphasquare_only:
+                raise HTTPException(
+                    status_code=400,
+                    detail="kiwoom_only 와 alphasquare_only 는 동시에 쓸 수 없습니다.",
+                )
+            reasons = bool(fetch_reasons) or bool(Config.ALPHASQUARE_FETCH_REASONS)
+            if kiwoom_only:
+                return refresh_kiwoom_theme_mapping_snapshot(session, top_n=capped)
+            if alphasquare_only:
+                return refresh_alphasquare_theme_mapping_snapshot(
+                    session,
+                    top_n=capped,
+                    fetch_reasons=reasons,
+                )
+            # env OFF면 호출측이 true여도 스킵
+            as_on = bool(include_alphasquare) and bool(Config.ALPHASQUARE_ENABLED)
             return refresh_theme_mapping_snapshot(
                 session,
                 top_n=capped,
                 include_news_keywords=bool(include_news_keywords),
                 include_kiwoom=bool(include_kiwoom),
+                include_alphasquare=as_on,
+                fetch_reasons=reasons if as_on else False,
             )
         raise HTTPException(status_code=500, detail="DB 연결 실패")
     except HTTPException:
@@ -2009,12 +2409,12 @@ async def theme_map_manual_upload(
 
 
 @app.get("/theme-map/tags")
-async def list_theme_map_tags(limit: int = 100):
-    """스파이크: 태그(테마) 목록."""
+async def list_theme_map_tags(limit: int = 100, source: Optional[str] = None):
+    """스파이크: 태그(테마) 목록. source=naver_theme|kiwoom_theme|alphasquare_theme|manual."""
     try:
         for db in get_db():
             session: Session = db
-            return {"items": get_theme_tags(session, limit=limit)}
+            return {"items": get_theme_tags(session, limit=limit, source=source)}
         raise HTTPException(status_code=500, detail="DB 연결 실패")
     except HTTPException:
         raise
@@ -2141,6 +2541,35 @@ async def theme_map_batch_status():
     except Exception as e:
         logger.error(f"theme-map batch-status 조회 오류: {e}")
         raise HTTPException(status_code=500, detail="theme-map batch-status 조회 실패")
+
+
+@app.get("/theme-map/source-cross")
+async def theme_map_source_cross(biz_date: Optional[str] = None):
+    """네이버·키움·알파스퀘어 테마 소스 교차 커버리지 리포트."""
+    try:
+        from datetime import date as _date
+
+        parsed = None
+        if biz_date:
+            try:
+                parsed = _date.fromisoformat(str(biz_date)[:10])
+            except ValueError:
+                raise HTTPException(status_code=400, detail="biz_date 형식: YYYY-MM-DD")
+
+        def _fetch():
+            for db in get_db():
+                return build_theme_source_cross_report(db, biz_date=parsed)
+            return None
+
+        result = await asyncio.to_thread(_fetch)
+        if result is None:
+            raise HTTPException(status_code=500, detail="DB 연결 실패")
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"theme-map source-cross 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail="theme-map source-cross 조회 실패")
 
 
 @app.get("/indicators/trade/latest")
@@ -2273,13 +2702,99 @@ async def list_keywords_today_api(limit: int = 20):
     return await list_keywords_today(limit=limit)
 
 
-@app.get("/market/indices")
-async def market_indices_api(force: bool = False):
-    """주요 지수(코스피·코스닥·나스닥·다우) 스냅샷."""
-    try:
-        from utils.market_indices import fetch_market_indices
+@app.get("/themes/trade-amount-map")
+async def themes_trade_amount_map_api(
+    rebuild: bool = False,
+    top_n: int = 0,
+    stock_limit: int = 0,
+    sort_by: str = "trade_amount",
+):
+    """거래대금순 종목 + 테마맵 합산 → 테마별 대금 상위 (대시보드 맵용).
 
-        return fetch_market_indices(force=force)
+    기본 15분 캐시. rebuild=1이면 키움 재조회.
+    """
+    try:
+        from core.config import Config
+        from utils.theme_trade_flow import get_theme_trade_flow
+
+        tn = int(top_n) if top_n and top_n > 0 else int(Config.THEME_FLOW_TOP_N or 40)
+        sl = (
+            int(stock_limit)
+            if stock_limit and stock_limit > 0
+            else int(Config.THEME_FLOW_STOCK_LIMIT or 300)
+        )
+        cache_sec = int(Config.THEME_FLOW_CACHE_SEC or 900)
+        sort_mode = "change_rate" if str(sort_by).strip().lower() == "change_rate" else "trade_amount"
+        return await get_theme_trade_flow(
+            kiwoom_api,
+            rebuild=bool(rebuild),
+            stock_limit=max(1, min(sl, 500)),
+            top_n=max(1, min(tn, 200)),
+            cache_sec=max(60, cache_sec),
+            sort_by=sort_mode,
+            get_db=get_db,
+        )
+    except Exception as e:
+        logger.error(f"themes trade-amount-map 오류: {e}")
+        return {
+            "success": False,
+            "error": str(e) or "테마 대금 맵 조회 실패",
+            "items": [],
+        }
+
+
+async def _attach_index_intraday_bars(payload: dict, date: str) -> None:
+    """코스피·코스닥 카드에 해당일 15분봉(ka20005) 첨부 — 지수 카드 스파크를 일봉 대신 당일 분봉으로."""
+    indices = payload.get("indices")
+    if not isinstance(indices, list):
+        return
+    # market_indices 캐시가 같은 리스트를 공유하므로 복사 후 교체
+    indices = [dict(it) if isinstance(it, dict) else it for it in indices]
+    payload["indices"] = indices
+    targets = [
+        (i, it) for i, it in enumerate(indices)
+        if isinstance(it, dict) and not it.get("closed") and it.get("key") in ("kospi", "kosdaq")
+    ]
+    if not targets:
+        return
+
+    async def _fetch(key: str):
+        try:
+            res = await kiwoom_api.get_index_intraday_chart_for_date(key, date, tic_scope="15")
+            return res.get("bars") or []
+        except Exception as e:
+            logger.debug(f"지수 분봉 조회 실패({key} {date}): {e}")
+            return []
+
+    try:
+        results = await asyncio.wait_for(
+            asyncio.gather(*(_fetch(it["key"]) for _, it in targets)),
+            timeout=12.0,
+        )
+    except asyncio.TimeoutError:
+        logger.debug(f"지수 분봉 첨부 시간 초과({date})")
+        return
+    for (i, it), bars in zip(targets, results):
+        if bars:
+            row = dict(it)
+            row["intraday_bars"] = bars
+            indices[i] = row
+
+
+@app.get("/market/indices")
+async def market_indices_api(force: bool = False, date: Optional[str] = None):
+    """주요 지수(코스피·코스닥·나스닥·다우) 스냅샷. date=YYYY-MM-DD 이면 해당일 종가."""
+    try:
+        from utils.market_indices import fetch_market_indices, fetch_market_indices_for_date
+
+        if date and date not in ("all", "this_week"):
+            payload = await asyncio.to_thread(fetch_market_indices_for_date, date, force)
+            await _attach_index_intraday_bars(payload, date)
+        else:
+            payload = await asyncio.to_thread(fetch_market_indices, force)
+        return JSONResponse(content=payload, headers={"Cache-Control": "no-store"})
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"market indices 조회 오류: {e}")
         raise HTTPException(status_code=500, detail="market indices 조회 실패")
@@ -2618,9 +3133,11 @@ async def get_monitoring_status():
             "api_limiter": api_status,
             "buy_executor": buy_executor_status,
             "linked_session_window": session_window,
+            "stop_loss_session_window": stop_loss_monitoring_window_str(),
             "trade_start_time": settings_row.trade_start_time if settings_row else None,
             "trade_end_time": settings_row.trade_end_time if settings_row else None,
             "in_linked_session": in_linked_trading_session(settings_row) if settings_row else False,
+            "in_stop_loss_session": is_stop_loss_monitoring_session(settings_row),
             "timestamp": kst_now_iso()
         }
         
@@ -3254,15 +3771,15 @@ async def get_order_history(limit: int = 100):
 
             def _entry_leg_from(meta: Dict, fill: Optional[PositionBuyFill] = None) -> Optional[int]:
                 note = (fill.note if fill else None) or ""
-                for token in ("종가배팅", "역매공파"):
+                for token in ("종가배팅", "역매공파", "15/92홀드", "MA1592"):
                     if token in note:
                         try:
-                            # "종가배팅 2차"
+                            # "종가배팅 2차" / "15/90홀드 3차"
                             part = note.split(token, 1)[1].strip()
                             return int("".join(ch for ch in part if ch.isdigit()) or 0) or None
                         except (TypeError, ValueError):
                             pass
-                for key in ("entry_leg", "jongga_entry_leg", "ymgp_entry_leg"):
+                for key in ("entry_leg", "jongga_entry_leg", "ymgp_entry_leg", "ma1592_entry_leg"):
                     try:
                         v = int(meta.get(key) or 0)
                         if v > 0:
@@ -3285,11 +3802,15 @@ async def get_order_history(limit: int = 100):
                     for idx, fill in enumerate(fill_rows, start=1):
                         entry_leg = _entry_leg_from(meta, fill) or idx
                         fill_type = str(fill.fill_type or "").upper() or None
+                        # 체결 시 저장된 note가 있으면 유지 (추가매수로 신호 meta가 덮여도 차수 보존)
                         fill_note = fill.note
-                        if strategy_key == "jongga":
-                            fill_note = f"종가배팅 {entry_leg}차"
-                        elif strategy_key == "ymgp":
-                            fill_note = f"역매공파 {entry_leg}차"
+                        if not fill_note:
+                            if strategy_key == "jongga":
+                                fill_note = f"종가배팅 {entry_leg}차"
+                            elif strategy_key == "ymgp":
+                                fill_note = f"역매공파 {entry_leg}차"
+                            elif strategy_key == "ma1592":
+                                fill_note = f"15/92홀드 {entry_leg}차"
                         orders.append(
                             {
                                 "id": f"{row.id}-{fill.id}",
@@ -3624,7 +4145,7 @@ async def get_strategies():
 async def configure_strategy(strategy_type: str, req: StrategyConfigureRequest):
     """전략 파라미터 설정"""
     try:
-        valid_types = ["MOMENTUM", "DISPARITY", "BOLLINGER", "RSI", "CHAIKIN"]
+        valid_types = ["MOMENTUM", "DISPARITY", "BOLLINGER", "RSI", "ICHIMOKU", "CHAIKIN", "MA1592"]
         if strategy_type not in valid_types:
             raise HTTPException(status_code=400, detail=f"유효하지 않은 전략 타입입니다: {strategy_type}")
         
@@ -4428,9 +4949,9 @@ async def get_positions(status: str = "HOLDING", limit: int = 50, with_levels: b
         from utils.api_traffic_guard import should_defer_dashboard_live
         if live and should_defer_dashboard_live():
             live = False
-        if status == "HOLDING":
-            await stop_loss_manager.sync_holdings_from_api(force=live)
-        elif live:
+        # live=false(DB 폴링)는 동기화 생략 — NXT 구간 종목당 sleep으로 목록이 타임아웃되던 문제 방지.
+        # 잔고·현재가 동기화는 손절 모니터 루프와 live=true 갱신에서만 수행.
+        if live:
             await stop_loss_manager.sync_holdings_from_api(force=True)
 
         positions = []
@@ -4447,6 +4968,7 @@ async def get_positions(status: str = "HOLDING", limit: int = 50, with_levels: b
 
         items = []
         pending_sell_ids: set = set()
+        manual_avg_down_by_pos: Dict[int, Dict[str, Any]] = {}
         if positions:
             pos_ids = [p.id for p in positions]
             for db in get_db():
@@ -4457,6 +4979,15 @@ async def get_positions(status: str = "HOLDING", limit: int = 50, with_levels: b
                     SellOrder.status.in_(("PENDING", "ORDERED")),
                 ).distinct().all()
                 pending_sell_ids = {r[0] for r in rows}
+                break
+            for db in get_db():
+                session: Session = db
+                from utils.position_buy_fills import manual_avg_down_state
+                for pos in positions:
+                    fallback = int(pos.actual_buy_amount or pos.buy_amount or 0)
+                    manual_avg_down_by_pos[pos.id] = manual_avg_down_state(
+                        session, pos.id, fallback,
+                    )
                 break
 
         # live + with_levels: 잔고 API 1회만 조회 후 종목별 재사용 (N+1 방지)
@@ -4472,6 +5003,17 @@ async def get_positions(status: str = "HOLDING", limit: int = 50, with_levels: b
             avg_price = pos.buy_price
             if (not avg_price or avg_price <= 0) and buy_amt and pos.buy_quantity:
                 avg_price = int(round(buy_amt / pos.buy_quantity))
+            avg_down_state = manual_avg_down_by_pos.get(
+                pos.id, {"baseline_amount": int(buy_amt or 0), "done": False},
+            )
+            avg_down_pct = float(
+                getattr(global_settings, "manual_avg_down_pct", 50.0) or 50.0
+            )
+            avg_down_amount = int(avg_down_state["baseline_amount"] * avg_down_pct / 100.0)
+            strategy_key = getattr(pos, "strategy_key", None)
+            strategy_stop_loss_rate = stop_loss_manager.strategy_stop_loss_rate(
+                global_settings, strategy_key,
+            )
             row = {
                 "id": pos.id,
                 "stock_code": pos.stock_code,
@@ -4484,8 +5026,8 @@ async def get_positions(status: str = "HOLDING", limit: int = 50, with_levels: b
                 "current_profit_loss": pos.current_profit_loss,
                 "current_profit_loss_rate": pos.current_profit_loss_rate,
                 "stop_loss_rate": (
-                    global_settings.stop_loss_rate
-                    if global_settings and pos.status == "HOLDING"
+                    strategy_stop_loss_rate
+                    if strategy_stop_loss_rate is not None and pos.status == "HOLDING"
                     else pos.stop_loss_rate
                 ),
                 "take_profit_rate": (
@@ -4494,7 +5036,9 @@ async def get_positions(status: str = "HOLDING", limit: int = 50, with_levels: b
                     else pos.take_profit_rate
                 ),
                 "applied_stop_loss_rate": (
-                    global_settings.stop_loss_rate if global_settings else pos.stop_loss_rate
+                    strategy_stop_loss_rate
+                    if strategy_stop_loss_rate is not None
+                    else pos.stop_loss_rate
                 ),
                 "applied_take_profit_rate": (
                     global_settings.take_profit_rate if global_settings else pos.take_profit_rate
@@ -4504,13 +5048,16 @@ async def get_positions(status: str = "HOLDING", limit: int = 50, with_levels: b
                 "status": pos.status,
                 "signal_id": pos.signal_id,
                 "condition_id": pos.condition_id,
-                "strategy_key": getattr(pos, "strategy_key", None),
+                "strategy_key": strategy_key,
                 "actual_buy_amount": pos.actual_buy_amount,
                 "amount_source": "kiwoom_api" if pos.actual_buy_amount else "db",
                 "buy_time": utc_naive_to_api_iso(pos.buy_time),
                 "sell_time": utc_naive_to_api_iso(pos.sell_time),
                 "last_monitored": utc_naive_to_api_iso(pos.last_monitored),
                 "pending_sell": pos.id in pending_sell_ids,
+                "manual_avg_down_done": bool(avg_down_state["done"]),
+                "manual_avg_down_pct": avg_down_pct,
+                "manual_avg_down_amount": avg_down_amount,
             }
             if with_levels and pos.status == "HOLDING":
                 try:
@@ -4518,7 +5065,7 @@ async def get_positions(status: str = "HOLDING", limit: int = 50, with_levels: b
                         pos, live=live, holdings_map=shared_holdings,
                     )
                     row["exit_levels"] = stop_loss_manager.overlay_global_exit_settings(
-                        ex, avg_price, global_settings,
+                        ex, avg_price, global_settings, strategy_key,
                     )
                     ex = row["exit_levels"]
                     if ex.get("current_price"):
@@ -4627,27 +5174,52 @@ async def get_sell_orders(status: str = "ALL", limit: int = 50):
             rows = query.order_by(SellOrder.created_at.desc()).limit(limit).all()
             pos_ids = [o.position_id for o in rows if o.position_id]
             strategy_by_pos: Dict[int, Optional[str]] = {}
+            buy_price_by_pos: Dict[int, Optional[int]] = {}
+            buy_time_by_pos: Dict[int, Optional[datetime]] = {}
             if pos_ids:
-                for pid, sk in (
-                    session.query(Position.id, Position.strategy_key)
+                for pid, sk, bp, bt in (
+                    session.query(
+                        Position.id,
+                        Position.strategy_key,
+                        Position.buy_price,
+                        Position.buy_time,
+                    )
                     .filter(Position.id.in_(pos_ids))
                     .all()
                 ):
                     strategy_by_pos[int(pid)] = sk
+                    buy_price_by_pos[int(pid)] = int(bp) if bp else None
+                    buy_time_by_pos[int(pid)] = bt
             for order in rows:
                 raw_sk = strategy_by_pos.get(int(order.position_id)) if order.position_id else None
                 strategy_key = _normalize_strategy(raw_sk) if raw_sk else None
+                buy_price = buy_price_by_pos.get(int(order.position_id)) if order.position_id else None
+                buy_time = buy_time_by_pos.get(int(order.position_id)) if order.position_id else None
+                qty = int(order.sell_quantity or 0)
+                sell_px = int(order.sell_price or 0)
+                gross = (
+                    (sell_px - int(buy_price)) * qty
+                    if buy_price and sell_px and qty > 0
+                    else None
+                )
+                fee = getattr(order, "trading_commission", None)
+                tax = getattr(order, "transaction_tax", None)
                 orders.append(
                     {
                         "id": order.id,
                         "position_id": order.position_id,
                         "stock_code": order.stock_code,
                         "stock_name": order.stock_name,
+                        "buy_price": buy_price,
+                        "buy_time": utc_naive_to_api_iso(buy_time) if buy_time else None,
                         "sell_price": order.sell_price,
                         "sell_quantity": order.sell_quantity,
                         "sell_amount": order.sell_amount,
                         "sell_reason": order.sell_reason,
                         "sell_reason_detail": order.sell_reason_detail,
+                        "gross_profit_loss": gross,
+                        "trading_commission": int(fee) if fee is not None else None,
+                        "transaction_tax": int(tax) if tax is not None else None,
                         "profit_loss": order.profit_loss,
                         "profit_loss_rate": order.profit_loss_rate,
                         "status": order.status,
@@ -4710,8 +5282,14 @@ async def get_performance_stats(
 
         kiwoom_period = {"start": strt_dt, "end": end_dt}
 
+        performance_base_asset = 0
+        performance_base_source = None
+
         def _respond(trades, pipeline, data_source, account_total=None, note=None, period=None):
-            out = compute_performance(trades, seed, pipeline, data_source)
+            base_asset = performance_base_asset or seed
+            out = compute_performance(trades, base_asset, pipeline, data_source)
+            out["base_asset"] = base_asset
+            out["base_asset_source"] = performance_base_source or "query_fallback"
             out["period"] = period or kiwoom_period
             if account_total is not None:
                 out["account_realized_net"] = account_total
@@ -4722,14 +5300,45 @@ async def get_performance_stats(
         from core.models import Position, SellOrder
 
         sell_rows, pos_rows = [], []
+        latest_balance_snapshot = None
         for db in get_db():
             session: Session = db
             sell_rows = session.query(SellOrder).order_by(SellOrder.completed_at.asc()).all()
             pos_rows = session.query(Position).order_by(Position.sell_time.asc()).all()
+            latest_balance_snapshot = (
+                session.query(AccountBalanceSnapshot)
+                .order_by(AccountBalanceSnapshot.as_of_date.desc())
+                .first()
+            )
             break
 
         db_trades = trades_from_db_closures(sell_rows, pos_rows)
         db_period = period_from_trades(db_trades)
+
+        # 성과율의 분모는 고정 시드가 아니라 현재 키움 계좌평가자산을 사용한다.
+        # 실시간 조회가 불가능하면 가장 최근 장마감 스냅샷, 마지막으로 쿼리 seed를 쓴다.
+        try:
+            balance = await get_account_balance()
+            breakdown = (balance or {}).get("balance_breakdown") or {}
+            performance_base_asset = _balance_int(
+                breakdown.get("total_asset")
+                or (balance or {}).get("prsm_dpst_aset_amt")
+                or breakdown.get("deposit_asset_eval")
+                or (balance or {}).get("aset_evlt_amt")
+            )
+            if performance_base_asset > 0:
+                performance_base_source = "kiwoom_account_evaluation"
+        except Exception as balance_error:
+            logger.warning(f"성과 통계 계좌평가자산 조회 실패: {balance_error}")
+
+        if performance_base_asset <= 0 and latest_balance_snapshot:
+            performance_base_asset = int(
+                latest_balance_snapshot.estimated_deposit_asset
+                or latest_balance_snapshot.asset_evaluation
+                or 0
+            )
+            if performance_base_asset > 0:
+                performance_base_source = "latest_account_snapshot"
 
         if source == "db":
             return _respond(
@@ -4788,7 +5397,7 @@ async def get_screener_candidates(
 ):
     """스크리너 후보 종목 조회.
     당일거래대금순(ka10030, sort_tp=3) 상위만 반환한다. (레거시 — 조건식 미사용)
-    ETF/ETN/레버리지/인버스/곱버스·등락 밴드 밖(기본 3.3%≤등락<15%)·거래대금 미달
+    ETF/ETN/레버리지/인버스/곱버스·등락 밴드 밖(기본 3.3%≤등락<12%)·거래대금 미달
     (기본 20억 미만)은 API·후처리 단계에서 제외된다.
     """
     try:
@@ -5055,83 +5664,61 @@ async def get_breakout_candidates(limit: int = 30):
         raise HTTPException(status_code=500, detail="돌파 후보 조회 중 오류가 발생했습니다.")
 
 
-@app.get("/ymgp/candidates")
-async def get_ymgp_candidates(limit: int = 30):
-    """역매공파 조건식 후보의 일봉 단계(FILTERED~ARMED)와 게이트 상태를 관측합니다."""
+@app.get("/fractal/candidates")
+async def get_fractal_candidates(limit: int = 20):
+    """프랙탈 스캘핑 조건식 후보의 1분 게이트(정배열·눌림·프랙탈·재돌파)를 관측합니다."""
     try:
-        from utils.auto_trade_engine import evaluate_gate_pack
+        from utils.ema_fractal import drop_forming_minute_bar, evaluate_fractal_setup
         from utils.screener_targets import fetch_condition_target_items, parse_condition_names
-        from utils.ymgp_engine import evaluate_ymgp_from_daily, get_stock_state, is_reentry_locked
 
         settings = None
         for db in get_db():
             settings = db.query(AutoTradeSettings).first()
             break
-        names = parse_condition_names(getattr(settings, "ymgp_condition_names", None))
+        names = parse_condition_names(getattr(settings, "fractal_condition_names", None))
         if not names:
-            return {"success": True, "items": [], "total": 0, "message": "역매공파 조건식 미설정"}
+            return {"success": True, "items": [], "total": 0, "message": "프랙탈 조건식 미설정"}
 
         rows, errors = await fetch_condition_target_items(kiwoom_api, names, pause_sec=0.3)
         out = []
-        for item in rows[:min(max(limit, 1), 40)]:
+        for item in rows[: min(max(int(limit or 20), 1), 30)]:
             code = item.get("stock_code")
-            try:
-                price = int(item.get("current_price") or 0)
-            except (TypeError, ValueError):
-                price = 0
-            try:
-                change_rate = float(item.get("change_rate")) if item.get("change_rate") is not None else None
-            except (TypeError, ValueError):
-                change_rate = None
-
-            # 관측용 — 주말·장외에도 일봉을 가져와야 "일봉 부족" 오판이 안 난다
-            bars = await kiwoom_api.get_stock_chart_data(
+            raw = await kiwoom_api.get_stock_chart_data(
                 getattr(kiwoom_api, "normalize_stock_code", lambda c: c)(code),
-                "1D",
-                max_bars=520,
+                "1M",
+                max_bars=130,
                 allow_off_hours=True,
             )
-            prior = get_stock_state(code)
-            evaled = evaluate_ymgp_from_daily(
-                bars or [],
-                settings,
-                current_price=price,
-                change_rate=change_rate,
-                prior_stage=prior.get("stage"),
-                stopped_lock=is_reentry_locked(code, settings),
+            bars = drop_forming_minute_bar(raw or [])
+            setup = evaluate_fractal_setup(
+                bars,
+                lookback=20,
+                stop_ema_period=int(getattr(settings, "fractal_stop_ema", None) or 50),
+                stop_ticks=int(getattr(settings, "fractal_stop_tick_buffer", None) or 1),
+                rr=float(getattr(settings, "fractal_rr", None) or 1.5),
             )
-            ctx = {"daily_bars": bars, "entry_leg": 1, "ymgp_ref": evaled.get("ref") or prior.get("ref")}
-            gate_ok, gate_reason = False, evaled.get("reason") or ""
-            if evaled.get("stage") == "ARMED" and not is_reentry_locked(code, settings):
-                gate_ok, gate_reason = await evaluate_gate_pack(
-                    kiwoom_api,
-                    settings,
-                    "yeokmaegongpa",
-                    code,
-                    price,
-                    change_rate=change_rate,
-                    ctx=ctx,
-                    skip_time_check=True,
-                )
-            ref = ctx.get("ymgp_ref") or evaled.get("ref") or {}
+            status = setup.get("status") or "wait"
+            gate_ok = status == "pass"
+            gate_reason = setup.get("reason") or ""
+            checks = setup.get("checks") or {}
             out.append({
                 **item,
-                "source": "ymgp",
-                "ymgp_stage": evaled.get("stage"),
-                "ymgp_reason": evaled.get("reason"),
-                "ymgp_checks": evaled.get("checks") or [],
-                "ymgp_ref": ref,
-                "ymgp_box": evaled.get("box"),
-                "ymgp_mas": evaled.get("mas"),
+                "source": "fractal",
                 "gate_ok": gate_ok,
                 "gate_reason": gate_reason,
-                "reentry_locked": is_reentry_locked(code, settings),
+                "fractal_status": status,
+                "fractal_checks": checks,
+                "stop_price": setup.get("stop_price"),
+                "take_profit_price": setup.get("take_profit_price"),
+                "ema20": checks.get("ema20"),
+                "ema50": checks.get("ema50"),
+                "ema100": checks.get("ema100"),
             })
-            await asyncio.sleep(0.15)
+            await asyncio.sleep(0.12)
 
         log_activity(
             "SCANNER",
-            f"역매공파 후보 관측 — {len(out)}개 (조건식: {', '.join(names)})",
+            f"프랙탈 후보 관측 — {len(out)}개 (조건식: {', '.join(names)})",
             "info",
         )
         return {
@@ -5142,8 +5729,267 @@ async def get_ymgp_candidates(limit: int = 30):
             "errors": errors,
         }
     except Exception as e:
-        logger.error(f"역매공파 후보 조회 오류: {e}")
-        raise HTTPException(status_code=500, detail="역매공파 후보 조회 중 오류가 발생했습니다.")
+        logger.error(f"프랙탈 후보 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail="프랙탈 후보 조회 중 오류가 발생했습니다.")
+
+
+@app.get("/ma1590/candidates", include_in_schema=False)
+async def get_ma1590_candidates_alias():
+    """Deprecated alias — use /ma1592/candidates."""
+    return await get_ma1592_candidates()
+
+
+@app.get("/ma1592/candidates")
+async def get_ma1592_candidates():
+    """15/92(1592매매) 장부 후보 + 조건식 편입(미장부) 관측.
+
+    장부 종목에는 편입 시점 EMA15/92 스냅샷과 현재 게이트 상태를 함께 반환한다.
+    """
+    try:
+        from utils.ma1592 import (
+            enrich_ma1592_display_row,
+            fetch_live_universe_metrics,
+            get_universe_store,
+            maintain_ma1592_universe,
+            params_from_settings,
+            preview_entry_gate_status,
+            preview_price_lead_status,
+            sync_universe_from_condition_async,
+        )
+        from utils.screener_targets import fetch_condition_target_items, parse_condition_names
+
+        settings = None
+        for db in get_db():
+            settings = db.query(AutoTradeSettings).first()
+            break
+
+        names = parse_condition_names(
+            getattr(settings, "ma1592_condition_names", None) if settings else None
+        )
+        if not names:
+            try:
+                names = list(getattr(Config, "TELEGRAM_ALERT_CONDITION_NAMES", None) or [])
+            except Exception:
+                names = []
+        if not names:
+            names = [Config.MA1592_DEFAULT_CONDITION_NAME]
+
+        store = get_universe_store()
+        store.load()
+        store.expire_stale()
+        ma_params = params_from_settings(settings)
+        chart_ttl = float(getattr(Config, "MA1592_CHART_CACHE_TTL", 60) or 60)
+
+        condition_rows, cond_errors = await fetch_condition_target_items(
+            kiwoom_api, names, pause_sec=0.2,
+        )
+        present: Dict[str, Dict[str, Any]] = {}
+        for it in condition_rows or []:
+            code = str(it.get("stock_code") or "").replace("A", "").zfill(6)
+            if not code or code == "000000":
+                continue
+            present[code] = {
+                "stock_name": it.get("stock_name") or code,
+                "current_price": it.get("current_price"),
+            }
+        if present:
+            await sync_universe_from_condition_async(
+                kiwoom_api,
+                present,
+                source="condition",
+                params=ma_params,
+                store=store,
+                cache_ttl_sec=chart_ttl,
+            )
+
+        maint = await maintain_ma1592_universe(
+            kiwoom_api, params=ma_params, store=store, cache_ttl_sec=chart_ttl,
+        )
+        purged = maint.get("purged") or []
+        if purged:
+            logger.info(f"MA1592 추세전환 장부 정리: {', '.join(purged)}")
+
+        state_label = {
+            "GC_WATCH": "조건관찰",
+            "WAIT_HOLD": "15선대기",
+            "MANAGE_FULL": "전량보유",
+            "MANAGE_HALF": "반익절",
+        }
+
+        def _ledger_entry_ts(value: Optional[str]) -> float:
+            if not value:
+                return 0.0
+            try:
+                s = str(value).strip().replace("Z", "+00:00")
+                return datetime.fromisoformat(s).timestamp()
+            except Exception:
+                return 0.0
+
+        ledger_codes = {str(r.stock_code or "").replace("A", "").zfill(6) for r in store.all_rows()}
+
+        def _gate_fields(close_px, ma15_val, ma92_val):
+            if close_px and ma15_val and ma92_val:
+                gate = preview_entry_gate_status(
+                    float(close_px), float(ma15_val), float(ma92_val), params=ma_params,
+                )
+                return {
+                    "gate_ok": gate.get("gate_ok"),
+                    "gate_reason": gate.get("gate_reason"),
+                    "reason_code": gate.get("reason_code"),
+                    "ema_gap_pct": gate.get("ema_gap_pct"),
+                    "price_vs_ma15_pct": gate.get("price_vs_ma15_pct"),
+                    "price_vs_ma92_pct": gate.get("price_vs_ma92_pct"),
+                    "ema15_above_ema92": gate.get("ema15_above_ema92"),
+                }
+            return {
+                "gate_ok": None,
+                "gate_reason": None,
+                "reason_code": None,
+                "ema_gap_pct": None,
+                "price_vs_ma15_pct": None,
+                "price_vs_ma92_pct": None,
+                "ema15_above_ema92": None,
+            }
+
+        async def _row_payload(row):
+            code = str(row.stock_code or "").replace("A", "").zfill(6)
+            if not code or code == "000000":
+                return None
+            cond_px = None
+            try:
+                cond_px = int((present.get(code) or {}).get("current_price") or 0) or None
+            except (TypeError, ValueError):
+                cond_px = None
+            try:
+                disp = await enrich_ma1592_display_row(
+                    kiwoom_api,
+                    row,
+                    params=ma_params,
+                    chart_ttl_sec=chart_ttl,
+                    condition_price=cond_px,
+                )
+                if disp.get("metrics_updated"):
+                    store.upsert(row)
+            except Exception as e:
+                logger.debug(f"MA1592 후보 표시 보강 실패 {code}: {e}")
+                disp = {
+                    "ma15": float(row.ma15) if row.ma15 else None,
+                    "ma92": float(row.ma92) if row.ma92 else None,
+                    "prev_high": int(row.prev_high) if row.prev_high else None,
+                    "current_price": None,
+                }
+            ma15 = disp.get("ma15")
+            ma92 = disp.get("ma92")
+            prev_high = disp.get("prev_high")
+            current_price = disp.get("current_price")
+            in_ma15 = float(row.in_ma15) if row.in_ma15 else None
+            in_ma92 = float(row.in_ma92) if row.in_ma92 else None
+            close_for_gate = current_price or disp.get("bar_close")
+            ledger_at = row.in_at or row.gc_at or None
+            payload = {
+                "stock_code": code,
+                "stock_name": row.stock_name or code,
+                "source": "ma1592",
+                "condition_name": names[0] if names else Config.MA1592_DEFAULT_CONDITION_NAME,
+                "state": row.state,
+                "state_label": state_label.get(row.state, row.state),
+                "ledger_at": ledger_at,
+                "in_at": ledger_at,
+                "in_price": row.in_price or row.gc_price or None,
+                "in_ma15": round(in_ma15, 2) if in_ma15 else None,
+                "in_ma92": round(in_ma92, 2) if in_ma92 else None,
+                "gc_at": row.gc_at,
+                "gc_date": row.gc_date,
+                "gc_price": row.gc_price or None,
+                "current_price": current_price,
+                "ma15": round(ma15, 2) if ma15 else None,
+                "ma92": round(ma92, 2) if ma92 else None,
+                "prev_high": prev_high or None,
+                "hold_ok_bars": int(row.hold_ok_bars or 0),
+                "bars_since_gc": int(row.bars_since_gc or 0),
+                "expire_date": row.expire_date or None,
+                "tp1_filled": bool(row.tp1_filled),
+                "entry_price": row.entry_price or None,
+                "tp1_price": row.tp1_price or None,
+                "universe_source": row.source,
+                "condition_present": code in present,
+            }
+            payload.update(_gate_fields(close_for_gate, ma15, ma92))
+            return payload
+
+        async def _watch_payload(code: str, meta: Dict[str, Any]):
+            if code in ledger_codes:
+                return None
+            name = str(meta.get("stock_name") or code)
+            try:
+                price = int(meta.get("current_price") or 0)
+            except (TypeError, ValueError):
+                price = 0
+            live = await fetch_live_universe_metrics(
+                kiwoom_api, code, params=ma_params, cache_ttl_sec=chart_ttl,
+            )
+            ma15 = live.get("ma15")
+            ma92 = live.get("ma92")
+            if not price:
+                price = int(live.get("bar_close") or 0) or None
+            close_for_gate = price or live.get("bar_close")
+            payload = {
+                "stock_code": code,
+                "stock_name": name,
+                "source": "ma1592_watch",
+                "state": "CONDITION_ONLY",
+                "state_label": "조건편입(미장부)",
+                "current_price": price or None,
+                "ma15": round(ma15, 2) if ma15 else None,
+                "ma92": round(ma92, 2) if ma92 else None,
+                "in_ma15": None,
+                "in_ma92": None,
+                "condition_present": True,
+            }
+            payload.update(_gate_fields(close_for_gate, ma15, ma92))
+            return payload
+
+        rows = store.all_rows()
+        payloads = await asyncio.gather(*(_row_payload(row) for row in rows))
+        out = [p for p in payloads if p]
+
+        watch_codes = [c for c in present.keys() if c not in ledger_codes]
+        watch_payloads = await asyncio.gather(
+            *(_watch_payload(c, present[c]) for c in watch_codes)
+        )
+        watch = [p for p in watch_payloads if p]
+
+        # 장부 편입 시각 최신순 (검증·모니터링용)
+        out.sort(
+            key=lambda r: _ledger_entry_ts(
+                r.get("ledger_at") or r.get("in_at") or r.get("gc_at"),
+            ),
+            reverse=True,
+        )
+        watch.sort(key=lambda r: (0 if r.get("gate_ok") else 1, r.get("stock_code") or ""))
+
+        l3_count = sum(1 for r in out if r.get("state") in ("GC_WATCH", "WAIT_HOLD"))
+        log_activity(
+            "SCANNER",
+            f"MA1592 장부 후보 — {len(out)}개 (L3 {l3_count} · 조건편입 {len(present)} · 미장부 {len(watch)})",
+            "info",
+        )
+        return {
+            "success": True,
+            "items": out,
+            "watch": watch,
+            "total": len(out),
+            "watch_count": len(watch),
+            "condition_present_count": len(present),
+            "l3_count": l3_count,
+            "condition_names": names,
+            "condition_errors": cond_errors,
+            "use_ma1592": bool(getattr(settings, "use_ma1592", False)) if settings else False,
+            "message": None if (out or watch) else "장부·조건식에 종목이 없습니다. (1592매매 편입 시 스티키 등록)",
+        }
+    except Exception as e:
+        logger.error(f"MA1592 후보 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail="MA1592 후보 조회 중 오류가 발생했습니다.")
 
 
 class JonggaPickRequest(BaseModel):
@@ -5536,4 +6382,19 @@ async def manual_sell_position(position_id: int, sell_price: int = 0):
     except Exception as e:
         logger.error(f"수동 매도 주문 오류: {e}")
         raise HTTPException(status_code=500, detail="수동 매도 주문 중 오류가 발생했습니다.")
+
+
+@app.post("/positions/{position_id}/manual-avg-down")
+async def manual_avg_down_position(position_id: int):
+    """보유 포지션 수동 물타기 (포지션당 1회)."""
+    try:
+        result = await buy_order_executor.execute_manual_avg_down(position_id)
+        if not result.get("success"):
+            raise HTTPException(status_code=400, detail=result.get("error") or "물타기 주문 실패")
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"수동 물타기 주문 오류: {e}")
+        raise HTTPException(status_code=500, detail="수동 물타기 주문 중 오류가 발생했습니다.")
 

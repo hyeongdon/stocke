@@ -82,9 +82,13 @@ def enqueue_trade_sell_tray(
     profit_loss: Optional[int] = None,
     profit_loss_rate: Optional[float] = None,
 ) -> bool:
-    from notifications.trade_alert import SELL_REASON_KO, _fmt_pnl
+    from notifications.trade_alert import sell_reason_ko, _fmt_pnl
 
-    reason = SELL_REASON_KO.get(sell_reason, sell_reason or "매도")
+    reason = sell_reason_ko(
+        sell_reason,
+        profit_loss=profit_loss,
+        profit_loss_rate=profit_loss_rate,
+    )
     title = f"Stocke · 매도 · {reason}"
     pnl = ""
     if profit_loss is not None:

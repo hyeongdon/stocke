@@ -134,7 +134,7 @@ function Start-StockeServer([int]$Port, [string]$BindHost) {
         New-Item -ItemType Directory -Path (Split-Path $LogFile) -Force | Out-Null
     }
 
-    $screenerLimit = Get-EnvServerSetting -Name 'SCREENER_CANDIDATE_LIMIT' -Default '50'
+    $screenerLimit = Get-EnvServerSetting -Name 'SCREENER_CANDIDATE_LIMIT' -Default '20'
     $env:SCREENER_CANDIDATE_LIMIT = $screenerLimit
 
     $args = @('-m', 'uvicorn', 'core.main:app', '--host', $BindHost, '--port', "$Port")

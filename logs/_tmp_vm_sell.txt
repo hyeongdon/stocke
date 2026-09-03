@@ -1,0 +1,30 @@
+﻿=== SELL ORDERS ===
+id: 343
+position_id: 207
+stock_code: 089970
+stock_name: 브이엠
+sell_price: 53800
+sell_quantity: 22
+sell_amount: 1183600
+sell_order_id: 0132274
+sell_reason: STOP_LOSS
+sell_reason_detail: TP1_GAP→STOP_LOSS | MA1592 TP1_GAP · frac=0.5 · 22/45주
+profit_loss: 9878
+profit_loss_rate: 0.8415962212517104
+status: COMPLETED
+created_at: 2026-09-02 05:38:46.024483
+ordered_at: 2026-09-02 05:38:46.517417
+completed_at: 2026-09-02 05:38:52.194315
+trading_commission: None
+transaction_tax: None
+---
+=== POSITIONS ===
+python : Traceback (most recent call last):
+위치 C:\Users\MiniPC\AppData\Local\Temp\ps-script-98841d06-72a1-4086-b514-fe3d1c45dadd.ps1:104 문자:1
++ python -c "
++ ~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Traceback (most recent call last)::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  File "<string>", line 17, in <module>
+sqlite3.OperationalError: no such column: created_at

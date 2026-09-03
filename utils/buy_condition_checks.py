@@ -285,6 +285,7 @@ def build_buy_condition_checklist(
     # --- 가격·등락률 / 전략 게이트 ---
     is_sangtta = (meta.get("strategy") == "sangtta") or (source == "sangtta")
     is_breakout = (meta.get("strategy") == "breakout") or (source == "breakout")
+    is_fractal = (meta.get("strategy") == "fractal") or (source == "fractal")
     if is_breakout:
         level_kind = meta.get("level_kind") or settings.get("breakout_level_mode") or "prev_high"
         level_price = int(meta.get("breakout_level_price") or meta.get("level_price") or 0)
@@ -320,6 +321,24 @@ def build_buy_condition_checklist(
             required=f"< {max_change:g}%",
             key="breakout_overheat",
         ))
+        cap = settings.get("crash_sync_pullback_cap_pct")
+        if cap is None or cap == "":
+            cap = 2.0
+        try:
+            cap_f = float(cap)
+        except (TypeError, ValueError):
+            cap_f = 2.0
+        if cap_f > 0:
+            pb = meta.get("pullback_pp")
+            dh = meta.get("day_high")
+            items.append(_chk(
+                "돌파 게이트", "고점대비 눌림 상한",
+                passed=(float(pb) < cap_f) if pb is not None else infer,
+                actual=(f"{float(pb):.2f}%p" + (f" · 고가 {int(dh):,}" if dh else ""))
+                if pb is not None else "—",
+                required=f"< {cap_f:g}%p",
+                key="breakout_pullback_cap",
+            ))
         confirm_mode = meta.get("entry_confirm_mode")
         hold_rsi = meta.get("hold_rsi")
         rsi_min = settings.get("breakout_hold_rsi_min")
@@ -358,6 +377,28 @@ def build_buy_condition_checklist(
             actual=f"{level_kind} · {level_price:,}원" if level_price else level_kind,
             required="AND 통과",
             key="oversold_breakout",
+        ))
+        require_prog = settings.get("breakout_require_program_net")
+        if require_prog is None:
+            require_prog = True
+        lookback = int(settings.get("breakout_program_lookback") or 5)
+        min_buy = int(settings.get("breakout_program_min_buy") or 3)
+        buy_n = meta.get("program_buy_count")
+        prog_ok = meta.get("program_net_ok")
+        items.append(_chk(
+            "돌파 게이트", "프로그램 순매수 (시간대)",
+            passed=bool(prog_ok) if prog_ok is not None else infer,
+            actual=(
+                f"{int(buy_n)}/{lookback}칸"
+                if buy_n is not None
+                else (str(meta.get("program_net_reason") or "—"))
+            ),
+            required=(
+                f"최근 {lookback}칸 중 {min_buy}칸 이상 순매수"
+                if require_prog
+                else "OFF"
+            ),
+            key="breakout_program_net",
         ))
     elif is_sangtta:
         from utils.auto_trade_engine import (
@@ -443,7 +484,10 @@ def build_buy_condition_checklist(
             key="sangtta_breakout",
         ))
     else:
-        has_price_cond = bool(settings.get("buy_below_price")) or _eff_min_rate(settings) is not None
+        # 프랙탈은 자체 1분 게이트만 — 레거시 최소등락률 체크리스트에서 제외
+        has_price_cond = bool(settings.get("buy_below_price")) or (
+            (not is_fractal) and _eff_min_rate(settings) is not None
+        )
         if settings.get("buy_below_price"):
             cap = int(settings["buy_below_price"])
             passed_p = price <= cap if price else None
@@ -455,7 +499,7 @@ def build_buy_condition_checklist(
                 key="buy_below_price",
             ))
 
-        min_rate = _eff_min_rate(settings)
+        min_rate = None if is_fractal else _eff_min_rate(settings)
         if min_rate is not None:
             passed_r = float(change_rate or 0) >= min_rate if change_rate is not None else None
             items.append(_chk(
@@ -470,7 +514,7 @@ def build_buy_condition_checklist(
             items.append(_chk(
                 "가격·등락률", "가격/등락 조건",
                 passed=True,
-                actual="미설정",
+                actual="미설정" if not is_fractal else "프랙탈(레거시 등락 미적용)",
                 required="—",
                 enabled=False,
             ))

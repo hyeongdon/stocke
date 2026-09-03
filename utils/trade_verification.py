@@ -32,15 +32,9 @@ SIGNAL_TYPE_KO = {
     "auto_trade": "자동매매 스캐너",
 }
 
-SELL_REASON_KO = {
-    "STOP_LOSS": "손절",
-    "TAKE_PROFIT": "익절",
-    "TRAILING": "트레일링 스탑",
-    "PROFIT_LOCK": "수익 잠금",
-    "MARKET_CLOSE": "장마감 청산",
-    "MANUAL": "수동 매도",
-    "INDICATOR": "지표 매도",
-}
+from utils.sell_reason_labels import SELL_REASON_KO, sell_reason_ko
+
+SELL_REASON_KO = SELL_REASON_KO  # re-export
 
 SELL_STATUS_KO = {
     "PENDING": "대기",
@@ -419,6 +413,8 @@ def _settings_dict(s: Optional[AutoTradeSettings]) -> Dict[str, Any]:
         "use_entry_gate", "require_above_open", "require_above_vwap",
         "day_position_min", "day_position_max", "volume_ratio_min",
         "legacy_rsi_min", "legacy_rsi_max",
+        "legacy_ema_exit_enabled", "legacy_ema_exit_period", "legacy_ema_exit_soft_min",
+        "legacy_ema_exit_band_pct",
         "sizing_method", "initial_min_amount", "initial_max_amount",
         "signal_min_threshold", "signal_max_threshold",
         "add_buy_amount", "add_buy_trigger", "max_concurrent_positions",
@@ -426,6 +422,10 @@ def _settings_dict(s: Optional[AutoTradeSettings]) -> Dict[str, Any]:
         "market_risk_enabled", "market_risk_index", "market_risk_change_pct",
         "market_risk_max_buys_per_strategy",
         "market_risk_block_legacy", "market_risk_block_sangtta", "market_risk_block_breakout",
+        "market_surge_enabled", "market_surge_index", "market_surge_change_pct",
+        "market_surge_max_buys_per_strategy",
+        "crash_sync_block_enabled", "crash_sync_index_pct", "crash_sync_error_pct",
+        "crash_sync_pullback_cap_pct",
         "liquidate_before_close", "liquidate_time", "order_method",
         "trade_start_time", "trade_end_time", "watchlist_codes", "scan_interval_sec",
         "limit_break_soft_pct", "limit_break_hard_pct",
@@ -438,6 +438,8 @@ def _settings_dict(s: Optional[AutoTradeSettings]) -> Dict[str, Any]:
         "breakout_level_mode", "breakout_n_day", "breakout_vol_mult",
         "breakout_max_change_pct", "breakout_stop_loss_pct",
         "breakout_trailing_start_pct", "breakout_trailing_pct",
+        "breakout_require_program_net", "breakout_program_lookback",
+        "breakout_program_min_buy",
         "struct_break_soft_pct", "struct_break_hard_pct",
     ]
     out = {}
@@ -536,6 +538,16 @@ def _build_exit_rule_text(settings: Dict[str, Any], pos: Position) -> str:
             f"SOFT {settings.get('struct_break_soft_pct', 1.0)}%"
             f"×{settings.get('soft_confirm_polls', 2)}회"
         )
+    else:
+        from utils.legacy_ema_exit import legacy_ema_exit_params
+        from utils.market_risk_gate import normalize_strategy_key
+        if normalize_strategy_key(strategy or "legacy") == "legacy":
+            on, ema_n, soft_m, band = legacy_ema_exit_params(settings)
+            if on:
+                parts.append(
+                    f"5분 EMA{ema_n} 이탈 SOFT 확정봉 "
+                    f"{max(1, (soft_m + 4) // 5)}개/{soft_m}분 (이격>{band:g}%)"
+                )
     trail_start_rate = (
         settings.get("breakout_trailing_start_pct")
         if strategy == "breakout" else pos.take_profit_rate
@@ -567,10 +579,13 @@ def _build_exit_rule_text(settings: Dict[str, Any], pos: Position) -> str:
             f"수익잠금 +{settings['profit_lock_trigger']}%→바닥 {settings.get('profit_lock_floor')}%"
         )
     if settings.get("liquidate_before_close"):
-        if strategy == "breakout":
-            parts.append("장마감 청산 제외(오버나잇 허용)")
+        if strategy in ("breakout", "ymgp", "jongga"):
+            slots = settings.get("overnight_keep_slots")
+            if slots is None:
+                slots = 3
+            parts.append(f"장마감 슬롯정리(당일종가배팅 제외 {slots}종목 오버나잇)")
         else:
-            parts.append(f"장마감 {settings.get('liquidate_time', '15:10')} 전량청산")
+            parts.append(f"장마감 {settings.get('liquidate_time', '15:10')} 슬롯 정리")
     return " · ".join(parts)
 
 
@@ -728,7 +743,11 @@ def _serialize_sell_order(so: SellOrder) -> Dict[str, Any]:
         "price": int(so.sell_price),
         "quantity": int(so.sell_quantity),
         "amount": int(so.sell_amount),
-        "reason": SELL_REASON_KO.get(so.sell_reason, so.sell_reason),
+        "reason": sell_reason_ko(
+            so.sell_reason,
+            profit_loss=int(so.profit_loss) if so.profit_loss is not None else None,
+            profit_loss_rate=float(so.profit_loss_rate) if so.profit_loss_rate is not None else None,
+        ),
         "reason_code": so.sell_reason,
         "reason_detail": so.sell_reason_detail,
         "status": so.status,
@@ -774,7 +793,11 @@ def _synthetic_sell_dict(pos: Position, buy_price: int, qty: int) -> Dict[str, A
         "price": sell_price,
         "quantity": qty or int(pos.buy_quantity or 0) or None,
         "amount": amount,
-        "reason": SELL_REASON_KO.get(reason_code, reason_code),
+        "reason": sell_reason_ko(
+            reason_code,
+            profit_loss=pnl,
+            profit_loss_rate=pl_rate,
+        ),
         "reason_code": reason_code,
         "reason_detail": "포지션 청산 기록 (sell_orders 없음 — reconcile 전 또는 수동 동기화)",
         "status": "COMPLETED",
@@ -883,7 +906,9 @@ def _exit_notes(pos: Position, sells: List[SellOrder], sell_rows: Optional[List[
             f"매도 체결: {int(s.sell_quantity):,}주 · {int(s.sell_amount or 0):,}원 "
             f"@ {int(s.sell_price):,}원"
         )
-        notes.append(f"청산 사유: {SELL_REASON_KO.get(s.sell_reason, s.sell_reason)}")
+        notes.append(
+            f"청산 사유: {sell_reason_ko(s.sell_reason, profit_loss=int(s.profit_loss) if s.profit_loss is not None else None, profit_loss_rate=float(s.profit_loss_rate) if s.profit_loss_rate is not None else None)}"
+        )
         if s.sell_reason_detail:
             notes.append(f"상세: {s.sell_reason_detail}")
         if s.profit_loss is not None:
@@ -898,7 +923,7 @@ def _exit_notes(pos: Position, sells: List[SellOrder], sell_rows: Optional[List[
         s = pending[-1]
         notes.append(
             f"매도 주문 {SELL_STATUS_KO.get(s.status, s.status)}: "
-            f"{SELL_REASON_KO.get(s.sell_reason, s.sell_reason)}"
+            f"{sell_reason_ko(s.sell_reason)}"
         )
         notes.append(f"주문 {int(s.sell_price):,}원 × {int(s.sell_quantity):,}주")
         if s.sell_reason_detail:
@@ -1053,10 +1078,11 @@ def calculation_guide() -> Dict[str, List[Dict[str, str]]]:
         ],
         "exit_priority": [
             {"step": "상따 이탈/급락", "desc": "strategy=sangtta: 상한가 이탈 HARD/SOFT · 고점 급락 HARD/SOFT (SOFT는 soft_confirm_polls 연속) — STOP_LOSS로 기록"},
+            {"step": "EMA 이탈 SOFT", "desc": "strategy=legacy|breakout|sangtta: 5분봉 EMA(기본 90) 대비 허용 이격(기본 1%)을 넘는 하락이 확정봉 2개(기본 10분) 연속 유지되고 현재가도 이탈선 아래면 전량 청산. 이격 안 회복 시 리셋. 돌파는 구조 이탈 다음, 상따는 이탈·급락 다음·고정손절·트레일보다 먼저."},
             {"step": "트레일링(B)", "desc": "고점≥시작% → armed + 바닥잠금 · 매도선=max(고점−트레일, 바닥)"},
             {"step": "손절", "desc": "매수가 대비 stop_loss_rate% 또는 매수가−ATR×배수 (유효선은 후보 중 최고가) — 상따는 백업"},
             {"step": "수익잠금", "desc": "profit_lock_trigger% 도달 후 최소 profit_lock_floor% 선 확보"},
-            {"step": "장마감", "desc": "liquidate_time 이후 전량 시장가 MARKET_CLOSE"},
+            {"step": "장마감", "desc": "liquidate_time 이후 슬롯 정리: 당일 종가배팅 유지 + overnight_keep_slots(기본 3, 전략당 1). 익절·큰 손실부터 MARKET_CLOSE"},
         ],
         "pnl": [
             {"step": "실현손익", "desc": "(매도체결가 − 매수단가) × 수량 (키움 수수료 제외 근사)"},
@@ -1190,13 +1216,25 @@ async def build_verification_report(
 
         sangtta_exit = classify_sangtta_exit_detail(reason_detail) if strategy_key == "sangtta" else None
         sell_reason_label = (
-            SELL_REASON_KO.get(sell.sell_reason, sell.sell_reason) if sell
+            sell_reason_ko(
+                sell.sell_reason,
+                profit_loss=int(sell.profit_loss) if sell.profit_loss is not None else None,
+                profit_loss_rate=float(sell.profit_loss_rate) if sell.profit_loss_rate is not None else None,
+            ) if sell
             else (primary_sell_row.get("reason") if primary_sell_row else None)
         )
-        if sangtta_exit and sell_reason_label:
-            sell_reason_label = f"{sell_reason_label} · {SANGTTA_EXIT_KO[sangtta_exit]}"
-        elif sangtta_exit:
-            sell_reason_label = SANGTTA_EXIT_KO[sangtta_exit]
+        # For 'sangtta' strategy, prefer showing 익절 if realized pnl is positive
+        if strategy_key == "sangtta" and (recorded_pnl is not None and recorded_pnl > 0):
+            base_label = "익절"
+            if sangtta_exit:
+                sell_reason_label = f"{base_label} · {SANGTTA_EXIT_KO[sangtta_exit]}"
+            else:
+                sell_reason_label = base_label
+        else:
+            if sangtta_exit and sell_reason_label:
+                sell_reason_label = f"{sell_reason_label} · {SANGTTA_EXIT_KO[sangtta_exit]}"
+            elif sangtta_exit:
+                sell_reason_label = SANGTTA_EXIT_KO[sangtta_exit]
 
         trades.append({
             "position_id": pos.id,

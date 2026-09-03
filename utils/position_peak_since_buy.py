@@ -83,13 +83,16 @@ def max_high_full_holding_days(
     buy_date,
     today,
 ) -> int:
-    """매수일 다음날 ~ 어제까지는 종일 보유로 일봉 고가 사용."""
+    """매수일 다음날부터는 종일 보유로 일봉 고가 사용(당일 진행 중 일봉 포함).
+
+    매수 당일 일봉은 매수 전 고가가 섞이므로 제외하고, 분봉으로만 집계한다.
+    """
     peak = 0
     for bar in daily_bars or []:
         bar_date = parse_daily_bar_date(str(bar.get("timestamp") or ""))
         if bar_date is None:
             continue
-        if buy_date < bar_date < today:
+        if buy_date < bar_date <= today:
             peak = max(peak, int(bar.get("high") or 0))
     return peak
 

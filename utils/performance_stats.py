@@ -94,6 +94,12 @@ def _normalize_sell_reason(reason: Optional[str]) -> str:
     return r
 
 
+def _outcome_sell_reason(reason: Optional[str], net: float) -> str:
+    """트레일 등 메커니즘 + 실현손익 → 익절/손절 결과 코드."""
+    from utils.sell_reason_labels import classify_exit_reason
+
+    return classify_exit_reason(_normalize_sell_reason(reason), profit_loss=net)
+
 def trades_from_db_closures(sell_orders, positions) -> List[Dict]:
     """앱 DB 청산 — 포지션 1개 완전 청산 = trade 1건.
 
@@ -127,13 +133,13 @@ def trades_from_db_closures(sell_orders, positions) -> List[Dict]:
             net = sum(int(s.profit_loss or 0) for s in sells)
             last = max(sells, key=lambda s: s.completed_at or s.created_at)
             ts = last.completed_at or last.created_at
-            reason = _normalize_sell_reason(last.sell_reason or "매도")
+            reason = _outcome_sell_reason(last.sell_reason or "매도", net)
             stock_code = last.stock_code
             stock_name = last.stock_name
         elif pos and pos.sell_time:
             net = int(pos.current_profit_loss or 0)
             ts = pos.sell_time
-            reason = _normalize_sell_reason(pos.status or "청산")
+            reason = _outcome_sell_reason(pos.status or "청산", net)
             stock_code = pos.stock_code
             stock_name = pos.stock_name
         else:
@@ -194,6 +200,9 @@ def compute_performance(
         "profit_factor": 0,
         "expected": 0,
         "mdd": 0,
+        "mdd_pct": 0,
+        "mdd_peak_date": None,
+        "mdd_trough_date": None,
         "best": 0,
         "worst": 0,
         "avg_win": 0,
@@ -220,12 +229,10 @@ def compute_performance(
     avg_win = win_sum / len(wins) if wins else 0
     avg_loss = loss_sum / len(losses) if losses else 0
 
-    curve, cum, peak, mdd = [], 0.0, 0.0, 0.0
+    curve, cum = [], 0.0
     for t in trades:
         cum += float(t["net"])
-        curve.append({"ts": t.get("ts"), "cum": round(cum)})
-        peak = max(peak, cum)
-        mdd = min(mdd, cum - peak)
+        curve.append({"ts": t.get("ts"), "date": t.get("date"), "cum": round(cum)})
 
     reason_map: Dict[str, Dict] = {}
     for t in trades:
@@ -236,16 +243,49 @@ def compute_performance(
 
     daily_map: Dict[str, Dict] = {}
     for t in trades:
-        d = daily_map.setdefault(t["date"], {"date": t["date"], "count": 0, "wins": 0, "pnl": 0.0})
+        d = daily_map.setdefault(
+            t["date"],
+            {"date": t["date"], "count": 0, "wins": 0, "losses": 0, "pnl": 0.0},
+        )
         d["count"] += 1
         if float(t["net"]) > 0:
             d["wins"] += 1
+        elif float(t["net"]) < 0:
+            d["losses"] += 1
         d["pnl"] += float(t["net"])
 
-    daily = [{"date": k, "count": v["count"], "wins": v["wins"], "pnl": round(v["pnl"])}
+    daily = [
+        {
+            "date": k,
+            "count": v["count"],
+            "wins": v["wins"],
+            "losses": v["losses"],
+            "pnl": round(v["pnl"]),
+        }
              for k, v in daily_map.items()]
     daily.sort(key=lambda x: x["date"], reverse=True)
     trading_days = len(daily)
+
+    # 트레이딩 MDD: 일별 실현 자산(시드+누적)의 고점 대비 최대 낙폭.
+    # 건별 곡선이 아니라 일자 종가 기준 — 당일 회복한 장중 저점은 낙폭으로 보지 않음.
+    mdd, mdd_pct = 0.0, 0.0
+    mdd_peak_date, mdd_trough_date = None, None
+    chrono = sorted(daily, key=lambda x: x["date"])
+    if chrono:
+        equity = float(seed or 0)
+        peak = equity
+        peak_date = chrono[0]["date"]
+        for row in chrono:
+            equity += float(row["pnl"])
+            if equity >= peak:
+                peak = equity
+                peak_date = row["date"]
+            dd = equity - peak
+            if dd < mdd:
+                mdd = dd
+                mdd_pct = (dd / peak * 100) if peak else 0.0
+                mdd_peak_date = peak_date
+                mdd_trough_date = row["date"]
 
     return {
         **base,
@@ -262,6 +302,9 @@ def compute_performance(
         "profit_factor": round((win_sum / abs(loss_sum)) if loss_sum else 0, 2),
         "expected": round(net_pnl / n),
         "mdd": round(mdd),
+        "mdd_pct": round(mdd_pct, 2),
+        "mdd_peak_date": mdd_peak_date,
+        "mdd_trough_date": mdd_trough_date,
         "best": round(max(float(t["net"]) for t in trades)),
         "worst": round(min(float(t["net"]) for t in trades)),
         "avg_win": round(avg_win),

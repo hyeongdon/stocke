@@ -69,8 +69,17 @@ class StrategyManager:
                 "long_period": 10,         # 장기 이동평균 기간
                 "buy_threshold": 0.0,      # 매수 신호 임계값
                 "sell_threshold": 0.0      # 매도 신호 임계값
-            }
+            },
+            "MA1592": None,  # utils.ma1592.DEFAULT_PARAMS 사용
         }
+        try:
+            from utils.ma1592 import DEFAULT_PARAMS as _MA1592
+            self.default_strategies["MA1592"] = dict(_MA1592)
+        except Exception:
+            self.default_strategies["MA1592"] = {
+                "ma_fast": 15, "ma_slow": 92, "ma_type": "ema", "ma_source": "bar",
+                "hold_bars": 6, "setup_expire_days": 8,
+            }
 
     def _to_native_json(self, value: Any) -> Any:
         """pandas/Datetime 등을 JSON 직렬화 가능한 기본 파이썬 타입으로 변환"""

@@ -6,11 +6,11 @@
 텔레그램으로 전송합니다.
 
 사용 예:
-  # 1회 실행 (모든 조건식)
-  python scripts/condition_telegram_alert.py
+  # 편입 종목이 1개 이상일 때만 텔레그램 전송 (0종이면 스킵)
+  python scripts/condition_telegram_alert.py --names "1592매매"
 
-  # 특정 조건식만 (이름 부분일치, 쉼표 구분)
-  python scripts/condition_telegram_alert.py --names "돌파,120일선"
+  # 실시간 편입 알림 (돌파 직후 이탈해도 편입 순간 전송, Ctrl+C 종료)
+  python scripts/condition_telegram_alert.py --realtime --names "1592매매"
 
   # 반복 실행 (600초 주기) - 종료는 Ctrl+C
   python scripts/condition_telegram_alert.py --loop --interval 600
@@ -23,6 +23,7 @@
   TELEGRAM_ALERT_CONDITION_NAMES        (선택, --names 미지정 시 기본 필터)
   TELEGRAM_ALERT_INTERVAL               (선택, --interval 미지정 시 기본 주기)
   TELEGRAM_ALERT_MAX_STOCKS             (선택, 조건식별 표시 종목 수)
+  TELEGRAM_CONDITION_REALTIME_DEDUP_SEC (선택, 동일 종목 재알림 간격 기본 300)
 """
 import argparse
 import asyncio
@@ -46,10 +47,8 @@ if sys.platform == "win32":
 from core.config import Config  # noqa: E402
 from api.kiwoom_api import KiwoomAPI  # noqa: E402
 from notifications.telegram_notifier import TelegramNotifier  # noqa: E402
-from notifications.condition_alert import (  # noqa: E402
-    collect_condition_results,
-    build_message,
-)
+from notifications.condition_alert import send_condition_alert  # noqa: E402
+from notifications.condition_realtime_alert import run_realtime_condition_alerts  # noqa: E402
 
 LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
 LOG_FILE = os.path.join(LOG_DIR, "condition_telegram_alert.log")
@@ -101,33 +100,27 @@ def _seconds_until_next_hour() -> float:
 
 
 async def run_once(api: KiwoomAPI, notifier: TelegramNotifier, names, max_stocks) -> bool:
-    """조건식 조회 후 텔레그램으로 1회 전송."""
-    from utils.market_hours import telegram_market_alert_block_reason
-
-    block = telegram_market_alert_block_reason()
-    if Config.TELEGRAM_ALERT_MARKET_HOURS_ONLY and block:
-        _log(f"⏸️ 알림 스킵 — {block}")
-        return True
-
+    """조건식 조회 후 편입 종목이 있을 때만 텔레그램 전송."""
     _log(f"[{datetime.now().strftime('%H:%M:%S')}] 조건식 목록 조회 중...")
-    condition_results = await collect_condition_results(api, names)
-
-    if not condition_results:
-        _log("⚠️ 조건식 목록이 비어 있습니다. (토큰/조건식 등록 여부 확인 필요)")
-        notifier.send_message("📊 조건식 조회 결과\n\n조건식 목록이 비어 있습니다.")
-        return False
-
-    for cond, stocks in condition_results:
-        _log(f"   - [{cond.get('condition_id')}] {cond.get('condition_name', '')}: {len(stocks)}종목")
-
-    message = build_message(condition_results, max_stocks)
-    _log("\n----- 전송 메시지 미리보기 -----")
-    _log(message)
-    _log("--------------------------------\n")
-
-    ok = notifier.send_message(message)
-    _log("✅ 텔레그램 전송 완료" if ok else "❌ 텔레그램 전송 실패 (logs 파일의 텔레그램 오류 확인)")
-    return ok
+    result = await send_condition_alert(
+        api, notifier, names=names, max_stocks=max_stocks,
+    )
+    if result.get("skipped"):
+        _log(f"⏸️ {result.get('skip_reason') or result.get('message') or '알림 스킵'}")
+        return True
+    if result.get("sent"):
+        _log(
+            f"✅ 텔레그램 전송 완료 "
+            f"(조건식 {result.get('condition_count', 0)} · 종목 {result.get('stock_count', 0)})"
+        )
+        preview = result.get("message") or ""
+        if preview:
+            _log("\n----- 전송 메시지 미리보기 -----")
+            _log(preview)
+            _log("--------------------------------\n")
+        return True
+    _log("❌ 텔레그램 전송 실패 (logs 파일의 텔레그램 오류 확인)")
+    return False
 
 
 async def run(args: argparse.Namespace) -> int:
@@ -152,6 +145,19 @@ async def run(args: argparse.Namespace) -> int:
         return 1
     _log("✅ 인증 성공")
     _log(f"   대상: {'전체 조건식' if not names else names}")
+    if args.realtime:
+        _log("   모드: 실시간 편입")
+        _log("실시간 편입 알림 시작 (Ctrl+C 로 종료)")
+        try:
+            await run_realtime_condition_alerts(api, notifier, names=names)
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:
+            _log(f"❌ 실시간 알림 오류: {e}")
+            logger.exception("실시간 알림 예외")
+            return 2
+        return 0
+
     if args.hourly:
         mode = "매 정시"
     elif args.loop:
@@ -197,11 +203,14 @@ def main() -> int:
     logger.info("condition_telegram_alert 시작")
     p = argparse.ArgumentParser(description="조건식 조회 → 텔레그램 알림")
     p.add_argument("--names", default=None, help="조건식 이름 필터 (부분일치, 쉼표 구분)")
+    p.add_argument("--realtime", action="store_true", help="실시간 편입 알림 (search_type=1)")
     p.add_argument("--loop", action="store_true", help="고정 주기 반복 실행")
     p.add_argument("--hourly", action="store_true", help="매 정시(00분)마다 실행")
     p.add_argument("--interval", type=int, default=None, help="반복 주기(초)")
     p.add_argument("--max-stocks", type=int, default=None, help="조건식별 표시 종목 수")
     args = p.parse_args()
+    if args.realtime and (args.loop or args.hourly):
+        p.error("--realtime 은 --loop/--hourly 와 함께 쓸 수 없습니다")
 
     try:
         return asyncio.run(run(args))

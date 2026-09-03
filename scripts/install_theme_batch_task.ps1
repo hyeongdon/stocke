@@ -31,6 +31,7 @@ if ($Uninstall) {
 }
 
 $batchArgs = "`"$scriptPath`" --top-n 0 --no-news"
+# 알파스퀘어는 기본 ON (ALPHASQUARE_ENABLED). 끄려면 --no-alphasquare 추가.
 $taskCommand = "`"$pythonExe`" $batchArgs"
 
 if ($Mode -eq "Daily") {

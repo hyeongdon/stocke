@@ -47,7 +47,7 @@ class TrayNotifyTests(unittest.TestCase):
             buy = json.loads(lines[0])
             sell = json.loads(lines[1])
             self.assertIn("신규매수", buy["title"])
-            self.assertIn("트레일링", sell["title"])
+            self.assertIn("익절", sell["title"])
 
 
 if __name__ == "__main__":

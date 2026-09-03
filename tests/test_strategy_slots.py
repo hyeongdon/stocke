@@ -34,7 +34,12 @@ class _FakeSession:
 
 
 def _settings(slots=1):
-    return SimpleNamespace(sangtta_max_slots=slots, breakout_max_slots=slots)
+    return SimpleNamespace(
+        legacy_max_slots=slots,
+        sangtta_max_slots=slots,
+        breakout_max_slots=slots,
+        ma1592_max_slots=slots,
+    )
 
 
 def test_executor_allows_self_reserved_signal_when_limit_1():
@@ -57,6 +62,20 @@ def test_legacy_holding_does_not_block_sangtta_slot():
     session = _FakeSession(positions=[pos])
     assert _count_strategy_slots(session, "sangtta") == 0
     assert is_strategy_slot_available(_settings(1), session, "sangtta", for_new_signal=True) is True
+
+
+def test_legacy_holding_fills_legacy_slot():
+    pos = SimpleNamespace(stock_code="005860", status="HOLDING", strategy_key="legacy")
+    session = _FakeSession(positions=[pos])
+    assert _count_strategy_slots(session, "legacy") == 1
+    assert is_strategy_slot_available(_settings(1), session, "legacy", for_new_signal=True) is False
+    assert is_strategy_slot_available(_settings(1), session, "legacy", for_new_signal=False) is True
+
+
+def test_untagged_holding_counts_as_legacy_for_backward_compatibility():
+    pos = SimpleNamespace(stock_code="005860", status="HOLDING", strategy_key=None)
+    session = _FakeSession(positions=[pos])
+    assert _count_strategy_slots(session, "legacy") == 1
 
 
 def test_sangtta_holding_fills_slot():
@@ -98,3 +117,35 @@ def test_stale_ordered_excluded():
     )
     session = _FakeSession(signals=[sig])
     assert _count_strategy_slots(session, "sangtta") == 0
+
+
+def test_ma1592_holding_fills_slot():
+    positions = [
+        SimpleNamespace(stock_code="085620", status="HOLDING", strategy_key="ma1592"),
+        SimpleNamespace(stock_code="280360", status="HOLDING", strategy_key="ma1592"),
+    ]
+    session = _FakeSession(positions=positions)
+    assert _count_strategy_slots(session, "ma1592") == 2
+    assert is_strategy_slot_available(_settings(2), session, "ma1592", for_new_signal=True) is False
+    assert is_strategy_slot_available(_settings(2), session, "ma1592", for_new_signal=False) is True
+
+
+def test_ma1592_add_buy_does_not_consume_slot():
+    now = utc_now_naive()
+    pos = SimpleNamespace(stock_code="085620", status="HOLDING", strategy_key="ma1592")
+    sig = SimpleNamespace(
+        stock_code="204620",
+        status="PENDING",
+        detected_at=now,
+        additional_data={"strategy": "ma1592", "is_add_buy": True, "entry_leg": 3},
+    )
+    session = _FakeSession(positions=[pos], signals=[sig])
+    assert _count_strategy_slots(session, "ma1592") == 1
+    assert is_strategy_slot_available(_settings(2), session, "ma1592", for_new_signal=True) is True
+
+
+def test_ma1590_alias_counts_toward_ma1592_slots():
+    pos = SimpleNamespace(stock_code="085620", status="HOLDING", strategy_key="ma1590")
+    session = _FakeSession(positions=[pos])
+    assert _count_strategy_slots(session, "ma1592") == 1
+    assert is_strategy_slot_available(_settings(1), session, "ma1590", for_new_signal=True) is False

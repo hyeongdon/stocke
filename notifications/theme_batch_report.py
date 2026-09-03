@@ -101,11 +101,11 @@ def _count_naver_edges(session: Session, biz: date) -> int:
     )
 
 
-def _count_kiwoom_edges(session: Session, biz: date) -> int:
+def _count_source_edges(session: Session, biz: date, source: str) -> int:
     return int(
         session.query(func.count(ThemeTagEdge.id))
         .filter(
-            ThemeTagEdge.source == "kiwoom_theme",
+            ThemeTagEdge.source == source,
             ThemeTagEdge.biz_date == biz,
         )
         .scalar()
@@ -113,16 +113,32 @@ def _count_kiwoom_edges(session: Session, biz: date) -> int:
     )
 
 
-def _count_kiwoom_themes(session: Session, biz: date) -> int:
+def _count_source_themes(session: Session, biz: date, source: str) -> int:
     return int(
         session.query(func.count(func.distinct(ThemeTagEdge.tag_id)))
         .filter(
-            ThemeTagEdge.source == "kiwoom_theme",
+            ThemeTagEdge.source == source,
             ThemeTagEdge.biz_date == biz,
         )
         .scalar()
         or 0
     )
+
+
+def _count_kiwoom_edges(session: Session, biz: date) -> int:
+    return _count_source_edges(session, biz, "kiwoom_theme")
+
+
+def _count_kiwoom_themes(session: Session, biz: date) -> int:
+    return _count_source_themes(session, biz, "kiwoom_theme")
+
+
+def _count_alphasquare_edges(session: Session, biz: date) -> int:
+    return _count_source_edges(session, biz, "alphasquare_theme")
+
+
+def _count_alphasquare_themes(session: Session, biz: date) -> int:
+    return _count_source_themes(session, biz, "alphasquare_theme")
 
 
 def _count_scores(session: Session, biz: date) -> Tuple[int, int]:
@@ -190,8 +206,20 @@ def collect_theme_batch_report_stats(
     if not kiwoom_edges:
         kiwoom_edges = _count_kiwoom_edges(session, biz)
 
+    alphasquare = (
+        result.get("alphasquare") if isinstance(result.get("alphasquare"), dict) else {}
+    )
+    as_themes = int(alphasquare.get("themes") or 0)
+    as_edges = int(alphasquare.get("edges") or 0)
+    as_api_calls = int(alphasquare.get("api_calls") or 0)
+    if not as_themes:
+        as_themes = _count_alphasquare_themes(session, biz)
+    if not as_edges:
+        as_edges = _count_alphasquare_edges(session, biz)
+
     prev_edges = _count_naver_edges(session, prev) if prev else None
     prev_kiwoom_edges = _count_kiwoom_edges(session, prev) if prev else None
+    prev_as_edges = _count_alphasquare_edges(session, prev) if prev else None
     prev_scores, prev_stocks = _count_scores(session, prev) if prev else (None, None)
     prev_kw = None
     if prev:
@@ -235,6 +263,14 @@ def collect_theme_batch_report_stats(
         warnings.append(f"키움 테마 수집 실패: {kiwoom.get('error') or 'unknown'}")
     elif kiwoom_themes <= 0 and result.get("kiwoom_ok") is not None:
         warnings.append("키움 테마 0건 — ka90001/인증·한도 확인")
+    if alphasquare and alphasquare.get("skipped"):
+        pass
+    elif alphasquare and result.get("alphasquare_ok") is False:
+        warnings.append(
+            f"알파스퀘어 테마 수집 실패: {alphasquare.get('error') or 'unknown'}"
+        )
+    elif as_themes <= 0 and result.get("alphasquare_ok") is not None:
+        warnings.append("알파스퀘어 테마 0건 — API/네트워크 확인")
     if prev_edges and today_edges and prev_edges > 0:
         drop_pct = (prev_edges - today_edges) / prev_edges * 100
         if drop_pct >= 10:
@@ -257,6 +293,9 @@ def collect_theme_batch_report_stats(
             "kiwoom_themes": kiwoom_themes,
             "kiwoom_edges": kiwoom_edges,
             "kiwoom_api_calls": kiwoom_api_calls,
+            "alphasquare_themes": as_themes,
+            "alphasquare_edges": as_edges,
+            "alphasquare_api_calls": as_api_calls,
         },
         "prev": {
             "edges": prev_edges,
@@ -264,6 +303,7 @@ def collect_theme_batch_report_stats(
             "scores": prev_scores,
             "stocks": prev_stocks,
             "kiwoom_edges": prev_kiwoom_edges,
+            "alphasquare_edges": prev_as_edges,
         },
         "top_keywords": [
             {
@@ -301,6 +341,11 @@ def collect_theme_batch_report_stats(
         ],
         "warnings": warnings,
         "error": result.get("error"),
+        "source_cross": (
+            result.get("source_cross")
+            if isinstance(result.get("source_cross"), dict)
+            else None
+        ),
     }
 
 
@@ -324,6 +369,8 @@ def _summary_table(stats: Dict[str, Any]) -> str:
         row("편입(N)", today.get("edges"), prev.get("edges")),
         row("테마(K)", today.get("kiwoom_themes"), None),
         row("편입(K)", today.get("kiwoom_edges"), prev.get("kiwoom_edges")),
+        row("테마(AS)", today.get("alphasquare_themes"), None),
+        row("편입(AS)", today.get("alphasquare_edges"), prev.get("alphasquare_edges")),
         row("키워드", today.get("keywords"), prev.get("keywords")),
         row("스코어행", today.get("scores"), prev.get("scores")),
         row("종목수", today.get("stocks"), prev.get("stocks")),
@@ -331,6 +378,9 @@ def _summary_table(stats: Dict[str, Any]) -> str:
     api_calls = today.get("kiwoom_api_calls")
     if api_calls:
         lines.append(row("K API", int(api_calls), None))
+    as_api = today.get("alphasquare_api_calls")
+    if as_api:
+        lines.append(row("AS API", int(as_api), None))
     return "\n".join(lines)
 
 
@@ -428,6 +478,29 @@ def format_theme_batch_report_html(stats: Dict[str, Any]) -> str:
 
     if stats.get("error"):
         parts.append(f"\n오류: <code>{_esc(stats['error'])}</code>")
+
+    cross = stats.get("source_cross") if isinstance(stats.get("source_cross"), dict) else None
+    if cross and cross.get("ok"):
+        s = cross.get("stocks") or {}
+        c = cross.get("coverage_pct") or {}
+        parts.extend(
+            [
+                "",
+                "<b>【소스 교차】</b>",
+                (
+                    f"N {_esc(s.get('naver'))} · K {_esc(s.get('kiwoom'))} · "
+                    f"AS {_esc(s.get('alphasquare'))} · ∪ {_esc(s.get('union'))}"
+                ),
+                (
+                    f"3교집합 {_esc(s.get('all_three'))} · AS alone {_esc(s.get('alphasquare_only'))} · "
+                    f"AS→N갭 {_esc(s.get('alphasquare_fills_naver_gap'))}"
+                ),
+                (
+                    f"커버리지∪ N {_esc(c.get('naver_of_union'))}% · "
+                    f"K {_esc(c.get('kiwoom_of_union'))}% · AS {_esc(c.get('alphasquare_of_union'))}%"
+                ),
+            ]
+        )
 
     parts.append("\n로그: <code>logs/theme_mart_batch.log</code>")
     return "\n".join(parts)

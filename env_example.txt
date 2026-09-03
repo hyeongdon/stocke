@@ -29,17 +29,48 @@ DATABASE_URL=sqlite:///./stock_pipeline.db
 HOST=0.0.0.0
 PORT=8000
 # 매일 KST 이 시각 이후 서버(uvicorn) 자동 종료. false면 끄기
+# 손절 모니터는 08:00~19:30 — 자동종료는 그 이후(기본 19:30)로 둘 것
 SERVER_AUTO_SHUTDOWN_ENABLED=true
-SERVER_AUTO_SHUTDOWN_TIME=19:00
+SERVER_AUTO_SHUTDOWN_TIME=19:30
 
-# 레거시 스크리너 — 거래대금 상위 후보 수 (기본 50)
-SCREENER_CANDIDATE_LIMIT=50
+# 웹 UI 세션 인증 (로그인 → 자동매매 대시보드)
+# AUTH_PASSWORD는 평문 env, 서버는 PBKDF2 해시로만 비교. 세션 쿠키 유효 6시간.
+AUTH_ENABLED=true
+AUTH_USERNAME=zi5
+AUTH_PASSWORD=zi6
+AUTH_SESSION_SECRET=change-me-to-a-long-random-string
+AUTH_SESSION_HOURS=6
+
+# 테마 거래대금 맵 (대시보드 · 거래대금순→테마 합산, 15분 캐시)
+THEME_FLOW_STOCK_LIMIT=300
+THEME_FLOW_TOP_N=40
+THEME_FLOW_CACHE_SEC=900
+
+# 알파스퀘어 테마 (비공식 내부 API · 일 1회 배치, 로그인 불필요)
+# 상세: docs/PRD_ALPHASQUARE_THEME.md
+ALPHASQUARE_ENABLED=true
+ALPHASQUARE_BASE_URL=https://api.alphasquare.co.kr
+ALPHASQUARE_TIMEOUT_SEC=20
+ALPHASQUARE_SLEEP_SEC=0.35
+# true면 themes-for-stock으로 편입사유까지 수집 (호출 수↑)
+ALPHASQUARE_FETCH_REASONS=false
+
+# 키움 REST — 분당 호출 상한·최소 간격 (공식 20회, 기본 18/3초)
+API_MAX_CALLS_PER_MIN=18
+API_MIN_CALL_INTERVAL=3.0
+# 스캔 종목 간 추가 대기(초). API 잔여≥5면 자동으로 더 짧게 (적응형)
+SCAN_GATE_PAUSE_SEC=3.0
+
+# 1회 스캔 총 대상 상한 (기본 60). 초과분은 레거시 상위부터 축소
+SCAN_TARGET_TOTAL_LIMIT=60
+# 레거시 스크리너 — 거래대금 상위 후보 상한(단독 시, 기본 60). 타 전략 편입 시 잔여 자리로 축소
+SCREENER_CANDIDATE_LIMIT=20
 # 상따 — 등락률상위 풀에서 거래대금순으로 남길 후보 수 (기본 20)
 SANGTTA_CANDIDATE_LIMIT=20
 # 스크리너 후보 최소 등락률(%). 0이면 플러스(>0)만. 매수 최소등락보다 약간 낮게(예: 3.5→3.3)
 SCREENER_MIN_CHANGE_RATE=3.3
 # 스크리너 후보 과열 컷(%). 이 이상이면 편입 제외. 0이면 상한 미적용
-SCREENER_MAX_CHANGE_RATE=15
+SCREENER_MAX_CHANGE_RATE=12
 # 스크리너 후보 최소 당일 거래대금(억원). 0이면 하한 미적용
 SCREENER_MIN_TRADE_AMOUNT_EOK=20
 
@@ -78,10 +109,14 @@ TELEGRAM_CHAT_ID=your_telegram_chat_id_here
 # 아침 스케줄(ensure_server_running) 서버 신규 기동 시에도 위 토큰으로 알림 전송
 # 자동매매 매수/매도 체결 시에도 동일 토큰으로 알림 전송
 # 알림 대상 조건식 이름 필터(쉼표 구분). 비우면 모든 조건식 대상.
+# 돌파형(짧게 편입 후 이탈)은 정시 스냅샷으로 놓치기 쉬움 → run_condition_alert_realtime.bat
 TELEGRAM_ALERT_CONDITION_NAMES=
+# 예: 1592매매  — MA1592 전략 유니버스도 동일 조건식명 사용(대시보드 ma1592_condition_names)
 # 반복 실행 주기(초)
 TELEGRAM_ALERT_INTERVAL=600
 # 조건식별 표시 최대 종목 수
 TELEGRAM_ALERT_MAX_STOCKS=20
 # true: 조건식·매매 알림은 거래일 장중(09:00~15:30)만 (휴장·주말·장외 스킵)
 TELEGRAM_ALERT_MARKET_HOURS_ONLY=true
+# 실시간 편입 알림 동일 종목 재알림 간격(초)
+TELEGRAM_CONDITION_REALTIME_DEDUP_SEC=300

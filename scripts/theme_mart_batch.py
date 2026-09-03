@@ -1,9 +1,12 @@
 """
-테마/키워드 매핑 배치 (Phase 1)
+테마/키워드 매핑 배치 (네이버 · 키움 · 알파스퀘어)
 
 사용 예:
   python scripts/theme_mart_batch.py
   python scripts/theme_mart_batch.py --top-n 20 --no-news
+  python scripts/theme_mart_batch.py --no-alphasquare
+  python scripts/theme_mart_batch.py --alphasquare-only --top-n 0
+  python scripts/theme_mart_batch.py --kiwoom-only
   python scripts/theme_mart_batch.py --notify-only
 """
 from __future__ import annotations
@@ -24,6 +27,7 @@ if sys.platform == "win32":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
+from core.config import Config  # noqa: E402
 from core.models import get_db  # noqa: E402
 from notifications.theme_batch_report import (  # noqa: E402
     build_notify_only_result,
@@ -31,6 +35,8 @@ from notifications.theme_batch_report import (  # noqa: E402
 )
 from notifications.telegram_notifier import TelegramNotifier  # noqa: E402
 from utils.theme_map_store import (  # noqa: E402
+    build_theme_source_cross_report,
+    refresh_alphasquare_theme_mapping_snapshot,
     refresh_kiwoom_theme_mapping_snapshot,
     refresh_theme_mapping_snapshot,
 )
@@ -64,6 +70,31 @@ def parse_args() -> argparse.Namespace:
         help="네이버 생략, 키움 테마만 수집 (기존 naver_theme 유지)",
     )
     p.add_argument(
+        "--no-alphasquare",
+        action="store_true",
+        help="알파스퀘어 테마 수집 비활성화 — 기본은 ON (ALPHASQUARE_ENABLED 시)",
+    )
+    p.add_argument(
+        "--alphasquare-only",
+        action="store_true",
+        help="네이버/키움 생략, 알파스퀘어 테마만 수집",
+    )
+    p.add_argument(
+        "--fetch-reasons",
+        action="store_true",
+        help="알파스퀘어 편입사유(themes-for-stock)까지 수집 — 호출 수↑",
+    )
+    p.add_argument(
+        "--cross-report",
+        action="store_true",
+        help="수집 후(또는 단독) 네이버·키움·AS 교차 커버리지 리포트 출력",
+    )
+    p.add_argument(
+        "--cross-report-only",
+        action="store_true",
+        help="수집 없이 교차 커버리지 리포트만 출력/텔레그램",
+    )
+    p.add_argument(
         "--no-telegram",
         action="store_true",
         help="완료/실패 텔레그램 일일 리포트 비활성화",
@@ -94,6 +125,8 @@ def _send_start(
     top_n: int,
     include_news: bool,
     include_kiwoom: bool,
+    include_alphasquare: bool,
+    mode: str,
 ) -> None:
     if not enabled:
         return
@@ -106,9 +139,11 @@ def _send_start(
         msg = (
             "<b>📊 테마/키워드 배치 시작</b>\n"
             f"기준일: <code>{kst_today().isoformat()}</code>\n"
+            f"mode: <code>{mode}</code>\n"
             f"top_n: <code>{'전체' if top_n <= 0 else top_n}</code>\n"
             f"뉴스키워드: <code>{'on' if include_news else 'off'}</code>\n"
             f"키움테마: <code>{'on' if include_kiwoom else 'off'}</code>\n"
+            f"알파스퀘어: <code>{'on' if include_alphasquare else 'off'}</code>\n"
             f"시각: {now}\n"
             "\n로그: <code>logs/theme_mart_batch.log</code>"
         )
@@ -116,6 +151,23 @@ def _send_start(
         log.info("테마 배치 시작 알림: %s", "OK" if ok else "FAIL")
     except Exception as e:
         log.exception("테마 배치 시작 알림 오류: %s", e)
+
+
+def _log_source_stage(log: logging.Logger, name: str, payload: dict | None) -> None:
+    if not isinstance(payload, dict):
+        return
+    if payload.get("skipped"):
+        log.info("%s: skipped", name)
+        return
+    log.info(
+        "%s: ok=%s themes=%s edges=%s api_calls=%s err=%s",
+        name,
+        payload.get("ok"),
+        payload.get("themes"),
+        payload.get("edges"),
+        payload.get("api_calls"),
+        payload.get("error") or payload.get("error_count"),
+    )
 
 
 def main() -> int:
@@ -132,18 +184,46 @@ def main() -> int:
             _send_report(db, result, None, telegram_on, log)
             return 0 if result.get("ok") else 1
 
+        if args.cross_report_only:
+            report = build_theme_source_cross_report(db)
+            log.info("cross-report: %s", report)
+            print(report)
+            return 0 if report.get("ok") else 1
+
+        if args.kiwoom_only and args.alphasquare_only:
+            log.error("--kiwoom-only 와 --alphasquare-only 는 동시에 쓸 수 없습니다.")
+            return 2
+
         include_news = not bool(args.no_news)
         include_kiwoom = not bool(args.no_kiwoom)
+        include_alphasquare = (not bool(args.no_alphasquare)) and bool(
+            Config.ALPHASQUARE_ENABLED
+        )
+        fetch_reasons = bool(args.fetch_reasons) or bool(Config.ALPHASQUARE_FETCH_REASONS)
         kiwoom_only = bool(args.kiwoom_only)
+        alphasquare_only = bool(args.alphasquare_only)
+        mode = "full"
         if kiwoom_only:
+            mode = "kiwoom_only"
             include_news = False
             include_kiwoom = True
+            include_alphasquare = False
+            fetch_reasons = False
+        elif alphasquare_only:
+            mode = "alphasquare_only"
+            include_news = False
+            include_kiwoom = False
+            include_alphasquare = True
+
         log.info(
-            "theme_mart_batch 시작 top_n=%s include_news=%s include_kiwoom=%s kiwoom_only=%s",
+            "theme_mart_batch 시작 top_n=%s include_news=%s include_kiwoom=%s "
+            "include_alphasquare=%s fetch_reasons=%s mode=%s",
             args.top_n,
             include_news,
             include_kiwoom,
-            kiwoom_only,
+            include_alphasquare,
+            fetch_reasons,
+            mode,
         )
         _send_start(
             telegram_on,
@@ -151,31 +231,49 @@ def main() -> int:
             top_n=int(args.top_n),
             include_news=include_news,
             include_kiwoom=include_kiwoom,
+            include_alphasquare=include_alphasquare,
+            mode=mode,
         )
         try:
             top_n_arg = int(args.top_n)
-            top_n = 0 if top_n_arg <= 0 else min(max(top_n_arg, 5), 200)
+            # 알파스퀘어 전수는 ~454 — 상한을 500으로 완화
+            top_n = 0 if top_n_arg <= 0 else min(max(top_n_arg, 1), 500)
             if kiwoom_only:
                 result = refresh_kiwoom_theme_mapping_snapshot(db, top_n=top_n)
+            elif alphasquare_only:
+                result = refresh_alphasquare_theme_mapping_snapshot(
+                    db,
+                    top_n=top_n,
+                    fetch_reasons=fetch_reasons,
+                )
             else:
                 result = refresh_theme_mapping_snapshot(
                     db,
                     top_n=top_n,
                     include_news_keywords=include_news,
                     include_kiwoom=include_kiwoom,
+                    include_alphasquare=include_alphasquare,
+                    fetch_reasons=fetch_reasons if include_alphasquare else False,
                 )
             elapsed = time.monotonic() - started
             log.info("theme_mart_batch 결과: %s (소요 %.1fs)", result, elapsed)
-            kw = result.get("kiwoom") if isinstance(result.get("kiwoom"), dict) else {}
-            if include_kiwoom:
-                log.info(
-                    "kiwoom_theme: ok=%s themes=%s edges=%s api_calls=%s err=%s",
-                    kw.get("ok"),
-                    kw.get("themes"),
-                    kw.get("edges"),
-                    kw.get("api_calls"),
-                    kw.get("error") or kw.get("error_count"),
+            if include_kiwoom or kiwoom_only:
+                _log_source_stage(
+                    log,
+                    "kiwoom_theme",
+                    result.get("kiwoom") if isinstance(result.get("kiwoom"), dict) else result,
                 )
+            if include_alphasquare or alphasquare_only:
+                as_payload = (
+                    result.get("alphasquare")
+                    if isinstance(result.get("alphasquare"), dict)
+                    else result
+                )
+                _log_source_stage(log, "alphasquare_theme", as_payload)
+            if args.cross_report:
+                report = build_theme_source_cross_report(db)
+                result["source_cross"] = report
+                log.info("cross-report: %s", report)
             _send_report(db, result, elapsed, telegram_on, log)
             if not result.get("ok"):
                 return 1

@@ -106,7 +106,7 @@ function initFromUrl() {
     $('resolution').value = resolution;
   }
   if (mode) $('entryMode').value = mode;
-  if (strategy && ['legacy', 'sangtta', 'breakout', 'ymgp'].includes(strategy)) {
+  if (strategy && ['legacy', 'sangtta', 'breakout', 'jongga', 'fractal'].includes(strategy)) {
     $('strategy').value = strategy;
   }
   const limit = p.get('limit');

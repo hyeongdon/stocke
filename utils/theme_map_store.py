@@ -25,12 +25,41 @@ from utils.batch_scheduler_status import get_batch_jobs_status
 from utils.datetime_kst import kst_today, utc_now_naive
 from utils.stock_news_progress import get_stock_news_progress
 from utils.theme_keyword_rules import extract_keywords
+from utils.theme_alphasquare_crawler import crawl_alphasquare_theme_snapshot_sync
 from utils.theme_kiwoom_crawler import crawl_kiwoom_theme_snapshot_sync
 from utils.theme_naver_crawler import crawl_theme_list, crawl_theme_stocks
 
-THEME_EDGE_SOURCES = ("naver_theme", "kiwoom_theme")
+THEME_EDGE_SOURCES = ("naver_theme", "kiwoom_theme", "alphasquare_theme")
 SOURCE_KIWOOM_THEME = "kiwoom_theme"
 SOURCE_NAVER_THEME = "naver_theme"
+SOURCE_ALPHASQUARE_THEME = "alphasquare_theme"
+
+_SOURCE_LABELS = {
+    "naver_theme": "네이버",
+    "kiwoom_theme": "키움",
+    "alphasquare_theme": "알파스퀘어",
+    "news_title": "뉴스",
+    "news_keyword": "뉴스",
+    "manual": "수동",
+}
+
+
+def source_label(source: Optional[str]) -> str:
+    s = str(source or "").strip()
+    return _SOURCE_LABELS.get(s, s or "기타")
+
+
+def source_short(source: Optional[str]) -> str:
+    s = str(source or "").strip()
+    return {
+        "naver_theme": "N",
+        "kiwoom_theme": "K",
+        "alphasquare_theme": "AS",
+        "news_title": "뉴스",
+        "news_keyword": "뉴스",
+        "manual": "수동",
+    }.get(s, (s[:4] if s else "?"))
+
 
 
 def _slug(s: str) -> str:
@@ -245,6 +274,149 @@ def refresh_kiwoom_theme_mapping_snapshot(
     }
 
 
+def _store_alphasquare_theme_edges(
+    session: Session,
+    *,
+    biz: date,
+    now: datetime,
+    top_n: int = 0,
+    fetch_reasons: Optional[bool] = None,
+) -> Dict:
+    """알파스퀘어 테마 스냅샷 → source=alphasquare_theme 엣지 저장."""
+    snap = crawl_alphasquare_theme_snapshot_sync(
+        limit=top_n,
+        fetch_reasons=fetch_reasons,
+    )
+    if not snap.get("ok"):
+        return {
+            "ok": False,
+            "error": snap.get("error") or "알파스퀘어 테마 수집 실패",
+            "themes": 0,
+            "edges": 0,
+            "api_calls": int(snap.get("api_calls") or 0),
+            "skipped": bool(snap.get("skipped")),
+        }
+
+    session.query(ThemeTagEdge).filter(
+        ThemeTagEdge.source == SOURCE_ALPHASQUARE_THEME,
+        ThemeTagEdge.biz_date == biz,
+    ).delete(synchronize_session=False)
+
+    inserted = 0
+    themes = snap.get("themes") or []
+    for t in themes:
+        theme_id = t.get("theme_id")
+        theme_name = str(t.get("theme_name") or "").strip()
+        if theme_id is None or not theme_name:
+            continue
+        tid = int(theme_id)
+        tag = _upsert_tag(
+            session,
+            tag_key=f"alphasquare_theme_{tid}_{_slug(theme_name)}",
+            name_ko=theme_name,
+            tag_type="theme",
+            source=SOURCE_ALPHASQUARE_THEME,
+            meta_json={
+                "alphasquare_theme_id": tid,
+                "description": t.get("description") or "",
+                "key_point": t.get("key_point"),
+                "stock_count": t.get("stock_count"),
+                "big_theme_id": t.get("big_theme_id"),
+                "category_name": t.get("category_name"),
+                "collected_via": "internal_api",
+                "valid_from": biz.isoformat(),
+            },
+        )
+        stocks = t.get("stocks") or []
+        for idx, stock in enumerate(stocks):
+            code = str(stock.get("stock_code") or "").strip().zfill(6)
+            if not code or len(code) != 6:
+                continue
+            reason = str(stock.get("reason") or "").strip()
+            session.add(
+                ThemeTagEdge(
+                    stock_code=code,
+                    stock_name=stock.get("stock_name") or "",
+                    tag_id=tag.id,
+                    source=SOURCE_ALPHASQUARE_THEME,
+                    role="leader" if idx == 0 else "member",
+                    weight=1.0,
+                    biz_date=biz,
+                    rank=idx + 1,
+                    inclusion_flag=True,
+                    reason_text=reason or f"알파스퀘어 테마 '{theme_name}' 편입",
+                    observed_at=now,
+                    meta_json={
+                        "alphasquare_theme_id": tid,
+                        "alphasquare_stock_id": stock.get("alphasquare_stock_id"),
+                        "reason": reason or None,
+                        "market": stock.get("market"),
+                    },
+                )
+            )
+            inserted += 1
+
+    return {
+        "ok": True,
+        "themes": len(themes),
+        "edges": inserted,
+        "api_calls": int(snap.get("api_calls") or 0),
+        "error_count": int(snap.get("error_count") or 0),
+        "errors": list(snap.get("errors") or [])[:10],
+        "fetch_reasons": bool(snap.get("fetch_reasons")),
+        "reason_count": int(snap.get("reason_count") or 0),
+    }
+
+
+def refresh_alphasquare_theme_mapping_snapshot(
+    session: Session,
+    *,
+    top_n: int = 0,
+    recompute_scores: bool = True,
+    fetch_reasons: Optional[bool] = None,
+) -> Dict:
+    """알파스퀘어 테마만 수집 (네이버·키움 스냅샷은 유지)."""
+    biz = kst_today()
+    now = utc_now_naive()
+    as_result = _store_alphasquare_theme_edges(
+        session,
+        biz=biz,
+        now=now,
+        top_n=top_n,
+        fetch_reasons=fetch_reasons,
+    )
+    if not as_result.get("ok"):
+        return {
+            "ok": False,
+            "error": as_result.get("error") or "알파스퀘어 테마 수집 실패",
+            "themes": 0,
+            "edges": 0,
+            "keywords": 0,
+            "biz_date": biz.isoformat(),
+            "scores": {"ok": False, "skipped": True},
+            "alphasquare": as_result,
+            "alphasquare_ok": False,
+            "mode": "alphasquare_only",
+        }
+
+    session.commit()
+    score_result: Dict = {"ok": True, "skipped": True}
+    if recompute_scores:
+        score_result = compute_theme_scores_for_date(session, biz_date=biz)
+
+    return {
+        "ok": True,
+        "themes": int(as_result.get("themes") or 0),
+        "edges": int(as_result.get("edges") or 0),
+        "keywords": 0,
+        "biz_date": biz.isoformat(),
+        "scores": score_result,
+        "alphasquare": as_result,
+        "alphasquare_ok": True,
+        "mode": "alphasquare_only",
+    }
+
+
 def refresh_theme_mapping_snapshot(
     session: Session,
     *,
@@ -252,6 +424,8 @@ def refresh_theme_mapping_snapshot(
     include_news_keywords: bool = True,
     news_stock_limit_per_theme: int = 2,
     include_kiwoom: bool = True,
+    include_alphasquare: bool = True,
+    fetch_reasons: Optional[bool] = None,
 ) -> Dict:
     now = utc_now_naive()
     biz = kst_today()
@@ -391,7 +565,7 @@ def refresh_theme_mapping_snapshot(
                 )
             )
 
-    # 네이버 커밋 후 키움 수집 — 장후 배치에서 네이버 다음 단계
+    # 네이버 커밋 후 키움·알파스퀘어 수집 — 장후 배치에서 네이버 다음 단계
     session.commit()
 
     kiwoom_result: Dict = {"ok": False, "skipped": True, "themes": 0, "edges": 0, "api_calls": 0}
@@ -416,6 +590,44 @@ def refresh_theme_mapping_snapshot(
                 "api_calls": 0,
             }
 
+    alphasquare_result: Dict = {
+        "ok": False,
+        "skipped": True,
+        "themes": 0,
+        "edges": 0,
+        "api_calls": 0,
+    }
+    if include_alphasquare:
+        if not Config.ALPHASQUARE_ENABLED:
+            alphasquare_result = {
+                "ok": False,
+                "skipped": True,
+                "themes": 0,
+                "edges": 0,
+                "api_calls": 0,
+                "error": "ALPHASQUARE_ENABLED=false",
+            }
+        else:
+            try:
+                as_now = utc_now_naive()
+                alphasquare_result = _store_alphasquare_theme_edges(
+                    session,
+                    biz=biz,
+                    now=as_now,
+                    top_n=top_n,
+                    fetch_reasons=fetch_reasons,
+                )
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                alphasquare_result = {
+                    "ok": False,
+                    "error": f"{type(e).__name__}: {e}",
+                    "themes": 0,
+                    "edges": 0,
+                    "api_calls": 0,
+                }
+
     score_result = compute_theme_scores_for_date(session, biz_date=biz)
 
     return {
@@ -426,26 +638,36 @@ def refresh_theme_mapping_snapshot(
         "biz_date": biz.isoformat(),
         "scores": score_result,
         "kiwoom": kiwoom_result,
-        # 키움 실패해도 네이버 스냅샷은 유지 (배치 overall ok)
+        # 키움/알파스퀘어 실패해도 네이버 스냅샷은 유지 (배치 overall ok)
         "kiwoom_ok": bool(kiwoom_result.get("ok")) if include_kiwoom else None,
+        "alphasquare": alphasquare_result,
+        "alphasquare_ok": (
+            None
+            if (not include_alphasquare or alphasquare_result.get("skipped"))
+            else bool(alphasquare_result.get("ok"))
+        ),
     }
 
 
-def get_theme_tags(session: Session, limit: int = 100) -> List[Dict]:
-    rows = (
-        session.query(ThemeTag)
-        .filter(ThemeTag.tag_type == "theme")
-        .order_by(ThemeTag.name_ko.asc())
-        .limit(max(1, min(limit, 500)))
-        .all()
-    )
+def get_theme_tags(session: Session, limit: int = 100, source: Optional[str] = None) -> List[Dict]:
+    q = session.query(ThemeTag).filter(ThemeTag.tag_type == "theme")
+    src = (source or "").strip()
+    if src:
+        q = q.filter(ThemeTag.source == src)
+    rows = q.order_by(ThemeTag.name_ko.asc()).limit(max(1, min(limit, 500))).all()
     out = []
     for r in rows:
         cnt = session.query(func.count(ThemeTagEdge.id)).filter(ThemeTagEdge.tag_id == r.id).scalar() or 0
+        meta = r.meta_json if isinstance(r.meta_json, dict) else {}
         out.append({
             "id": r.id,
             "tag_key": r.tag_key,
             "name_ko": r.name_ko,
+            "source": r.source,
+            "source_label": source_label(r.source),
+            "source_short": source_short(r.source),
+            "key_point": meta.get("key_point"),
+            "description": (meta.get("description") or "")[:240] or None,
             "edge_count": int(cnt),
             "updated_at": r.updated_at.isoformat() if r.updated_at else None,
         })
@@ -464,19 +686,27 @@ def get_tags_by_stock(session: Session, stock_code: str, limit: int = 50) -> Lis
         .order_by(ThemeTagEdge.observed_at.desc())
         .limit(max(1, min(limit, 200)))
     )
+    # 동일 (tag_id, source) 중복만 제거 — 소스별 병행 표시
     seen = set()
     out: List[Dict] = []
     for edge, tag in q:
-        key = tag.id
+        key = (tag.id, str(edge.source or ""))
         if key in seen:
             continue
         seen.add(key)
+        meta = edge.meta_json if isinstance(edge.meta_json, dict) else {}
+        tag_meta = tag.meta_json if isinstance(tag.meta_json, dict) else {}
+        reason = (edge.reason_text or "").strip() or (meta.get("reason") or None)
         out.append({
             "tag_id": tag.id,
             "tag_name": tag.name_ko,
             "tag_type": tag.tag_type,
             "source": edge.source,
+            "source_label": source_label(edge.source),
+            "source_short": source_short(edge.source),
             "role": edge.role,
+            "reason": reason,
+            "key_point": tag_meta.get("key_point"),
             "observed_at": edge.observed_at.isoformat() if edge.observed_at else None,
             "stock_code": edge.stock_code,
             "stock_name": edge.stock_name,
@@ -498,11 +728,16 @@ def get_stocks_by_tag(session: Session, tag_id: int, limit: int = 200) -> List[D
         if edge.stock_code in seen:
             continue
         seen.add(edge.stock_code)
+        meta = edge.meta_json if isinstance(edge.meta_json, dict) else {}
+        reason = (edge.reason_text or "").strip() or (meta.get("reason") or None)
         out.append({
             "stock_code": edge.stock_code,
             "stock_name": edge.stock_name,
             "source": edge.source,
+            "source_label": source_label(edge.source),
+            "source_short": source_short(edge.source),
             "role": edge.role,
+            "reason": reason,
             "weight": edge.weight,
             "observed_at": edge.observed_at.isoformat() if edge.observed_at else None,
         })
@@ -540,6 +775,16 @@ def get_theme_batch_status(session: Session) -> Dict:
         .filter(ThemeTagEdge.source == "naver_theme")
         .scalar()
     )
+    latest_kiwoom_at = (
+        session.query(func.max(ThemeTagEdge.observed_at))
+        .filter(ThemeTagEdge.source == SOURCE_KIWOOM_THEME)
+        .scalar()
+    )
+    latest_alphasquare_at = (
+        session.query(func.max(ThemeTagEdge.observed_at))
+        .filter(ThemeTagEdge.source == SOURCE_ALPHASQUARE_THEME)
+        .scalar()
+    )
     latest_news_at = (
         session.query(func.max(TagArticle.collected_at))
         .filter(TagArticle.source == "naver_news")
@@ -548,6 +793,7 @@ def get_theme_batch_status(session: Session) -> Dict:
     latest_keyword_at = session.query(func.max(KeywordDailyStat.updated_at)).scalar()
     latest_keyword_biz = session.query(func.max(KeywordDailyStat.biz_date)).scalar()
     latest_article_biz = session.query(func.max(TagArticle.biz_date)).scalar()
+    latest_theme_biz = session.query(func.max(ThemeTagEdge.biz_date)).scalar()
 
     article_count_today = 0
     article_stock_count_today = 0
@@ -580,8 +826,39 @@ def get_theme_batch_status(session: Session) -> Dict:
             or 0
         )
 
+    def _src_counts(src: str, biz: Optional[date]) -> Dict:
+        if not biz:
+            return {"themes": 0, "edges": 0, "stocks": 0}
+        edges = int(
+            session.query(func.count(ThemeTagEdge.id))
+            .filter(ThemeTagEdge.source == src, ThemeTagEdge.biz_date == biz)
+            .scalar()
+            or 0
+        )
+        themes = int(
+            session.query(func.count(func.distinct(ThemeTagEdge.tag_id)))
+            .filter(ThemeTagEdge.source == src, ThemeTagEdge.biz_date == biz)
+            .scalar()
+            or 0
+        )
+        stocks = int(
+            session.query(func.count(func.distinct(ThemeTagEdge.stock_code)))
+            .filter(ThemeTagEdge.source == src, ThemeTagEdge.biz_date == biz)
+            .scalar()
+            or 0
+        )
+        return {"themes": themes, "edges": edges, "stocks": stocks}
+
     return {
         "theme_snapshot_last_at": latest_theme_at.isoformat() if latest_theme_at else None,
+        "kiwoom_snapshot_last_at": latest_kiwoom_at.isoformat() if latest_kiwoom_at else None,
+        "alphasquare_snapshot_last_at": (
+            latest_alphasquare_at.isoformat() if latest_alphasquare_at else None
+        ),
+        "theme_snapshot_biz_date": latest_theme_biz.isoformat() if latest_theme_biz else None,
+        "naver_today": _src_counts(SOURCE_NAVER_THEME, latest_theme_biz),
+        "kiwoom_today": _src_counts(SOURCE_KIWOOM_THEME, latest_theme_biz),
+        "alphasquare_today": _src_counts(SOURCE_ALPHASQUARE_THEME, latest_theme_biz),
         "news_batch_last_at": latest_news_at.isoformat() if latest_news_at else None,
         "keyword_stats_last_at": latest_keyword_at.isoformat() if latest_keyword_at else None,
         "theme_snapshot_cadence": "매일 18:00",
@@ -594,6 +871,91 @@ def get_theme_batch_status(session: Session) -> Dict:
         "keyword_count_today": keyword_count_today,
         "stock_news_progress": get_stock_news_progress(session),
         "batch_jobs": get_batch_jobs_status(),
+    }
+
+
+def build_theme_source_cross_report(
+    session: Session,
+    *,
+    biz_date: Optional[date] = None,
+) -> Dict:
+    """네이버·키움·알파스퀘어 테마 소스 교차 커버리지 리포트."""
+    biz = biz_date or session.query(func.max(ThemeTagEdge.biz_date)).scalar()
+    if not biz:
+        return {
+            "ok": False,
+            "error": "테마 스냅샷(biz_date)이 없습니다.",
+            "biz_date": None,
+        }
+
+    def _stock_theme_names(source: str) -> Dict[str, set]:
+        rows = (
+            session.query(ThemeTagEdge.stock_code, ThemeTag.name_ko)
+            .join(ThemeTag, ThemeTag.id == ThemeTagEdge.tag_id)
+            .filter(
+                ThemeTagEdge.source == source,
+                ThemeTagEdge.biz_date == biz,
+                ThemeTag.tag_type == "theme",
+            )
+            .all()
+        )
+        out: Dict[str, set] = defaultdict(set)
+        for code, name in rows:
+            c = _norm_code(code)
+            n = (name or "").strip()
+            if c and n:
+                out[c].add(n)
+        return out
+
+    naver = _stock_theme_names(SOURCE_NAVER_THEME)
+    kiwoom = _stock_theme_names(SOURCE_KIWOOM_THEME)
+    alphasq = _stock_theme_names(SOURCE_ALPHASQUARE_THEME)
+
+    sn, sk, sa = set(naver), set(kiwoom), set(alphasq)
+    union = sn | sk | sa
+
+    def _name_overlap(a: Dict[str, set], b: Dict[str, set]) -> Dict[str, int]:
+        both = set(a) & set(b)
+        share_any = 0
+        for code in both:
+            if a[code] & b[code]:
+                share_any += 1
+        return {
+            "stocks_both": len(both),
+            "stocks_share_theme_name": share_any,
+            "share_pct": round(100.0 * share_any / len(both), 1) if both else 0.0,
+        }
+
+    # AS가 메꾸는 네이버 미매핑
+    as_fills_naver_gap = len(sa - sn)
+    as_fills_any_gap = len(sa - (sn | sk))
+
+    return {
+        "ok": True,
+        "biz_date": biz.isoformat(),
+        "stocks": {
+            "naver": len(sn),
+            "kiwoom": len(sk),
+            "alphasquare": len(sa),
+            "union": len(union),
+            "naver_and_kiwoom": len(sn & sk),
+            "naver_and_alphasquare": len(sn & sa),
+            "kiwoom_and_alphasquare": len(sk & sa),
+            "all_three": len(sn & sk & sa),
+            "alphasquare_only": len(sa - sn - sk),
+            "alphasquare_fills_naver_gap": as_fills_naver_gap,
+            "alphasquare_fills_nk_gap": as_fills_any_gap,
+        },
+        "name_overlap": {
+            "naver_kiwoom": _name_overlap(naver, kiwoom),
+            "naver_alphasquare": _name_overlap(naver, alphasq),
+            "kiwoom_alphasquare": _name_overlap(kiwoom, alphasq),
+        },
+        "coverage_pct": {
+            "naver_of_union": round(100.0 * len(sn) / len(union), 1) if union else 0.0,
+            "kiwoom_of_union": round(100.0 * len(sk) / len(union), 1) if union else 0.0,
+            "alphasquare_of_union": round(100.0 * len(sa) / len(union), 1) if union else 0.0,
+        },
     }
 
 
@@ -712,9 +1074,10 @@ def list_articles_by_keyword(
 
 
 _SOURCE_RANK = {
-    # 같은 이름이면 키움·네이버 동등 — 서로 다른 이름이면 dual로 둘 다 노출
+    # 같은 이름이면 키움·네이버·알파스퀘어 동등 — 서로 다른 이름이면 dual로 둘 다 노출
     "kiwoom_theme": 0,
     "naver_theme": 0,
+    "alphasquare_theme": 0,
     "news_title": 1,
     "news_keyword": 1,
     "manual": 2,
@@ -1440,6 +1803,77 @@ def _query_themes_from_edges(
             "tag_freshness": (
                 latest_biz.isoformat() if latest_biz else (fresh.isoformat() if fresh else None)
             ),
+        }
+    return out
+
+
+def get_trade_flow_theme_map(
+    session: Session,
+    stock_codes: List[str],
+    *,
+    theme_limit: int = 0,
+) -> Dict[str, Dict]:
+    """테마지도 전용 종목→전체 테마 맵.
+
+    점수 기반 대표테마를 거치지 않고 가장 최근 스냅샷 날짜의 모든 테마
+    소스 엣지를 합친다. 같은 이름은 소스가 달라도 한 번만 반환한다.
+    ``theme_limit=0``이면 종목별 테마 수를 제한하지 않는다.
+    """
+    codes = list(dict.fromkeys(_norm_code(c) for c in stock_codes if str(c or "").strip()))
+    if not codes:
+        return {}
+    query_codes = list(dict.fromkeys(codes + [c.lstrip("0") or "0" for c in codes]))
+
+    latest_biz = (
+        session.query(func.max(ThemeTagEdge.biz_date))
+        .filter(
+            ThemeTagEdge.stock_code.in_(query_codes),
+            ThemeTagEdge.source.in_(THEME_EDGE_SOURCES),
+        )
+        .scalar()
+    )
+    rows = (
+        session.query(ThemeTagEdge, ThemeTag)
+        .join(ThemeTag, ThemeTag.id == ThemeTagEdge.tag_id)
+        .filter(
+            ThemeTagEdge.stock_code.in_(query_codes),
+            ThemeTag.tag_type == "theme",
+            ThemeTagEdge.inclusion_flag.is_(True),
+            ThemeTagEdge.source.in_(THEME_EDGE_SOURCES),
+        )
+    )
+    if latest_biz is not None:
+        rows = rows.filter(ThemeTagEdge.biz_date == latest_biz)
+    rows = rows.order_by(
+        ThemeTagEdge.stock_code.asc(),
+        ThemeTagEdge.rank.asc(),
+        ThemeTag.name_ko.asc(),
+    ).all()
+
+    names_by_code: Dict[str, List[str]] = defaultdict(list)
+    seen_by_code: Dict[str, set] = defaultdict(set)
+    for edge, tag in rows:
+        code = _norm_code(edge.stock_code)
+        name = str(tag.name_ko or "").strip()
+        key = name.casefold()
+        if not name or key in seen_by_code[code]:
+            continue
+        seen_by_code[code].add(key)
+        names_by_code[code].append(name)
+
+    limit = max(0, int(theme_limit or 0))
+    out: Dict[str, Dict] = {}
+    for code in codes:
+        names = names_by_code.get(code) or []
+        if limit:
+            names = names[:limit]
+        out[code] = {
+            "themes": names,
+            "theme_items": [{"name": name, "score": None, "tier": "all_sources"} for name in names],
+            "keywords": [],
+            "theme_text": ", ".join(names),
+            "keyword_text": "",
+            "tag_freshness": latest_biz.isoformat() if latest_biz else None,
         }
     return out
 

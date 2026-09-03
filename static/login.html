@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <title>로그인 · stock.daily</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <style>
+    :root {
+      --bg: #0a0c10;
+      --card: #131720;
+      --border: #252b38;
+      --text: #e8edf5;
+      --muted: #7a8496;
+      --accent: #7c6cf0;
+      --down: #f87171;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg);
+      background-image:
+        radial-gradient(ellipse 70% 45% at 50% -10%, rgba(124, 108, 240, 0.12), transparent),
+        linear-gradient(180deg, #0a0c10 0%, #0d1017 100%);
+      color: var(--text);
+      font-family: "Segoe UI", -apple-system, "Malgun Gothic", sans-serif;
+      padding: 24px;
+    }
+    .box {
+      width: 100%;
+      max-width: 360px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 28px 24px 24px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+    }
+    h1 {
+      margin: 0 0 4px;
+      font-size: 20px;
+      font-weight: 800;
+      letter-spacing: -0.3px;
+      background: linear-gradient(135deg, #fff 0%, #a5b4fc 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .sub {
+      margin: 0 0 22px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    label {
+      display: block;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    input {
+      width: 100%;
+      padding: 10px 12px;
+      margin-bottom: 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #0f1218;
+      color: var(--text);
+      font-size: 14px;
+      outline: none;
+    }
+    input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(124, 108, 240, 0.18);
+    }
+    button {
+      width: 100%;
+      margin-top: 6px;
+      padding: 11px 14px;
+      border: none;
+      border-radius: 8px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button:hover { filter: brightness(1.08); }
+    button:disabled { opacity: 0.6; cursor: wait; }
+    .err {
+      display: none;
+      margin: 0 0 14px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: rgba(248, 113, 113, 0.12);
+      color: var(--down);
+      font-size: 13px;
+    }
+    .err.show { display: block; }
+  </style>
+</head>
+<body>
+  <form class="box" id="loginForm" autocomplete="on">
+    <h1>stock.daily</h1>
+    <p class="sub">로그인 후 자동매매 대시보드로 이동합니다</p>
+    <div class="err" id="errBox" role="alert"></div>
+    <label for="username">아이디</label>
+    <input id="username" name="username" type="text" autocomplete="username" required autofocus>
+    <label for="password">비밀번호</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <button type="submit" id="submitBtn">로그인</button>
+  </form>
+  <script>
+    const form = document.getElementById("loginForm");
+    const errBox = document.getElementById("errBox");
+    const submitBtn = document.getElementById("submitBtn");
+    const params = new URLSearchParams(location.search);
+    const next = params.get("next") || "/dashboard";
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errBox.classList.remove("show");
+      errBox.textContent = "";
+      submitBtn.disabled = true;
+      try {
+        const res = await fetch("/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Accept": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({
+            username: document.getElementById("username").value,
+            password: document.getElementById("password").value,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          errBox.textContent = data.detail || "로그인에 실패했습니다.";
+          errBox.classList.add("show");
+          return;
+        }
+        location.href = next.startsWith("/") ? next : "/dashboard";
+      } catch (err) {
+        errBox.textContent = "서버에 연결할 수 없습니다.";
+        errBox.classList.add("show");
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

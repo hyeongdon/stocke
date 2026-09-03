@@ -20,7 +20,13 @@ from utils.datetime_kst import (
     kst_date_str,
     kst_day_start_utc_naive,
     kst_today,
+    now_kst,
     utc_now_naive,
+)
+from utils.program_net_continuation import (
+    DEFAULT_LOOKBACK as PROGRAM_LOOKBACK_DEFAULT,
+    DEFAULT_MIN_BUY as PROGRAM_MIN_BUY_DEFAULT,
+    program_net_continuation_ok,
 )
 
 logger = logging.getLogger(__name__)
@@ -596,12 +602,13 @@ SANGTTA_OPEN_RISE_MIN_PCT = 3.0
 SANGTTA_UPPER_LIMIT_MULT = 1.30  # 일반주 상한가(전일종가 대비)
 DEFAULT_SANGTTA_BUY_AMOUNT = 500_000  # 상따 1회 매수 기본 소액
 DEFAULT_SANGTTA_MAX_SLOTS = 2
+DEFAULT_LEGACY_MAX_SLOTS = 4
 DEFAULT_BREAKOUT_BUY_AMOUNT = 1_000_000
 DEFAULT_BREAKOUT_MAX_SLOTS = 1
-DEFAULT_YMGP_BUY_AMOUNT = 500_000
-DEFAULT_YMGP_MAX_SLOTS = 1
 DEFAULT_JONGGA_BUY_AMOUNT = 1_000_000
 DEFAULT_JONGGA_MAX_SLOTS = 1
+DEFAULT_FRACTAL_MAX_SLOTS = 1
+DEFAULT_FRACTAL_WATCH_SLOTS = 5
 
 
 def is_deposit_pct_buy_unit(settings: Optional[AutoTradeSettings]) -> bool:
@@ -667,6 +674,14 @@ def effective_sangtta_max_slots(settings: Optional[AutoTradeSettings]) -> int:
     return n if n > 0 else DEFAULT_SANGTTA_MAX_SLOTS
 
 
+def effective_legacy_max_slots(settings: Optional[AutoTradeSettings]) -> int:
+    try:
+        slots = int(getattr(settings, "legacy_max_slots", 0) or 0)
+    except (TypeError, ValueError):
+        slots = 0
+    return slots if slots > 0 else DEFAULT_LEGACY_MAX_SLOTS
+
+
 def effective_breakout_buy_amount(
     settings: Optional[AutoTradeSettings],
     deposit: Optional[int] = None,
@@ -688,40 +703,6 @@ def effective_breakout_max_slots(settings: Optional[AutoTradeSettings]) -> int:
     except (TypeError, ValueError):
         slots = 0
     return slots if slots > 0 else DEFAULT_BREAKOUT_MAX_SLOTS
-
-
-def effective_ymgp_buy_amount(
-    settings: Optional[AutoTradeSettings],
-    *,
-    entry_leg: int = 1,
-    deposit: Optional[int] = None,
-) -> int:
-    if not settings:
-        return DEFAULT_YMGP_BUY_AMOUNT
-    leg = 2 if int(entry_leg or 1) >= 2 else 1
-    if leg == 2:
-        return resolve_buy_amount_won(
-            settings,
-            amount_won=getattr(settings, "ymgp_buy_amount_2", None),
-            deposit_pct=getattr(settings, "ymgp_buy_deposit_pct_2", None),
-            deposit=deposit,
-            default_won=DEFAULT_YMGP_BUY_AMOUNT,
-        )
-    return resolve_buy_amount_won(
-        settings,
-        amount_won=getattr(settings, "ymgp_buy_amount_1", None),
-        deposit_pct=getattr(settings, "ymgp_buy_deposit_pct_1", None),
-        deposit=deposit,
-        default_won=DEFAULT_YMGP_BUY_AMOUNT,
-    )
-
-
-def effective_ymgp_max_slots(settings: Optional[AutoTradeSettings]) -> int:
-    try:
-        slots = int(getattr(settings, "ymgp_max_slots", 0) or 0)
-    except (TypeError, ValueError):
-        slots = 0
-    return slots if slots > 0 else DEFAULT_YMGP_MAX_SLOTS
 
 
 def effective_jongga_buy_amount(
@@ -760,6 +741,33 @@ def effective_jongga_max_slots(settings: Optional[AutoTradeSettings]) -> int:
     return slots if slots > 0 else DEFAULT_JONGGA_MAX_SLOTS
 
 
+def effective_fractal_max_slots(settings: Optional[AutoTradeSettings]) -> int:
+    try:
+        slots = int(getattr(settings, "fractal_max_slots", 0) or 0)
+    except (TypeError, ValueError):
+        slots = 0
+    return slots if slots > 0 else DEFAULT_FRACTAL_MAX_SLOTS
+
+
+def effective_fractal_watch_slots(settings: Optional[AutoTradeSettings]) -> int:
+    try:
+        slots = int(getattr(settings, "fractal_watch_slots", 0) or 0)
+    except (TypeError, ValueError):
+        slots = 0
+    return slots if slots > 0 else DEFAULT_FRACTAL_WATCH_SLOTS
+
+
+DEFAULT_MA1592_MAX_SLOTS = 2
+
+
+def effective_ma1592_max_slots(settings: Optional[AutoTradeSettings]) -> int:
+    try:
+        slots = int(getattr(settings, "ma1592_max_slots", 0) or 0)
+    except (TypeError, ValueError):
+        slots = 0
+    return slots if slots > 0 else DEFAULT_MA1592_MAX_SLOTS
+
+
 def effective_min_change_rate(settings: AutoTradeSettings) -> Optional[float]:
     if settings.min_change_rate_buy is not None:
         return float(settings.min_change_rate_buy)
@@ -770,17 +778,24 @@ def effective_min_change_rate(settings: AutoTradeSettings) -> Optional[float]:
 
 def has_buy_conditions(settings: AutoTradeSettings) -> bool:
     return (
-        bool(settings.buy_below_price)
-        or effective_min_change_rate(settings) is not None
+        (
+            bool(getattr(settings, "use_legacy", True))
+            and (
+                bool(settings.buy_below_price)
+                or effective_min_change_rate(settings) is not None
+            )
+        )
+        or bool(getattr(settings, "use_sangtta", True))
         or bool(
             getattr(settings, "use_breakout", False)
             and getattr(settings, "breakout_condition_names", None)
         )
-        or bool(
-            getattr(settings, "use_ymgp", False)
-            and getattr(settings, "ymgp_condition_names", None)
-        )
         or bool(getattr(settings, "use_jongga", False))
+        or bool(
+            getattr(settings, "use_fractal", False)
+            and getattr(settings, "fractal_condition_names", None)
+        )
+        or bool(getattr(settings, "use_ma1592", False))
     )
 
 
@@ -839,7 +854,11 @@ def new_buy_block_reason(
         f"{getattr(settings, 'sangtta_trade_start_time', None) or '09:05'}"
         f"~{getattr(settings, 'sangtta_trade_end_time', None) or '11:00'}"
     )
-    parts = [f"레거시 {legacy}", f"상따 {sang}"]
+    parts = []
+    if getattr(settings, "use_legacy", True):
+        parts.append(f"레거시 {legacy}")
+    if getattr(settings, "use_sangtta", True):
+        parts.append(f"상따 {sang}")
     if getattr(settings, "use_breakout", False) or str(
         getattr(settings, "breakout_condition_names", None) or ""
     ).strip():
@@ -848,14 +867,6 @@ def new_buy_block_reason(
             f"~{getattr(settings, 'breakout_trade_end_time', None) or '14:30'}"
         )
         parts.append(f"돌파 {br}")
-    if getattr(settings, "use_ymgp", False) or str(
-        getattr(settings, "ymgp_condition_names", None) or ""
-    ).strip():
-        ym = (
-            f"{getattr(settings, 'ymgp_trade_start_time', None) or '09:30'}"
-            f"~{getattr(settings, 'ymgp_trade_end_time', None) or '14:30'}"
-        )
-        parts.append(f"역매공파 {ym}")
     if getattr(settings, "use_jongga", False):
         from utils.jongga_engine import jongga_buy_window_end
 
@@ -864,6 +875,22 @@ def new_buy_block_reason(
             f"~{jongga_buy_window_end(settings)}"
         )
         parts.append(f"종가배팅 {jg}")
+    if getattr(settings, "use_fractal", False) or str(
+        getattr(settings, "fractal_condition_names", None) or ""
+    ).strip():
+        fr = (
+            f"{getattr(settings, 'fractal_trade_start_time', None) or '09:20'}"
+            f"~{getattr(settings, 'fractal_trade_end_time', None) or '14:50'}"
+        )
+        parts.append(f"프랙탈 {fr}")
+    if getattr(settings, "use_ma1592", False):
+        m15 = (
+            f"{getattr(settings, 'ma1592_trade_start_time', None) or '09:10'}"
+            f"~{getattr(settings, 'ma1592_trade_end_time', None) or '15:15'}"
+        )
+        parts.append(f"15/92 {m15}")
+    if not parts:
+        parts.append("활성 전략 없음")
     engine = linked_trading_session_window_str(settings, now)
     return f"모든 전략 매매시간 외 ({', '.join(parts)} · 엔진 {engine})"
 
@@ -1247,6 +1274,53 @@ def evaluate_sangtta_breakout_from_ctx(
     return True, "상따 게이트 통과"
 
 
+def _implied_prev_close(
+    current_price: Optional[int],
+    change_rate: Optional[float],
+    prev_close: Optional[float] = None,
+) -> Optional[float]:
+    try:
+        pc = float(prev_close or 0)
+    except (TypeError, ValueError):
+        pc = 0.0
+    if pc > 0:
+        return pc
+    try:
+        px = float(current_price or 0)
+        cr = float(change_rate)
+    except (TypeError, ValueError):
+        return None
+    if px <= 0 or cr <= -99.9:
+        return None
+    return px / (1.0 + cr / 100.0)
+
+
+def _session_high_from_minute_bars(bars: Optional[List[Dict[str, Any]]]) -> int:
+    today = kst_date_str()
+    hi = 0
+    for bar in bars or []:
+        ts = str(bar.get("timestamp") or "")[:10]
+        if ts != today:
+            continue
+        try:
+            h = int(bar.get("high") or 0)
+        except (TypeError, ValueError):
+            h = 0
+        if h > hi:
+            hi = h
+    return hi
+
+
+def _breakout_pullback_cap(settings: AutoTradeSettings) -> float:
+    raw = getattr(settings, "crash_sync_pullback_cap_pct", 2.0)
+    if raw is None or raw == "":
+        return 2.0
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return 2.0
+
+
 def evaluate_oversold_breakout_from_ctx(
     settings: AutoTradeSettings,
     current_price: int,
@@ -1392,6 +1466,24 @@ def evaluate_oversold_breakout_from_ctx(
     ctx["overheat_ok"] = overheat_ok
     ctx["max_change_pct"] = max_change
 
+    pullback_cap = _breakout_pullback_cap(settings)
+    prev_close = _implied_prev_close(
+        current_price, change_rate, ctx.get("prev_close"),
+    )
+    day_high = int(ctx.get("day_high") or 0)
+    pullback_pp = None
+    pullback_ok = True
+    if pullback_cap > 0 and day_high > 0 and prev_close:
+        from utils.market_risk_gate import pullback_from_high_pp
+        pullback_pp = pullback_from_high_pp(day_high, current_price, prev_close)
+        if pullback_pp is not None:
+            pullback_ok = pullback_pp < pullback_cap
+    ctx["prev_close"] = prev_close
+    ctx["day_high"] = day_high or None
+    ctx["pullback_pp"] = pullback_pp
+    ctx["pullback_cap_pct"] = pullback_cap
+    ctx["pullback_ok"] = pullback_ok
+
     day_volume = int(ctx.get("day_volume") or 0)
     prev_volume = int(ctx.get("prev_volume") or 0)
     vol_mult = float(getattr(settings, "breakout_vol_mult", 1.5) or 1.5)
@@ -1484,6 +1576,10 @@ def evaluate_oversold_breakout_from_ctx(
         range_ok=range_ok,
         range_ratio=range_ratio,
         range_min=range_min,
+        pullback_ok=pullback_ok,
+        pullback_pp=pullback_pp,
+        pullback_cap=pullback_cap,
+        day_high=day_high,
     )
     ctx["gate_checks"] = checks
 
@@ -1501,6 +1597,11 @@ def evaluate_oversold_breakout_from_ctx(
 
     if change_rate is not None and float(change_rate) >= max_change:
         return False, f"과열 컷 ({float(change_rate):.2f}% ≥ {max_change:g}%)"
+
+    if not pullback_ok and pullback_pp is not None:
+        return False, (
+            f"고점대비 눌림 과다 ({pullback_pp:.2f}%p ≥ {pullback_cap:g}%p)"
+        )
 
     if prev_volume <= 0:
         return False, "비교 거래량 없음(분봉)"
@@ -1566,13 +1667,51 @@ def evaluate_oversold_breakout_from_ctx(
         if range_min > 0:
             quality.append(f"범위{range_ratio:.1f}×")
         qbit = (" · " + "+".join(quality)) if quality else ""
-        return True, (
+        ok_reason = (
             f"돌파 통과 ({mode_label} · {level_kind} {level_price:,}, "
             f"거래량 {volume_ratio:.2f}배{qbit})"
         )
+        return _breakout_apply_program_gate(settings, ctx, True, ok_reason)
 
     ctx["entry_confirm_mode"] = "TOUCH"
-    return True, f"돌파 통과 (TOUCH · {level_kind} {level_price:,}, 거래량 {volume_ratio:.2f}배)"
+    return _breakout_apply_program_gate(
+        settings,
+        ctx,
+        True,
+        f"돌파 통과 (TOUCH · {level_kind} {level_price:,}, 거래량 {volume_ratio:.2f}배)",
+    )
+
+
+def _breakout_apply_program_gate(
+    settings: AutoTradeSettings,
+    ctx: Dict[str, Any],
+    ok: bool,
+    reason: str,
+) -> Tuple[bool, str]:
+    """5분 게이트 통과 후에만 프로그램 순매수(이미 조회된 ctx)를 AND."""
+    if not ok:
+        return False, reason
+    require = bool(getattr(settings, "breakout_require_program_net", False))
+    if not require:
+        return True, reason
+    if not ctx.get("program_net_checked"):
+        return True, reason
+    prog_ok = bool(ctx.get("program_net_ok"))
+    prog_reason = str(ctx.get("program_net_reason") or "")
+    n = int(ctx.get("program_lookback") or PROGRAM_LOOKBACK_DEFAULT)
+    m = int(ctx.get("program_min_buy") or PROGRAM_MIN_BUY_DEFAULT)
+    buy_n = ctx.get("program_buy_count")
+    detail = prog_reason or (
+        f"프로그램 순매수 {buy_n}/{n}칸 (필요 {m})"
+        if buy_n is not None
+        else "프로그램 수급"
+    )
+    checks = list(ctx.get("gate_checks") or [])
+    checks.append(_gate_check("프로그램순매수", prog_ok, detail, enabled=True))
+    ctx["gate_checks"] = checks
+    if not prog_ok:
+        return False, prog_reason or "프로그램 매수세 부족"
+    return True, f"{reason} · {detail}"
 
 
 def _gate_check(
@@ -1637,6 +1776,10 @@ def _breakout_gate_checks(
     range_ok: bool = True,
     range_ratio: float = 0.0,
     range_min: float = 0.0,
+    pullback_ok: bool = True,
+    pullback_pp: Optional[float] = None,
+    pullback_cap: float = 0.0,
+    day_high: int = 0,
 ) -> List[Dict[str, Any]]:
     """돌파 후보 UI용 조건별 체크리스트."""
     checks: List[Dict[str, Any]] = []
@@ -1679,6 +1822,15 @@ def _breakout_gate_checks(
     else:
         oh_detail = f"{float(change_rate):+.2f}% / <{max_change:g}%"
     checks.append(_gate_check("과열", overheat_ok, oh_detail))
+
+    if pullback_cap > 0:
+        if pullback_pp is None:
+            pb_detail = "고점/전일종가 없음"
+        else:
+            pb_detail = f"{pullback_pp:.2f}%p / <{pullback_cap:g}%p"
+            if day_high:
+                pb_detail += f" (고가 {day_high:,})"
+        checks.append(_gate_check("고점눌림", pullback_ok, pb_detail, enabled=True))
 
     if use_hard:
         if hard_ok:
@@ -1933,6 +2085,9 @@ async def _eval_legacy_momentum(
     settings: AutoTradeSettings,
     stock_code: str,
     current_price: int,
+    *,
+    skip_volume_ratio: bool = False,
+    skip_day_position: bool = False,
 ) -> Tuple[bool, str]:
     """기존 진입 게이트 AND 묶음 (legacy_momentum)."""
     if not settings.use_entry_gate:
@@ -1969,48 +2124,50 @@ async def _eval_legacy_momentum(
     day_low = int(today_bar.get("low") or current_price)
     day_volume = int(today_bar.get("volume") or 0)
     prev_volume = int(prev_bar.get("volume") or 0) if prev_bar else 0
+    prev_close = int(prev_bar.get("close") or 0) if prev_bar else 0
 
-    if settings.require_above_open and day_open > 0 and current_price < day_open:
-        return False, f"시가 미만 ({current_price:,} < {day_open:,})"
+    if settings.use_entry_gate:
+        if settings.require_above_open and day_open > 0 and current_price < day_open:
+            return False, f"시가 미만 ({current_price:,} < {day_open:,})"
 
-    if settings.require_above_vwap:
-        minute_bars = await kiwoom_api.get_stock_chart_data(code, VWAP_BAR_INTERVAL)
-        vwap = _compute_vwap(minute_bars, today_str)
-        if vwap is None:
-            if not api_rate_limiter.is_api_available():
-                return False, "API 호출 제한(VWAP)"
-            return False, "VWAP 계산 불가"
-        if current_price < vwap:
-            return False, f"VWAP 미만 ({current_price:,} < {vwap:,.0f})"
+        if settings.require_above_vwap:
+            minute_bars = await kiwoom_api.get_stock_chart_data(code, VWAP_BAR_INTERVAL)
+            vwap = _compute_vwap(minute_bars, today_str)
+            if vwap is None:
+                if not api_rate_limiter.is_api_available():
+                    return False, "API 호출 제한(VWAP)"
+                return False, "VWAP 계산 불가"
+            if current_price < vwap:
+                return False, f"VWAP 미만 ({current_price:,} < {vwap:,.0f})"
 
-    pos_min = settings.day_position_min
-    if pos_min is not None and day_high > day_low:
-        position = (current_price - day_low) / (day_high - day_low)
-        if position < float(pos_min):
-            return False, f"당일 위치 부족 ({position:.2f} < {pos_min})"
+        pos_min = None if skip_day_position else settings.day_position_min
+        if pos_min is not None and day_high > day_low:
+            position = (current_price - day_low) / (day_high - day_low)
+            if position < float(pos_min):
+                return False, f"당일 위치 부족 ({position:.2f} < {pos_min})"
 
-    pos_max = getattr(settings, "day_position_max", None)
-    if pos_max is not None and day_high > day_low:
-        position = (current_price - day_low) / (day_high - day_low)
-        if position > float(pos_max):
-            return False, f"당일 위치 과열 ({position:.2f} > {pos_max})"
+        pos_max = None if skip_day_position else getattr(settings, "day_position_max", None)
+        if pos_max is not None and day_high > day_low:
+            position = (current_price - day_low) / (day_high - day_low)
+            if position > float(pos_max):
+                return False, f"당일 위치 과열 ({position:.2f} > {pos_max})"
 
-    vol_ratio_min = settings.volume_ratio_min
-    if vol_ratio_min is not None and prev_volume > 0:
-        ratio = day_volume / prev_volume * 100
-        if ratio < float(vol_ratio_min):
-            return False, f"거래량비 부족 ({ratio:.0f}% < {vol_ratio_min}%)"
+        vol_ratio_min = None if skip_volume_ratio else settings.volume_ratio_min
+        if vol_ratio_min is not None and prev_volume > 0:
+            ratio = day_volume / prev_volume * 100
+            if ratio < float(vol_ratio_min):
+                return False, f"거래량비 부족 ({ratio:.0f}% < {vol_ratio_min}%)"
 
-    rsi_min = getattr(settings, "legacy_rsi_min", None)
-    rsi_max = getattr(settings, "legacy_rsi_max", None)
-    if rsi_min is not None or rsi_max is not None:
-        rsi = compute_legacy_rsi14(daily_bars, current_price=current_price)
-        if rsi is None:
-            return False, "RSI(14) 계산 불가"
-        if rsi_min is not None and rsi < float(rsi_min):
-            return False, f"RSI 하한 미달 ({rsi:.1f} < {float(rsi_min):g})"
-        if rsi_max is not None and rsi > float(rsi_max):
-            return False, f"RSI 과열 ({rsi:.1f} > {float(rsi_max):g})"
+        rsi_min = getattr(settings, "legacy_rsi_min", None)
+        rsi_max = getattr(settings, "legacy_rsi_max", None)
+        if rsi_min is not None or rsi_max is not None:
+            rsi = compute_legacy_rsi14(daily_bars, current_price=current_price)
+            if rsi is None:
+                return False, "RSI(14) 계산 불가"
+            if rsi_min is not None and rsi < float(rsi_min):
+                return False, f"RSI 하한 미달 ({rsi:.1f} < {float(rsi_min):g})"
+            if rsi_max is not None and rsi > float(rsi_max):
+                return False, f"RSI 과열 ({rsi:.1f} > {float(rsi_max):g})"
 
     return True, "게이트 통과"
 
@@ -2154,6 +2311,19 @@ async def _eval_oversold_breakout(
         streak = prev_streak
     merged["entry_soft_streak"] = streak
 
+    cap = _breakout_pullback_cap(settings)
+    if cap > 0:
+        if bars:
+            sess_hi = _session_high_from_minute_bars(bars)
+            if sess_hi:
+                merged["day_high"] = max(int(merged.get("day_high") or 0), sess_hi)
+        if (not merged.get("day_high") or not merged.get("prev_close")) and kiwoom_api is not None:
+            today_bar, prev_bar, _err = await _load_daily_gate_bars(kiwoom_api, stock_code)
+            if today_bar and not merged.get("day_high"):
+                merged["day_high"] = int(today_bar.get("high") or current_price or 0)
+            if prev_bar and not merged.get("prev_close"):
+                merged["prev_close"] = int(prev_bar.get("close") or 0)
+
     if ctx is not None:
         ctx.update(merged)
     result = evaluate_oversold_breakout_from_ctx(
@@ -2167,6 +2337,56 @@ async def _eval_oversold_breakout(
     if ctx is not None:
         ctx.update(merged)
     ok, reason = result
+    if ok and bool(getattr(settings, "breakout_require_program_net", False)):
+        lookback = max(
+            1,
+            int(
+                getattr(settings, "breakout_program_lookback", None)
+                or PROGRAM_LOOKBACK_DEFAULT
+            ),
+        )
+        min_buy = max(
+            1,
+            int(
+                getattr(settings, "breakout_program_min_buy", None)
+                or PROGRAM_MIN_BUY_DEFAULT
+            ),
+        )
+        series = await kiwoom_api.get_stock_program_time_series(stock_code)
+        if not series.get("success"):
+            if not api_rate_limiter.is_api_available():
+                return False, "API 호출 제한(프로그램수급)"
+            merged["program_net_checked"] = True
+            merged["program_net_ok"] = False
+            merged["program_net_reason"] = str(
+                series.get("error") or "프로그램 시간대 데이터 없음"
+            )
+        else:
+            clock = as_kst(now) if now else now_kst()
+            prog_ok, prog_reason, prog_detail = program_net_continuation_ok(
+                series.get("rows") or [],
+                lookback=lookback,
+                min_buy=min_buy,
+                now=clock,
+            )
+            merged["program_net_checked"] = True
+            merged.update(prog_detail)
+            merged["program_net_ok"] = prog_ok
+            merged["program_net_reason"] = prog_reason
+        result = evaluate_oversold_breakout_from_ctx(
+            settings,
+            current_price,
+            change_rate,
+            merged,
+            now=now,
+            skip_time_check=skip_time_check,
+        )
+        if ctx is not None:
+            ctx.update(merged)
+        ok, reason = result
+        if not ok:
+            logger.info(f"📈 [돌파] 프로그램 수급 탈락 {stock_code}: {reason}")
+            return result
     if ok and update_soft_streak:
         logger.info(
             f"📈 [돌파] 진입확인 통과 {stock_code}: {reason}"
@@ -2213,16 +2433,7 @@ async def evaluate_gate_pack(
             update_soft_streak=update_soft_streak,
         )
     if pack in ("ymgp", "yeokmaegongpa"):
-        return await _eval_ymgp(
-            kiwoom_api,
-            settings,
-            stock_code,
-            current_price,
-            change_rate,
-            ctx=ctx,
-            now=now,
-            skip_time_check=skip_time_check,
-        )
+        return False, "역매공파 전략 폐기"
     if pack in ("jongga", "jongga_closing", "closing_bet"):
         return await _eval_jongga(
             kiwoom_api,
@@ -2234,7 +2445,449 @@ async def evaluate_gate_pack(
             now=now,
             skip_time_check=skip_time_check,
         )
+    if pack in ("fractal", "ema_fractal_pullback"):
+        return await _eval_ema_fractal_pullback(
+            kiwoom_api,
+            settings,
+            stock_code,
+            current_price,
+            change_rate,
+            ctx=ctx,
+            now=now,
+            skip_time_check=skip_time_check,
+        )
+    if pack in ("ma1592", "ma1592_hold", "ma1590", "ma1590_hold"):
+        return await _eval_ma1592_hold(
+            kiwoom_api,
+            settings,
+            stock_code,
+            current_price,
+            change_rate,
+            ctx=ctx,
+            now=now,
+            skip_time_check=skip_time_check,
+        )
+    if pack in ("ma1592_scale", "ma1592_scale_in", "ma1590_scale", "ma1590_scale_in"):
+        return await _eval_ma1592_scale_leg(
+            kiwoom_api,
+            settings,
+            stock_code,
+            current_price,
+            ctx=ctx,
+            now=now,
+        )
     return await _eval_legacy_momentum(kiwoom_api, settings, stock_code, current_price)
+
+
+async def _eval_ma1592_hold(
+    kiwoom_api,
+    settings: AutoTradeSettings,
+    stock_code: str,
+    current_price: int,
+    change_rate: Optional[float] = None,
+    *,
+    ctx: Optional[Dict[str, Any]] = None,
+    now: Optional[datetime] = None,
+    skip_time_check: bool = False,
+) -> Tuple[bool, str]:
+    """L3: L2 장부 종목 — 3분봉 GC(EMA15>EMA92) 확인 후 1차(15%) 분할매수."""
+    from utils.ma1592 import (
+        build_buy_additional_data,
+        chart_tf_interval_minutes,
+        compute_bar_ma,
+        compute_prev_high_bars,
+        evaluate_setup_on_bar,
+        get_universe_store,
+        is_golden_cross_bar,
+        normalize_chart_tf,
+        params_from_settings,
+        scale_leg_qty,
+        size_position,
+    )
+    from utils.ema_fractal import drop_forming_minute_bar
+
+    if not skip_time_check:
+        ok, reason = allows_strategy_new_buy(settings, "ma1592", now=now)
+        if not ok:
+            return False, reason or "MA1592 시간 외"
+    if not getattr(settings, "use_ma1592", False):
+        return False, "MA1592 탈락: 전략 비활성"
+    if current_price is None or int(current_price) <= 0:
+        return False, "MA1592 대기: 현재가 없음"
+
+    ctx = ctx if isinstance(ctx, dict) else {}
+    store = get_universe_store()
+    row = store.get(stock_code)
+    if not row or row.state not in ("GC_WATCH", "WAIT_HOLD"):
+        return False, "MA1592 탈락: L2 장부 없음"
+
+    p = params_from_settings(settings)
+    entry_trigger = str(p.get("entry_trigger") or "gc_above").strip().lower()
+    exec_tf = normalize_chart_tf(p.get("exec_tf") or "3M")
+    interval_min = chart_tf_interval_minutes(exec_tf)
+    ttl = float(getattr(Config, "MA1592_CHART_CACHE_TTL", 60) or 60)
+    # EMA92 시드용 — 최소 ~100봉
+    raw_bars = await kiwoom_api.get_stock_chart_data(
+        stock_code, exec_tf, max_bars=150, cache_ttl_sec=ttl,
+    )
+    bars = drop_forming_minute_bar(raw_bars or [], now=now, interval_minutes=interval_min)
+    ma_slow = int(p.get("ma_slow") or 92)
+    if not bars or len(bars) < ma_slow:
+        return False, f"MA1592 대기: {exec_tf}봉 부족(EMA92)"
+
+    closes = []
+    highs = []
+    for b in bars:
+        try:
+            c = float(b.get("close") or 0)
+            h = float(b.get("high") or 0)
+        except (TypeError, ValueError):
+            c, h = 0.0, 0.0
+        if c > 0:
+            closes.append(c)
+        if h > 0:
+            highs.append(h)
+
+    ma_type = str(p.get("ma_type") or "ema")
+    ma15, ma92, ma15_prev, ma92_prev = compute_bar_ma(
+        closes,
+        fast=int(p.get("ma_fast") or 15),
+        slow=ma_slow,
+        ma_type=ma_type,
+    )
+    if ma15 is None or ma92 is None:
+        return False, "MA1592 대기: EMA 계산 불가"
+
+    # gc_above: EMA15≤EMA92이면 즉시 폐기.
+    if entry_trigger in ("gc_above", "gc", "gc_confirm") and float(ma15) <= float(ma92):
+        store.set_state(stock_code, "DONE")
+        logger.info(f"📈 [MA1592] 탈락 {stock_code}: EMA15≤EMA92 (데드크로스)")
+        return False, "MA1592 탈락: NO_GC"
+
+    # GC_WATCH 진입 직후 첫 평가에서 교차 확정 로그(선택)
+    if row.state == "GC_WATCH" and int(row.hold_ok_bars or 0) == 0:
+        gc_ok, gc_code = is_golden_cross_bar(
+            float(ma15), float(ma92), ma15_prev, ma92_prev,
+            require_slope_up=bool(p.get("require_ma_slope_up")),
+        )
+        ctx["ma1592_gc"] = {"ok": gc_ok, "code": gc_code}
+
+    bar = bars[-1]
+    already = bool(ctx.get("already_in_position"))
+    result = evaluate_setup_on_bar(
+        row, bar, float(ma15), ma92=float(ma92),
+        ma15_prev=ma15_prev, ma92_prev=ma92_prev,
+        closes=closes,
+        params=p, already_in_position=already,
+    )
+    row.ma15 = float(ma15)
+    row.ma92 = float(ma92)
+    store.upsert(row)
+    ctx["ma1592_checks"] = {
+        "state": row.state,
+        "hold_ok_bars": row.hold_ok_bars,
+        "reason_code": result.get("reason_code"),
+        "ma15": float(ma15),
+        "ma92": float(ma92),
+        "ma_type": ma_type,
+        "ma_source": "bar",
+        "exec_tf": exec_tf,
+        "hold_mode": p.get("hold_mode"),
+        "entry_trigger": entry_trigger,
+        "entry_leg": result.get("entry_leg") or 1,
+    }
+    ctx["gate_pack"] = "ma1592_hold"
+
+    if result.get("status") == "fail":
+        code = result.get("reason_code") or "FAIL"
+        if code in ("MA92_BREAK_PRE", "SETUP_EXPIRED", "FAR_FROM_GC", "BELOW_MA92", "MA15_BREAK_PRE", "TREND_LOST", "GC_STALE"):
+            store.set_state(stock_code, "DONE")
+        logger.info(f"📈 [MA1592] 탈락 {stock_code}: {result.get('reason')} ({code})")
+        return False, f"MA1592 탈락: {result.get('reason')}"
+
+    if not result.get("buy"):
+        reason = str(result.get("reason") or "MA1592 대기")
+        logger.debug(f"📈 [MA1592] 대기 {stock_code}: {reason}")
+        return False, f"MA1592 대기: {reason}"
+
+    prev_high = compute_prev_high_bars(
+        highs, int(p.get("prev_high_lookback_bars") or 90),
+    ) or int(row.prev_high or 0)
+    equity = float(ctx.get("equity") or ctx.get("deposit") or 10_000_000)
+    max_invest = int(getattr(settings, "ma1592_max_invest_amount", None) or 0)
+    sizing = size_position(
+        equity,
+        int(current_price),
+        float(ma15),
+        ma92=float(ma92),
+        risk_per_trade_pct=float(p["risk_per_trade_pct"]),
+        stop_pct=float(p["stop_pct"]),
+        hard_break_pct=float(p["hard_break_pct"]),
+        max_invest_amount=max_invest,
+        tp1_frac=float(p["tp1_frac"]),
+    )
+    full_qty = int(sizing.get("qty") or 0)
+    if full_qty <= 0:
+        return False, "MA1592 탈락: RISK_LIMIT"
+
+    entry_leg = int(result.get("entry_leg") or 1)
+    if entry_leg <= 1 and not already:
+        from core.models import get_db
+
+        for db in get_db():
+            if not is_strategy_slot_available(settings, db, "ma1592", for_new_signal=True):
+                used = _count_strategy_slots(db, "ma1592")
+                lim = effective_ma1592_max_slots(settings)
+                return False, f"MA1592 탈락: 슬롯 포화 ({used}/{lim})"
+            break
+    leg_qty = scale_leg_qty(full_qty, entry_leg, p) if str(p.get("hold_mode")) == "scale_in_gc" else full_qty
+    if leg_qty <= 0:
+        return False, "MA1592 탈락: RISK_LIMIT"
+
+    meta = build_buy_additional_data(
+        row,
+        entry=int(current_price),
+        ma15=float(ma15),
+        ma92=float(ma92),
+        prev_high=int(prev_high or 0),
+        sizing=sizing,
+        params=p,
+        entry_leg=entry_leg,
+        suggested_qty=leg_qty,
+        reason=str(result.get("reason") or "SCALE_LEG1"),
+    )
+    for k, v in meta.items():
+        ctx[k] = v
+    row.prev_high = int(prev_high or 0)
+    row.tp1_price = int(meta["tp1_price"])
+    row.planned_qty = full_qty
+    # 1차 신호 중복 방지 — 체결 전 WAIT_HOLD, 체결 시 MANAGE_FULL
+    if str(p.get("hold_mode")) == "scale_in_gc" and row.state == "GC_WATCH":
+        row.state = "WAIT_HOLD"
+    store.upsert(row)
+    logger.info(
+        f"📈 [MA1592] BUY {stock_code}: LEG{entry_leg} · "
+        f"EMA15={ma15:.0f} EMA92={ma92:.0f} · tf={exec_tf} · trigger={entry_trigger} · 전고={prev_high} · "
+        f"qty={leg_qty}/{full_qty}"
+    )
+    return True, f"MA1592 게이트 통과: LEG{entry_leg}"
+
+
+async def _eval_ma1592_scale_leg(
+    kiwoom_api,
+    settings: AutoTradeSettings,
+    stock_code: str,
+    current_price: int,
+    *,
+    ctx: Optional[Dict[str, Any]] = None,
+    now: Optional[datetime] = None,
+) -> Tuple[bool, str]:
+    """보유 중 MA1592 2·3차 (15분봉 이격·눌림)."""
+    from utils.ma1592 import (
+        build_buy_additional_data,
+        compute_bar_ma,
+        evaluate_scale_add_on_15m,
+        get_universe_store,
+        params_from_settings,
+        scale_leg_qty,
+        size_position,
+    )
+    from utils.ema_fractal import drop_forming_minute_bar, ema_series
+
+    if not getattr(settings, "use_ma1592", False):
+        return False, "MA1592 탈락: 전략 비활성"
+    p = params_from_settings(settings)
+    if str(p.get("hold_mode") or "") != "scale_in_gc":
+        return False, "MA1592 대기: 분할모드 아님"
+
+    store = get_universe_store()
+    row = store.get(stock_code)
+    if not row or row.state not in ("MANAGE_FULL", "MANAGE_HALF"):
+        return False, "MA1592 탈락: 보유 장부 없음"
+    if int(row.entry_leg or 0) < 1:
+        return False, "MA1592 대기: 1차 미반영"
+    if int(row.entry_leg or 0) >= 3:
+        return False, "MA1592 대기: 분할 완료"
+
+    ok, reason = allows_strategy_new_buy(settings, "ma1592", now=now)
+    if not ok:
+        return False, reason or "MA1592 시간 외"
+
+    ctx = ctx if isinstance(ctx, dict) else {}
+    ttl = float(getattr(Config, "MA1592_CHART_CACHE_TTL", 60) or 60)
+    raw_15 = await kiwoom_api.get_stock_chart_data(
+        stock_code, "15M", max_bars=120, cache_ttl_sec=ttl,
+    )
+    bars = drop_forming_minute_bar(raw_15 or [], now=now, interval_minutes=15)
+    if not bars or len(bars) < 20:
+        return False, "MA1592 대기: 15분봉 부족"
+
+    closes = []
+    for b in bars:
+        try:
+            c = float(b.get("close") or 0)
+        except (TypeError, ValueError):
+            c = 0.0
+        if c > 0:
+            closes.append(c)
+    if len(closes) < int(p.get("ma_fast") or 15):
+        return False, "MA1592 대기: EMA15 부족"
+
+    ema_vals = ema_series(closes, int(p.get("ma_fast") or 15))
+    ma15 = 0.0
+    for v in reversed(ema_vals or []):
+        if v is not None and float(v) > 0:
+            ma15 = float(v)
+            break
+    if ma15 <= 0:
+        # fallback compute_bar_ma
+        ma15_t, _, _, _ = compute_bar_ma(closes, fast=15, slow=min(90, len(closes)), ma_type="ema")
+        ma15 = float(ma15_t or 0)
+    if ma15 <= 0:
+        return False, "MA1592 대기: EMA15 계산 불가"
+
+    ma92 = float(row.ma92 or 0)
+    slow = int(p.get("ma_slow") or 92)
+    if len(closes) >= slow:
+        ema92_vals = ema_series(closes, slow)
+        for v in reversed(ema92_vals or []):
+            if v is not None and float(v) > 0:
+                ma92 = float(v)
+                break
+
+    result = evaluate_scale_add_on_15m(row, bars, ma15, ma92=ma92, params=p)
+    store.upsert(row)
+    ctx["ma1592_scale"] = {
+        "entry_leg": row.entry_leg,
+        "gap_pct": result.get("gap_pct"),
+        "scale_ok_bars": result.get("scale_ok_bars"),
+        "reason": result.get("reason"),
+        "ma15_15m": ma15,
+        "ma92_15m": ma92,
+    }
+    if not result.get("buy"):
+        return False, f"MA1592 대기: {result.get('reason')}"
+
+    next_leg = int(result.get("entry_leg") or 0)
+    full_qty = int(row.planned_qty or 0)
+    if full_qty <= 0:
+        equity = float(ctx.get("equity") or ctx.get("deposit") or 10_000_000)
+        max_invest = int(getattr(settings, "ma1592_max_invest_amount", None) or 0)
+        sizing = size_position(
+            equity,
+            int(current_price or 0),
+            ma15,
+            ma92=float(row.ma92 or 0),
+            risk_per_trade_pct=float(p["risk_per_trade_pct"]),
+            stop_pct=float(p["stop_pct"]),
+            hard_break_pct=float(p["hard_break_pct"]),
+            max_invest_amount=max_invest,
+            tp1_frac=float(p["tp1_frac"]),
+        )
+        full_qty = int(sizing.get("qty") or 0)
+        row.planned_qty = full_qty
+    else:
+        sizing = {
+            "qty": full_qty,
+            "qty_tp1": max(1, int(full_qty * float(p["tp1_frac"]))) if full_qty >= 2 else full_qty,
+            "stop_price": int(row.entry_price or current_price or 0),
+        }
+
+    leg_qty = scale_leg_qty(full_qty, next_leg, p)
+    if leg_qty <= 0:
+        return False, "MA1592 탈락: 분할수량 0"
+
+    meta = build_buy_additional_data(
+        row,
+        entry=int(current_price or 0),
+        ma15=float(row.ma15 or ma15),
+        ma92=float(row.ma92 or 0),
+        prev_high=int(row.prev_high or 0),
+        sizing=sizing,
+        params=p,
+        entry_leg=next_leg,
+        suggested_qty=leg_qty,
+        reason=str(result.get("reason") or f"SCALE_LEG{next_leg}"),
+    )
+    for k, v in meta.items():
+        ctx[k] = v
+    store.upsert(row)
+    logger.info(
+        f"📈 [MA1592] ADD LEG{next_leg} {stock_code}: qty={leg_qty}/{full_qty} · {result.get('reason')}"
+    )
+    return True, f"MA1592 게이트 통과: LEG{next_leg}"
+
+
+async def _eval_ema_fractal_pullback(
+    kiwoom_api,
+    settings: AutoTradeSettings,
+    stock_code: str,
+    current_price: int,
+    change_rate: Optional[float] = None,
+    *,
+    ctx: Optional[Dict[str, Any]] = None,
+    now: Optional[datetime] = None,
+    skip_time_check: bool = False,
+) -> Tuple[bool, str]:
+    """1분 EMA 정배열 + 확정 프랙탈 + 20EMA 종가 재돌파. 미충족은 대기(WATCHING)."""
+    from utils.ema_fractal import (
+        drop_forming_minute_bar,
+        evaluate_fractal_setup,
+        is_fractal_fail_reason,
+    )
+
+    if not skip_time_check:
+        ok, reason = allows_strategy_new_buy(settings, "fractal", now=now)
+        if not ok:
+            return False, reason or "프랙탈 시간 외"
+    if not getattr(settings, "use_fractal", False):
+        return False, "프랙탈 탈락: 전략 비활성"
+    if current_price is None or int(current_price) <= 0:
+        return False, "프랙탈 대기: 현재가 없음"
+
+    ctx = ctx if isinstance(ctx, dict) else {}
+    timeout_min = int(getattr(settings, "fractal_watching_timeout_min", None) or 15)
+    started = ctx.get("watching_started_at") or ctx.get("detected_at")
+    if started and timeout_min > 0:
+        try:
+            if isinstance(started, str):
+                started_dt = datetime.fromisoformat(started.replace("Z", "+00:00"))
+            else:
+                started_dt = started
+            age_min = (as_kst(now) - as_kst(started_dt)).total_seconds() / 60.0
+            if age_min > timeout_min:
+                return False, f"프랙탈 탈락: 관찰시간 초과({timeout_min}분)"
+        except Exception:
+            pass
+
+    ttl = float(getattr(Config, "FRACTAL_CHART_CACHE_TTL", 45) or 45)
+    raw = await kiwoom_api.get_stock_chart_data(
+        stock_code, "1M", max_bars=130, cache_ttl_sec=ttl,
+    )
+    bars = drop_forming_minute_bar(raw or [], now=now)
+    setup = evaluate_fractal_setup(
+        bars,
+        lookback=20,
+        stop_ema_period=int(getattr(settings, "fractal_stop_ema", None) or 50),
+        stop_ticks=int(getattr(settings, "fractal_stop_tick_buffer", None) or 1),
+        rr=float(getattr(settings, "fractal_rr", None) or 1.5),
+    )
+    ctx["fractal_checks"] = setup.get("checks")
+    ctx["gate_pack"] = "ema_fractal_pullback"
+    if setup.get("status") == "pass":
+        ctx["stop_price"] = setup.get("stop_price")
+        ctx["take_profit_price"] = setup.get("take_profit_price")
+        ctx["ema50_at_entry"] = setup.get("ema50_at_entry")
+        ctx["fractal_rr"] = setup.get("rr")
+        ctx["order_ready"] = True
+        logger.info(f"📈 [프랙탈] {stock_code}: {setup.get('reason')}")
+        return True, str(setup.get("reason") or "프랙탈 게이트 통과")
+    reason = str(setup.get("reason") or "프랙탈 대기")
+    if is_fractal_fail_reason(reason) or setup.get("status") == "fail":
+        logger.info(f"📈 [프랙탈] 탈락 {stock_code}: {reason}")
+        return False, reason
+    logger.debug(f"📈 [프랙탈] 대기 {stock_code}: {reason}")
+    return False, reason
 
 
 async def _eval_jongga(
@@ -2273,135 +2926,23 @@ async def _eval_jongga(
     return True, "종가배팅 게이트 통과"
 
 
-async def _eval_ymgp(
-    kiwoom_api,
-    settings: AutoTradeSettings,
-    stock_code: str,
-    current_price: int,
-    change_rate: Optional[float] = None,
-    *,
-    ctx: Optional[Dict[str, Any]] = None,
-    now: Optional[datetime] = None,
-    skip_time_check: bool = False,
-) -> Tuple[bool, str]:
-    """역매공파: 일봉 상태 ARMED + 기준봉 고점 돌파(또는 meta entry_leg=2 눌림)."""
-    from utils.ymgp_engine import (
-        entry1_breakout_ok,
-        entry2_pullback_ok,
-        evaluate_ymgp_from_daily,
-        format_ymgp_checks_summary,
-        format_ymgp_fail_brief,
-        get_stock_state,
-        is_reentry_locked,
-        log_ymgp_stage_metrics,
-        update_stock_state,
-    )
-
-    merged: Dict[str, Any] = dict(ctx or {})
-    if not skip_time_check:
-        allowed, reason = allows_strategy_new_buy(settings, "ymgp", now)
-        if not allowed:
-            merged["gate_checks"] = [{"key": "time", "label": "시간대", "passed": False, "actual": reason}]
-            if ctx is not None:
-                ctx.update(merged)
-            return False, reason or "역매공파 시간대 외"
-
-    if is_reentry_locked(stock_code, settings):
-        merged["gate_checks"] = [{"key": "lock", "label": "재진입 락", "passed": False, "actual": "락 중"}]
-        if ctx is not None:
-            ctx.update(merged)
-        return False, "손절 후 재진입 락"
-
-    code = getattr(kiwoom_api, "normalize_stock_code", lambda c: c)(stock_code)
-    bars = merged.get("daily_bars")
-    if not bars:
-        bars = await kiwoom_api.get_stock_chart_data(
-            code, "1D", max_bars=520, allow_off_hours=True,
-        )
-        merged["daily_bars"] = bars
-    if not bars:
-        if not api_rate_limiter.is_api_available():
-            return False, "API 호출 제한(일봉)"
-        return False, "일봉 데이터 없음(역매공파)"
-
-    prior = get_stock_state(code)
-    evaled = evaluate_ymgp_from_daily(
-        bars,
-        settings,
-        current_price=current_price,
-        change_rate=change_rate,
-        prior_stage=prior.get("stage"),
-        stopped_lock=False,
-    )
-    merged.update({
-        "ymgp_stage": evaled.get("stage"),
-        "ymgp_checks": evaled.get("checks"),
-        "ymgp_mas": evaled.get("mas"),
-        "ymgp_box": evaled.get("box"),
-        "ymgp_ref": evaled.get("ref") or prior.get("ref"),
-        "gate_checks": evaled.get("checks") or [],
-        "ymgp_checks_summary": format_ymgp_checks_summary(evaled),
-        "ymgp_fail_brief": format_ymgp_fail_brief(evaled),
-    })
-    name = str(merged.get("stock_name") or "")
-    log_ymgp_stage_metrics(code, evaled, stock_name=name)
-    ref = merged.get("ymgp_ref") or {}
-    if evaled.get("ref"):
-        update_stock_state(
-            code,
-            stage=evaled.get("stage"),
-            ref=evaled.get("ref"),
-            box=evaled.get("box"),
-        )
-    else:
-        update_stock_state(code, stage=evaled.get("stage"))
-
-    entry_leg = int(merged.get("entry_leg") or merged.get("ymgp_entry_leg") or 1)
-    if entry_leg >= 2:
-        ok2, reason2 = entry2_pullback_ok(current_price, ref, evaled.get("mas") or {}, settings)
-        if ctx is not None:
-            ctx.update(merged)
-        return (ok2, reason2) if ok2 else (False, reason2)
-
-    stage = evaled.get("stage")
-    if stage != "ARMED" and not (ref and ref.get("high")):
-        if ctx is not None:
-            ctx.update(merged)
-        brief = merged.get("ymgp_fail_brief") or ""
-        base = f"단계 미달 ({stage})"
-        return False, f"{base} · {brief}" if brief else base
-    if evaled.get("overheat"):
-        if ctx is not None:
-            ctx.update(merged)
-        return False, "과열 컷"
-
-    # prev_high for entry mode
-    if len(bars) >= 2:
-        try:
-            ref = dict(ref or {})
-            ref["prev_high"] = int(bars[-2].get("high") or 0)
-            merged["ymgp_ref"] = ref
-        except (TypeError, ValueError):
-            pass
-
-    ok1, reason1 = entry1_breakout_ok(current_price, ref, settings)
-    if ctx is not None:
-        ctx.update(merged)
-        ctx["level_kind"] = "ymgp_ref_high"
-        ctx["level_price"] = int((ref or {}).get("high") or 0)
-        ctx["breakout_level_price"] = int((ref or {}).get("low") or 0)  # 손절 기준가 저장용
-    return (ok1, reason1) if ok1 else (False, reason1)
-
-
 async def check_entry_gate(
     kiwoom_api,
     settings: AutoTradeSettings,
     stock_code: str,
     current_price: int,
+    *,
+    skip_volume_ratio: bool = False,
+    skip_day_position: bool = False,
 ) -> Tuple[bool, str]:
     """진입 타이밍 게이트 (legacy_momentum). use_entry_gate=False면 항상 통과."""
-    return await evaluate_gate_pack(
-        kiwoom_api, settings, "legacy_momentum", stock_code, current_price,
+    return await _eval_legacy_momentum(
+        kiwoom_api,
+        settings,
+        stock_code,
+        current_price,
+        skip_volume_ratio=skip_volume_ratio,
+        skip_day_position=skip_day_position,
     )
 
 
@@ -2437,6 +2978,7 @@ async def fetch_entry_gate_context(
     ctx["day_low"] = int(today_bar.get("low") or current_price)
     ctx["day_volume"] = int(today_bar.get("volume") or 0)
     ctx["prev_volume"] = int(prev_bar.get("volume") or 0) if prev_bar else 0
+    ctx["prev_close"] = int(prev_bar.get("close") or 0) if prev_bar else 0
     ctx["rsi14"] = compute_legacy_rsi14(daily_bars, current_price=current_price)
     minute_bars = await kiwoom_api.get_stock_chart_data(code, VWAP_BAR_INTERVAL)
     ctx["vwap"] = _compute_vwap(minute_bars, today_str)
@@ -2601,6 +3143,13 @@ def is_max_concurrent_positions_reached(
     return slots > limit
 
 
+def _normalize_strategy_key(strategy_key: str) -> str:
+    sk = (strategy_key or "legacy").strip()
+    if sk == "ma1590":
+        return "ma1592"
+    return sk
+
+
 def _count_strategy_slots(session: Session, strategy_key: str) -> int:
     """전략별 점유 슬롯 수 (HOLDING + 신규매수 예약).
 
@@ -2610,10 +3159,12 @@ def _count_strategy_slots(session: Session, strategy_key: str) -> int:
     """
     from core.models import PendingBuySignal, Position
 
+    strategy_key = _normalize_strategy_key(strategy_key)
     holding_codes = {
         (p.stock_code or "").strip()
         for p in session.query(Position).filter(Position.status == "HOLDING").all()
-        if getattr(p, "strategy_key", None) == strategy_key and (p.stock_code or "").strip()
+        if _normalize_strategy_key(getattr(p, "strategy_key", None) or "legacy") == strategy_key
+        and (p.stock_code or "").strip()
     }
     in_flight_cutoff = utc_now_naive() - timedelta(minutes=IN_FLIGHT_BUY_ORDERED_MINUTES)
     reserved: set = set()
@@ -2621,7 +3172,7 @@ def _count_strategy_slots(session: Session, strategy_key: str) -> int:
         PendingBuySignal.status.in_(["PENDING", "PROCESSING", "ORDERED"]),
     ).all():
         meta = parse_signal_meta(sig)
-        if meta.get("strategy") != strategy_key:
+        if _normalize_strategy_key(meta.get("strategy") or "legacy") != strategy_key:
             continue
         if meta.get("is_add_buy"):
             continue
@@ -2648,6 +3199,13 @@ def is_strategy_slot_available(
     """
     if not strategy_key:
         return True
+    strategy_key = _normalize_strategy_key(strategy_key)
+    if strategy_key == "legacy":
+        limit = effective_legacy_max_slots(settings)
+        if limit <= 0:
+            return True
+        count = _count_strategy_slots(session, strategy_key)
+        return count < limit if for_new_signal else count <= limit
     if strategy_key == "sangtta":
         limit = effective_sangtta_max_slots(settings)
         if limit <= 0:
@@ -2660,14 +3218,20 @@ def is_strategy_slot_available(
             return True
         count = _count_strategy_slots(session, strategy_key)
         return count < limit if for_new_signal else count <= limit
-    if strategy_key == "ymgp":
-        limit = effective_ymgp_max_slots(settings)
+    if strategy_key == "jongga":
+        limit = effective_jongga_max_slots(settings)
         if limit <= 0:
             return True
         count = _count_strategy_slots(session, strategy_key)
         return count < limit if for_new_signal else count <= limit
-    if strategy_key == "jongga":
-        limit = effective_jongga_max_slots(settings)
+    if strategy_key == "fractal":
+        limit = effective_fractal_max_slots(settings)
+        if limit <= 0:
+            return True
+        count = _count_strategy_slots(session, strategy_key)
+        return count < limit if for_new_signal else count <= limit
+    if strategy_key == "ma1592":
+        limit = effective_ma1592_max_slots(settings)
         if limit <= 0:
             return True
         count = _count_strategy_slots(session, strategy_key)
@@ -2675,10 +3239,17 @@ def is_strategy_slot_available(
     return True
 
 
-def allows_strategy_new_buy(settings: Optional[AutoTradeSettings], strategy_key: Optional[str], now: Optional[datetime] = None) -> Tuple[bool, Optional[str]]:
+def allows_strategy_new_buy(
+    settings: Optional[AutoTradeSettings],
+    strategy_key: Optional[str],
+    now: Optional[datetime] = None,
+    *,
+    is_add_buy: bool = False,
+) -> Tuple[bool, Optional[str]]:
     """전략별 매수 시간 허용 여부. (허용, 차단사유)."""
     if not settings:
         return False, "자동매매 설정 없음"
+    strategy_key = _normalize_strategy_key(strategy_key) if strategy_key else strategy_key
     now = as_kst(now)
     off_day = trading_day_block_reason(now)
     if off_day:
@@ -2694,6 +3265,8 @@ def allows_strategy_new_buy(settings: Optional[AutoTradeSettings], strategy_key:
             except Exception:
                 pass
     if strategy_key == "sangtta":
+        if not getattr(settings, "use_sangtta", True):
+            return False, "상따 전략 OFF"
         try:
             start = getattr(settings, "sangtta_trade_start_time", None) or "09:05"
             end = getattr(settings, "sangtta_trade_end_time", None) or "11:00"
@@ -2706,6 +3279,8 @@ def allows_strategy_new_buy(settings: Optional[AutoTradeSettings], strategy_key:
             return False, "상따 시간 판정 오류"
         return True, None
     if strategy_key == "breakout":
+        if not getattr(settings, "use_breakout", False):
+            return False, "돌파 전략 OFF"
         try:
             start = getattr(settings, "breakout_trade_start_time", None) or "11:00"
             end = getattr(settings, "breakout_trade_end_time", None) or "14:30"
@@ -2717,17 +3292,10 @@ def allows_strategy_new_buy(settings: Optional[AutoTradeSettings], strategy_key:
             return False, "돌파 시간 판정 오류"
         return True, None
     if strategy_key == "ymgp":
-        try:
-            start = getattr(settings, "ymgp_trade_start_time", None) or "09:30"
-            end = getattr(settings, "ymgp_trade_end_time", None) or "14:30"
-            sh, sm = map(int, str(start).split(":"))
-            eh, em = map(int, str(end).split(":"))
-            if not dt_time(sh, sm) <= now.time() <= dt_time(eh, em):
-                return False, f"역매공파 시간대 외 ({start}~{end})"
-        except Exception:
-            return False, "역매공파 시간 판정 오류"
-        return True, None
+        return False, "역매공파 전략 폐기"
     if strategy_key == "jongga":
+        if not getattr(settings, "use_jongga", False):
+            return False, "종가배팅 전략 OFF"
         try:
             from utils.jongga_engine import jongga_buy_window_end
 
@@ -2739,13 +3307,46 @@ def allows_strategy_new_buy(settings: Optional[AutoTradeSettings], strategy_key:
             end_dt = datetime.combine(now.date(), dt_time(eh, em), tzinfo=now.tzinfo)
             grace = end_dt + timedelta(minutes=2)
             if now.time() < dt_time(sh, sm):
+                if is_add_buy:
+                    from utils.jongga_engine import in_open_avg_down_window
+
+                    if in_open_avg_down_window(now):
+                        return True, None
                 return False, f"종가배팅 시간대 외 ({start}~{end})"
             if now > grace:
                 return False, f"종가배팅 시간대 외 ({start}~{end})"
         except Exception:
             return False, "종가배팅 시간 판정 오류"
         return True, None
+    if strategy_key == "fractal":
+        if not getattr(settings, "use_fractal", False):
+            return False, "프랙탈 전략 OFF"
+        try:
+            start = getattr(settings, "fractal_trade_start_time", None) or "09:20"
+            end = getattr(settings, "fractal_trade_end_time", None) or "14:50"
+            sh, sm = map(int, str(start).split(":"))
+            eh, em = map(int, str(end).split(":"))
+            if not dt_time(sh, sm) <= now.time() <= dt_time(eh, em):
+                return False, f"프랙탈 시간대 외 ({start}~{end})"
+        except Exception:
+            return False, "프랙탈 시간 판정 오류"
+        return True, None
+    if strategy_key == "ma1592":
+        if not getattr(settings, "use_ma1592", False):
+            return False, "MA1592 전략 OFF"
+        try:
+            start = getattr(settings, "ma1592_trade_start_time", None) or "09:10"
+            end = getattr(settings, "ma1592_trade_end_time", None) or "15:15"
+            sh, sm = map(int, str(start).split(":"))
+            eh, em = map(int, str(end).split(":"))
+            if not dt_time(sh, sm) <= now.time() <= dt_time(eh, em):
+                return False, f"MA1592 시간대 외 ({start}~{end})"
+        except Exception:
+            return False, "MA1592 시간 판정 오류"
+        return True, None
     # 레거시(또는 미지정) — 전역 레거시 시간창만
+    if strategy_key in (None, "", "legacy") and not getattr(settings, "use_legacy", True):
+        return False, "레거시 전략 OFF"
     if getattr(Config, "ALLOW_OUT_OF_MARKET_TRADING", False):
         return True, None
     if in_trade_hours(settings, now):

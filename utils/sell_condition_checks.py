@@ -6,17 +6,10 @@ from typing import Any, Dict, List, Optional
 from core.models import Position, SellOrder
 
 from utils.buy_condition_checks import _chk, checklist_summary
+from utils.legacy_ema_exit import classify_legacy_ema_exit_detail
+from utils.sell_reason_labels import SELL_REASON_KO, sell_reason_ko
 
-SELL_REASON_KO = {
-    "STOP_LOSS": "손절",
-    "TAKE_PROFIT": "익절",
-    "TRAILING": "트레일링 스탑",
-    "PROFIT_LOCK": "수익 잠금",
-    "MARKET_CLOSE": "장마감 청산",
-    "MANUAL": "수동 매도",
-    "MANUAL_SELL": "수동 매도",
-    "INDICATOR": "지표 매도",
-}
+SELL_REASON_KO = SELL_REASON_KO  # re-export for callers
 
 SANGTTA_EXIT_KO = {
     "limit_hard": "상한가 이탈 HARD",
@@ -27,6 +20,9 @@ SANGTTA_EXIT_KO = {
 BREAKOUT_EXIT_KO = {
     "structure_hard": "구조 이탈 HARD",
     "structure_soft": "구조 이탈 SOFT",
+}
+LEGACY_EMA_EXIT_KO = {
+    "ema_soft": "EMA 이탈 SOFT",
 }
 
 
@@ -103,6 +99,7 @@ _RULE_OWNER: Dict[str, str] = {
     "breakout_strategy": "BREAKOUT_STRUCTURE",
     "breakout_structure_hard": "BREAKOUT_STRUCTURE",
     "breakout_structure_soft": "BREAKOUT_STRUCTURE",
+    "legacy_ema_soft": "LEGACY_EMA",
 }
 _TRIG_GROUP = {
     "TAKE_PROFIT": "TRAILING",
@@ -263,6 +260,39 @@ def breakout_exit_check_items(
     ]
 
 
+def legacy_ema_exit_check_items(
+    settings: Dict[str, Any],
+    *,
+    reason_detail: Optional[str],
+    closed: bool,
+) -> List[Dict[str, Any]]:
+    from utils.legacy_ema_exit import legacy_ema_exit_params
+
+    enabled, period, soft_min, band_pct = legacy_ema_exit_params(settings)
+    exit_kind = classify_legacy_ema_exit_detail(reason_detail)
+    passed: Optional[bool] = None
+    if closed:
+        passed = exit_kind == "ema_soft"
+    return [
+        _chk(
+            "EMA 청산", "EMA 이탈 SOFT",
+            passed=passed if enabled else None,
+            actual=(
+                f"발동 · {reason_detail}" if exit_kind == "ema_soft"
+                else ("미사용" if not enabled else ("미발동" if closed else "대기"))
+            ),
+            required=(
+                f"5분 EMA{period} 이격>{band_pct:g}% 후 확정봉 연속 "
+                f"{max(1, (soft_min + 4) // 5)}개({soft_min}분)"
+                if enabled else "비활성"
+            ),
+            note=str(reason_detail or "") if exit_kind == "ema_soft" else "",
+            key="legacy_ema_soft",
+            enabled=enabled,
+        ),
+    ]
+
+
 def _apply_exit_rule_context(
     items: List[Dict[str, Any]],
     closed: bool,
@@ -270,6 +300,7 @@ def _apply_exit_rule_context(
     *,
     sangtta_kind: Optional[str] = None,
     breakout_kind: Optional[str] = None,
+    legacy_ema_kind: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """다른 규칙으로 청산된 경우, 미사용 규칙의 ✗를 해당 없음(?)으로."""
     if not closed or not trig:
@@ -277,11 +308,13 @@ def _apply_exit_rule_context(
     group = (
         _sangtta_trigger_group(sangtta_kind)
         or ("BREAKOUT_STRUCTURE" if breakout_kind else None)
+        or ("LEGACY_EMA" if legacy_ema_kind else None)
         or _exit_trigger_group(trig)
     )
     reason_ko = (
         SANGTTA_EXIT_KO.get(sangtta_kind or "", "")
         or BREAKOUT_EXIT_KO.get(breakout_kind or "", "")
+        or LEGACY_EMA_EXIT_KO.get(legacy_ema_kind or "", "")
         or SELL_REASON_KO.get(trig.upper(), trig)
     )
     skip = {
@@ -313,6 +346,9 @@ def _apply_exit_rule_context(
         if breakout_kind and key.startswith("breakout_structure_") and item.get("passed") is False:
             item["passed"] = None
             item["note"] = f"청산 사유 {reason_ko} — 이 규칙 미사용"
+        if legacy_ema_kind and key == "legacy_ema_soft" and item.get("passed") is False:
+            item["passed"] = None
+            item["note"] = f"청산 사유 {reason_ko} — 이 규칙 미사용"
     return items
 
 
@@ -339,14 +375,25 @@ def build_sell_condition_checklist(
     strat = (strategy_key or getattr(pos, "strategy_key", None) or "").strip().lower()
     is_sangtta = strat == "sangtta"
     is_breakout = strat == "breakout"
+    from utils.market_risk_gate import normalize_strategy_key
+    uses_ema_exit = (
+        is_sangtta
+        or is_breakout
+        or normalize_strategy_key(strat or "legacy") == "legacy"
+    )
     sangtta_kind = classify_sangtta_exit_detail(reason_detail) if is_sangtta else None
     breakout_kind = classify_breakout_exit_detail(reason_detail) if is_breakout else None
+    legacy_ema_kind = classify_legacy_ema_exit_detail(reason_detail) if uses_ema_exit else None
 
     # --- 청산 상태 ---
     if closed:
         reason_label = SELL_REASON_KO.get(trig, trig or str(pos.status or "청산"))
         if sangtta_kind:
             reason_label = f"{reason_label} · {SANGTTA_EXIT_KO.get(sangtta_kind, sangtta_kind)}"
+        elif breakout_kind:
+            reason_label = f"{reason_label} · {BREAKOUT_EXIT_KO.get(breakout_kind, breakout_kind)}"
+        elif legacy_ema_kind:
+            reason_label = f"{reason_label} · {LEGACY_EMA_EXIT_KO.get(legacy_ema_kind, legacy_ema_kind)}"
         items.append(_chk(
             "청산 상태", "포지션 종료",
             passed=True,
@@ -391,30 +438,26 @@ def build_sell_condition_checklist(
         items.extend(breakout_exit_check_items(
             settings, pos, reason_detail=reason_detail, closed=closed,
         ))
+    if uses_ema_exit:
+        items.extend(legacy_ema_exit_check_items(
+            settings, reason_detail=reason_detail, closed=closed,
+        ))
 
-    # --- 장마감 ---
+    # --- 장마감 (오버나잇 슬롯 정리) ---
     if settings.get("liquidate_before_close"):
         liq_time = settings.get("liquidate_time") or "15:10"
-        if is_breakout:
-            items.append(_chk(
-                "장마감", "전량 청산",
-                passed=True if closed and trig != "MARKET_CLOSE" else None,
-                actual="오버나잇 허용 (breakout 제외)",
-                required="수급 돌파 포지션은 장마감 강제청산 비적용",
-                note="PRD §10 확정",
-                key="market_close",
-                enabled=False,
-            ))
-        else:
-            triggered = trig == "MARKET_CLOSE"
-            items.append(_chk(
-                "장마감", "전량 청산",
-                passed=triggered if closed else None,
-                actual="청산됨" if triggered else ("—" if closed else "미발동"),
-                required=f"{liq_time} 이후 MARKET_CLOSE",
-                note="청산 사유" if triggered else "",
-                key="market_close",
-            ))
+        slots = settings.get("overnight_keep_slots")
+        if slots is None:
+            slots = 3
+        triggered = trig == "MARKET_CLOSE"
+        items.append(_chk(
+            "장마감", "슬롯 정리",
+            passed=triggered if closed else None,
+            actual="청산됨" if triggered else ("—" if closed else "미발동"),
+            required=f"{liq_time} 이후 당일종가배팅 제외 {slots}종목 오버나잇",
+            note="익절·큰 손실부터 정리 · 전략당 1종목" if not triggered else "청산 사유",
+            key="market_close",
+        ))
 
     # --- 트레일링 (패턴 B) ---
     tp = float(
@@ -471,7 +514,7 @@ def build_sell_condition_checklist(
         sl_price = int(pos.stop_loss_price or 0) or _step_price(exit_steps, "손절") or int(
             buy_price * (1 - abs(sl) / 100)
         )
-        triggered = trig == "STOP_LOSS" and not sangtta_kind and not breakout_kind
+        triggered = trig == "STOP_LOSS" and not sangtta_kind and not breakout_kind and not legacy_ema_kind
         hit = bool(sell_px and sell_px <= sl_price) if closed and sell_px else None
         items.append(_chk(
             "손절", "손절 %",
@@ -481,8 +524,9 @@ def build_sell_condition_checklist(
             note=(
                 "구조 이탈이 우선" if (closed and breakout_kind)
                 else ("상따 이탈/급락이 우선" if (closed and sangtta_kind)
+                else ("EMA 이탈 SOFT가 우선" if (closed and legacy_ema_kind)
                 else ("청산 사유" if triggered else "")
-                )
+                ))
             ),
             key="stop_loss",
             enabled=not bool(sangtta_kind),
@@ -596,6 +640,8 @@ def build_sell_condition_checklist(
             label = f"{label} · {SANGTTA_EXIT_KO.get(sangtta_kind, sangtta_kind)}"
         elif breakout_kind:
             label = f"{label} · {BREAKOUT_EXIT_KO.get(breakout_kind, breakout_kind)}"
+        elif legacy_ema_kind:
+            label = f"{label} · {LEGACY_EMA_EXIT_KO.get(legacy_ema_kind, legacy_ema_kind)}"
         items.append(_chk(
             "매도 실행", "청산 사유 일치",
             passed=True,
@@ -610,6 +656,7 @@ def build_sell_condition_checklist(
         trig,
         sangtta_kind=sangtta_kind,
         breakout_kind=breakout_kind,
+        legacy_ema_kind=legacy_ema_kind,
     )
 
 

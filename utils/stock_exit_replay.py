@@ -29,6 +29,8 @@ STRATEGY_LABELS = {
     "breakout": "수급 돌파",
     "ymgp": "역매공파",
     "jongga": "종가배팅",
+    "fractal": "프랙탈 스캘핑",
+    "ma1592": "15/92홀드",
 }
 
 STRATEGY_ALIASES = {
@@ -43,6 +45,9 @@ STRATEGY_ALIASES = {
     "jongga": "jongga",
     "jongga_closing": "jongga",
     "closing_bet": "jongga",
+    "fractal": "fractal",
+    "ema_fractal_pullback": "fractal",
+    "ma1592": "ma1592",
 }
 
 
@@ -177,6 +182,8 @@ def _settings_to_dict(settings: AutoTradeSettings) -> Dict[str, Any]:
         "use_entry_gate", "require_above_open", "require_above_vwap",
         "day_position_min", "day_position_max", "volume_ratio_min",
         "legacy_rsi_min", "legacy_rsi_max",
+        "legacy_ema_exit_enabled", "legacy_ema_exit_period", "legacy_ema_exit_soft_min",
+        "legacy_ema_exit_band_pct",
         "trade_start_time", "trade_end_time",
         "sangtta_trade_start_time", "sangtta_trade_end_time",
         "sangtta_max_market_cap", "sangtta_change_min", "sangtta_change_max",
@@ -189,6 +196,8 @@ def _settings_to_dict(settings: AutoTradeSettings) -> Dict[str, Any]:
         "breakout_entry_hard", "breakout_entry_soft", "breakout_entry_soft_polls",
         "breakout_entry_hold", "breakout_hold_expire_bars",
         "breakout_hold_rsi_min", "breakout_rsi_period",
+        "breakout_require_program_net", "breakout_program_lookback",
+        "breakout_program_min_buy",
         "breakout_max_change_pct", "breakout_stop_loss_pct",
         "breakout_trailing_start_pct", "breakout_trailing_pct",
         "struct_break_soft_pct", "struct_break_hard_pct",
@@ -370,21 +379,22 @@ def _exit_fill_price(stop_line: float, bar_open: int, bar_low: int) -> int:
     return line
 
 
-def _reason_label(reason: str) -> str:
-    labels = {
-        "STOP_LOSS": "손절",
-        "TAKE_PROFIT": "익절",
-        "TRAILING": "트레일링 스탑",
-        "PROFIT_LOCK": "수익 잠금",
+def _reason_label(reason: str, profit_loss=None, profit_loss_rate=None) -> str:
+    from utils.sell_reason_labels import sell_reason_ko
+
+    extra = {
         "HOLDING": "미청산",
         "END_OF_PERIOD": "기간 종료 청산",
-        "MARKET_CLOSE": "장마감 청산",
         "SANGTTA_LIMIT": "상한가 이탈",
         "SANGTTA_DROP": "급락",
         "BREAKOUT_STRUCTURE": "돌파 구조 이탈",
         "YMGP_STRUCTURE": "역매공파 구조 이탈",
     }
-    return labels.get(reason, reason)
+    if reason in extra:
+        return extra[reason]
+    return sell_reason_ko(
+        reason, profit_loss=profit_loss, profit_loss_rate=profit_loss_rate
+    )
 
 
 def _strategy_time_window(settings: Dict[str, Any], strategy: str) -> Tuple[str, str]:

@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>자동매매 검증</title>
+  <title>검증</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/dashboard.css?v=64">
-  <link rel="stylesheet" href="/static/verify.css?v=15">
+  <link rel="stylesheet" href="/static/dashboard.css?v=66">
+  <link rel="stylesheet" href="/static/verify.css?v=19">
 </head>
 <body>
   <header class="topbar">
@@ -39,6 +39,7 @@
 
   <div class="wrap verify-wrap">
     <div id="statusBanner" class="verify-banner" style="display:none;"></div>
+    <div class="market-indices verify-market-indices" id="marketIndices" aria-live="polite"></div>
 
     <section class="verify-summary" id="summaryCards">
       <div class="v-stat"><div class="k">상태</div><div class="v" style="font-size:14px;">불러오는 중…</div></div>
@@ -73,6 +74,6 @@
     </div>
   </div>
 
-  <script src="/static/verify.js?v=19"></script>
+  <script src="/static/verify.js?v=26"></script>
 </body>
 </html>

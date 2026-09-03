@@ -474,10 +474,19 @@ class SignalLifecycleTracker {
                     const sellReasonMap = {
                         'STOP_LOSS': '손절',
                         'TAKE_PROFIT': '익절',
+                        'TRAILING': '트레일링 스탑',
+                        'PROFIT_LOCK': '수익 잠금',
                         'MANUAL': '수동청산',
                         'INDICATOR': '지표청산'
                     };
-                    const sellReasonText = sellReasonMap[sellOrder.sell_reason] || sellOrder.sell_reason;
+                    let sellReasonText = sellReasonMap[sellOrder.sell_reason] || sellOrder.sell_reason;
+                    if (sellOrder.sell_reason === 'TRAILING') {
+                        if (profitLoss > 0) sellReasonText = '익절 (트레일)';
+                        else if (profitLoss < 0) sellReasonText = '손절 (트레일)';
+                    } else if (sellOrder.sell_reason === 'PROFIT_LOCK') {
+                        if (profitLoss > 0) sellReasonText = '익절 (수익잠금)';
+                        else if (profitLoss < 0) sellReasonText = '손절 (수익잠금)';
+                    }
                     
                     // 매도 정보 (매도가/매도수량/매도금액)를 한 셀에 통합
                     const sellInfo = `

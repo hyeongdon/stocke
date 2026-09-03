@@ -9,9 +9,255 @@ function esc(s) {
 }
 
 async function fetchJSON(url, opts) {
-  const r = await fetch(url, opts);
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
+  const timeoutMs = (opts && opts.timeoutMs) || 0;
+  const { timeoutMs: _t, ...rest } = opts || {};
+  if (!timeoutMs) {
+    const r = await fetch(url, rest);
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  }
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const r = await fetch(url, Object.assign({ signal: ctrl.signal }, rest));
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function parseNum(v) {
+  if (v === null || v === undefined) return 0;
+  if (typeof v === "number") return v;
+  const s = String(v).trim();
+  if (!s) return 0;
+  const sign = s[0] === "-" ? -1 : 1;
+  if (/^-?\d+\.\d+$/.test(s.replace(/,/g, ""))) {
+    return sign * parseFloat(s.replace(/[^0-9.]/g, ""));
+  }
+  const cleaned = s.replace(/[^0-9]/g, "").replace(/^0+(?=\d)/, "") || "0";
+  return sign * parseFloat(cleaned);
+}
+function num(v) { return Math.round(parseNum(v)).toLocaleString("ko-KR"); }
+function numFixed(v, digits) {
+  const n = parseNum(v);
+  return n.toLocaleString("ko-KR", {
+    minimumFractionDigits: digits ?? 0,
+    maximumFractionDigits: digits ?? 0,
+  });
+}
+function emptyRow(msg, ico) {
+  return `<div class="empty"><span class="ico">${ico || "📭"}</span>${esc(msg)}</div>`;
+}
+function fmtEokOrJo(v) {
+  if (v === null || v === undefined || v === "") return "-";
+  const n = parseNum(v);
+  if (Math.abs(n) >= 10000) return numFixed(n / 10000, 2) + "조";
+  return numFixed(n, 1) + "억";
+}
+
+let _themeFlowItems = [];
+let _themeFlowSelected = null;
+let _themeFlowResizeTimer = null;
+
+function themeFlowColor(changeRate) {
+  const c = parseNum(changeRate);
+  const t = Math.max(-6, Math.min(6, c)) / 6;
+  if (t >= 0) {
+    const light = 52 - t * 10;
+    return `hsl(0 82% ${light.toFixed(1)}%)`;
+  }
+  const light = 55 - (-t) * 10;
+  return `hsl(214 86% ${light.toFixed(1)}%)`;
+}
+
+function squarifyLayout(items, x0, y0, w, h) {
+  const total = items.reduce((s, it) => s + Math.max(0, parseNum(it.value)), 0);
+  if (!total || w <= 0 || h <= 0) return [];
+  const nodes = items.map((it) => ({
+    ...it,
+    value: Math.max(0, parseNum(it.value)),
+  })).filter((it) => it.value > 0);
+  const out = [];
+  let i = 0;
+  let x = x0;
+  let y = y0;
+  let rw = w;
+  let rh = h;
+  let rem = total;
+
+  function worst(row, len, remArea) {
+    if (!row.length) return Infinity;
+    const s = row.reduce((a, b) => a + b.value, 0);
+    const maxV = Math.max(...row.map((b) => b.value));
+    const minV = Math.min(...row.map((b) => b.value));
+    const scale = remArea / rem;
+    const r = s * scale;
+    if (r <= 0) return Infinity;
+    return Math.max((len * len * maxV * scale) / (r * r), (r * r) / (len * len * minV * scale));
+  }
+
+  function layoutRow(row, horizontal) {
+    const s = row.reduce((a, b) => a + b.value, 0);
+    const frac = s / rem;
+    if (horizontal) {
+      const rowH = rh * frac;
+      let cx = x;
+      row.forEach((node) => {
+        const tw = rw * (node.value / s);
+        out.push({ ...node, x: cx, y, w: tw, h: rowH });
+        cx += tw;
+      });
+      y += rowH;
+      rh -= rowH;
+    } else {
+      const rowW = rw * frac;
+      let cy = y;
+      row.forEach((node) => {
+        const th = rh * (node.value / s);
+        out.push({ ...node, x, y: cy, w: rowW, h: th });
+        cy += th;
+      });
+      x += rowW;
+      rw -= rowW;
+    }
+    rem -= s;
+  }
+
+  while (i < nodes.length) {
+    const horizontal = rw >= rh;
+    const len = horizontal ? rw : rh;
+    const row = [nodes[i]];
+    i += 1;
+    while (i < nodes.length) {
+      const next = nodes[i];
+      const w1 = worst(row, len, rem);
+      const w2 = worst(row.concat([next]), len, rem);
+      if (w2 <= w1) {
+        row.push(next);
+        i += 1;
+      } else break;
+    }
+    layoutRow(row, horizontal);
+  }
+  return out;
+}
+
+function renderThemeFlowDetail(item) {
+  const el = $("themeFlowDetail");
+  if (!el) return;
+  if (!item) {
+    el.innerHTML = '<span class="muted">타일을 클릭하면 구성 종목이 표시됩니다.</span>';
+    return;
+  }
+  const chg = parseNum(item.avg_change_rate);
+  const chgCls = chg > 0 ? "up" : (chg < 0 ? "down" : "flat");
+  const chgTxt = (chg > 0 ? "+" : "") + numFixed(chg, 2) + "%";
+  const stocks = item.top_stocks || [];
+  const rows = stocks.map((s, idx) => {
+    const sc = parseNum(s.change_rate);
+    const scCls = sc > 0 ? "up" : (sc < 0 ? "down" : "flat");
+    return `<tr>
+      <td class="num">${idx + 1}</td>
+      <td>${esc(s.stock_name || "-")} <span class="muted">${esc(s.stock_code || "")}</span></td>
+      <td class="num">${fmtEokOrJo(s.trade_amount_eok)}</td>
+      <td class="num ${scCls}">${(sc > 0 ? "+" : "") + numFixed(sc, 2)}%</td>
+    </tr>`;
+  }).join("");
+  el.innerHTML = `
+    <div class="tf-head">
+      <strong>#${num(item.rank)} ${esc(item.theme || "-")}</strong>
+      <span>대금 <b>${fmtEokOrJo(item.trade_amount_eok)}</b></span>
+      <span>종목 ${num(item.stock_count)}</span>
+      <span class="${chgCls}">평균등락 ${esc(chgTxt)}</span>
+    </div>
+    ${stocks.length ? `<table class="tbl"><thead><tr><th>#</th><th>종목</th><th class="num">대금</th><th class="num">등락</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="muted">구성 종목 없음</div>'}
+  `;
+}
+
+function renderThemeFlowMap(items) {
+  const map = $("themeFlowMap");
+  if (!map) return;
+  const data = (items || []).filter((it) => parseNum(it.trade_amount_eok || it.trade_amount) > 0);
+  if (!data.length) {
+    map.innerHTML = emptyRow("테마 대금 데이터가 없습니다. 새로고침을 눌러 주세요.", "🗺️");
+    renderThemeFlowDetail(null);
+    return;
+  }
+  map.innerHTML = data.map((it) => {
+    const chg = parseNum(it.avg_change_rate);
+    const chgTxt = (chg > 0 ? "+" : "") + numFixed(chg, 1) + "%";
+    const title = `${it.theme || "-"} · ${chgTxt} · 중복합산 대금 ${fmtEokOrJo(it.trade_amount_eok)} · 종목 ${it.stock_count || 0}`;
+    return `<button type="button" class="theme-tile" data-theme="${esc(it.theme || "")}" title="${esc(title)}"
+      style="background:${themeFlowColor(chg)};">
+      <span class="tt-name">${esc(it.theme || "-")}</span>
+      <span class="tt-change">${esc(chgTxt)}</span>
+      <span class="tt-meta">${fmtEokOrJo(it.trade_amount_eok)}</span>
+    </button>`;
+  }).join("");
+
+  map.querySelectorAll(".theme-tile").forEach((btn) => {
+    btn.onclick = () => {
+      const name = btn.getAttribute("data-theme");
+      const item = (_themeFlowItems || []).find((r) => String(r.theme) === String(name));
+      _themeFlowSelected = name;
+      map.querySelectorAll(".theme-tile").forEach((b) => b.classList.toggle("is-active", b === btn));
+      renderThemeFlowDetail(item || null);
+    };
+  });
+
+  if (_themeFlowSelected) {
+    const prev = (_themeFlowItems || []).find((r) => String(r.theme) === String(_themeFlowSelected));
+    if (prev) {
+      const sel = (window.CSS && CSS.escape)
+        ? CSS.escape(_themeFlowSelected)
+        : String(_themeFlowSelected).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+      const btn = map.querySelector(`.theme-tile[data-theme="${sel}"]`);
+      if (btn) btn.classList.add("is-active");
+      renderThemeFlowDetail(prev);
+      return;
+    }
+  }
+  renderThemeFlowDetail(null);
+}
+
+async function loadThemeTradeFlow(rebuild = false) {
+  const map = $("themeFlowMap");
+  const hint = $("themeFlowHint");
+  if (!map) return;
+  if (rebuild) map.innerHTML = '<div class="skeleton">테마 데이터 새로고침 중...</div>';
+  try {
+    const sortBy = $("themeFlowSort")?.value || "trade_amount";
+    const qs = new URLSearchParams({ sort_by: sortBy });
+    if (rebuild) qs.set("rebuild", "1");
+    const d = await fetchJSON(`/themes/trade-amount-map?${qs.toString()}`, { timeoutMs: 120000 });
+    if (!d.success) {
+      map.innerHTML = emptyRow(d.error || "테마 대금 맵 조회 실패", "⚠️");
+      if (hint) hint.textContent = "";
+      return;
+    }
+    const items = d.items || [];
+    _themeFlowItems = items;
+    const cacheTag = d.cached ? "캐시" : "실시간";
+    const sortTag = d.sort_by === "change_rate" ? "등락률순" : "거래대금순";
+    const built = d.built_at ? new Date(d.built_at + (String(d.built_at).endsWith("Z") ? "" : "Z")).toLocaleTimeString("ko-KR") : "-";
+    if (hint) {
+      hint.textContent = `${items.length}테마 · ${sortTag} · 종목 ${num(d.stock_universe || 0)} · 전체 소속테마 중복합산 · ${cacheTag} ${built}`;
+    }
+    renderThemeFlowMap(items);
+  } catch (e) {
+    map.innerHTML = emptyRow("테마 대금 맵을 불러오지 못했습니다.", "⚠️");
+    if (hint) hint.textContent = "";
+  }
+}
+
+function bindThemeFlowResize() {
+  window.addEventListener("resize", () => {
+    if (!_themeFlowItems.length) return;
+    clearTimeout(_themeFlowResizeTimer);
+    _themeFlowResizeTimer = setTimeout(() => renderThemeFlowMap(_themeFlowItems), 120);
+  });
 }
 
 function toast(msg, err = false) {
@@ -29,6 +275,34 @@ const COVERAGE_PAGE = 100;
 function fmtPct(v) {
   const n = Number(v);
   return Number.isFinite(n) ? `${n}%` : "-";
+}
+
+function sourceChipClass(source) {
+  const s = String(source || "");
+  if (s === "naver_theme") return "src-n";
+  if (s === "kiwoom_theme") return "src-k";
+  if (s === "alphasquare_theme") return "src-as";
+  if (s === "manual") return "manual";
+  if (s.startsWith("news")) return "src-news";
+  return "";
+}
+
+function renderSourceChip(it) {
+  const short = it.source_short || it.source_label || it.source || "";
+  const cls = sourceChipClass(it.source);
+  return `<span class="cov-chip src-chip ${cls}" title="${esc(it.source_label || it.source || "")}">${esc(short)}</span>`;
+}
+
+function renderReason(reason) {
+  const t = String(reason || "").trim();
+  if (!t) return "";
+  return `<div class="reason-text" title="${esc(t)}">${esc(t)}</div>`;
+}
+
+function renderKeyPoint(kp) {
+  const t = String(kp || "").trim();
+  if (!t) return "";
+  return `<div class="keypoint-text" title="${esc(t)}">KEY · ${esc(t)}</div>`;
 }
 
 function renderTagChips(names, kind) {
@@ -250,7 +524,10 @@ async function loadKeywords() {
 }
 
 async function loadTags() {
-  const d = await fetchJSON("/theme-map/tags?limit=200");
+  const source = $("tagSourceFilter")?.value || "";
+  const qs = new URLSearchParams({ limit: "200" });
+  if (source) qs.set("source", source);
+  const d = await fetchJSON(`/theme-map/tags?${qs}`);
   const items = d.items || [];
   $("tagHint").textContent = `${items.length}개`;
   if (!items.length) {
@@ -260,8 +537,9 @@ async function loadTags() {
   $("tagBody").innerHTML = `<div class="theme-list">${
     items.map((it) => `
       <div class="theme-item ${currentTagId === it.id ? "active" : ""}" data-tag-id="${it.id}">
-        <div><b>${esc(it.name_ko)}</b></div>
-        <div class="meta">edge ${it.edge_count} · ${esc(it.tag_key)}</div>
+        <div><b>${esc(it.name_ko)}</b> ${renderSourceChip(it)}</div>
+        <div class="meta">edge ${it.edge_count} · ${esc(it.source_label || it.source || "")}</div>
+        ${renderKeyPoint(it.key_point)}
       </div>
     `).join("")
   }</div>`;
@@ -285,8 +563,9 @@ async function loadStocksByTag(tagId) {
   $("stocksByTagBody").innerHTML = `<div class="theme-list">${
     items.map((it) => `
       <div class="theme-item" data-stock-code="${esc(it.stock_code)}">
-        <div><b>${esc(it.stock_name)}</b> <span class="hint">${esc(it.stock_code)}</span></div>
-        <div class="meta">${esc(it.role || "member")} · ${esc(it.source || "")}</div>
+        <div><b>${esc(it.stock_name)}</b> <span class="hint">${esc(it.stock_code)}</span> ${renderSourceChip(it)}</div>
+        <div class="meta">${esc(it.role || "member")} · ${esc(it.source_label || it.source || "")}</div>
+        ${renderReason(it.reason)}
       </div>
     `).join("")
   }</div>`;
@@ -305,8 +584,9 @@ async function loadStocksByKeyword(keyword) {
   $("stocksByTagBody").innerHTML = `<div class="theme-list">${
     items.map((it) => `
       <div class="theme-item" data-stock-code="${esc(it.stock_code)}">
-        <div><b>${esc(it.stock_name)}</b> <span class="hint">${esc(it.stock_code)}</span></div>
-        <div class="meta">${esc(it.role || "member")} · ${esc(it.source || "")}</div>
+        <div><b>${esc(it.stock_name)}</b> <span class="hint">${esc(it.stock_code)}</span> ${renderSourceChip(it)}</div>
+        <div class="meta">${esc(it.role || "member")} · ${esc(it.source_label || it.source || "")}</div>
+        ${renderReason(it.reason)}
       </div>
     `).join("")
   }</div>`;
@@ -334,13 +614,50 @@ async function lookupStockTags() {
     <div class="theme-list">${
       items.map((it) => `
         <div class="theme-item">
-          <div><b>${esc(it.tag_name)}</b> <span class="hint">${esc(it.tag_type)}</span>${it.source === "manual" ? ' <span class="cov-chip manual">수동</span>' : ""}</div>
-          <div class="meta">${esc(it.source)} · ${esc(it.role || "")}</div>
+          <div><b>${esc(it.tag_name)}</b> <span class="hint">${esc(it.tag_type)}</span> ${renderSourceChip(it)}</div>
+          <div class="meta">${esc(it.source_label || it.source || "")} · ${esc(it.role || "")}</div>
+          ${renderReason(it.reason)}
+          ${renderKeyPoint(it.key_point)}
         </div>
       `).join("")
     }</div>
   `;
   await loadArticlesByStock(code);
+}
+
+async function loadSourceCross() {
+  const body = $("crossBody");
+  if (!body) return;
+  body.innerHTML = "불러오는 중...";
+  try {
+    const d = await fetchJSON("/theme-map/source-cross");
+    if (!d.ok) {
+      body.innerHTML = `<div class="empty"><span class="ico">⚠</span>${esc(d.error || "리포트 없음")}</div>`;
+      return;
+    }
+    const s = d.stocks || {};
+    const c = d.coverage_pct || {};
+    const ov = d.name_overlap || {};
+    $("crossHint").textContent = `기준일 ${d.biz_date || "-"}`;
+    body.innerHTML = `
+      <div class="coverage-stats">
+        <div class="coverage-stat"><div class="label">네이버 종목</div><div class="value">${esc(s.naver || 0)}</div><div class="sub">${fmtPct(c.naver_of_union)} of union</div></div>
+        <div class="coverage-stat"><div class="label">키움 종목</div><div class="value">${esc(s.kiwoom || 0)}</div><div class="sub">${fmtPct(c.kiwoom_of_union)} of union</div></div>
+        <div class="coverage-stat"><div class="label">알파스퀘어 종목</div><div class="value">${esc(s.alphasquare || 0)}</div><div class="sub">${fmtPct(c.alphasquare_of_union)} of union</div></div>
+        <div class="coverage-stat"><div class="label">합집합</div><div class="value">${esc(s.union || 0)}</div><div class="sub">3소스</div></div>
+        <div class="coverage-stat"><div class="label">3소스 교집합</div><div class="value">${esc(s.all_three || 0)}</div><div class="sub">N∩K∩AS</div></div>
+        <div class="coverage-stat"><div class="label">AS만 보유</div><div class="value">${esc(s.alphasquare_only || 0)}</div><div class="sub">네이버 갭 메움 ${esc(s.alphasquare_fills_naver_gap || 0)}</div></div>
+      </div>
+      <div class="cross-overlap hint" style="margin-top:8px;">
+        테마명 일치(교집합 종목 기준):
+        N∩K ${esc((ov.naver_kiwoom || {}).share_pct ?? "-")}% ·
+        N∩AS ${esc((ov.naver_alphasquare || {}).share_pct ?? "-")}% ·
+        K∩AS ${esc((ov.kiwoom_alphasquare || {}).share_pct ?? "-")}%
+      </div>
+    `;
+  } catch (e) {
+    body.innerHTML = `<div class="empty"><span class="ico">⚠</span>${esc(e.message)}</div>`;
+  }
 }
 
 async function submitManualMapping() {
@@ -455,8 +772,23 @@ async function refreshSnapshot() {
   btn.disabled = true;
   btn.textContent = "갱신 중...";
   try {
-    const d = await fetchJSON("/theme-map/refresh?top_n=0", { method: "POST" });
-    toast(`갱신 완료: 테마 ${d.themes} · 매핑 ${d.edges} · 키워드 ${d.keywords}`);
+    const qs = new URLSearchParams({
+      top_n: "0",
+      include_kiwoom: "true",
+      include_alphasquare: "true",
+      include_news_keywords: "true",
+    });
+    const d = await fetchJSON(`/theme-map/refresh?${qs}`, { method: "POST" });
+    const asOk = d.alphasquare_ok;
+    const kwOk = d.kiwoom_ok;
+    const extra = [
+      asOk == null ? null : `AS ${asOk ? "ok" : "fail"}`,
+      kwOk == null ? null : `K ${kwOk ? "ok" : "fail"}`,
+    ].filter(Boolean).join(" · ");
+    toast(
+      `갱신 완료: 테마 ${d.themes} · 매핑 ${d.edges} · 키워드 ${d.keywords}` +
+        (extra ? ` (${extra})` : "")
+    );
     await loadAll();
   } catch (e) {
     toast(`갱신 실패: ${e.message}`, true);
@@ -467,16 +799,27 @@ async function refreshSnapshot() {
 }
 
 async function loadAll() {
-  await Promise.all([loadKeywords(), loadTags(), loadCoverage(false)]);
+  await Promise.all([
+    loadThemeTradeFlow(false),
+    loadKeywords(),
+    loadTags(),
+    loadCoverage(false),
+    loadSourceCross(),
+  ]);
   $("lastUpdated").textContent = new Date().toLocaleTimeString("ko-KR");
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
   $("btnRefreshSnapshot").onclick = refreshSnapshot;
+  if ($("themeFlowRefresh")) $("themeFlowRefresh").onclick = () => loadThemeTradeFlow(true);
+  if ($("themeFlowSort")) $("themeFlowSort").onchange = () => loadThemeTradeFlow(false);
+  bindThemeFlowResize();
   $("btnStockLookup").onclick = lookupStockTags;
   $("stockCodeInput").addEventListener("keydown", (e) => {
     if (e.key === "Enter") lookupStockTags();
   });
+  $("tagSourceFilter")?.addEventListener("change", () => loadTags());
+  $("btnCrossReload")?.addEventListener("click", () => loadSourceCross());
   $("btnCoverageReload").onclick = () => loadCoverage(true);
   $("coverageMarket").onchange = () => loadCoverage(true);
   $("coverageGap").onchange = () => loadCoverage(true);

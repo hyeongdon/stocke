@@ -1,8 +1,9 @@
-# Windows 작업 스케줄러 - 장 마감 후 종목 뉴스/키워드 배치 (미니PC 기본)
+# Windows 작업 스케줄러 - 종목 뉴스/키워드 배치
+# 기본은 비활성(키워드 수집 중단). 재개할 때만 등록하세요.
 # 사용:
-#   powershell -ExecutionPolicy Bypass -File scripts\install_stock_news_batch_task.ps1
-#   powershell ... -At "16:30" -Uninstall
-#   powershell ... -FullMarket   # 전종목(비권장, 수시간·고CPU)
+#   powershell -ExecutionPolicy Bypass -File scripts\install_stock_news_batch_task.ps1 -Uninstall
+#   powershell ... -At "16:30"          # 재등록(비권장)
+#   powershell ... -FullMarket          # 전종목(비권장, 수시간·고CPU)
 
 param(
     [string]$At = "16:30",

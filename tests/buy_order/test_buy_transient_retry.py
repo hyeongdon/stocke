@@ -123,3 +123,42 @@ async def test_defer_fails_after_limit():
 
     assert signal.status == "FAILED"
     assert "계좌 정보" in signal.failure_reason
+
+
+@pytest.mark.asyncio
+async def test_add_buy_does_not_unbound_strategy_key():
+    """피라미딩 추가매수 시 strategy_key UnboundLocalError 회귀 방지 (키다리스튜디오 020120)."""
+    ex = BuyOrderExecutor()
+    ex.retry_delay_seconds = 0
+    ex.max_retry_attempts = 1
+    ex.auto_trade_settings = SimpleNamespace(is_enabled=True)
+    signal = SimpleNamespace(
+        id=1108,
+        stock_code="020120",
+        stock_name="키다리스튜디오",
+        additional_data={
+            "current_price": 6280,
+            "change_rate": 13.15,
+            "source": "pyramiding_add",
+            "is_add_buy": True,
+            "strategy": "breakout",
+        },
+    )
+
+    ex._update_signal_status = AsyncMock()
+    ex._defer_transient_failure = AsyncMock()
+    ex._clear_transient_defer_meta = AsyncMock()
+    ex._validate_buy_conditions = AsyncMock(return_value={"valid": True})
+    ex._get_current_price = AsyncMock(return_value=6280)
+    ex._calculate_buy_quantity = AsyncMock(return_value=(10, 62800))
+    ex._execute_buy_order_with_retry = AsyncMock()
+
+    with patch("managers.buy_order_executor.log_activity"):
+        await ex._process_single_signal(signal)
+
+    failed = [
+        c for c in ex._update_signal_status.await_args_list
+        if len(c.args) >= 2 and c.args[1] == "FAILED"
+    ]
+    assert failed == [], f"unexpected FAILED: {failed}"
+    ex._execute_buy_order_with_retry.assert_awaited_once()

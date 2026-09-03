@@ -40,6 +40,14 @@ function getDateFilterParam() {
   return p;
 }
 
+function normStockCode(code) {
+  return String(code || '').trim().replace(/^A/i, '').split('_')[0];
+}
+
+function getDeepLinkCode() {
+  return normStockCode(new URLSearchParams(window.location.search).get('code'));
+}
+
 function getSelectedDate() {
   const el = $('tradeDate');
   const v = el && el.value ? el.value.trim() : '';
@@ -342,9 +350,155 @@ function showFatal(msg) {
   if ($('failedList')) $('failedList').innerHTML = sk;
 }
 
+function fmtIndexValue(v) {
+  if (v == null || Number.isNaN(Number(v))) return '-';
+  const n = Number(v);
+  return n.toLocaleString('ko-KR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function fmtIndexDelta(v) {
+  if (v == null || Number.isNaN(Number(v))) return '-';
+  const n = Number(v);
+  const sign = n > 0 ? '+' : '';
+  return sign + n.toLocaleString('ko-KR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function fmtIndexPct(v) {
+  if (v == null || Number.isNaN(Number(v))) return '';
+  const n = Number(v);
+  const sign = n > 0 ? '+' : '';
+  return `${sign}${n.toFixed(2)}%`;
+}
+function fmtEok(v) {
+  if (v == null || Number.isNaN(Number(v))) return '-';
+  const n = Number(v);
+  const sign = n > 0 ? '+' : '';
+  return sign + n.toLocaleString('ko-KR') + '억';
+}
+function renderInvestorBadges(it) {
+  const inv = it && it.investor;
+  if (!inv || (inv.foreign == null && inv.institution == null)) return '';
+  const chip = (label, val) => {
+    if (val == null) return '';
+    const cls = Number(val) > 0 ? 'up' : (Number(val) < 0 ? 'down' : 'flat');
+    return `<span class="mi-inv ${cls}">${label} ${fmtEok(val)}</span>`;
+  };
+  const tip = [
+    inv.bizdate ? `기준 ${inv.bizdate}` : '',
+    inv.personal != null ? `개인 ${fmtEok(inv.personal)}` : '',
+  ].filter(Boolean).join(' · ');
+  return `<span class="mi-investor" title="${esc(tip)}">${chip('외', inv.foreign)}${chip('기', inv.institution)}</span>`;
+}
+function renderIndexSpark(bars, opts) {
+  const list = Array.isArray(bars) ? bars.filter((b) => b && b.close != null) : [];
+  if (!list.length) return '';
+  const ariaLabel = (opts && opts.intraday) ? '당일 15분봉' : '시가·종가 일봉';
+  const w = 128;
+  const h = 42;
+  const padY = 3;
+  const padX = 2;
+  const nums = (b, k, fallback) => {
+    const n = Number(b[k]);
+    return Number.isFinite(n) ? n : fallback;
+  };
+  const highs = list.map((b) => nums(b, 'high', Math.max(nums(b, 'open', b.close), b.close)));
+  const lows = list.map((b) => nums(b, 'low', Math.min(nums(b, 'open', b.close), b.close)));
+  const min = Math.min(...lows);
+  const max = Math.max(...highs);
+  const span = max - min || 1;
+  const slot = (w - padX * 2) / list.length;
+  const bodyW = Math.max(2.2, Math.min(5.5, slot * 0.62));
+  const yOf = (v) => padY + (1 - (Number(v) - min) / span) * (h - padY * 2);
+  const parts = list.map((b, i) => {
+    const o = nums(b, 'open', b.close);
+    const c = Number(b.close);
+    const hi = nums(b, 'high', Math.max(o, c));
+    const lo = nums(b, 'low', Math.min(o, c));
+    const x = padX + slot * i + slot / 2;
+    const up = c >= o;
+    const cls = up ? 'up' : 'down';
+    const top = yOf(Math.max(o, c));
+    const bot = yOf(Math.min(o, c));
+    const bh = Math.max(1.2, bot - top);
+    return `<g class="${cls}">
+      <line x1="${x.toFixed(1)}" y1="${yOf(hi).toFixed(1)}" x2="${x.toFixed(1)}" y2="${yOf(lo).toFixed(1)}"/>
+      <rect x="${(x - bodyW / 2).toFixed(1)}" y="${top.toFixed(1)}" width="${bodyW.toFixed(1)}" height="${bh.toFixed(1)}"/>
+    </g>`;
+  });
+  return `<svg class="mi-spark" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img" aria-label="${ariaLabel}">${parts.join('')}</svg>`;
+}
+function renderMarketIndexItem(it, filterDate) {
+  if (it.closed) {
+    return `<span class="market-index-item market-index-card closed"><span class="mi-label">${esc(it.label)}</span><span class="mi-value">휴장</span></span>`;
+  }
+  const movement = Number(it.change_pct ?? it.change);
+  const dir = movement > 0 ? 'up' : (movement < 0 ? 'down' : 'flat');
+  const deltaParts = [];
+  if (it.change != null) deltaParts.push(fmtIndexDelta(it.change));
+  if (it.change_pct != null) deltaParts.push(`(${fmtIndexPct(it.change_pct)})`);
+  let label = it.label || '';
+  if (it.session_date && filterDate && it.session_date !== filterDate) {
+    const md = String(it.session_date).slice(5).replace('-', '/');
+    label = `${label} ${md}`;
+  }
+  const ohlc = it.open != null
+    ? `<div class="mi-ohlc"><span>시 ${fmtIndexValue(it.open)}</span><span>종 ${fmtIndexValue(it.value)}</span></div>`
+    : `<div class="mi-ohlc"><span>종 ${fmtIndexValue(it.value)}</span></div>`;
+  const hiLo = (it.high != null && it.low != null)
+    ? `<div class="mi-hl">고 ${fmtIndexValue(it.high)} · 저 ${fmtIndexValue(it.low)}</div>`
+    : '';
+  const intradayBars = it.intraday_bars && it.intraday_bars.length ? it.intraday_bars : null;
+  const sparkBars = intradayBars
+    || (it.bars && it.bars.length ? it.bars : [{ open: it.open, high: it.high, low: it.low, close: it.value }]);
+  return `<span class="market-index-item market-index-card ${dir}">
+    <span class="mi-top"><span class="mi-label">${esc(label)}</span><span class="mi-delta">${deltaParts.join(' ') || '-'}</span></span>
+    ${ohlc}${hiLo}
+    ${renderInvestorBadges(it)}
+    ${renderIndexSpark(sparkBars, { intraday: !!intradayBars })}
+  </span>`;
+}
+let _indexReqSeq = 0;
+async function loadMarketIndices() {
+  const el = $('marketIndices');
+  if (!el) return;
+  const dateParam = getDateFilterParam();
+  const req = ++_indexReqSeq;
+  if (!dateParam || dateParam === 'this_week') {
+    el.innerHTML = '<span class="market-index-skeleton">거래일(하루)을 고르면 코스피·코스닥·나스닥·다우가 표시됩니다</span>';
+    return;
+  }
+  el.innerHTML = '<span class="market-index-skeleton">지수 불러오는 중…</span>';
+  try {
+    const url = `/market/indices?date=${encodeURIComponent(dateParam)}&_=${Date.now()}`;
+    const res = await fetch(url, { headers: { Accept: 'application/json' }, cache: 'no-store' });
+    if (req !== _indexReqSeq) return;
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const d = await res.json();
+    if (req !== _indexReqSeq) return;
+    if (d.as_of === 'live' && dateParam !== kstToday()) {
+      el.innerHTML = '<span class="market-index-skeleton">지수 API가 해당일이 아닌 실시간 값을 반환했습니다. 서버를 재시작한 뒤 새로고침하세요.</span>';
+      return;
+    }
+    if (d.date && d.date !== dateParam) {
+      el.innerHTML = '<span class="market-index-skeleton">지수 날짜가 선택한 거래일과 다릅니다</span>';
+      return;
+    }
+    const items = d.indices || [];
+    const asOf = d.as_of === 'live' ? '실시간' : '시·종';
+    const head = items.length
+      ? `<span class="market-index-skeleton">${esc(dateParam)} ${asOf}</span>`
+      : '';
+    el.innerHTML = items.length
+      ? head + items.map((it) => renderMarketIndexItem(it, dateParam)).join('')
+      : '<span class="market-index-skeleton">지수 데이터 없음</span>';
+  } catch (e) {
+    if (req !== _indexReqSeq) return;
+    el.innerHTML = '<span class="market-index-skeleton">지수 로드 실패</span>';
+  }
+}
+
 async function loadReport() {
   const dateParam = getDateFilterParam();
   showBanner('데이터 불러오는 중…', false);
+  loadMarketIndices();
   try {
     let url = '/verification/trades?limit=100';
     if (dateParam) url += `&date=${encodeURIComponent(dateParam)}`;
@@ -367,14 +521,25 @@ async function loadReport() {
     $('genAt').textContent = d.generated_at || '-';
     const label = (d.filter && d.filter.trade_date_label) || (dateParam || '전체');
     const count = (d.summary && d.summary.positions) || 0;
-    showBanner(`${label} · 매매 ${count}건`, false);
+    _trades = d.trades || [];
+    _chartLoaded.clear();
+    const deepCode = getDeepLinkCode();
+    let openIdx = null;
+    if (deepCode) {
+      openIdx = _trades.findIndex((t) => normStockCode(t.stock_code) === deepCode);
+      if (openIdx < 0) {
+        showBanner(`${label} · 매매 ${count}건 · ${deepCode} 해당일 검증 내역 없음`, false);
+      } else {
+        showBanner(`${label} · 매매 ${count}건`, false);
+      }
+    } else {
+      showBanner(`${label} · 매매 ${count}건`, false);
+    }
     updateDatePresetButtons();
     renderSummary(d.summary || {});
     renderGuide(d.calculation_guide || {});
-    _trades = d.trades || [];
-    _chartLoaded.clear();
-    renderTradeTable(_trades);
-    renderTrades(_trades);
+    renderTradeTable(_trades, openIdx);
+    renderTrades(_trades, openIdx);
     renderFailed(d.failed_signals || []);
   } catch (e) {
     console.error('[verify]', e);
@@ -405,7 +570,7 @@ function renderGuide(g) {
   $('guideExit').innerHTML = stepHtml([...(g.exit_priority || []), ...(g.pnl || [])]);
 }
 
-function renderTradeTable(trades) {
+function renderTradeTable(trades, openIdx) {
   const el = $('tradeTableWrap');
   const tradeDate = getSelectedDate();
   if (!trades.length) {
@@ -415,11 +580,13 @@ function renderTradeTable(trades) {
     el.innerHTML = `<div class="empty"><span class="ico">📭</span>${esc(hint)}</div>`;
     return;
   }
+  const hlIdx = openIdx != null && openIdx >= 0 ? openIdx : -1;
   const rows = trades.map((t, i) => {
     const buy = t.buy || {};
     const sell = t.sell || {};
     const pl = sell.profit_loss;
-    return `<tr data-idx="${i}" class="verify-row" style="cursor:pointer;">
+    const hlCls = i === hlIdx ? ' verify-row-hl' : '';
+    return `<tr data-idx="${i}" class="verify-row${hlCls}" style="cursor:pointer;">
       <td>${verdictPill(t.entry_verdict)} ${strategyPill(t)}</td>
       <td><span class="stock-name">${esc(t.stock_name)}</span><span class="stock-code">${esc(t.stock_code)}</span></td>
       <td>${esc(buy.time || '-')}</td>
@@ -439,9 +606,13 @@ function renderTradeTable(trades) {
   el.querySelectorAll('.verify-row').forEach((row) => {
     row.addEventListener('click', () => openTrade(parseInt(row.dataset.idx, 10)));
   });
+  if (hlIdx >= 0) {
+    const hlRow = el.querySelector(`.verify-row[data-idx="${hlIdx}"]`);
+    if (hlRow) hlRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
 }
 
-function renderTrades(trades) {
+function renderTrades(trades, openIdx) {
   const tradeDate = getSelectedDate();
   if (!trades.length) {
     const hint = tradeDate
@@ -450,14 +621,16 @@ function renderTrades(trades) {
     $('tradeList').innerHTML = `<div class="empty"><span class="ico">📭</span>${esc(hint)}</div>`;
     return;
   }
-  $('tradeList').innerHTML = trades.map((t, i) => buildTradeCard(t, i)).join('');
-  const firstOpen = document.querySelector('.trade-card.open');
-  if (firstOpen && firstOpen.dataset.idx != null) {
-    loadTradeChart(parseInt(firstOpen.dataset.idx, 10));
+  const idxToOpen = openIdx == null ? 0 : openIdx;
+  $('tradeList').innerHTML = trades.map((t, i) => buildTradeCard(t, i, idxToOpen >= 0 && i === idxToOpen)).join('');
+  if (idxToOpen >= 0) {
+    loadTradeChart(idxToOpen);
+    const card = document.getElementById(`trade-card-${idxToOpen}`);
+    if (card) card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 }
 
-function buildTradeCard(t, i) {
+function buildTradeCard(t, i, isOpen) {
   const sell = t.sell || {};
   const buy = t.buy || {};
   const pl = sell.profit_loss;
@@ -481,7 +654,7 @@ function buildTradeCard(t, i) {
     ${t.pnl_calc.match === false ? '<div class="hint" style="color:var(--amber)">⚠ 계산값과 DB 기록 차이 — 수수료·체결가 반올림 가능</div>' : ''}
   ` : '';
 
-  const openCls = i === 0 ? ' open' : '';
+  const openCls = isOpen ? ' open' : '';
 
   return `<article class="trade-card${openCls}" id="trade-card-${i}" data-idx="${i}">
     <div class="trade-card-head" role="button" tabindex="0" data-idx="${i}">
@@ -520,13 +693,14 @@ function buildTradeCard(t, i) {
       </div>
       ${pnlCalc ? `<div class="v-block"><h4>손익 검증</h4>${pnlCalc}</div>` : ''}
       <div class="v-block v-chart-block">
-        <h4>매매 15분봉</h4>
+        <h4>매매 5분봉</h4>
         <div class="v-chart-wrap" id="chart-wrap-${i}" data-idx="${i}">
           <div class="v-chart-status">카드를 펼치면 차트를 불러옵니다</div>
-          <canvas class="v-chart-canvas" aria-label="매매 15분봉 차트"></canvas>
+          <canvas class="v-chart-canvas" aria-label="매매 5분봉 차트"></canvas>
           <div class="v-chart-legend" style="display:none;">
             <span class="lg-buy">● 매수(가격)</span>
             <span class="lg-sell">● 매도(가격)</span>
+            <span class="lg-ema90">━ EMA(90)</span>
             <span class="lg-stop">┄ 손절</span>
             <span class="lg-take">┄ 익절</span>
             <span class="lg-up">▮ 양봉</span>
@@ -711,6 +885,7 @@ function renderIntradayChart(canvas, payload) {
   const stopC = styles.getPropertyValue('--v-down').trim() || '#5b9bd5';
   const takeC = styles.getPropertyValue('--v-up').trim() || '#e8a0a0';
   const trailC = styles.getPropertyValue('--muted').trim() || '#888';
+  const ema90C = '#a78bfa';
 
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, W, H);
@@ -780,6 +955,32 @@ function renderIntradayChart(canvas, payload) {
       ctx.fillRect(x - bodyW / 2, vy, bodyW, vh);
     }
   });
+
+  const alpha = 2 / 91;
+  let ema = null;
+  (payload.ema_seed_closes || []).forEach((value) => {
+    const close = Number(value);
+    if (Number.isFinite(close)) {
+      ema = ema == null ? close : alpha * close + (1 - alpha) * ema;
+    }
+  });
+  ctx.save();
+  ctx.strokeStyle = ema90C;
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  bars.forEach((b, i) => {
+    const close = Number(b.close);
+    if (!Number.isFinite(close)) return;
+    ema = ema == null ? close : alpha * close + (1 - alpha) * ema;
+    const x = padL + i * slotW + slotW / 2;
+    const y = yOf(ema);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  ctx.restore();
 
   if (hasVolume && volMax > 0) {
     ctx.strokeStyle = grid;
@@ -881,7 +1082,7 @@ async function fetchTradeChart(wrapId, cacheKey, url, trade) {
   if (!statusEl || !canvas) return;
 
   _chartLoaded.add(cacheKey);
-  statusEl.textContent = '15분봉 불러오는 중…';
+  statusEl.textContent = '5분봉 불러오는 중…';
   statusEl.classList.remove('err', 'warn');
   statusEl.style.display = 'block';
   canvas.style.display = 'none';
@@ -917,7 +1118,7 @@ function buildChartUrl(t) {
   const buyTime = buy.time_kst || buy.time;
   const sellTime = sell.time_kst || sell.time;
 
-  let url = `/verification/chart?stock_code=${encodeURIComponent(t.stock_code)}&date=${encodeURIComponent(buyDate)}`;
+  let url = `/verification/chart?stock_code=${encodeURIComponent(t.stock_code)}&date=${encodeURIComponent(buyDate)}&interval=5M`;
   if (sell.status === 'COMPLETED' && sellDate && sellDate !== buyDate) {
     url += `&end_date=${encodeURIComponent(sellDate)}`;
   }

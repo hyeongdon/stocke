@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from core.models import PositionBuyFill
 
 KST = timezone(timedelta(hours=9))
+MANUAL_AVG_DOWN_NOTE = "수동 물타기"
 
 
 def _fmt_kst(v: Any) -> Optional[str]:
@@ -70,6 +71,32 @@ def record_buy_fill(
     session.commit()
     session.refresh(row)
     return row
+
+
+def manual_avg_down_state(
+    session: Session,
+    position_id: int,
+    fallback_amount: int = 0,
+) -> Dict[str, Any]:
+    """수동 물타기의 기준 매수금과 1회 실행 여부."""
+    rows = (
+        session.query(PositionBuyFill)
+        .filter(PositionBuyFill.position_id == position_id)
+        .order_by(PositionBuyFill.filled_at.asc(), PositionBuyFill.id.asc())
+        .all()
+    )
+    initial = next(
+        (row for row in rows if (row.fill_type or "").upper() == "INITIAL"),
+        rows[0] if rows else None,
+    )
+    baseline = int(
+        (getattr(initial, "amount", None) if initial else 0)
+        or (getattr(initial, "planned_amount", None) if initial else 0)
+        or fallback_amount
+        or 0
+    )
+    done = any(MANUAL_AVG_DOWN_NOTE in str(row.note or "") for row in rows)
+    return {"baseline_amount": baseline, "done": done}
 
 
 FILL_TYPE_KO = {
@@ -210,20 +237,52 @@ def reconcile_position_buy_with_fills(
     )
     agg = aggregate_buy_fills_from_rows(rows)
 
-    if not getattr(position, "order_quantity", None):
-        if agg and agg.get("order_quantity"):
-            position.order_quantity = agg["order_quantity"]
-        elif agg and agg.get("quantity"):
-            position.order_quantity = agg["quantity"]
+    if agg:
+        fill_ord = int(agg.get("order_quantity") or agg.get("quantity") or 0)
+        cur_ord = int(getattr(position, "order_quantity", None) or 0)
+        if fill_ord > cur_ord:
+            position.order_quantity = fill_ord
 
     api_qty = _parse_kiwoom_int(holding.get("qty")) if holding else 0
     api_pur = _parse_kiwoom_int(holding.get("pur_amt")) if holding else 0
     api_avg = _parse_kiwoom_int(holding.get("avg_pr")) if holding else 0
+    stale_snap = bool(holding and (holding.get("_cached") or holding.get("_stale")))
 
-    if api_qty > 0:
+    fill_qty = int((agg or {}).get("quantity") or 0)
+    fill_amt = int((agg or {}).get("amount") or 0)
+    # 추가매수 직후 잔고 API/캐시가 체결보다 늦으면 fill 합산을 유지
+    prefer_fills = (
+        fill_qty > 0
+        and api_qty > 0
+        and fill_qty > api_qty
+        and (
+            stale_snap
+            or _recent_buy_fill(rows, within_sec=180)
+        )
+    )
+
+    if prefer_fills:
+        position.buy_quantity = fill_qty
+        position.buy_amount = fill_amt
+        position.actual_buy_amount = fill_amt
+        position.buy_price = int((agg or {}).get("avg_price") or position.buy_price or 0)
+    elif api_qty > 0:
         from utils.eval_pnl import resolve_purchase_amount
 
-        filled_qty = api_qty
+        # api_qty가 이 포지션의 주문 수량(order_quantity)보다 크면
+        # 다른 보유분(기존 보유·중복 주문)이 포함된 것 → order_quantity로 상한 제한
+        ord_qty = int(agg.get("order_quantity") or 0) if agg else 0
+        if ord_qty <= 0:
+            ord_qty = int(getattr(position, "order_quantity", None) or 0)
+        if ord_qty > 0 and api_qty > ord_qty:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                f"[BUY_FILL] 계좌 잔량({api_qty}) > 주문수량({ord_qty}) — "
+                f"포지션 수량을 주문수량으로 제한 (종목: {getattr(position, 'stock_code', '?')})"
+            )
+            filled_qty = ord_qty
+        else:
+            filled_qty = api_qty
         fallback_amt = int(
             (agg or {}).get("amount")
             or getattr(position, "actual_buy_amount", None)
@@ -262,11 +321,34 @@ def reconcile_position_buy_with_fills(
 
     if holding:
         cur = _parse_kiwoom_int(holding.get("cur_pr"))
-        pl, rate = pl_from_holding(holding)
-        if cur > 0:
-            position.current_price = cur
-        position.current_profit_loss = pl
-        position.current_profit_loss_rate = rate
+        if prefer_fills:
+            buy_amt = int(position.buy_amount or 0)
+            qty = int(position.buy_quantity or 0)
+            if cur > 0 and buy_amt > 0 and qty > 0:
+                from utils.eval_pnl import pl_from_amounts
+                pl, rate = pl_from_amounts(buy_amt, qty, cur)
+                position.current_price = cur
+                position.current_profit_loss = pl
+                position.current_profit_loss_rate = rate
+        else:
+            pl, rate = pl_from_holding(holding)
+            if cur > 0:
+                position.current_price = cur
+            position.current_profit_loss = pl
+            position.current_profit_loss_rate = rate
+
+
+def _recent_buy_fill(rows: List[PositionBuyFill], within_sec: int = 180) -> bool:
+    if not rows:
+        return False
+    last = rows[-1]
+    ts = last.filled_at
+    if not ts:
+        return False
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - ts.astimezone(timezone.utc)).total_seconds()
+    return age <= within_sec
 
 
 def effective_buy_stats(
@@ -304,24 +386,23 @@ def effective_buy_stats(
 
 
 def repair_positions_from_buy_fills(session: Session) -> int:
-    """order_quantity 미설정 포지션만 체결 이력에서 보완."""
+    """order_quantity 미설정·추가매수 미반영 포지션을 체결 이력에서 보완."""
     from core.models import Position
 
     n = 0
     for pos in session.query(Position).filter(Position.status.in_(("HOLDING", "TRAILING"))).all():
-        if getattr(pos, "order_quantity", None):
-            continue
         rows = (
             session.query(PositionBuyFill)
             .filter(PositionBuyFill.position_id == pos.id)
             .all()
         )
         agg = aggregate_buy_fills_from_rows(rows)
-        if agg and agg.get("order_quantity"):
-            pos.order_quantity = agg["order_quantity"]
-            n += 1
-        elif agg and agg.get("quantity"):
-            pos.order_quantity = agg["quantity"]
+        if not agg:
+            continue
+        fill_ord = int(agg.get("order_quantity") or agg.get("quantity") or 0)
+        cur_ord = int(getattr(pos, "order_quantity", None) or 0)
+        if fill_ord > cur_ord:
+            pos.order_quantity = fill_ord
             n += 1
     if n:
         session.commit()

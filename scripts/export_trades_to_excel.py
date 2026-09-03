@@ -33,6 +33,16 @@ SELL_REASON_KO = {
 }
 
 
+def _sell_reason_ko(reason: str, profit_loss=None, profit_loss_rate=None) -> str:
+    try:
+        from utils.sell_reason_labels import sell_reason_ko
+        return sell_reason_ko(
+            reason, profit_loss=profit_loss, profit_loss_rate=profit_loss_rate
+        )
+    except Exception:
+        return SELL_REASON_KO.get(reason, reason)
+
+
 def _connect(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
@@ -156,6 +166,14 @@ def _build_exit_rule_text(settings: Dict[str, Any], pos: sqlite3.Row) -> str:
         parts.append(f"손절 {sl}%")
     if settings.get("trailing_stop_pct"):
         parts.append(f"트레일 {settings['trailing_stop_pct']}% (고점 대비)")
+    on = settings.get("legacy_ema_exit_enabled")
+    if on is None or on:
+        period = settings.get("legacy_ema_exit_period") or 90
+        soft = settings.get("legacy_ema_exit_soft_min") or 10
+        band = settings.get("legacy_ema_exit_band_pct")
+        if band is None:
+            band = 1.0
+        parts.append(f"1분 EMA{period} 이탈 SOFT {soft}분 (이격>{band:g}%)")
     if settings.get("atr_mult_stop") or settings.get("atr_mult_trail"):
         atr_bits = []
         if settings.get("atr_mult_stop"):
@@ -230,7 +248,9 @@ def fetch_trade_rows(conn: sqlite3.Connection) -> tuple:
         ):
             d = dict(r)
             reason = d.get("sell_reason", "")
-            d["매도사유한글"] = SELL_REASON_KO.get(reason, reason)
+            d["매도사유한글"] = _sell_reason_ko(
+                reason, d.get("profit_loss"), d.get("profit_loss_rate")
+            )
             d["주문시각"] = _fmt_dt(d.get("created_at"))
             d["체결시각"] = _fmt_dt(d.get("completed_at"))
             sell_rows.append(d)
@@ -380,7 +400,11 @@ def export_excel(db_path: Path, out_path: Path) -> Path:
                         "매수단가": b.get("buy_price"),
                         "매수금액": b.get("buy_amount"),
                         "매수조건": b.get("매수조건요약"),
-                        "매도사유": SELL_REASON_KO.get(s.get("sell_reason", ""), s.get("sell_reason")),
+                        "매도사유": _sell_reason_ko(
+                            s.get("sell_reason", ""),
+                            s.get("profit_loss"),
+                            s.get("profit_loss_rate"),
+                        ),
                         "매도상세": s.get("sell_reason_detail"),
                         "매도금액": s.get("sell_amount"),
                         "손익": s.get("profit_loss"),

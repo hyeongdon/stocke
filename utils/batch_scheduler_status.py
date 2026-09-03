@@ -23,8 +23,8 @@ KNOWN_BATCHES: List[Dict[str, Any]] = [
         "task_name": "Stocke-MorningServerWatch",
         "process_needles": ["ensure_server_running.ps1", "MorningServerWatch"],
         "log_file": os.path.join(LOG_DIR, "server_watch.log"),
-        "default_schedule": "평일 08:30",
-        "description": "장 시작 전 서버 기동·헬스체크 (19:00 이후 서버 자동 종료)",
+        "default_schedule": "평일 07:55~08:20",
+        "description": "손절 모니터(08:00) 전 서버 기동·헬스체크 (07:55~08:20 5분 간격, 이후 19:30 자동 종료)",
     },
     {
         "id": "daily_server",
@@ -32,8 +32,8 @@ KNOWN_BATCHES: List[Dict[str, Any]] = [
         "task_name": "Stocke-DailyServerStart",
         "process_needles": ["ensure_server_running.ps1", "DailyServerStart"],
         "log_file": os.path.join(LOG_DIR, "server_start.log"),
-        "default_schedule": "매일 08:30",
-        "description": "Stocke 서버 자동 기동 · 야간 19:00 자동 종료(SERVER_AUTO_SHUTDOWN_TIME)",
+        "default_schedule": "매일 08:00",
+        "description": "Stocke 서버 자동 기동 · 야간 19:30 자동 종료(SERVER_AUTO_SHUTDOWN_TIME)",
     },
     {
         "id": "telegram_alert",
@@ -45,12 +45,36 @@ KNOWN_BATCHES: List[Dict[str, Any]] = [
         "description": "키움 조건식 조회 → 텔레그램 전송",
     },
     {
+        "id": "telegram_realtime_alert",
+        "label": "조건식 실시간 편입 알림",
+        "task_name": "StockeConditionRealtimeAlert",
+        "process_needles": [
+            "condition_telegram_alert.py",
+            "--realtime",
+            "ensure_condition_realtime_alert.ps1",
+            "run_condition_alert_realtime.bat",
+        ],
+        "log_file": os.path.join(LOG_DIR, "condition_telegram_alert.log"),
+        "default_schedule": "평일 08:50~09:10",
+        "description": "키움 조건식 실시간 편입(REAL) → 텔레그램 (장중 상시)",
+    },
+
+    {
+        "id": "kiwoom_db_pnl_sync",
+        "label": "NXT마감 키움↔DB 손익",
+        "task_name": "stocke-kiwoom-db-pnl-sync",
+        "process_needles": ["kiwoom_db_pnl_sync_batch.py", "run_kiwoom_db_pnl_sync_batch.bat"],
+        "log_file": os.path.join(LOG_DIR, "kiwoom_db_pnl_sync_batch.log"),
+        "default_schedule": "평일 19:50",
+        "description": "NXT 마감 후 키움 당일 실현손익·수수료·잔고 → DB 동기화 (매매 일지보다 먼저)",
+    },
+    {
         "id": "daily_trade_journal",
         "label": "장마감 매매 일지",
         "task_name": "stocke-daily-trade-journal",
         "process_needles": ["daily_trade_journal_batch.py", "run_daily_trade_journal_batch.bat"],
         "log_file": os.path.join(LOG_DIR, "daily_trade_journal_batch.log"),
-        "default_schedule": "평일 15:40",
+        "default_schedule": "평일 19:52",
         "description": "당일 매수·매도·실현손익 → 텔레그램 매매 일지",
     },
     {
@@ -61,15 +85,6 @@ KNOWN_BATCHES: List[Dict[str, Any]] = [
         "log_file": os.path.join(LOG_DIR, "failed_buy_signals_batch.log"),
         "default_schedule": "평일 15:42",
         "description": "당일 FAILED 매수 신호 → 전략/사유 표 텔레그램",
-    },
-    {
-        "id": "ymgp_eod",
-        "label": "장마감 역매공파 단계",
-        "task_name": "stocke-ymgp-eod",
-        "process_needles": ["ymgp_eod_batch.py", "run_ymgp_eod_batch.bat"],
-        "log_file": os.path.join(LOG_DIR, "ymgp_eod_batch.log"),
-        "default_schedule": "평일 15:45",
-        "description": "역매공파 FILTERED/READY · 박스 폭초과·고점差 → 텔레그램",
     },
 
     {
@@ -96,8 +111,8 @@ KNOWN_BATCHES: List[Dict[str, Any]] = [
         "task_name": "stocke-stock-news-batch",
         "process_needles": ["stock_news_daily_batch.py"],
         "log_file": os.path.join(LOG_DIR, "stock_news_daily_batch.log"),
-        "default_schedule": "매일 16:30 (100종목/회)",
-        "description": "전체 종목(~3900) 네이버 뉴스 API → 기사·키워드 수집",
+        "default_schedule": "비활성 (키워드 수집 중단)",
+        "description": "전체 종목 네이버 뉴스→키워드 수집 — 현재 스케줄 비활성",
         "has_progress": True,
     },
 ]

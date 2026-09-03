@@ -1,0 +1,10 @@
+﻿python : Traceback (most recent call last):
+위치 C:\Users\MiniPC\AppData\Local\Temp\ps-script-c3d1eca0-38b9-424a-8f54-2e40e868dcb3.ps1:104 문자:1
++ python -c "
++ ~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Traceback (most recent call last)::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  File "<string>", line 11, in <module>
+UnicodeEncodeError: 'cp949' codec can't encode character '\ufffd' in position 2: illegal multibyte sequence
+summary_info: 

@@ -172,6 +172,125 @@ class JonggaExitDayTests(unittest.TestCase):
         self.assertTrue(is_exit_management_day(buy, now))
 
 
+    def test_exit_day_not_open_avg_two_days_later(self):
+        now = datetime(2026, 8, 3, 9, 5, tzinfo=KST)
+        buy = datetime(2026, 7, 30, 5, 40)  # UTC naive ≈ 14:40 KST Jul 30
+        self.assertTrue(is_exit_management_day(buy, now))
+        from utils.jongga_engine import is_jongga_open_avg_down_day
+
+        self.assertFalse(is_jongga_open_avg_down_day(buy, now))
+
+    def test_open_avg_down_day_is_next_session(self):
+        from utils.jongga_engine import is_jongga_open_avg_down_day
+
+        buy = datetime(2026, 7, 30, 5, 40)
+        fri = datetime(2026, 7, 31, 9, 5, tzinfo=KST)
+        self.assertTrue(is_jongga_open_avg_down_day(buy, fri))
+
+    def test_session_count_today_next_and_third(self):
+        from utils.jongga_engine import jongga_session_count
+
+        buy = datetime(2026, 7, 30, 5, 40)  # UTC naive ≈ 14:40 KST Jul 30 (Thu)
+        thu = datetime(2026, 7, 30, 15, 10, tzinfo=KST)
+        fri = datetime(2026, 7, 31, 15, 10, tzinfo=KST)
+        mon = datetime(2026, 8, 3, 15, 10, tzinfo=KST)
+        self.assertEqual(jongga_session_count(buy, thu), 1)
+        self.assertEqual(jongga_session_count(buy, fri), 2)
+        self.assertEqual(jongga_session_count(buy, mon), 3)
+
+    def test_flatten_close_plus_on_second_session(self):
+        from utils.jongga_engine import should_flatten_jongga_at_close
+
+        buy = datetime(2026, 7, 30, 5, 40)
+        fri = datetime(2026, 7, 31, 15, 10, tzinfo=KST)
+        self.assertFalse(should_flatten_jongga_at_close(buy, 1.2, datetime(2026, 7, 30, 15, 10, tzinfo=KST)))
+        self.assertTrue(should_flatten_jongga_at_close(buy, 0.4, fri))
+        self.assertFalse(should_flatten_jongga_at_close(buy, 0.0, fri))
+        self.assertFalse(should_flatten_jongga_at_close(buy, -1.1, fri))
+
+    def test_flatten_close_always_on_third_session(self):
+        from utils.jongga_engine import (
+            jongga_close_flatten_reason,
+            should_flatten_jongga_at_close,
+        )
+
+        buy = datetime(2026, 7, 30, 5, 40)
+        mon = datetime(2026, 8, 3, 15, 10, tzinfo=KST)
+        self.assertTrue(should_flatten_jongga_at_close(buy, -2.0, mon))
+        self.assertTrue(should_flatten_jongga_at_close(buy, 1.0, mon))
+        self.assertIn("이틀 초과", jongga_close_flatten_reason(buy, -2.0, mon) or "")
+
+    def test_open_avg_down_window(self):
+        from utils.jongga_engine import in_open_avg_down_window
+
+        self.assertTrue(in_open_avg_down_window(datetime(2026, 7, 31, 9, 0, tzinfo=KST)))
+        self.assertTrue(in_open_avg_down_window(datetime(2026, 7, 31, 9, 10, tzinfo=KST)))
+        self.assertFalse(in_open_avg_down_window(datetime(2026, 7, 31, 9, 11, tzinfo=KST)))
+        self.assertFalse(in_open_avg_down_window(datetime(2026, 7, 31, 14, 50, tzinfo=KST)))
+
+    def test_at_or_below_stop(self):
+        from utils.jongga_engine import at_or_below_stop, jongga_pct_stop_price
+
+        stop = jongga_pct_stop_price(100_000, 3.0)
+        self.assertEqual(stop, 97000)
+        self.assertTrue(at_or_below_stop(97000, stop))
+        self.assertTrue(at_or_below_stop(96000, stop))
+        self.assertFalse(at_or_below_stop(97100, stop))
+
+    def test_defer_open_avg_stop(self):
+        from utils.jongga_engine import should_defer_jongga_stop_for_open_avg_down
+
+        base = dict(
+            pig_split=True,
+            first_exit_day=True,
+            in_open_window=True,
+            leg2_filled=False,
+            open_avg_already_done=False,
+            price_at_or_below_stop=True,
+            pending_open_avg_buy=False,
+        )
+        self.assertTrue(should_defer_jongga_stop_for_open_avg_down(**base))
+        self.assertFalse(should_defer_jongga_stop_for_open_avg_down(**{**base, "leg2_filled": True}))
+        self.assertFalse(should_defer_jongga_stop_for_open_avg_down(**{**base, "in_open_window": False}))
+        self.assertTrue(
+            should_defer_jongga_stop_for_open_avg_down(
+                **{**base, "in_open_window": False, "pending_open_avg_buy": True, "open_avg_already_done": True}
+            )
+        )
+        self.assertFalse(
+            should_defer_jongga_stop_for_open_avg_down(
+                **{**base, "open_avg_already_done": True, "pending_open_avg_buy": False}
+            )
+        )
+
+    def test_leg2_fill_note(self):
+        from utils.jongga_engine import is_jongga_leg2_fill_note
+
+        self.assertTrue(is_jongga_leg2_fill_note("종가배팅 2차"))
+        self.assertFalse(is_jongga_leg2_fill_note("종가배팅 1차"))
+        self.assertFalse(is_jongga_leg2_fill_note("종가배팅 3차"))
+
+    def test_ma_dc_exit_after_avg_down(self):
+        from utils.jongga_engine import evaluate_ma_dc_exit_after_avg_down
+
+        self.assertIsNone(
+            evaluate_ma_dc_exit_after_avg_down(
+                10950, 11000, avg_down_done=False, far_pct=3.0,
+            )
+        )
+        self.assertIsNone(
+            evaluate_ma_dc_exit_after_avg_down(
+                10950, 11000, avg_down_done=True, far_pct=3.0,
+            )
+        )
+        detail = evaluate_ma_dc_exit_after_avg_down(
+            10600, 11000, avg_down_done=True, far_pct=3.0,
+        )
+        self.assertIsNotNone(detail)
+        assert detail is not None
+        self.assertIn("EMA15≤92", detail)
+
+
 class JonggaPigSplitTests(unittest.TestCase):
     def test_leg_fraction_default(self):
         from types import SimpleNamespace
@@ -221,6 +340,16 @@ class JonggaPigSplitTests(unittest.TestCase):
         self.assertTrue(program_net_ok(57070)[0])
         self.assertFalse(program_net_ok(0)[0])
         self.assertFalse(program_net_ok(-100)[0])
+
+    def test_avg_down_ok(self):
+        from utils.jongga_engine import avg_down_ok
+
+        # 평단 100_000, −2% = 98_000
+        self.assertTrue(avg_down_ok(100_000, 98_000, 2.0)[0])
+        self.assertTrue(avg_down_ok(100_000, 97_000, 2.0)[0])
+        self.assertFalse(avg_down_ok(100_000, 99_000, 2.0)[0])
+        self.assertFalse(avg_down_ok(100_000, 100_000, 2.0)[0])
+        self.assertFalse(avg_down_ok(0, 98_000, 2.0)[0])
 
     def test_low_support_ok(self):
         from utils.jongga_engine import low_support_ok

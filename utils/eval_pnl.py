@@ -11,11 +11,17 @@ def holdings_by_code(balance: Optional[dict]) -> Dict[str, dict]:
     out: Dict[str, dict] = {}
     if not balance or balance.get("_error"):
         return out
+    cached = bool(balance.get("_cached") or balance.get("_stale"))
     for h in balance.get("stk_acnt_evlt_prst") or []:
         code = KiwoomAPI.normalize_stock_code(h.get("stk_cd", ""))
         qty = _parse_kiwoom_int(h.get("qty"))
         if code and qty > 0:
-            out[code] = h
+            row = dict(h)
+            if cached:
+                row["_cached"] = True
+                if balance.get("_stale"):
+                    row["_stale"] = True
+            out[code] = row
     return out
 
 
@@ -103,32 +109,45 @@ def apply_holding_to_position(position, holding: dict) -> None:
     else:
         pl, rate = pl_from_holding(holding)
 
-    if qty > 0:
+    # 추가매수 직후 캐시/지연 잔고가 예전 수량이면 낙관적 반영분을 깎지 않음
+    stale_snap = bool(holding.get("_cached") or holding.get("_stale"))
+    cur_qty = int(position.buy_quantity or 0)
+    skip_qty_shrink = stale_snap and cur_qty > qty > 0
+
+    if qty > 0 and not skip_qty_shrink:
         position.buy_quantity = qty
-    if avg > 0:
+    if avg > 0 and not skip_qty_shrink:
         position.buy_price = avg
-    elif pur > 0 and qty > 0:
+    elif pur > 0 and qty > 0 and not skip_qty_shrink:
         position.buy_price = int(round(pur / qty))
-    if pur > 0:
+    if pur > 0 and not skip_qty_shrink:
         position.actual_buy_amount = pur
         position.buy_amount = pur
     if cur > 0:
         position.current_price = cur
-    position.current_profit_loss = pl
-    position.current_profit_loss_rate = rate
+    if not skip_qty_shrink:
+        position.current_profit_loss = pl
+        position.current_profit_loss_rate = rate
+    elif cur > 0 and cur_qty > 0:
+        buy_amt = int(getattr(position, "actual_buy_amount", None) or position.buy_amount or 0)
+        if buy_amt > 0:
+            pl2, rate2 = pl_from_amounts(buy_amt, cur_qty, cur)
+            position.current_profit_loss = pl2
+            position.current_profit_loss_rate = rate2
 
 
 def calc_profit_for_position(position, current_price: int, holding: dict | None = None) -> Tuple[int, float]:
-    """포지션 평가손익 — holding(API lspft_amt) 우선, 없으면 DB 동기화값, 최후 폴백만 계산."""
+    """포지션 평가손익 — holding(API lspft_amt) 우선, 없으면 매입금액×현재가로 재계산."""
     if holding:
         return pl_from_holding(holding)
-    if getattr(position, "actual_buy_amount", None) and position.current_profit_loss is not None:
-        return int(position.current_profit_loss), float(position.current_profit_loss_rate or 0)
     pur = int(getattr(position, "actual_buy_amount", None) or position.buy_amount or 0)
     qty = int(position.buy_quantity or 0)
     price = int(current_price or position.current_price or 0)
     if pur > 0 and qty > 0 and price > 0:
         return pl_from_amounts(pur, qty, price)
+    if position.current_profit_loss is not None:
+        return int(position.current_profit_loss), float(position.current_profit_loss_rate or 0)
+    return 0, 0.0
     if position.current_profit_loss is not None:
         return int(position.current_profit_loss), float(position.current_profit_loss_rate or 0)
     return 0, 0.0

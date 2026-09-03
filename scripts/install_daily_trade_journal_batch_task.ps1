@@ -1,12 +1,12 @@
-# Windows 작업 스케줄러 — 평일 장마감 후 매매 일지 텔레그램
+# Windows 작업 스케줄러 — 평일 NXT 마감·손익정산 후 매매 일지 텔레그램
 # 사용:
 #   powershell -ExecutionPolicy Bypass -File scripts\install_daily_trade_journal_batch_task.ps1
-#   powershell ... -At "15:40"
+#   powershell ... -At "19:52"
 #   powershell ... -Uninstall
 
 param(
     [string]$TaskName = "stocke-daily-trade-journal",
-    [string]$At = "15:40",
+    [string]$At = "19:52",
     [switch]$Uninstall
 )
 
@@ -29,7 +29,7 @@ if (!(Test-Path $batPath)) {
 try {
     $null = [DateTime]::ParseExact($At, "HH:mm", $null)
 } catch {
-    throw "시간 형식 오류. 예: -At `"15:40`""
+    throw "시간 형식 오류. 예: -At `"19:52`""
 }
 
 $weekdays = @(
@@ -64,7 +64,7 @@ Register-ScheduledTask `
     -Trigger $trigger `
     -Settings $settings `
     -Principal $principal `
-    -Description "Stocke 평일 장마감 매매 일지 → 텔레그램" `
+    -Description "Stocke 평일 NXT 마감·손익정산 후(기본 19:52) 매매 일지 → 텔레그램" `
     -Force | Out-Null
 
 Write-Host ""

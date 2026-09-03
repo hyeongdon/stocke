@@ -21,6 +21,7 @@ class JonggaCandidatesNotifyTests(unittest.TestCase):
                     {
                         "stock_code": "000660",
                         "stock_name": "SK하이닉스",
+                        "current_price": 285000,
                         "trade_amount": 3000,
                         "change_rate": 4.5,
                         "pullback_pct": 2.1,
@@ -29,6 +30,7 @@ class JonggaCandidatesNotifyTests(unittest.TestCase):
                     {
                         "stock_code": "005930",
                         "stock_name": "삼성전자",
+                        "current_price": 72000,
                         "trade_amount": 2000,
                         "change_rate": 2.0,
                         "pullback_pct": 1.0,
@@ -44,6 +46,7 @@ class JonggaCandidatesNotifyTests(unittest.TestCase):
         self.assertIn("종가배팅 후보", html)
         self.assertIn("반도체", html)
         self.assertIn("000660", html)
+        self.assertIn("285,000원", html)
         self.assertIn("자동매수 예정", html)
         self.assertIn("★", html)
 

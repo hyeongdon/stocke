@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, time as dt_time, timedelta
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from utils.datetime_kst import as_kst, kst_today, utc_now_naive
@@ -561,6 +561,27 @@ def is_exit_management_day(buy_time, now: Optional[datetime] = None) -> bool:
     return as_kst(now).date() > buy_kst.date()
 
 
+def evaluate_ma_dc_exit_after_avg_down(
+    ma15: float,
+    ma92: float,
+    *,
+    avg_down_done: bool,
+    far_pct: float = 3.0,
+) -> Optional[str]:
+    """2차 물타기 반영 후 EMA15≤92 + 이평 이격 확대 시 청산 사유."""
+    if not avg_down_done:
+        return None
+    from utils.ma1592 import should_exit_ma_dc_after_scale
+
+    ok, detail = should_exit_ma_dc_after_scale(
+        ma15,
+        ma92,
+        entry_leg=2,
+        params={"price_lead_far_pct": far_pct},
+    )
+    return detail if ok else None
+
+
 def find_candidate(state: Dict[str, Any], stock_code: str) -> Optional[Dict[str, Any]]:
     code = _norm_code(stock_code)
     for row in state.get("candidates") or []:
@@ -578,6 +599,9 @@ DEFAULT_LEG3_END = "15:28"
 DEFAULT_PIG_RATIO = 1.5
 DEFAULT_PIG_LEVELS = 5
 DEFAULT_LOW_HOLD_BARS = 5
+DEFAULT_AVG_DOWN_PCT = 2.0
+DEFAULT_OPEN_AVG_START = "09:00"
+DEFAULT_OPEN_AVG_END = "09:10"
 
 
 def pig_split_enabled(settings: Any) -> bool:
@@ -735,6 +759,32 @@ def program_net_ok(net_qty: Optional[int]) -> Tuple[bool, str]:
     return False, "프로그램 순매수 없음"
 
 
+def avg_down_ok(
+    buy_price: Optional[float],
+    current_price: Optional[float],
+    drop_pct: Optional[float] = None,
+) -> Tuple[bool, str]:
+    """물타기: 현재가 ≤ 평단 × (1 − drop_pct/100). drop_pct 기본 2.0."""
+    try:
+        buy = float(buy_price or 0)
+        px = float(current_price or 0)
+    except (TypeError, ValueError):
+        return False, "평단/현재가 없음"
+    if buy <= 0 or px <= 0:
+        return False, "평단/현재가 없음"
+    try:
+        pct = float(drop_pct if drop_pct is not None else DEFAULT_AVG_DOWN_PCT)
+    except (TypeError, ValueError):
+        pct = DEFAULT_AVG_DOWN_PCT
+    if pct <= 0:
+        return False, "물타기 하락% 미설정"
+    trigger = buy * (1.0 - abs(pct) / 100.0)
+    drop = (buy - px) / buy * 100.0
+    if px <= trigger:
+        return True, f"물타기 평단대비 {drop:+.2f}% (기준 −{abs(pct):.1f}% · ≤{trigger:,.0f})"
+    return False, f"물타기 미달 평단대비 {drop:+.2f}% (기준 −{abs(pct):.1f}% · ≤{trigger:,.0f})"
+
+
 def low_support_ok(
     bars: Sequence[Dict[str, Any]],
     current_price: float,
@@ -801,3 +851,245 @@ def mark_leg(
     entry["at"] = utc_now_naive().isoformat()
     save_jongga_state(state)
     return state
+
+
+def in_open_avg_down_window(now: Optional[datetime] = None) -> bool:
+    """익일 시초(09:00~09:10) 갭하락 물타기 창."""
+    return in_hm_window(
+        DEFAULT_OPEN_AVG_START,
+        DEFAULT_OPEN_AVG_END,
+        default_start=DEFAULT_OPEN_AVG_START,
+        default_end=DEFAULT_OPEN_AVG_END,
+        now=now,
+    )
+
+
+def prev_session_state(
+    path: Optional[str] = None,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """오늘보다 이전 biz_date 상태(전일 종가배팅 세션). 당일이면 빈 dict."""
+    st = load_jongga_state(path)
+    today = as_kst(now).date().isoformat()
+    biz = str(st.get("biz_date") or "")
+    if biz and biz < today:
+        return st
+    return {}
+
+
+def next_krx_session_date(from_day):
+    """from_day 다음 KRX 거래일."""
+    from utils.datetime_kst import KST
+    from utils.market_hours import is_krx_trading_day
+
+    if from_day is None:
+        return None
+    d = from_day + timedelta(days=1)
+    for _ in range(14):
+        probe = datetime.combine(d, dt_time(12, 0), tzinfo=KST)
+        if is_krx_trading_day(probe):
+            return d
+        d += timedelta(days=1)
+    return None
+
+
+def jongga_session_count(buy_time, now: Optional[datetime] = None) -> int:
+    """매수일부터 오늘까지 KRX 거래일 수. 당일=1, 익일=2. 매수시각 없으면 1."""
+    from utils.datetime_kst import KST
+    from utils.market_hours import is_krx_trading_day
+    from utils.position_peak_since_buy import buy_time_utc_naive_to_kst
+
+    buy_kst = buy_time_utc_naive_to_kst(buy_time)
+    today = as_kst(now).date()
+    if buy_kst is None:
+        return 1
+    start = buy_kst.date()
+    if today < start:
+        return 0
+    n = 0
+    d = start
+    while d <= today:
+        probe = datetime.combine(d, dt_time(12, 0), tzinfo=KST)
+        if is_krx_trading_day(probe):
+            n += 1
+        d += timedelta(days=1)
+        if (d - start).days > 40:
+            break
+    return n
+
+
+def should_flatten_jongga_at_close(
+    buy_time,
+    pnl_rate: float,
+    now: Optional[datetime] = None,
+) -> bool:
+    """장마감 강제청산: 익일 플러스, 또는 사흘째(이틀 초과)부터 전량."""
+    n = jongga_session_count(buy_time, now)
+    if n <= 1:
+        return False
+    if n >= 3:
+        return True
+    try:
+        rate = float(pnl_rate or 0)
+    except (TypeError, ValueError):
+        rate = 0.0
+    return rate > 0
+
+
+def jongga_close_flatten_reason(
+    buy_time,
+    pnl_rate: float,
+    now: Optional[datetime] = None,
+) -> Optional[str]:
+    if not should_flatten_jongga_at_close(buy_time, pnl_rate, now):
+        return None
+    n = jongga_session_count(buy_time, now)
+    if n >= 3:
+        return "종가배팅 이틀 초과 장마감 청산"
+    return "종가배팅 익일 플러스 장마감 청산"
+
+
+def is_jongga_open_avg_down_day(buy_time, now: Optional[datetime] = None) -> bool:
+    """매수 다음 거래일(첫 익일 세션)만 시초 물타기 대상."""
+    from utils.position_peak_since_buy import buy_time_utc_naive_to_kst
+
+    buy_kst = buy_time_utc_naive_to_kst(buy_time)
+    if buy_kst is None:
+        return False
+    nxt = next_krx_session_date(buy_kst.date())
+    if nxt is None:
+        return False
+    return as_kst(now).date() == nxt
+
+
+def leg2_done_in_state(state: Optional[Dict[str, Any]]) -> bool:
+    if not state:
+        return False
+    ensure_leg_state(state)
+    return bool((state.get("legs") or {}).get("2", {}).get("done"))
+
+
+def open_avg_down_done_in_state(state: Optional[Dict[str, Any]]) -> bool:
+    o = (state or {}).get("open_avg_down") or {}
+    return bool(o.get("done"))
+
+
+def is_jongga_leg2_fill_note(note: Optional[str]) -> bool:
+    s = str(note or "")
+    if "종가배팅 2차" in s:
+        return True
+    if "시초" in s and "물타기" in s:
+        return True
+    return False
+
+
+def jongga_pct_stop_price(
+    buy_price: Optional[float],
+    stop_pct: Optional[float],
+) -> Optional[int]:
+    try:
+        buy = float(buy_price or 0)
+        pct = float(stop_pct or 0)
+    except (TypeError, ValueError):
+        return None
+    if buy <= 0 or pct <= 0:
+        return None
+    return int(buy * (1.0 - abs(pct) / 100.0))
+
+
+def at_or_below_stop(
+    current_price: Optional[float],
+    stop_price: Optional[float],
+) -> bool:
+    try:
+        px = float(current_price or 0)
+        stop = float(stop_price or 0)
+    except (TypeError, ValueError):
+        return False
+    return px > 0 and stop > 0 and px <= stop
+
+
+def open_avg_down_price_ok(
+    buy_price: Optional[float],
+    current_price: Optional[float],
+    stop_price: Optional[float] = None,
+    drop_pct: Optional[float] = None,
+    *,
+    in_open_window: bool = True,
+) -> Tuple[bool, str]:
+    """익일 손절 전 물타기 가격 조건.
+
+    - 시초 창(09:00~09:10): 평단 −avg_down% **또는** 손절가 이하 (갭하락 시 손절보다 먼저)
+    - 시초 창 밖: 손절가 이하만 (손절 직전 1회 기회)
+    """
+    if in_open_window:
+        ok_avg, msg_avg = avg_down_ok(buy_price, current_price, drop_pct)
+        if ok_avg:
+            return True, msg_avg
+        if at_or_below_stop(current_price, stop_price):
+            try:
+                px = float(current_price or 0)
+                stop = float(stop_price or 0)
+            except (TypeError, ValueError):
+                px, stop = 0.0, 0.0
+            return True, f"시초 손절가 이하 현재 {px:,.0f} ≤ {stop:,.0f}"
+        return False, msg_avg
+    if at_or_below_stop(current_price, stop_price):
+        try:
+            px = float(current_price or 0)
+            stop = float(stop_price or 0)
+        except (TypeError, ValueError):
+            px, stop = 0.0, 0.0
+        return True, f"손절 전 물타기 현재 {px:,.0f} ≤ 손절 {stop:,.0f}"
+    return False, "손절 전 물타기 미달(손절가 미도달)"
+
+
+def mark_open_avg_down(
+    state: Dict[str, Any],
+    *,
+    done: bool = False,
+    skipped: bool = False,
+    reason: Optional[str] = None,
+) -> Dict[str, Any]:
+    state["open_avg_down"] = {
+        "done": bool(done),
+        "skipped": bool(skipped),
+        "reason": reason,
+        "at": utc_now_naive().isoformat(),
+    }
+    if done:
+        mark_leg(state, 2, done=True, skipped=False, reason=reason)
+    else:
+        save_jongga_state(state)
+    return state
+
+
+def should_defer_jongga_stop_for_open_avg_down(
+    *,
+    pig_split: bool,
+    first_exit_day: bool,
+    in_open_window: bool,
+    leg2_filled: bool,
+    open_avg_already_done: bool,
+    price_at_or_below_stop: bool,
+    pending_open_avg_buy: bool,
+    price_triggers_open_avg: Optional[bool] = None,
+) -> bool:
+    """익일 손절 전 물타기(시초 갭·손절 직전) 전에 고정손절을 보류할지."""
+    if not pig_split or not first_exit_day:
+        return False
+    if leg2_filled:
+        return False
+    if pending_open_avg_buy:
+        return True
+    if open_avg_already_done:
+        return False
+    # 손절 발동 시점(price_at_or_below_stop)이면 창 밖에서도 1회 물타기 기회 보류
+    if price_at_or_below_stop:
+        return True
+    trigger = (
+        price_triggers_open_avg
+        if price_triggers_open_avg is not None
+        else price_at_or_below_stop
+    )
+    return bool(in_open_window and trigger)

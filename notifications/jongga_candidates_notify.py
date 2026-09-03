@@ -76,9 +76,15 @@ def format_jongga_candidates_html(state: Dict[str, Any]) -> str:
             star = "★ " if auto and str(auto.get("stock_code")) == str(row.get("stock_code")) else ""
             name = row.get("stock_name") or row.get("stock_code") or "—"
             code = row.get("stock_code") or "—"
+            px = row.get("current_price") or row.get("chart_last")
+            try:
+                px_s = f"{int(px):,}" if px else "—"
+            except (TypeError, ValueError):
+                px_s = "—"
             lines.append(
                 f"{star}{_esc(i)}. {_esc(name)}(<code>{_esc(code)}</code>)"
-                f" 대금 {_esc(_fmt_amt(row.get('trade_amount')))}"
+                f" {_esc(px_s)}원"
+                f" · 대금 {_esc(_fmt_amt(row.get('trade_amount')))}"
                 f" · 등락 {_esc(_fmt_pct(row.get('change_rate'), signed=True))}"
                 f" · 눌림 {_esc(_fmt_pct(row.get('pullback_pct')))}"
                 f" · 점수 {_esc(row.get('score') if row.get('score') is not None else '—')}"

@@ -17,15 +17,7 @@ from utils.datetime_kst import now_kst
 
 logger = logging.getLogger(__name__)
 
-SELL_REASON_KO = {
-    "STOP_LOSS": "손절",
-    "TAKE_PROFIT": "익절",
-    "TRAILING": "트레일링 스탑",
-    "PROFIT_LOCK": "수익 잠금",
-    "MARKET_CLOSE": "장마감 청산",
-    "MANUAL": "수동 매도",
-    "INDICATOR": "지표 매도",
-}
+from utils.sell_reason_labels import SELL_REASON_KO, sell_reason_ko  # noqa: F401
 
 STRATEGY_LABEL_KO = {
     "legacy": "거래대금",
@@ -39,12 +31,31 @@ STRATEGY_LABEL_KO = {
     "ymgp": "역매공파",
     "jongga": "종가배팅",
     "jongga_closing": "종가배팅",
+    "fractal": "프랙탈",
+    "ma1592": "15/92홀드",
 }
 
 
 def strategy_label_ko(strategy: Optional[str]) -> str:
     key = (strategy or "").strip().lower()
-    return STRATEGY_LABEL_KO.get(key, "거래대금")
+    if not key:
+        return "기타"
+    return STRATEGY_LABEL_KO.get(key, key)
+
+
+# 전략 슬롯 포화 · 전역 최대 동시 보유(슬롯) 초과
+_SLOT_CAPACITY_MARKERS = (
+    "슬롯 포화",
+    "최대 동시 보유",
+    "최대 보유 종목",
+)
+
+
+def is_buy_slot_capacity_reason(reason: Optional[str]) -> bool:
+    text = (reason or "").strip()
+    if not text:
+        return False
+    return any(m in text for m in _SLOT_CAPACITY_MARKERS)
 
 
 def _fmt_price(value: Optional[int]) -> str:
@@ -105,7 +116,6 @@ def build_sell_message(
     remaining_qty: Optional[int] = None,
 ) -> str:
     now = now_kst().strftime("%Y-%m-%d %H:%M:%S")
-    reason_ko = SELL_REASON_KO.get(sell_reason, sell_reason)
     total = sell_price * quantity
 
     pnl_rate = None
@@ -113,6 +123,12 @@ def build_sell_message(
         cost = buy_price * quantity
         if cost > 0:
             pnl_rate = profit_loss / cost * 100
+
+    reason_ko = sell_reason_ko(
+        sell_reason,
+        profit_loss=profit_loss,
+        profit_loss_rate=pnl_rate,
+    )
 
     header = "🟠 부분 매도 체결" if remaining_qty is not None else "🔴 매도 체결"
     lines = [
@@ -197,6 +213,58 @@ def notify_buy(
 
 async def notify_buy_async(**kwargs) -> bool:
     return await asyncio.to_thread(notify_buy, **kwargs)
+
+
+def build_buy_slot_blocked_message(
+    *,
+    stock_name: str,
+    stock_code: str,
+    reason: str,
+    strategy: Optional[str] = None,
+) -> str:
+    now = now_kst().strftime("%Y-%m-%d %H:%M:%S")
+    tag = strategy_label_ko(strategy)
+    return "\n".join(
+        [
+            f"⚠️ 매수 실패 — 슬롯 부족 [{tag}]",
+            f"종목: {stock_name}({stock_code})",
+            f"전략: {tag}",
+            f"사유: {reason}",
+            f"시각: {now}",
+        ]
+    )
+
+
+def notify_buy_slot_blocked(
+    *,
+    stock_name: str,
+    stock_code: str,
+    reason: str,
+    strategy: Optional[str] = None,
+) -> bool:
+    """슬롯/최대보유 한도로 매수가 막혔을 때 텔레그램 알림."""
+    if not is_buy_slot_capacity_reason(reason):
+        return False
+    try:
+        msg = build_buy_slot_blocked_message(
+            stock_name=stock_name or stock_code or "?",
+            stock_code=stock_code or "",
+            reason=(reason or "").strip() or "슬롯 부족",
+            strategy=strategy,
+        )
+        ok = send_trade_alert(msg)
+        if ok:
+            logger.info(
+                f"슬롯 부족 텔레그램 알림 전송 — {stock_name}({stock_code}): {reason}"
+            )
+        return ok
+    except Exception as e:
+        logger.warning(f"슬롯 부족 텔레그램 알림 오류 — {stock_name}: {e}")
+        return False
+
+
+async def notify_buy_slot_blocked_async(**kwargs) -> bool:
+    return await asyncio.to_thread(notify_buy_slot_blocked, **kwargs)
 
 
 def sell_fill_snapshot(sell, position) -> dict:

@@ -1,9 +1,10 @@
 """매수 이후 고점·트레일링 방어 로직 단위 테스트."""
-from datetime import datetime
+from datetime import date, datetime
 
 from utils.datetime_kst import KST
 from utils.position_peak_since_buy import (
     buy_time_utc_naive_to_kst,
+    max_high_full_holding_days,
     max_high_since_buy_from_intraday_bars,
     resolve_position_peak_price,
     should_disarm_trailing,
@@ -66,6 +67,18 @@ def test_should_not_disarm_once_armed():
     ) is False
 
 
+def test_daily_high_includes_today_after_buy_day():
+    """익일 보유 — 당일 진행 중 일봉 고가(8400)를 쓴다. 매수일 일봉은 제외."""
+    bars = [
+        {"timestamp": "2026-08-12", "high": 7380},
+        {"timestamp": "2026-08-13", "high": 8400},
+    ]
+    buy_date = date(2026, 8, 12)
+    today = date(2026, 8, 13)
+    assert max_high_full_holding_days(bars, buy_date, today) == 8400
+    assert max_high_full_holding_days(bars, buy_date, buy_date) == 0
+
+
 def test_locked_floor_kept_when_peak_below_start():
     """armed 후 고점이 시작% 미만이어도 잠긴 바닥·해제가 유지되는 정책."""
     buy = 1_221_000
@@ -93,5 +106,6 @@ if __name__ == "__main__":
     test_resolve_peak_caps_inflated_stored()
     test_resolve_peak_keeps_tick_above_intraday()
     test_should_not_disarm_once_armed()
+    test_daily_high_includes_today_after_buy_day()
     test_locked_floor_kept_when_peak_below_start()
     print("all ok")

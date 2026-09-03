@@ -119,6 +119,67 @@ async def test_eval_legacy_rsi_band_pass():
     assert reason == "게이트 통과"
 
 
+@pytest.mark.asyncio
+async def test_eval_legacy_can_skip_volume_ratio_for_fractal():
+    from unittest.mock import patch
+
+    from utils.auto_trade_engine import _eval_legacy_momentum
+
+    bars = [
+        {
+            "timestamp": "2026-07-27",
+            "open": 100,
+            "high": 110,
+            "low": 90,
+            "close": 100,
+            "volume": 1000,
+        },
+        {
+            "timestamp": "2026-07-28",
+            "open": 100,
+            "high": 110,
+            "low": 90,
+            "close": 105,
+            "volume": 450,
+        },
+    ]
+
+    class Api:
+        def normalize_stock_code(self, c):
+            return str(c).zfill(6)
+
+        async def get_stock_chart_data(self, code, interval):
+            return bars
+
+    settings = SimpleNamespace(
+        use_entry_gate=True,
+        require_above_open=False,
+        require_above_vwap=False,
+        day_position_min=None,
+        day_position_max=None,
+        volume_ratio_min=70.0,
+        legacy_rsi_min=None,
+        legacy_rsi_max=None,
+    )
+    with patch("utils.auto_trade_engine.kst_date_str", return_value="2026-07-28"):
+        blocked, reason = await _eval_legacy_momentum(
+            Api(), settings, "005930", 105,
+        )
+        passed, skip_reason = await _eval_legacy_momentum(
+            Api(),
+            settings,
+            "005930",
+            105,
+            skip_volume_ratio=True,
+            skip_day_position=True,
+        )
+
+    assert blocked is False
+    assert "거래량비 부족" in reason
+    assert passed is True
+    assert skip_reason == "게이트 통과"
+
+
 def test_rsi_series_matches_helper():
     closes = _falling_closes(25)
     series = compute_rsi_series(closes, 14)

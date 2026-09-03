@@ -122,10 +122,37 @@ function buildQuery() {
   return p.toString();
 }
 
-async function fetchJSON(url) {
-  const res = await fetch(url, { headers: { Accept: 'application/json' } });
-  if (!res.ok) throw new Error(`${res.status}`);
-  return res.json();
+async function fetchJSON(url, opts) {
+  const timeoutMs = (opts && opts.timeoutMs) || 20000;
+  const { timeoutMs: _t, ...rest } = opts || {};
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, Object.assign({
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json' },
+      signal: ctrl.signal,
+    }, rest || {}));
+    if (res.status === 401) {
+      const next = encodeURIComponent(window.location.pathname + window.location.search);
+      window.location.href = `/login?next=${next}`;
+      throw new Error(`401 ${url}`);
+    }
+    if (!res.ok) {
+      let detail = '';
+      try {
+        const body = await res.json();
+        detail = body && body.detail ? String(body.detail) : '';
+      } catch (_) { /* ignore */ }
+      const err = new Error(detail || `${res.status}`);
+      err.status = res.status;
+      err.detail = detail;
+      throw err;
+    }
+    return res.json();
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function showEmptyBanner(show) {
@@ -197,11 +224,51 @@ function detailField(label, value) {
   return `<div class="detail-item"><div class="k">${esc(label)}</div><div class="v">${value}</div></div>`;
 }
 
+function companyProfilePlaceholderHtml() {
+  return '<div id="companyProfileSection" class="company-profile-section"><div class="skeleton">회사 정보 불러오는 중…</div></div>';
+}
+
+function renderCompanyProfileHtml(profile) {
+  if (!profile || !profile.ok) {
+    return '<div class="hint">회사 개요를 불러오지 못했습니다.</div>';
+  }
+  const overview = (profile.overview || []).map((p) => esc(p)).join('<br><br>');
+  const peers = (profile.industry_peers || []).map(
+    (name) => `<span class="company-profile-peer">${esc(name)}</span>`,
+  ).join('');
+  const metaParts = [
+    profile.market ? `시장 ${esc(profile.market)}` : '',
+    profile.industry_code ? `업종코드 ${esc(profile.industry_code)}` : '',
+    profile.source ? `출처 ${esc(profile.source)}` : '',
+  ].filter(Boolean);
+  return `
+    ${overview ? `<div class="company-profile-overview">${overview}</div>` : '<div class="hint">회사 개요 없음</div>'}
+    ${peers ? `<div class="detail-section-title" style="margin-top:12px;margin-bottom:6px;">동종업종</div><div class="company-profile-peers">${peers}</div>` : ''}
+    ${metaParts.length ? `<div class="company-profile-meta">${metaParts.join(' · ')}</div>` : ''}`;
+}
+
+async function loadCompanyProfile(code) {
+  const el = $('companyProfileSection');
+  if (!el) return;
+  const c = String(code || '').trim().replace(/^A/i, '').replace(/\D/g, '').padStart(6, '0');
+  if (!c || c === '000000') {
+    el.innerHTML = '';
+    return;
+  }
+  try {
+    const profile = await fetchJSON(`/fundamentals/${encodeURIComponent(c)}/profile`);
+    el.innerHTML = renderCompanyProfileHtml(profile);
+  } catch (_) {
+    el.innerHTML = '<div class="hint">회사 개요를 불러오지 못했습니다.</div>';
+  }
+}
+
 function renderDetail(row) {
   if (!row) {
     $('detailTitle').textContent = '종목 상세';
     $('detailHint').textContent = '행을 클릭하거나 종목코드를 검색하세요';
     $('detailBody').innerHTML = '<div class="empty"><span class="ico">📊</span>목록에서 종목을 선택하면 상세 지표가 표시됩니다.</div>';
+    chartPayload = null;
     return;
   }
   $('detailTitle').textContent = `${row.stock_name || ''} (${row.stock_code})`;
@@ -211,6 +278,8 @@ function renderDetail(row) {
     detailField('시가총액', fmtEok(row.market_cap)),
     detailField('거래량', fmtNum(row.volume)),
     detailField('거래대금', row.trading_value != null ? fmtNum(row.trading_value) + '백만' : '-'),
+    detailField('MA120', '<span id="detailMa120">-</span>'),
+    detailField('MA180', '<span id="detailMa180">-</span>'),
   ].join('');
   const valBlock = [
     detailField('PER', fmtFloat(row.per, 2)),
@@ -232,29 +301,85 @@ function renderDetail(row) {
     detailField('수집 시각', esc(row.fetched_at || '-')),
   ].join('');
   $('detailBody').innerHTML = `
+    <div class="detail-section">
+      <div class="detail-section-title">회사 정보</div>
+      ${companyProfilePlaceholderHtml()}
+    </div>
     <div class="detail-grid">${priceBlock}</div>
     <div class="detail-section analysis-chart-section">
-      <div class="detail-section-title">5분봉 차트 <span class="hint">최근 거래일</span></div>
+      <div class="detail-section-title">일봉 차트 <span class="hint">최근 120거래일 · MA120/180</span></div>
       <div class="analysis-chart-wrap" id="analysisChartWrap">
         <div class="analysis-chart-status" id="analysisChartStatus">차트 불러오는 중…</div>
-        <canvas class="analysis-chart-canvas" id="analysisChartCanvas" aria-label="5분봉 차트"></canvas>
+        <canvas class="analysis-chart-canvas" id="analysisChartCanvas" aria-label="일봉 차트"></canvas>
       </div>
     </div>
     <div class="detail-section"><div class="detail-section-title">밸류에이션</div><div class="detail-grid">${valBlock}</div></div>
     <div class="detail-section"><div class="detail-section-title">재무</div><div class="detail-grid">${finBlock}</div></div>
     <div class="detail-section"><div class="detail-section-title">메타</div><div class="detail-grid">${metaBlock}</div></div>`;
+  loadCompanyProfile(row.stock_code);
   loadAnalysisChart(row.stock_code);
 }
 
 let chartPayload = null;
 let chartResizeTimer = null;
 
+const MA_COLORS = {
+  120: '#f0a030',
+  180: '#a78bfa',
+};
+
+function drawMaLine(ctx, bars, key, color, padL, slotW, yOf) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  let started = false;
+  bars.forEach((b, i) => {
+    const v = b[key];
+    if (v == null || !Number.isFinite(v)) {
+      started = false;
+      return;
+    }
+    const x = padL + i * slotW + slotW / 2;
+    const y = yOf(v);
+    if (!started) {
+      ctx.moveTo(x, y);
+      started = true;
+    } else {
+      ctx.lineTo(x, y);
+    }
+  });
+  ctx.stroke();
+}
+
+function drawChartLegend(ctx, items, W, padT) {
+  let x = W - 8;
+  ctx.font = '10px system-ui, sans-serif';
+  ctx.textAlign = 'right';
+  items.slice().reverse().forEach((item) => {
+    const label = item.label;
+    const tw = ctx.measureText(label).width;
+    x -= tw + 14;
+    ctx.strokeStyle = item.color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x, padT + 6);
+    ctx.lineTo(x + 12, padT + 6);
+    ctx.stroke();
+    ctx.fillStyle = item.color;
+    ctx.fillText(label, x + 16, padT + 9);
+    x -= 8;
+  });
+}
 function barDate(ts) {
   return String(ts || '').slice(0, 10);
 }
 
-function barTimeLabel(ts) {
+function barTimeLabel(ts, interval) {
   const s = String(ts || '');
+  if (String(interval || '').toUpperCase() === '1D') {
+    if (s.length >= 10) return s.slice(5, 10);
+    return s;
+  }
   if (s.length >= 16) return s.slice(11, 16);
   if (s.length >= 5) return s.slice(5, 10);
   return s;
@@ -262,6 +387,8 @@ function barTimeLabel(ts) {
 
 function renderAnalysisChart(canvas, payload) {
   const bars = payload.bars || [];
+  const interval = String(payload.interval || '1D').toUpperCase();
+  const isDaily = interval === '1D';
   const statusEl = $('analysisChartStatus');
   const wrap = $('analysisChartWrap');
   if (!canvas || !bars.length) {
@@ -285,9 +412,21 @@ function renderAnalysisChart(canvas, payload) {
 
   if (statusEl) {
     const parts = [];
-    const dr = payload.date_range;
-    if (dr && dr.length === 2) {
-      parts.push(dr[0] === dr[1] ? dr[0] : `${dr[0]} ~ ${dr[1]}`);
+    if (isDaily && bars.length) {
+      const a = barDate(bars[0].timestamp);
+      const b = barDate(bars[bars.length - 1].timestamp);
+      if (a && b) parts.push(a === b ? a : `${a} ~ ${b}`);
+      parts.push(`${bars.length}일`);
+      const ma = payload.ma_latest || {};
+      const maParts = [];
+      if (ma.ma120 != null) maParts.push(`MA120 ${fmtWon(ma.ma120)}`);
+      if (ma.ma180 != null) maParts.push(`MA180 ${fmtWon(ma.ma180)}`);
+      if (maParts.length) parts.push(maParts.join(' · '));
+    } else {
+      const dr = payload.date_range;
+      if (dr && dr.length === 2) {
+        parts.push(dr[0] === dr[1] ? dr[0] : `${dr[0]} ~ ${dr[1]}`);
+      }
     }
     if (payload.warning) parts.push(payload.warning);
     if (parts.length) {
@@ -313,6 +452,10 @@ function renderAnalysisChart(canvas, payload) {
   bars.forEach((b) => {
     lo = Math.min(lo, b.low, b.open, b.close);
     hi = Math.max(hi, b.high, b.open, b.close);
+    if (isDaily) {
+      if (b.ma120 != null) { lo = Math.min(lo, b.ma120); hi = Math.max(hi, b.ma120); }
+      if (b.ma180 != null) { lo = Math.min(lo, b.ma180); hi = Math.max(hi, b.ma180); }
+    }
   });
 
   if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo === hi) {
@@ -354,7 +497,7 @@ function renderAnalysisChart(canvas, payload) {
 
   bars.forEach((b, i) => {
     const x = padL + i * slotW + slotW / 2;
-    if (i > 0) {
+    if (!isDaily && i > 0) {
       const d0 = barDate(bars[i - 1].timestamp);
       const d1 = barDate(b.timestamp);
       if (d0 !== d1) {
@@ -393,6 +536,15 @@ function renderAnalysisChart(canvas, payload) {
     ctx.fillRect(x - bodyW / 2, top, bodyW, h);
   });
 
+  if (isDaily) {
+    drawMaLine(ctx, bars, 'ma120', MA_COLORS[120], padL, slotW, yOf);
+    drawMaLine(ctx, bars, 'ma180', MA_COLORS[180], padL, slotW, yOf);
+    drawChartLegend(ctx, [
+      { label: 'MA120', color: MA_COLORS[120] },
+      { label: 'MA180', color: MA_COLORS[180] },
+    ], W, padT);
+  }
+
   const n = bars.length;
   if (n > 0) {
     ctx.fillStyle = text;
@@ -400,12 +552,20 @@ function renderAnalysisChart(canvas, payload) {
     ctx.textAlign = 'center';
     const idxs = [0, Math.floor(n / 2), n - 1];
     idxs.forEach((i) => {
-      const label = barTimeLabel(bars[i].timestamp);
+      const label = barTimeLabel(bars[i].timestamp, interval);
       if (!label) return;
       const x = padL + i * slotW + slotW / 2;
       ctx.fillText(label, x, H - 6);
     });
   }
+}
+
+function updateMaDetailFields(payload) {
+  const ma = (payload && payload.ma_latest) || {};
+  const el120 = $('detailMa120');
+  const el180 = $('detailMa180');
+  if (el120) el120.textContent = ma.ma120 != null ? fmtWon(ma.ma120) : '-';
+  if (el180) el180.textContent = ma.ma180 != null ? fmtWon(ma.ma180) : '-';
 }
 
 async function loadAnalysisChart(stockCode) {
@@ -414,20 +574,25 @@ async function loadAnalysisChart(stockCode) {
   if (!canvas) return;
   if (statusEl) {
     statusEl.style.display = 'block';
-    statusEl.textContent = '5분봉 차트 불러오는 중…';
+    statusEl.textContent = '일봉 차트 불러오는 중…';
     statusEl.classList.remove('err', 'warn');
   }
   canvas.style.display = 'none';
   try {
     const data = await fetchJSON(
-      `/fundamentals/${encodeURIComponent(stockCode)}/chart?interval=5M`,
+      `/fundamentals/${encodeURIComponent(stockCode)}/chart?interval=1D&bars=120`,
     );
     chartPayload = data;
     renderAnalysisChart(canvas, data);
+    updateMaDetailFields(data);
   } catch (e) {
     chartPayload = null;
+    updateMaDetailFields(null);
     if (statusEl) {
-      statusEl.textContent = '차트를 불러오지 못했습니다 (장외·API 제한일 수 있음)';
+      const detail = (e && e.detail) ? String(e.detail) : '';
+      statusEl.textContent = detail
+        ? `차트 실패: ${detail}`
+        : '차트를 불러오지 못했습니다 (장외·API 제한일 수 있음)';
       statusEl.classList.add('err');
       statusEl.style.display = 'block';
     }
@@ -443,10 +608,34 @@ function onChartResize() {
   chartResizeTimer = setTimeout(() => renderAnalysisChart(canvas, chartPayload), 120);
 }
 
+async function renderDetailFallback(code, name) {
+  const c = String(code || '').trim().replace(/^A/i, '').padStart(6, '0');
+  $('detailTitle').textContent = name ? `${name} (${c})` : `종목 (${c})`;
+  $('detailHint').textContent = '기본적분석 마트에 없음 · 일봉 차트만 표시';
+  $('detailBody').innerHTML = `
+    <div class="detail-section">
+      <div class="detail-section-title">회사 정보</div>
+      ${companyProfilePlaceholderHtml()}
+    </div>
+    <div class="detail-section analysis-chart-section">
+      <div class="detail-section-title">일봉 차트 <span class="hint">최근 120거래일 · MA120/180</span></div>
+      <div class="analysis-chart-wrap" id="analysisChartWrap">
+        <div class="analysis-chart-status" id="analysisChartStatus">차트 불러오는 중…</div>
+        <canvas class="analysis-chart-canvas" id="analysisChartCanvas" aria-label="일봉 차트"></canvas>
+      </div>
+    </div>
+    <div class="empty" style="margin-top:12px;"><span class="ico">ℹ️</span>재무 지표는 <code>run_fundamental_batch.bat</code> 적재 후 표시됩니다.</div>`;
+  loadCompanyProfile(c);
+  await loadAnalysisChart(c);
+}
+
 async function selectStock(code) {
-  const c = String(code || '').trim().padStart(6, '0');
+  const c = String(code || '').trim().replace(/^A/i, '').replace(/\D/g, '').padStart(6, '0');
   if (!c || c === '000000') return;
   state.selectedCode = c;
+  syncUrlCode(c);
+  const search = $('codeSearch');
+  if (search) search.value = c;
   document.querySelectorAll('tr.data-row').forEach((tr) => {
     tr.classList.toggle('selected', tr.dataset.code === c);
   });
@@ -455,8 +644,12 @@ async function selectStock(code) {
     const row = await fetchJSON(`/fundamentals/${encodeURIComponent(c)}`);
     renderDetail(row);
   } catch (e) {
-    renderDetail(null);
-    toast('종목 상세를 불러오지 못했습니다.', true);
+    if (e && e.status === 404) {
+      await renderDetailFallback(c);
+      return;
+    }
+    await renderDetailFallback(c);
+    toast('재무 지표 없음 · 차트·회사 정보만 표시', false);
   }
 }
 
@@ -468,7 +661,8 @@ async function loadSummary() {
   }
 }
 
-async function loadList() {
+async function loadList(options) {
+  const autoSelect = !options || options.autoSelect !== false;
   if (state.loading) return;
   state.loading = true;
   const wrap = $('tableWrap');
@@ -482,13 +676,12 @@ async function loadList() {
     showEmptyBanner(empty);
     renderSummary(summary, list);
     renderTable(list.items || []);
-    if (state.selectedCode) {
-      const found = (list.items || []).some((r) => r.stock_code === state.selectedCode);
-      if (!found) await selectStock(state.selectedCode);
+    if (autoSelect && state.selectedCode) {
+      await selectStock(state.selectedCode);
     }
     $('lastUpdated').textContent = new Date().toLocaleTimeString('ko-KR');
   } catch (e) {
-    wrap.innerHTML = '<div class="empty"><span class="ico">⚠️</span>데이터를 불러오지 못했습니다.</div>';
+    if (wrap) wrap.innerHTML = '<div class="empty"><span class="ico">⚠️</span>데이터를 불러오지 못했습니다.</div>';
     toast('목록 조회 실패', true);
   } finally {
     state.loading = false;
@@ -507,6 +700,23 @@ function resetFilters() {
   loadList();
 }
 
+function codeFromUrl() {
+  const raw = String(new URLSearchParams(window.location.search).get('code') || '')
+    .trim()
+    .replace(/^A/i, '')
+    .replace(/\D/g, '');
+  return raw ? raw.padStart(6, '0') : null;
+}
+
+function syncUrlCode(code) {
+  const c = String(code || '').trim().replace(/^A/i, '').replace(/\D/g, '').padStart(6, '0');
+  if (!c || c === '000000') return;
+  const url = new URL(window.location.href);
+  if (url.searchParams.get('code') === c) return;
+  url.searchParams.set('code', c);
+  window.history.replaceState(null, '', url.pathname + url.search);
+}
+
 function initFromUrl() {
   const p = new URLSearchParams(window.location.search);
   if (p.get('market')) $('fltMarket').value = p.get('market');
@@ -514,12 +724,17 @@ function initFromUrl() {
     state.sortBy = p.get('sort_by');
     $('fltSortBy').value = state.sortBy;
   }
-  if (p.get('code')) state.selectedCode = p.get('code').padStart(6, '0');
+  const code = codeFromUrl();
+  if (code) {
+    state.selectedCode = code;
+    const search = $('codeSearch');
+    if (search) search.value = code;
+  }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
   initFromUrl();
-  $('btnRefresh').onclick = loadList;
+  $('btnRefresh').onclick = () => loadList();
   $('btnApply').onclick = () => {
     state.sortBy = $('fltSortBy').value || 'market_cap';
     loadList();
@@ -533,8 +748,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (v.length < 4) { toast('종목코드를 4~6자리로 입력하세요.', true); return; }
     selectStock(v);
   });
-  loadList().then(() => {
-    if (state.selectedCode) selectStock(state.selectedCode);
-  });
+  const pendingCode = state.selectedCode;
+  if (pendingCode) {
+    selectStock(pendingCode).then(() => {
+      const card = $('detailCard');
+      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+  }
+  loadList({ autoSelect: !pendingCode });
   window.addEventListener('resize', onChartResize);
 });

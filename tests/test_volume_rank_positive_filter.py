@@ -50,20 +50,20 @@ def test_min_change_rate_33_keep_rule():
     assert [r["change_rate"] for r in kept] == [3.5, 3.3]
 
 
-def test_max_change_rate_15_overheat_cut():
-    """스크리너 과열컷: 등락률≥15% 제외."""
+def test_max_change_rate_12_overheat_cut():
+    """스크리너 과열컷: 등락률≥12% 제외."""
     rows = [
-        {"change_rate": 14.99},
+        {"change_rate": 11.99},
+        {"change_rate": 12.0},
         {"change_rate": 15.0},
-        {"change_rate": 18.2},
         {"change_rate": 3.5},
     ]
-    floor, ceil = 3.3, 15.0
+    floor, ceil = 3.3, 12.0
     kept = [
         r for r in rows
         if floor <= float(r.get("change_rate") or 0) < ceil
     ]
-    assert [r["change_rate"] for r in kept] == [14.99, 3.5]
+    assert [r["change_rate"] for r in kept] == [11.99, 3.5]
 
 
 def test_min_trade_amount_20eok_keep_rule():

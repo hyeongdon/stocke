@@ -1,12 +1,12 @@
 # Windows 작업 스케줄러 — 평일 아침 구간에 Stocke 서버 자동 기동 (꺼져 있을 때만)
 # 사용:
 #   powershell -ExecutionPolicy Bypass -File scripts\install_morning_server_task.ps1
-#   powershell ... -WindowStart "08:30" -WindowEnd "08:50" -IntervalMinutes 5
+#   powershell ... -WindowStart "07:55" -WindowEnd "08:20" -IntervalMinutes 5
 #   powershell ... -Uninstall
 
 param(
-    [string]$WindowStart = '08:30',
-    [string]$WindowEnd = '08:50',
+    [string]$WindowStart = '07:55',
+    [string]$WindowEnd = '08:20',
     [int]$IntervalMinutes = 5,
     [string]$TaskName = 'Stocke-MorningServerWatch',
     [switch]$Uninstall

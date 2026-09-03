@@ -1,0 +1,3180 @@
+[
+  {
+    "id": 108,
+    "name": "강관",
+    "stock_count": 12,
+    "big_theme_id": 25,
+    "category": "건설/토목"
+  },
+  {
+    "id": 241,
+    "name": "건설/토목",
+    "stock_count": 40,
+    "big_theme_id": 25,
+    "category": "건설/토목"
+  },
+  {
+    "id": 150,
+    "name": "철강/철근",
+    "stock_count": 45,
+    "big_theme_id": 25,
+    "category": "건설/토목"
+  },
+  {
+    "id": 245,
+    "name": "타일/도기",
+    "stock_count": 4,
+    "big_theme_id": 25,
+    "category": "건설/토목"
+  },
+  {
+    "id": 243,
+    "name": "피팅/밸브",
+    "stock_count": 10,
+    "big_theme_id": 25,
+    "category": "건설/토목"
+  },
+  {
+    "id": 516,
+    "name": "싱크홀",
+    "stock_count": 18,
+    "big_theme_id": 25,
+    "category": "건설/토목"
+  },
+  {
+    "id": 246,
+    "name": "페인트",
+    "stock_count": 8,
+    "big_theme_id": 25,
+    "category": "건설/토목"
+  },
+  {
+    "id": 242,
+    "name": "바닥재/합판/창호",
+    "stock_count": 10,
+    "big_theme_id": 25,
+    "category": "건설/토목"
+  },
+  {
+    "id": 247,
+    "name": "시멘트/콘크리트",
+    "stock_count": 19,
+    "big_theme_id": 25,
+    "category": "건설/토목"
+  },
+  {
+    "id": 244,
+    "name": "건설기계",
+    "stock_count": 16,
+    "big_theme_id": 25,
+    "category": "건설/토목"
+  },
+  {
+    "id": 248,
+    "name": "난방",
+    "stock_count": 7,
+    "big_theme_id": 26,
+    "category": "계절"
+  },
+  {
+    "id": 176,
+    "name": "냉방",
+    "stock_count": 15,
+    "big_theme_id": 26,
+    "category": "계절"
+  },
+  {
+    "id": 249,
+    "name": "복날",
+    "stock_count": 9,
+    "big_theme_id": 26,
+    "category": "계절"
+  },
+  {
+    "id": 251,
+    "name": "제설",
+    "stock_count": 7,
+    "big_theme_id": 26,
+    "category": "계절"
+  },
+  {
+    "id": 250,
+    "name": "아이스크림",
+    "stock_count": 11,
+    "big_theme_id": 26,
+    "category": "계절"
+  },
+  {
+    "id": 252,
+    "name": "크리스마스",
+    "stock_count": 8,
+    "big_theme_id": 26,
+    "category": "계절"
+  },
+  {
+    "id": 255,
+    "name": "바이든",
+    "stock_count": 8,
+    "big_theme_id": 27,
+    "category": "글로벌"
+  },
+  {
+    "id": 539,
+    "name": "월드컵",
+    "stock_count": 24,
+    "big_theme_id": 27,
+    "category": "글로벌"
+  },
+  {
+    "id": 494,
+    "name": "트럼프",
+    "stock_count": 9,
+    "big_theme_id": 27,
+    "category": "글로벌"
+  },
+  {
+    "id": 495,
+    "name": "해리스",
+    "stock_count": 13,
+    "big_theme_id": 27,
+    "category": "글로벌"
+  },
+  {
+    "id": 254,
+    "name": "무역전쟁",
+    "stock_count": 18,
+    "big_theme_id": 27,
+    "category": "글로벌"
+  },
+  {
+    "id": 47,
+    "name": "중국소비",
+    "stock_count": 24,
+    "big_theme_id": 27,
+    "category": "글로벌"
+  },
+  {
+    "id": 538,
+    "name": "중동전쟁",
+    "stock_count": 18,
+    "big_theme_id": 27,
+    "category": "글로벌"
+  },
+  {
+    "id": 183,
+    "name": "지소미아",
+    "stock_count": 10,
+    "big_theme_id": 27,
+    "category": "글로벌"
+  },
+  {
+    "id": 467,
+    "name": "국내상장 중국기업",
+    "stock_count": 12,
+    "big_theme_id": 27,
+    "category": "글로벌"
+  },
+  {
+    "id": 180,
+    "name": "일본불매/수출규제",
+    "stock_count": 42,
+    "big_theme_id": 27,
+    "category": "글로벌"
+  },
+  {
+    "id": 461,
+    "name": "우크라이나 재건",
+    "stock_count": 26,
+    "big_theme_id": 27,
+    "category": "글로벌"
+  },
+  {
+    "id": 253,
+    "name": "대륙간탄도미사일",
+    "stock_count": 10,
+    "big_theme_id": 27,
+    "category": "글로벌"
+  },
+  {
+    "id": 520,
+    "name": "엔 캐리 트레이드",
+    "stock_count": 11,
+    "big_theme_id": 28,
+    "category": "금융/경제"
+  },
+  {
+    "id": 122,
+    "name": "보험",
+    "stock_count": 17,
+    "big_theme_id": 28,
+    "category": "금융/경제"
+  },
+  {
+    "id": 258,
+    "name": "유가",
+    "stock_count": 9,
+    "big_theme_id": 28,
+    "category": "금융/경제"
+  },
+  {
+    "id": 259,
+    "name": "은행",
+    "stock_count": 11,
+    "big_theme_id": 28,
+    "category": "금융/경제"
+  },
+  {
+    "id": 260,
+    "name": "증권",
+    "stock_count": 24,
+    "big_theme_id": 28,
+    "category": "금융/경제"
+  },
+  {
+    "id": 224,
+    "name": "창투사",
+    "stock_count": 21,
+    "big_theme_id": 28,
+    "category": "금융/경제"
+  },
+  {
+    "id": 257,
+    "name": "부동산/리츠",
+    "stock_count": 31,
+    "big_theme_id": 28,
+    "category": "금융/경제"
+  },
+  {
+    "id": 170,
+    "name": "가상화폐",
+    "stock_count": 26,
+    "big_theme_id": 28,
+    "category": "금융/경제"
+  },
+  {
+    "id": 237,
+    "name": "금리인상",
+    "stock_count": 16,
+    "big_theme_id": 28,
+    "category": "금융/경제"
+  },
+  {
+    "id": 512,
+    "name": "지역화폐",
+    "stock_count": 7,
+    "big_theme_id": 28,
+    "category": "금융/경제"
+  },
+  {
+    "id": 519,
+    "name": "환율상승",
+    "stock_count": 18,
+    "big_theme_id": 28,
+    "category": "금융/경제"
+  },
+  {
+    "id": 261,
+    "name": "환율하락",
+    "stock_count": 25,
+    "big_theme_id": 28,
+    "category": "금융/경제"
+  },
+  {
+    "id": 256,
+    "name": "인플레이션",
+    "stock_count": 9,
+    "big_theme_id": 28,
+    "category": "금융/경제"
+  },
+  {
+    "id": 165,
+    "name": "애플",
+    "stock_count": 19,
+    "big_theme_id": 29,
+    "category": "기업"
+  },
+  {
+    "id": 222,
+    "name": "쿠팡",
+    "stock_count": 26,
+    "big_theme_id": 29,
+    "category": "기업"
+  },
+  {
+    "id": 465,
+    "name": "토스",
+    "stock_count": 8,
+    "big_theme_id": 29,
+    "category": "기업"
+  },
+  {
+    "id": 273,
+    "name": "티몬",
+    "stock_count": 6,
+    "big_theme_id": 29,
+    "category": "기업"
+  },
+  {
+    "id": 262,
+    "name": "두나무",
+    "stock_count": 13,
+    "big_theme_id": 29,
+    "category": "기업"
+  },
+  {
+    "id": 266,
+    "name": "야놀자",
+    "stock_count": 6,
+    "big_theme_id": 29,
+    "category": "기업"
+  },
+  {
+    "id": 522,
+    "name": "오라클",
+    "stock_count": 14,
+    "big_theme_id": 29,
+    "category": "기업"
+  },
+  {
+    "id": 268,
+    "name": "지주사",
+    "stock_count": 135,
+    "big_theme_id": 29,
+    "category": "기업"
+  },
+  {
+    "id": 271,
+    "name": "테슬라",
+    "stock_count": 29,
+    "big_theme_id": 29,
+    "category": "기업"
+  },
+  {
+    "id": 264,
+    "name": "하이브",
+    "stock_count": 5,
+    "big_theme_id": 29,
+    "category": "기업"
+  },
+  {
+    "id": 274,
+    "name": "화웨이",
+    "stock_count": 16,
+    "big_theme_id": 29,
+    "category": "기업"
+  },
+  {
+    "id": 272,
+    "name": "리디북스",
+    "stock_count": 13,
+    "big_theme_id": 29,
+    "category": "기업"
+  },
+  {
+    "id": 263,
+    "name": "마켓컬리",
+    "stock_count": 13,
+    "big_theme_id": 29,
+    "category": "기업"
+  },
+  {
+    "id": 231,
+    "name": "삼성전자",
+    "stock_count": 36,
+    "big_theme_id": 29,
+    "category": "기업"
+  },
+  {
+    "id": 267,
+    "name": "종합상사",
+    "stock_count": 8,
+    "big_theme_id": 29,
+    "category": "기업"
+  },
+  {
+    "id": 270,
+    "name": "크래프톤",
+    "stock_count": 9,
+    "big_theme_id": 29,
+    "category": "기업"
+  },
+  {
+    "id": 521,
+    "name": "퓨리오사",
+    "stock_count": 15,
+    "big_theme_id": 29,
+    "category": "기업"
+  },
+  {
+    "id": 269,
+    "name": "카카오뱅크",
+    "stock_count": 13,
+    "big_theme_id": 29,
+    "category": "기업"
+  },
+  {
+    "id": 265,
+    "name": "카카오엔터테인먼트",
+    "stock_count": 4,
+    "big_theme_id": 29,
+    "category": "기업"
+  },
+  {
+    "id": 484,
+    "name": "BYD",
+    "stock_count": 10,
+    "big_theme_id": 29,
+    "category": "기업"
+  },
+  {
+    "id": 532,
+    "name": "스페이스X",
+    "stock_count": 27,
+    "big_theme_id": 29,
+    "category": "기업"
+  },
+  {
+    "id": 276,
+    "name": "농업",
+    "stock_count": 22,
+    "big_theme_id": 30,
+    "category": "농/축/수산업"
+  },
+  {
+    "id": 279,
+    "name": "비료",
+    "stock_count": 14,
+    "big_theme_id": 30,
+    "category": "농/축/수산업"
+  },
+  {
+    "id": 280,
+    "name": "사료",
+    "stock_count": 18,
+    "big_theme_id": 30,
+    "category": "농/축/수산업"
+  },
+  {
+    "id": 186,
+    "name": "수산/수산가공품",
+    "stock_count": 11,
+    "big_theme_id": 30,
+    "category": "농/축/수산업"
+  },
+  {
+    "id": 281,
+    "name": "낙농업",
+    "stock_count": 14,
+    "big_theme_id": 30,
+    "category": "농/축/수산업"
+  },
+  {
+    "id": 275,
+    "name": "농기계",
+    "stock_count": 9,
+    "big_theme_id": 30,
+    "category": "농/축/수산업"
+  },
+  {
+    "id": 284,
+    "name": "닭고기",
+    "stock_count": 12,
+    "big_theme_id": 30,
+    "category": "농/축/수산업"
+  },
+  {
+    "id": 282,
+    "name": "소고기",
+    "stock_count": 6,
+    "big_theme_id": 30,
+    "category": "농/축/수산업"
+  },
+  {
+    "id": 142,
+    "name": "구제역/광우병",
+    "stock_count": 23,
+    "big_theme_id": 30,
+    "category": "농/축/수산업"
+  },
+  {
+    "id": 283,
+    "name": "돼지고기",
+    "stock_count": 9,
+    "big_theme_id": 30,
+    "category": "농/축/수산업"
+  },
+  {
+    "id": 184,
+    "name": "돼지열병",
+    "stock_count": 30,
+    "big_theme_id": 30,
+    "category": "농/축/수산업"
+  },
+  {
+    "id": 277,
+    "name": "스마트팜",
+    "stock_count": 12,
+    "big_theme_id": 30,
+    "category": "농/축/수산업"
+  },
+  {
+    "id": 278,
+    "name": "동물백신/방역",
+    "stock_count": 27,
+    "big_theme_id": 30,
+    "category": "농/축/수산업"
+  },
+  {
+    "id": 37,
+    "name": "방산",
+    "stock_count": 72,
+    "big_theme_id": 31,
+    "category": "대북"
+  },
+  {
+    "id": 36,
+    "name": "철도",
+    "stock_count": 41,
+    "big_theme_id": 31,
+    "category": "대북"
+  },
+  {
+    "id": 41,
+    "name": "금강산",
+    "stock_count": 8,
+    "big_theme_id": 31,
+    "category": "대북"
+  },
+  {
+    "id": 38,
+    "name": "비핵화",
+    "stock_count": 10,
+    "big_theme_id": 31,
+    "category": "대북"
+  },
+  {
+    "id": 39,
+    "name": "개성공단",
+    "stock_count": 12,
+    "big_theme_id": 31,
+    "category": "대북"
+  },
+  {
+    "id": 110,
+    "name": "자원개발",
+    "stock_count": 30,
+    "big_theme_id": 31,
+    "category": "대북"
+  },
+  {
+    "id": 35,
+    "name": "비무장지대",
+    "stock_count": 22,
+    "big_theme_id": 31,
+    "category": "대북"
+  },
+  {
+    "id": 285,
+    "name": "남북경제협력",
+    "stock_count": 34,
+    "big_theme_id": 31,
+    "category": "대북"
+  },
+  {
+    "id": 286,
+    "name": "대북식량지원",
+    "stock_count": 13,
+    "big_theme_id": 31,
+    "category": "대북"
+  },
+  {
+    "id": 43,
+    "name": "대북의료지원",
+    "stock_count": 17,
+    "big_theme_id": 31,
+    "category": "대북"
+  },
+  {
+    "id": 85,
+    "name": "폴더블폰",
+    "stock_count": 25,
+    "big_theme_id": 32,
+    "category": "디스플레이"
+  },
+  {
+    "id": 295,
+    "name": "플렉서블 디스플레이",
+    "stock_count": 28,
+    "big_theme_id": 32,
+    "category": "디스플레이"
+  },
+  {
+    "id": 290,
+    "name": "LCD 장비",
+    "stock_count": 39,
+    "big_theme_id": 32,
+    "category": "디스플레이"
+  },
+  {
+    "id": 288,
+    "name": "LCD 부품/소재",
+    "stock_count": 39,
+    "big_theme_id": 32,
+    "category": "디스플레이"
+  },
+  {
+    "id": 287,
+    "name": "LCD BLU 제조",
+    "stock_count": 5,
+    "big_theme_id": 32,
+    "category": "디스플레이"
+  },
+  {
+    "id": 292,
+    "name": "LED",
+    "stock_count": 46,
+    "big_theme_id": 32,
+    "category": "디스플레이"
+  },
+  {
+    "id": 294,
+    "name": "미니LED",
+    "stock_count": 10,
+    "big_theme_id": 32,
+    "category": "디스플레이"
+  },
+  {
+    "id": 289,
+    "name": "마이크로LED",
+    "stock_count": 11,
+    "big_theme_id": 32,
+    "category": "디스플레이"
+  },
+  {
+    "id": 291,
+    "name": "LED 장비",
+    "stock_count": 23,
+    "big_theme_id": 32,
+    "category": "디스플레이"
+  },
+  {
+    "id": 84,
+    "name": "OLED",
+    "stock_count": 78,
+    "big_theme_id": 32,
+    "category": "디스플레이"
+  },
+  {
+    "id": 293,
+    "name": "QLED",
+    "stock_count": 8,
+    "big_theme_id": 32,
+    "category": "디스플레이"
+  },
+  {
+    "id": 296,
+    "name": "UTG",
+    "stock_count": 10,
+    "big_theme_id": 32,
+    "category": "디스플레이"
+  },
+  {
+    "id": 487,
+    "name": "제약",
+    "stock_count": 127,
+    "big_theme_id": 33,
+    "category": "바이오"
+  },
+  {
+    "id": 193,
+    "name": "구충제",
+    "stock_count": 12,
+    "big_theme_id": 33,
+    "category": "바이오"
+  },
+  {
+    "id": 219,
+    "name": "주사기",
+    "stock_count": 13,
+    "big_theme_id": 33,
+    "category": "바이오"
+  },
+  {
+    "id": 299,
+    "name": "진통제",
+    "stock_count": 10,
+    "big_theme_id": 33,
+    "category": "바이오"
+  },
+  {
+    "id": 171,
+    "name": "피임약",
+    "stock_count": 6,
+    "big_theme_id": 33,
+    "category": "바이오"
+  },
+  {
+    "id": 181,
+    "name": "첨생법(첨단재생바이오법)",
+    "stock_count": 24,
+    "big_theme_id": 33,
+    "category": "바이오"
+  },
+  {
+    "id": 298,
+    "name": "이중항체",
+    "stock_count": 11,
+    "big_theme_id": 33,
+    "category": "바이오"
+  },
+  {
+    "id": 90,
+    "name": "줄기세포",
+    "stock_count": 28,
+    "big_theme_id": 33,
+    "category": "바이오"
+  },
+  {
+    "id": 209,
+    "name": "혈장치료",
+    "stock_count": 11,
+    "big_theme_id": 33,
+    "category": "바이오"
+  },
+  {
+    "id": 94,
+    "name": "면역항암제",
+    "stock_count": 45,
+    "big_theme_id": 33,
+    "category": "바이오"
+  },
+  {
+    "id": 297,
+    "name": "스테로이드",
+    "stock_count": 28,
+    "big_theme_id": 33,
+    "category": "바이오"
+  },
+  {
+    "id": 486,
+    "name": "중입자치료",
+    "stock_count": 9,
+    "big_theme_id": 33,
+    "category": "바이오"
+  },
+  {
+    "id": 92,
+    "name": "유전자치료/검사",
+    "stock_count": 43,
+    "big_theme_id": 33,
+    "category": "바이오"
+  },
+  {
+    "id": 95,
+    "name": "바이오시밀러",
+    "stock_count": 23,
+    "big_theme_id": 33,
+    "category": "바이오"
+  },
+  {
+    "id": 480,
+    "name": "AI신약개발",
+    "stock_count": 9,
+    "big_theme_id": 33,
+    "category": "바이오"
+  },
+  {
+    "id": 540,
+    "name": "호남 반도체",
+    "stock_count": 16,
+    "big_theme_id": 34,
+    "category": "반도체"
+  },
+  {
+    "id": 541,
+    "name": "삼성 파운드리",
+    "stock_count": 24,
+    "big_theme_id": 34,
+    "category": "반도체"
+  },
+  {
+    "id": 190,
+    "name": "불화수소",
+    "stock_count": 9,
+    "big_theme_id": 34,
+    "category": "반도체"
+  },
+  {
+    "id": 500,
+    "name": "유리기판",
+    "stock_count": 26,
+    "big_theme_id": 34,
+    "category": "반도체"
+  },
+  {
+    "id": 304,
+    "name": "회로기판",
+    "stock_count": 36,
+    "big_theme_id": 34,
+    "category": "반도체"
+  },
+  {
+    "id": 305,
+    "name": "반도체생산",
+    "stock_count": 18,
+    "big_theme_id": 34,
+    "category": "반도체"
+  },
+  {
+    "id": 306,
+    "name": "반도체설계",
+    "stock_count": 19,
+    "big_theme_id": 34,
+    "category": "반도체"
+  },
+  {
+    "id": 307,
+    "name": "반도체장비",
+    "stock_count": 101,
+    "big_theme_id": 34,
+    "category": "반도체"
+  },
+  {
+    "id": 303,
+    "name": "이미지센서",
+    "stock_count": 10,
+    "big_theme_id": 34,
+    "category": "반도체"
+  },
+  {
+    "id": 152,
+    "name": "반도체재료/부품",
+    "stock_count": 73,
+    "big_theme_id": 34,
+    "category": "반도체"
+  },
+  {
+    "id": 300,
+    "name": "메모리반도체",
+    "stock_count": 36,
+    "big_theme_id": 34,
+    "category": "반도체"
+  },
+  {
+    "id": 308,
+    "name": "반도체전공정",
+    "stock_count": 21,
+    "big_theme_id": 34,
+    "category": "반도체"
+  },
+  {
+    "id": 309,
+    "name": "반도체후공정",
+    "stock_count": 21,
+    "big_theme_id": 34,
+    "category": "반도체"
+  },
+  {
+    "id": 172,
+    "name": "시스템반도체",
+    "stock_count": 58,
+    "big_theme_id": 34,
+    "category": "반도체"
+  },
+  {
+    "id": 310,
+    "name": "차량용반도체",
+    "stock_count": 19,
+    "big_theme_id": 34,
+    "category": "반도체"
+  },
+  {
+    "id": 302,
+    "name": "3D낸드",
+    "stock_count": 19,
+    "big_theme_id": 34,
+    "category": "반도체"
+  },
+  {
+    "id": 524,
+    "name": "CXL",
+    "stock_count": 14,
+    "big_theme_id": 34,
+    "category": "반도체"
+  },
+  {
+    "id": 301,
+    "name": "D램",
+    "stock_count": 24,
+    "big_theme_id": 34,
+    "category": "반도체"
+  },
+  {
+    "id": 491,
+    "name": "(e)SSD",
+    "stock_count": 11,
+    "big_theme_id": 34,
+    "category": "반도체"
+  },
+  {
+    "id": 523,
+    "name": "HBM",
+    "stock_count": 43,
+    "big_theme_id": 34,
+    "category": "반도체"
+  },
+  {
+    "id": 204,
+    "name": "MLCC(적층세라믹콘덴서)",
+    "stock_count": 17,
+    "big_theme_id": 34,
+    "category": "반도체"
+  },
+  {
+    "id": 506,
+    "name": "NPU",
+    "stock_count": 16,
+    "big_theme_id": 34,
+    "category": "반도체"
+  },
+  {
+    "id": 531,
+    "name": "TPU",
+    "stock_count": 11,
+    "big_theme_id": 34,
+    "category": "반도체"
+  },
+  {
+    "id": 311,
+    "name": "가구",
+    "stock_count": 18,
+    "big_theme_id": 35,
+    "category": "생활"
+  },
+  {
+    "id": 312,
+    "name": "광고",
+    "stock_count": 22,
+    "big_theme_id": 35,
+    "category": "생활"
+  },
+  {
+    "id": 78,
+    "name": "교육",
+    "stock_count": 25,
+    "big_theme_id": 35,
+    "category": "생활"
+  },
+  {
+    "id": 313,
+    "name": "라면",
+    "stock_count": 8,
+    "big_theme_id": 35,
+    "category": "생활"
+  },
+  {
+    "id": 325,
+    "name": "렌탈",
+    "stock_count": 11,
+    "big_theme_id": 35,
+    "category": "생활"
+  },
+  {
+    "id": 315,
+    "name": "물류",
+    "stock_count": 16,
+    "big_theme_id": 35,
+    "category": "생활"
+  },
+  {
+    "id": 320,
+    "name": "생수",
+    "stock_count": 14,
+    "big_theme_id": 35,
+    "category": "생활"
+  },
+  {
+    "id": 322,
+    "name": "신발",
+    "stock_count": 12,
+    "big_theme_id": 35,
+    "category": "생활"
+  },
+  {
+    "id": 326,
+    "name": "제과",
+    "stock_count": 8,
+    "big_theme_id": 35,
+    "category": "생활"
+  },
+  {
+    "id": 327,
+    "name": "주류",
+    "stock_count": 13,
+    "big_theme_id": 35,
+    "category": "생활"
+  },
+  {
+    "id": 328,
+    "name": "캠핑",
+    "stock_count": 7,
+    "big_theme_id": 35,
+    "category": "생활"
+  },
+  {
+    "id": 198,
+    "name": "키즈",
+    "stock_count": 17,
+    "big_theme_id": 35,
+    "category": "생활"
+  },
+  {
+    "id": 323,
+    "name": "패션/의류",
+    "stock_count": 60,
+    "big_theme_id": 35,
+    "category": "생활"
+  },
+  {
+    "id": 321,
+    "name": "리테일",
+    "stock_count": 21,
+    "big_theme_id": 35,
+    "category": "생활"
+  },
+  {
+    "id": 160,
+    "name": "식자재",
+    "stock_count": 25,
+    "big_theme_id": 35,
+    "category": "생활"
+  },
+  {
+    "id": 317,
+    "name": "제습기",
+    "stock_count": 11,
+    "big_theme_id": 35,
+    "category": "생활"
+  },
+  {
+    "id": 329,
+    "name": "편의점",
+    "stock_count": 5,
+    "big_theme_id": 35,
+    "category": "생활"
+  },
+  {
+    "id": 48,
+    "name": "화장품",
+    "stock_count": 88,
+    "big_theme_id": 35,
+    "category": "생활"
+  },
+  {
+    "id": 316,
+    "name": "물리보안",
+    "stock_count": 17,
+    "big_theme_id": 35,
+    "category": "생활"
+  },
+  {
+    "id": 319,
+    "name": "반려동물",
+    "stock_count": 17,
+    "big_theme_id": 35,
+    "category": "생활"
+  },
+  {
+    "id": 324,
+    "name": "의류소재",
+    "stock_count": 9,
+    "big_theme_id": 35,
+    "category": "생활"
+  },
+  {
+    "id": 314,
+    "name": "인테리어",
+    "stock_count": 23,
+    "big_theme_id": 35,
+    "category": "생활"
+  },
+  {
+    "id": 318,
+    "name": "공기청정기",
+    "stock_count": 13,
+    "big_theme_id": 35,
+    "category": "생활"
+  },
+  {
+    "id": 22,
+    "name": "원전",
+    "stock_count": 54,
+    "big_theme_id": 36,
+    "category": "에너지"
+  },
+  {
+    "id": 104,
+    "name": "풍력",
+    "stock_count": 37,
+    "big_theme_id": 36,
+    "category": "에너지"
+  },
+  {
+    "id": 528,
+    "name": "변압기",
+    "stock_count": 13,
+    "big_theme_id": 36,
+    "category": "에너지"
+  },
+  {
+    "id": 332,
+    "name": "수자원",
+    "stock_count": 26,
+    "big_theme_id": 36,
+    "category": "에너지"
+  },
+  {
+    "id": 106,
+    "name": "태양광",
+    "stock_count": 51,
+    "big_theme_id": 36,
+    "category": "에너지"
+  },
+  {
+    "id": 103,
+    "name": "핵융합",
+    "stock_count": 9,
+    "big_theme_id": 36,
+    "category": "에너지"
+  },
+  {
+    "id": 536,
+    "name": "나트륨 배터리",
+    "stock_count": 11,
+    "big_theme_id": 36,
+    "category": "에너지"
+  },
+  {
+    "id": 44,
+    "name": "전력설비",
+    "stock_count": 37,
+    "big_theme_id": 36,
+    "category": "에너지"
+  },
+  {
+    "id": 463,
+    "name": "폐배터리",
+    "stock_count": 25,
+    "big_theme_id": 36,
+    "category": "에너지"
+  },
+  {
+    "id": 153,
+    "name": "바이오가스",
+    "stock_count": 9,
+    "big_theme_id": 36,
+    "category": "에너지"
+  },
+  {
+    "id": 511,
+    "name": "재생에너지",
+    "stock_count": 23,
+    "big_theme_id": 36,
+    "category": "에너지"
+  },
+  {
+    "id": 333,
+    "name": "전고체배터리",
+    "stock_count": 30,
+    "big_theme_id": 36,
+    "category": "에너지"
+  },
+  {
+    "id": 24,
+    "name": "지능형전력망",
+    "stock_count": 22,
+    "big_theme_id": 36,
+    "category": "에너지"
+  },
+  {
+    "id": 537,
+    "name": "페로브스카이트",
+    "stock_count": 10,
+    "big_theme_id": 36,
+    "category": "에너지"
+  },
+  {
+    "id": 83,
+    "name": "2차전지",
+    "stock_count": 139,
+    "big_theme_id": 36,
+    "category": "에너지"
+  },
+  {
+    "id": 331,
+    "name": "2차전지-생산설비",
+    "stock_count": 40,
+    "big_theme_id": 36,
+    "category": "에너지"
+  },
+  {
+    "id": 147,
+    "name": "2차전지-소재부품",
+    "stock_count": 84,
+    "big_theme_id": 36,
+    "category": "에너지"
+  },
+  {
+    "id": 330,
+    "name": "ESS",
+    "stock_count": 46,
+    "big_theme_id": 36,
+    "category": "에너지"
+  },
+  {
+    "id": 489,
+    "name": "SMR",
+    "stock_count": 18,
+    "big_theme_id": 36,
+    "category": "에너지"
+  },
+  {
+    "id": 58,
+    "name": "게임",
+    "stock_count": 38,
+    "big_theme_id": 37,
+    "category": "여가"
+  },
+  {
+    "id": 336,
+    "name": "골프",
+    "stock_count": 14,
+    "big_theme_id": 37,
+    "category": "여가"
+  },
+  {
+    "id": 55,
+    "name": "영화",
+    "stock_count": 17,
+    "big_theme_id": 37,
+    "category": "여가"
+  },
+  {
+    "id": 340,
+    "name": "웹툰",
+    "stock_count": 15,
+    "big_theme_id": 37,
+    "category": "여가"
+  },
+  {
+    "id": 59,
+    "name": "여행/관광",
+    "stock_count": 16,
+    "big_theme_id": 37,
+    "category": "여가"
+  },
+  {
+    "id": 530,
+    "name": "호텔/리조트",
+    "stock_count": 15,
+    "big_theme_id": 37,
+    "category": "여가"
+  },
+  {
+    "id": 337,
+    "name": "면세점",
+    "stock_count": 7,
+    "big_theme_id": 37,
+    "category": "여가"
+  },
+  {
+    "id": 338,
+    "name": "백화점",
+    "stock_count": 9,
+    "big_theme_id": 37,
+    "category": "여가"
+  },
+  {
+    "id": 341,
+    "name": "자전거",
+    "stock_count": 6,
+    "big_theme_id": 37,
+    "category": "여가"
+  },
+  {
+    "id": 56,
+    "name": "카지노",
+    "stock_count": 7,
+    "big_theme_id": 37,
+    "category": "여가"
+  },
+  {
+    "id": 343,
+    "name": "홈쇼핑",
+    "stock_count": 6,
+    "big_theme_id": 37,
+    "category": "여가"
+  },
+  {
+    "id": 164,
+    "name": "저가항공",
+    "stock_count": 7,
+    "big_theme_id": 37,
+    "category": "여가"
+  },
+  {
+    "id": 342,
+    "name": "테마파크",
+    "stock_count": 6,
+    "big_theme_id": 37,
+    "category": "여가"
+  },
+  {
+    "id": 57,
+    "name": "모바일게임",
+    "stock_count": 48,
+    "big_theme_id": 37,
+    "category": "여가"
+  },
+  {
+    "id": 339,
+    "name": "스포츠행사",
+    "stock_count": 13,
+    "big_theme_id": 37,
+    "category": "여가"
+  },
+  {
+    "id": 53,
+    "name": "음원서비스",
+    "stock_count": 15,
+    "big_theme_id": 37,
+    "category": "여가"
+  },
+  {
+    "id": 344,
+    "name": "전기자전거",
+    "stock_count": 6,
+    "big_theme_id": 37,
+    "category": "여가"
+  },
+  {
+    "id": 54,
+    "name": "엔터테인먼트",
+    "stock_count": 34,
+    "big_theme_id": 37,
+    "category": "여가"
+  },
+  {
+    "id": 201,
+    "name": "OTT서비스",
+    "stock_count": 20,
+    "big_theme_id": 37,
+    "category": "여가"
+  },
+  {
+    "id": 334,
+    "name": "SNS",
+    "stock_count": 11,
+    "big_theme_id": 37,
+    "category": "여가"
+  },
+  {
+    "id": 335,
+    "name": "TV",
+    "stock_count": 17,
+    "big_theme_id": 37,
+    "category": "여가"
+  },
+  {
+    "id": 158,
+    "name": "금",
+    "stock_count": 6,
+    "big_theme_id": 38,
+    "category": "원자재"
+  },
+  {
+    "id": 347,
+    "name": "곡물",
+    "stock_count": 21,
+    "big_theme_id": 38,
+    "category": "원자재"
+  },
+  {
+    "id": 348,
+    "name": "구리",
+    "stock_count": 16,
+    "big_theme_id": 38,
+    "category": "원자재"
+  },
+  {
+    "id": 349,
+    "name": "니켈",
+    "stock_count": 17,
+    "big_theme_id": 38,
+    "category": "원자재"
+  },
+  {
+    "id": 350,
+    "name": "대두",
+    "stock_count": 24,
+    "big_theme_id": 38,
+    "category": "원자재"
+  },
+  {
+    "id": 471,
+    "name": "리튬",
+    "stock_count": 23,
+    "big_theme_id": 38,
+    "category": "원자재"
+  },
+  {
+    "id": 485,
+    "name": "맥신",
+    "stock_count": 11,
+    "big_theme_id": 38,
+    "category": "원자재"
+  },
+  {
+    "id": 155,
+    "name": "정유",
+    "stock_count": 17,
+    "big_theme_id": 38,
+    "category": "원자재"
+  },
+  {
+    "id": 211,
+    "name": "제지",
+    "stock_count": 23,
+    "big_theme_id": 38,
+    "category": "원자재"
+  },
+  {
+    "id": 159,
+    "name": "커피",
+    "stock_count": 6,
+    "big_theme_id": 38,
+    "category": "원자재"
+  },
+  {
+    "id": 351,
+    "name": "밀가루",
+    "stock_count": 11,
+    "big_theme_id": 38,
+    "category": "원자재"
+  },
+  {
+    "id": 352,
+    "name": "바나듐",
+    "stock_count": 5,
+    "big_theme_id": 38,
+    "category": "원자재"
+  },
+  {
+    "id": 355,
+    "name": "철광석",
+    "stock_count": 13,
+    "big_theme_id": 38,
+    "category": "원자재"
+  },
+  {
+    "id": 354,
+    "name": "팔라듐",
+    "stock_count": 9,
+    "big_theme_id": 38,
+    "category": "원자재"
+  },
+  {
+    "id": 156,
+    "name": "희토류",
+    "stock_count": 14,
+    "big_theme_id": 38,
+    "category": "원자재"
+  },
+  {
+    "id": 107,
+    "name": "도시가스",
+    "stock_count": 10,
+    "big_theme_id": 38,
+    "category": "원자재"
+  },
+  {
+    "id": 346,
+    "name": "부탄가스",
+    "stock_count": 3,
+    "big_theme_id": 38,
+    "category": "원자재"
+  },
+  {
+    "id": 151,
+    "name": "비철금속",
+    "stock_count": 25,
+    "big_theme_id": 38,
+    "category": "원자재"
+  },
+  {
+    "id": 146,
+    "name": "셰일가스",
+    "stock_count": 13,
+    "big_theme_id": 38,
+    "category": "원자재"
+  },
+  {
+    "id": 509,
+    "name": "알래스카",
+    "stock_count": 20,
+    "big_theme_id": 38,
+    "category": "원자재"
+  },
+  {
+    "id": 353,
+    "name": "알루미늄",
+    "stock_count": 14,
+    "big_theme_id": 38,
+    "category": "원자재"
+  },
+  {
+    "id": 482,
+    "name": "초전도체",
+    "stock_count": 20,
+    "big_theme_id": 38,
+    "category": "원자재"
+  },
+  {
+    "id": 474,
+    "name": "페라이트",
+    "stock_count": 12,
+    "big_theme_id": 38,
+    "category": "원자재"
+  },
+  {
+    "id": 149,
+    "name": "희귀금속",
+    "stock_count": 18,
+    "big_theme_id": 38,
+    "category": "원자재"
+  },
+  {
+    "id": 105,
+    "name": "LNG",
+    "stock_count": 32,
+    "big_theme_id": 38,
+    "category": "원자재"
+  },
+  {
+    "id": 345,
+    "name": "LPG",
+    "stock_count": 9,
+    "big_theme_id": 38,
+    "category": "원자재"
+  },
+  {
+    "id": 65,
+    "name": "수소차",
+    "stock_count": 72,
+    "big_theme_id": 39,
+    "category": "자동차"
+  },
+  {
+    "id": 70,
+    "name": "전기차",
+    "stock_count": 111,
+    "big_theme_id": 39,
+    "category": "자동차"
+  },
+  {
+    "id": 359,
+    "name": "타이어",
+    "stock_count": 10,
+    "big_theme_id": 39,
+    "category": "자동차"
+  },
+  {
+    "id": 360,
+    "name": "솔라루프",
+    "stock_count": 10,
+    "big_theme_id": 39,
+    "category": "자동차"
+  },
+  {
+    "id": 63,
+    "name": "스마트카",
+    "stock_count": 20,
+    "big_theme_id": 39,
+    "category": "자동차"
+  },
+  {
+    "id": 66,
+    "name": "자율주행",
+    "stock_count": 64,
+    "big_theme_id": 39,
+    "category": "자동차"
+  },
+  {
+    "id": 357,
+    "name": "자동차부품",
+    "stock_count": 146,
+    "big_theme_id": 39,
+    "category": "자동차"
+  },
+  {
+    "id": 356,
+    "name": "수소차인프라",
+    "stock_count": 10,
+    "big_theme_id": 39,
+    "category": "자동차"
+  },
+  {
+    "id": 358,
+    "name": "전기차인프라",
+    "stock_count": 24,
+    "big_theme_id": 39,
+    "category": "자동차"
+  },
+  {
+    "id": 505,
+    "name": "개헌",
+    "stock_count": 19,
+    "big_theme_id": 40,
+    "category": "정책"
+  },
+  {
+    "id": 34,
+    "name": "새만금",
+    "stock_count": 15,
+    "big_theme_id": 40,
+    "category": "정책"
+  },
+  {
+    "id": 366,
+    "name": "세종시",
+    "stock_count": 10,
+    "big_theme_id": 40,
+    "category": "정책"
+  },
+  {
+    "id": 19,
+    "name": "일자리",
+    "stock_count": 16,
+    "big_theme_id": 40,
+    "category": "정책"
+  },
+  {
+    "id": 367,
+    "name": "재개발",
+    "stock_count": 16,
+    "big_theme_id": 40,
+    "category": "정책"
+  },
+  {
+    "id": 21,
+    "name": "저출산",
+    "stock_count": 26,
+    "big_theme_id": 40,
+    "category": "정책"
+  },
+  {
+    "id": 194,
+    "name": "탈원전",
+    "stock_count": 16,
+    "big_theme_id": 40,
+    "category": "정책"
+  },
+  {
+    "id": 363,
+    "name": "고령화/노인복지",
+    "stock_count": 35,
+    "big_theme_id": 40,
+    "category": "정책"
+  },
+  {
+    "id": 214,
+    "name": "그린뉴딜",
+    "stock_count": 36,
+    "big_theme_id": 40,
+    "category": "정책"
+  },
+  {
+    "id": 27,
+    "name": "도시재생",
+    "stock_count": 14,
+    "big_theme_id": 40,
+    "category": "정책"
+  },
+  {
+    "id": 365,
+    "name": "무상교육",
+    "stock_count": 10,
+    "big_theme_id": 40,
+    "category": "정책"
+  },
+  {
+    "id": 30,
+    "name": "무상급식",
+    "stock_count": 8,
+    "big_theme_id": 40,
+    "category": "정책"
+  },
+  {
+    "id": 45,
+    "name": "조림사업",
+    "stock_count": 14,
+    "big_theme_id": 40,
+    "category": "정책"
+  },
+  {
+    "id": 20,
+    "name": "최저임금",
+    "stock_count": 13,
+    "big_theme_id": 40,
+    "category": "정책"
+  },
+  {
+    "id": 25,
+    "name": "해저터널",
+    "stock_count": 12,
+    "big_theme_id": 40,
+    "category": "정책"
+  },
+  {
+    "id": 29,
+    "name": "화폐개혁",
+    "stock_count": 8,
+    "big_theme_id": 40,
+    "category": "정책"
+  },
+  {
+    "id": 368,
+    "name": "디지털뉴딜",
+    "stock_count": 12,
+    "big_theme_id": 40,
+    "category": "정책"
+  },
+  {
+    "id": 364,
+    "name": "마이데이터",
+    "stock_count": 15,
+    "big_theme_id": 40,
+    "category": "정책"
+  },
+  {
+    "id": 61,
+    "name": "스마트시티",
+    "stock_count": 15,
+    "big_theme_id": 40,
+    "category": "정책"
+  },
+  {
+    "id": 102,
+    "name": "탄소배출권",
+    "stock_count": 17,
+    "big_theme_id": 40,
+    "category": "정책"
+  },
+  {
+    "id": 32,
+    "name": "가덕도신공항",
+    "stock_count": 17,
+    "big_theme_id": 40,
+    "category": "정책"
+  },
+  {
+    "id": 166,
+    "name": "남북러가스관",
+    "stock_count": 16,
+    "big_theme_id": 40,
+    "category": "정책"
+  },
+  {
+    "id": 196,
+    "name": "일회용품규제",
+    "stock_count": 8,
+    "big_theme_id": 40,
+    "category": "정책"
+  },
+  {
+    "id": 362,
+    "name": "경부고속도로 지하화",
+    "stock_count": 12,
+    "big_theme_id": 40,
+    "category": "정책"
+  },
+  {
+    "id": 361,
+    "name": "4대강복원",
+    "stock_count": 12,
+    "big_theme_id": 40,
+    "category": "정책"
+  },
+  {
+    "id": 369,
+    "name": "CBDC",
+    "stock_count": 12,
+    "big_theme_id": 40,
+    "category": "정책"
+  },
+  {
+    "id": 87,
+    "name": "GTX",
+    "stock_count": 28,
+    "big_theme_id": 40,
+    "category": "정책"
+  },
+  {
+    "id": 175,
+    "name": "조국",
+    "stock_count": 12,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 370,
+    "name": "김경수",
+    "stock_count": 7,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 469,
+    "name": "김기현",
+    "stock_count": 5,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 205,
+    "name": "김동연",
+    "stock_count": 15,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 15,
+    "name": "김무성",
+    "stock_count": 12,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 502,
+    "name": "김문수",
+    "stock_count": 8,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 527,
+    "name": "김민석",
+    "stock_count": 11,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 14,
+    "name": "김부겸",
+    "stock_count": 9,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 213,
+    "name": "김종인",
+    "stock_count": 8,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 470,
+    "name": "나경원",
+    "stock_count": 9,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 17,
+    "name": "남경필",
+    "stock_count": 9,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 23,
+    "name": "문재인",
+    "stock_count": 43,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 220,
+    "name": "박영선",
+    "stock_count": 4,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 535,
+    "name": "박주민",
+    "stock_count": 7,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 13,
+    "name": "반기문",
+    "stock_count": 12,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 12,
+    "name": "손학규",
+    "stock_count": 7,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 3,
+    "name": "안철수",
+    "stock_count": 33,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 18,
+    "name": "안희정",
+    "stock_count": 19,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 2,
+    "name": "오세훈",
+    "stock_count": 33,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 499,
+    "name": "우원식",
+    "stock_count": 15,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 479,
+    "name": "원희룡",
+    "stock_count": 6,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 10,
+    "name": "유승민",
+    "stock_count": 34,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 9,
+    "name": "유시민",
+    "stock_count": 26,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 188,
+    "name": "윤석열",
+    "stock_count": 47,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 7,
+    "name": "이낙연",
+    "stock_count": 54,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 6,
+    "name": "이재명",
+    "stock_count": 41,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 228,
+    "name": "이준석",
+    "stock_count": 10,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 11,
+    "name": "임종석",
+    "stock_count": 7,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 525,
+    "name": "장동혁",
+    "stock_count": 7,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 371,
+    "name": "전해철",
+    "stock_count": 6,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 199,
+    "name": "정세균",
+    "stock_count": 10,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 534,
+    "name": "정원오",
+    "stock_count": 13,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 229,
+    "name": "최재형",
+    "stock_count": 35,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 200,
+    "name": "추미애",
+    "stock_count": 5,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 503,
+    "name": "한덕수",
+    "stock_count": 15,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 476,
+    "name": "한동훈",
+    "stock_count": 19,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 173,
+    "name": "홍정욱",
+    "stock_count": 19,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 4,
+    "name": "홍준표",
+    "stock_count": 19,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 1,
+    "name": "황교안",
+    "stock_count": 25,
+    "big_theme_id": 41,
+    "category": "정치"
+  },
+  {
+    "id": 240,
+    "name": "조선",
+    "stock_count": 35,
+    "big_theme_id": 42,
+    "category": "조선/해운"
+  },
+  {
+    "id": 373,
+    "name": "해운",
+    "stock_count": 15,
+    "big_theme_id": 42,
+    "category": "조선/해운"
+  },
+  {
+    "id": 529,
+    "name": "핵추진 잠수함",
+    "stock_count": 12,
+    "big_theme_id": 42,
+    "category": "조선/해운"
+  },
+  {
+    "id": 513,
+    "name": "북극항로",
+    "stock_count": 10,
+    "big_theme_id": 42,
+    "category": "조선/해운"
+  },
+  {
+    "id": 372,
+    "name": "조선기자재",
+    "stock_count": 38,
+    "big_theme_id": 42,
+    "category": "조선/해운"
+  },
+  {
+    "id": 139,
+    "name": "결핵",
+    "stock_count": 16,
+    "big_theme_id": 43,
+    "category": "질병"
+  },
+  {
+    "id": 375,
+    "name": "독감",
+    "stock_count": 14,
+    "big_theme_id": 43,
+    "category": "질병"
+  },
+  {
+    "id": 376,
+    "name": "모기",
+    "stock_count": 19,
+    "big_theme_id": 43,
+    "category": "질병"
+  },
+  {
+    "id": 101,
+    "name": "치매",
+    "stock_count": 49,
+    "big_theme_id": 43,
+    "category": "질병"
+  },
+  {
+    "id": 383,
+    "name": "폐렴",
+    "stock_count": 6,
+    "big_theme_id": 43,
+    "category": "질병"
+  },
+  {
+    "id": 384,
+    "name": "홍역",
+    "stock_count": 8,
+    "big_theme_id": 43,
+    "category": "질병"
+  },
+  {
+    "id": 377,
+    "name": "메르스",
+    "stock_count": 29,
+    "big_theme_id": 43,
+    "category": "질병"
+  },
+  {
+    "id": 380,
+    "name": "에볼라",
+    "stock_count": 12,
+    "big_theme_id": 43,
+    "category": "질병"
+  },
+  {
+    "id": 381,
+    "name": "췌장염",
+    "stock_count": 17,
+    "big_theme_id": 43,
+    "category": "질병"
+  },
+  {
+    "id": 382,
+    "name": "콜레라",
+    "stock_count": 2,
+    "big_theme_id": 43,
+    "category": "질병"
+  },
+  {
+    "id": 206,
+    "name": "흑사병",
+    "stock_count": 14,
+    "big_theme_id": 43,
+    "category": "질병"
+  },
+  {
+    "id": 379,
+    "name": "말라리아",
+    "stock_count": 17,
+    "big_theme_id": 43,
+    "category": "질병"
+  },
+  {
+    "id": 378,
+    "name": "일본뇌염",
+    "stock_count": 9,
+    "big_theme_id": 43,
+    "category": "질병"
+  },
+  {
+    "id": 135,
+    "name": "조류독감",
+    "stock_count": 18,
+    "big_theme_id": 43,
+    "category": "질병"
+  },
+  {
+    "id": 442,
+    "name": "원숭이두창/엠폭스",
+    "stock_count": 9,
+    "big_theme_id": 43,
+    "category": "질병"
+  },
+  {
+    "id": 143,
+    "name": "노로바이러스",
+    "stock_count": 6,
+    "big_theme_id": 43,
+    "category": "질병"
+  },
+  {
+    "id": 137,
+    "name": "슈퍼박테리아",
+    "stock_count": 10,
+    "big_theme_id": 43,
+    "category": "질병"
+  },
+  {
+    "id": 136,
+    "name": "지카바이러스",
+    "stock_count": 17,
+    "big_theme_id": 43,
+    "category": "질병"
+  },
+  {
+    "id": 210,
+    "name": "한타바이러스",
+    "stock_count": 9,
+    "big_theme_id": 43,
+    "category": "질병"
+  },
+  {
+    "id": 374,
+    "name": "A형간염",
+    "stock_count": 6,
+    "big_theme_id": 43,
+    "category": "질병"
+  },
+  {
+    "id": 437,
+    "name": "얀센",
+    "stock_count": 3,
+    "big_theme_id": 44,
+    "category": "코로나"
+  },
+  {
+    "id": 141,
+    "name": "마스크",
+    "stock_count": 31,
+    "big_theme_id": 44,
+    "category": "코로나"
+  },
+  {
+    "id": 434,
+    "name": "모더나",
+    "stock_count": 9,
+    "big_theme_id": 44,
+    "category": "코로나"
+  },
+  {
+    "id": 393,
+    "name": "소독제",
+    "stock_count": 8,
+    "big_theme_id": 44,
+    "category": "코로나"
+  },
+  {
+    "id": 439,
+    "name": "코비박",
+    "stock_count": 3,
+    "big_theme_id": 44,
+    "category": "코로나"
+  },
+  {
+    "id": 438,
+    "name": "화이자",
+    "stock_count": 10,
+    "big_theme_id": 44,
+    "category": "코로나"
+  },
+  {
+    "id": 212,
+    "name": "간편식품",
+    "stock_count": 29,
+    "big_theme_id": 44,
+    "category": "코로나"
+  },
+  {
+    "id": 433,
+    "name": "노바백스",
+    "stock_count": 5,
+    "big_theme_id": 44,
+    "category": "코로나"
+  },
+  {
+    "id": 440,
+    "name": "백신여권",
+    "stock_count": 7,
+    "big_theme_id": 44,
+    "category": "코로나"
+  },
+  {
+    "id": 221,
+    "name": "음압병실",
+    "stock_count": 9,
+    "big_theme_id": 44,
+    "category": "코로나"
+  },
+  {
+    "id": 396,
+    "name": "진단키트",
+    "stock_count": 41,
+    "big_theme_id": 44,
+    "category": "코로나"
+  },
+  {
+    "id": 215,
+    "name": "콜드체인",
+    "stock_count": 20,
+    "big_theme_id": 44,
+    "category": "코로나"
+  },
+  {
+    "id": 395,
+    "name": "재택근무/스마트워크",
+    "stock_count": 12,
+    "big_theme_id": 44,
+    "category": "코로나"
+  },
+  {
+    "id": 138,
+    "name": "코로나백신",
+    "stock_count": 45,
+    "big_theme_id": 44,
+    "category": "코로나"
+  },
+  {
+    "id": 436,
+    "name": "아스트라제네카",
+    "stock_count": 7,
+    "big_theme_id": 44,
+    "category": "코로나"
+  },
+  {
+    "id": 394,
+    "name": "임상시험수탁기관",
+    "stock_count": 10,
+    "big_theme_id": 44,
+    "category": "코로나"
+  },
+  {
+    "id": 435,
+    "name": "스푸트니크V",
+    "stock_count": 13,
+    "big_theme_id": 44,
+    "category": "코로나"
+  },
+  {
+    "id": 76,
+    "name": "로봇",
+    "stock_count": 87,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 501,
+    "name": "딥시크",
+    "stock_count": 8,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 405,
+    "name": "인터넷",
+    "stock_count": 5,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 408,
+    "name": "카메라",
+    "stock_count": 29,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 82,
+    "name": "핀테크",
+    "stock_count": 42,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 406,
+    "name": "인터넷 보안",
+    "stock_count": 46,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 400,
+    "name": "공작기계",
+    "stock_count": 15,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 225,
+    "name": "메타버스",
+    "stock_count": 42,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 75,
+    "name": "무선충전",
+    "stock_count": 11,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 402,
+    "name": "블랙박스",
+    "stock_count": 15,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 410,
+    "name": "블록체인",
+    "stock_count": 28,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 96,
+    "name": "생체인식",
+    "stock_count": 24,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 169,
+    "name": "스마트폰",
+    "stock_count": 71,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 60,
+    "name": "스마트홈",
+    "stock_count": 23,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 533,
+    "name": "액침냉각",
+    "stock_count": 14,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 517,
+    "name": "엔비디아",
+    "stock_count": 16,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 120,
+    "name": "원격의료",
+    "stock_count": 25,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 86,
+    "name": "웨어러블",
+    "stock_count": 13,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 404,
+    "name": "전자결제",
+    "stock_count": 18,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 397,
+    "name": "키오스크",
+    "stock_count": 11,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 409,
+    "name": "플라잉카",
+    "stock_count": 28,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 526,
+    "name": "데이터센터",
+    "stock_count": 25,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 73,
+    "name": "사물인터넷",
+    "stock_count": 33,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 403,
+    "name": "선박평형수",
+    "stock_count": 7,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 401,
+    "name": "시스템통합",
+    "stock_count": 31,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 88,
+    "name": "양자컴퓨터",
+    "stock_count": 25,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 407,
+    "name": "지능형로봇",
+    "stock_count": 40,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 398,
+    "name": "네트워크통합",
+    "stock_count": 9,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 62,
+    "name": "스마트팩토리",
+    "stock_count": 42,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 510,
+    "name": "스테이블코인",
+    "stock_count": 29,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 411,
+    "name": "클라우드컴퓨팅",
+    "stock_count": 48,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 74,
+    "name": "3D프린터",
+    "stock_count": 15,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 67,
+    "name": "AI",
+    "stock_count": 51,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 488,
+    "name": "온디바이스AI",
+    "stock_count": 22,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 490,
+    "name": "AI의료",
+    "stock_count": 23,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 71,
+    "name": "AR",
+    "stock_count": 19,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 161,
+    "name": "CCTV",
+    "stock_count": 9,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 472,
+    "name": "챗GPT",
+    "stock_count": 23,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 233,
+    "name": "NFT",
+    "stock_count": 30,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 399,
+    "name": "RFID/NFC",
+    "stock_count": 18,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 473,
+    "name": "STO",
+    "stock_count": 27,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 72,
+    "name": "VR",
+    "stock_count": 28,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 481,
+    "name": "XR",
+    "stock_count": 7,
+    "big_theme_id": 45,
+    "category": "테크"
+  },
+  {
+    "id": 504,
+    "name": "유심",
+    "stock_count": 8,
+    "big_theme_id": 46,
+    "category": "통신"
+  },
+  {
+    "id": 413,
+    "name": "알뜰폰",
+    "stock_count": 8,
+    "big_theme_id": 46,
+    "category": "통신"
+  },
+  {
+    "id": 77,
+    "name": "라이파이",
+    "stock_count": 6,
+    "big_theme_id": 46,
+    "category": "통신"
+  },
+  {
+    "id": 414,
+    "name": "통신장비",
+    "stock_count": 59,
+    "big_theme_id": 46,
+    "category": "통신"
+  },
+  {
+    "id": 64,
+    "name": "차세대이동통신",
+    "stock_count": 51,
+    "big_theme_id": 46,
+    "category": "통신"
+  },
+  {
+    "id": 412,
+    "name": "철도통합무선망",
+    "stock_count": 10,
+    "big_theme_id": 46,
+    "category": "통신"
+  },
+  {
+    "id": 31,
+    "name": "제4이동통신",
+    "stock_count": 15,
+    "big_theme_id": 46,
+    "category": "통신"
+  },
+  {
+    "id": 515,
+    "name": "김밥",
+    "stock_count": 10,
+    "big_theme_id": 47,
+    "category": "트렌드"
+  },
+  {
+    "id": 168,
+    "name": "대마",
+    "stock_count": 12,
+    "big_theme_id": 47,
+    "category": "트렌드"
+  },
+  {
+    "id": 475,
+    "name": "소금",
+    "stock_count": 9,
+    "big_theme_id": 47,
+    "category": "트렌드"
+  },
+  {
+    "id": 462,
+    "name": "쏘카",
+    "stock_count": 6,
+    "big_theme_id": 47,
+    "category": "트렌드"
+  },
+  {
+    "id": 478,
+    "name": "메타 스레드",
+    "stock_count": 6,
+    "big_theme_id": 47,
+    "category": "트렌드"
+  },
+  {
+    "id": 422,
+    "name": "고배당",
+    "stock_count": 48,
+    "big_theme_id": 47,
+    "category": "트렌드"
+  },
+  {
+    "id": 232,
+    "name": "리비안",
+    "stock_count": 23,
+    "big_theme_id": 47,
+    "category": "트렌드"
+  },
+  {
+    "id": 421,
+    "name": "손정의",
+    "stock_count": 8,
+    "big_theme_id": 47,
+    "category": "트렌드"
+  },
+  {
+    "id": 230,
+    "name": "애플카",
+    "stock_count": 25,
+    "big_theme_id": 47,
+    "category": "트렌드"
+  },
+  {
+    "id": 235,
+    "name": "요소수",
+    "stock_count": 6,
+    "big_theme_id": 47,
+    "category": "트렌드"
+  },
+  {
+    "id": 466,
+    "name": "네옴시티",
+    "stock_count": 19,
+    "big_theme_id": 47,
+    "category": "트렌드"
+  },
+  {
+    "id": 468,
+    "name": "더글로리",
+    "stock_count": 2,
+    "big_theme_id": 47,
+    "category": "트렌드"
+  },
+  {
+    "id": 477,
+    "name": "러브버그",
+    "stock_count": 10,
+    "big_theme_id": 47,
+    "category": "트렌드"
+  },
+  {
+    "id": 417,
+    "name": "블랙핑크",
+    "stock_count": 2,
+    "big_theme_id": 47,
+    "category": "트렌드"
+  },
+  {
+    "id": 464,
+    "name": "애플페이",
+    "stock_count": 11,
+    "big_theme_id": 47,
+    "category": "트렌드"
+  },
+  {
+    "id": 508,
+    "name": "조기대선",
+    "stock_count": 7,
+    "big_theme_id": 47,
+    "category": "트렌드"
+  },
+  {
+    "id": 419,
+    "name": "층간소음",
+    "stock_count": 9,
+    "big_theme_id": 47,
+    "category": "트렌드"
+  },
+  {
+    "id": 420,
+    "name": "후쿠시마",
+    "stock_count": 12,
+    "big_theme_id": 47,
+    "category": "트렌드"
+  },
+  {
+    "id": 52,
+    "name": "방탄소년단",
+    "stock_count": 19,
+    "big_theme_id": 47,
+    "category": "트렌드"
+  },
+  {
+    "id": 497,
+    "name": "오징어게임",
+    "stock_count": 14,
+    "big_theme_id": 47,
+    "category": "트렌드"
+  },
+  {
+    "id": 33,
+    "name": "통합신공항",
+    "stock_count": 9,
+    "big_theme_id": 47,
+    "category": "트렌드"
+  },
+  {
+    "id": 226,
+    "name": "디즈니플러스",
+    "stock_count": 13,
+    "big_theme_id": 47,
+    "category": "트렌드"
+  },
+  {
+    "id": 418,
+    "name": "중국산아정책",
+    "stock_count": 6,
+    "big_theme_id": 47,
+    "category": "트렌드"
+  },
+  {
+    "id": 163,
+    "name": "공인인증서폐지",
+    "stock_count": 14,
+    "big_theme_id": 47,
+    "category": "트렌드"
+  },
+  {
+    "id": 416,
+    "name": "미국식품의약국",
+    "stock_count": 8,
+    "big_theme_id": 47,
+    "category": "트렌드"
+  },
+  {
+    "id": 514,
+    "name": "케이팝데몬헌터스",
+    "stock_count": 17,
+    "big_theme_id": 47,
+    "category": "트렌드"
+  },
+  {
+    "id": 415,
+    "name": "국제전자제품박람회",
+    "stock_count": 18,
+    "big_theme_id": 47,
+    "category": "트렌드"
+  },
+  {
+    "id": 162,
+    "name": "1인가구",
+    "stock_count": 31,
+    "big_theme_id": 47,
+    "category": "트렌드"
+  },
+  {
+    "id": 441,
+    "name": "P2E",
+    "stock_count": 13,
+    "big_theme_id": 47,
+    "category": "트렌드"
+  },
+  {
+    "id": 69,
+    "name": "드론",
+    "stock_count": 29,
+    "big_theme_id": 48,
+    "category": "항공/우주"
+  },
+  {
+    "id": 424,
+    "name": "항공",
+    "stock_count": 9,
+    "big_theme_id": 48,
+    "category": "항공/우주"
+  },
+  {
+    "id": 81,
+    "name": "우주/항공소재부품",
+    "stock_count": 30,
+    "big_theme_id": 48,
+    "category": "항공/우주"
+  },
+  {
+    "id": 423,
+    "name": "나로호",
+    "stock_count": 12,
+    "big_theme_id": 48,
+    "category": "항공/우주"
+  },
+  {
+    "id": 112,
+    "name": "성형",
+    "stock_count": 14,
+    "big_theme_id": 49,
+    "category": "헬스케어"
+  },
+  {
+    "id": 114,
+    "name": "탈모",
+    "stock_count": 24,
+    "big_theme_id": 49,
+    "category": "헬스케어"
+  },
+  {
+    "id": 121,
+    "name": "보톡스",
+    "stock_count": 13,
+    "big_theme_id": 49,
+    "category": "헬스케어"
+  },
+  {
+    "id": 425,
+    "name": "전자파",
+    "stock_count": 11,
+    "big_theme_id": 49,
+    "category": "헬스케어"
+  },
+  {
+    "id": 119,
+    "name": "의료기기",
+    "stock_count": 92,
+    "big_theme_id": 49,
+    "category": "헬스케어"
+  },
+  {
+    "id": 117,
+    "name": "임플란트/치아",
+    "stock_count": 16,
+    "big_theme_id": 49,
+    "category": "헬스케어"
+  },
+  {
+    "id": 496,
+    "name": "비만치료제(위고비)",
+    "stock_count": 18,
+    "big_theme_id": 49,
+    "category": "헬스케어"
+  },
+  {
+    "id": 518,
+    "name": "비만치료제(마운자로)",
+    "stock_count": 27,
+    "big_theme_id": 49,
+    "category": "헬스케어"
+  },
+  {
+    "id": 113,
+    "name": "건강기능식품",
+    "stock_count": 35,
+    "big_theme_id": 49,
+    "category": "헬스케어"
+  },
+  {
+    "id": 80,
+    "name": "그래핀",
+    "stock_count": 15,
+    "big_theme_id": 50,
+    "category": "화학/신소재"
+  },
+  {
+    "id": 428,
+    "name": "스판덱스",
+    "stock_count": 7,
+    "big_theme_id": 50,
+    "category": "화학/신소재"
+  },
+  {
+    "id": 429,
+    "name": "합성고무",
+    "stock_count": 6,
+    "big_theme_id": 50,
+    "category": "화학/신소재"
+  },
+  {
+    "id": 430,
+    "name": "합성수지",
+    "stock_count": 22,
+    "big_theme_id": 50,
+    "category": "화학/신소재"
+  },
+  {
+    "id": 427,
+    "name": "화학섬유",
+    "stock_count": 12,
+    "big_theme_id": 50,
+    "category": "화학/신소재"
+  },
+  {
+    "id": 431,
+    "name": "나노와이어",
+    "stock_count": 6,
+    "big_theme_id": 50,
+    "category": "화학/신소재"
+  },
+  {
+    "id": 426,
+    "name": "탄소나노튜브",
+    "stock_count": 8,
+    "big_theme_id": 50,
+    "category": "화학/신소재"
+  },
+  {
+    "id": 133,
+    "name": "가뭄",
+    "stock_count": 10,
+    "big_theme_id": 51,
+    "category": "환경/재해"
+  },
+  {
+    "id": 134,
+    "name": "녹조",
+    "stock_count": 6,
+    "big_theme_id": 51,
+    "category": "환경/재해"
+  },
+  {
+    "id": 127,
+    "name": "산불",
+    "stock_count": 9,
+    "big_theme_id": 51,
+    "category": "환경/재해"
+  },
+  {
+    "id": 128,
+    "name": "지진",
+    "stock_count": 19,
+    "big_theme_id": 51,
+    "category": "환경/재해"
+  },
+  {
+    "id": 126,
+    "name": "폭염",
+    "stock_count": 23,
+    "big_theme_id": 51,
+    "category": "환경/재해"
+  },
+  {
+    "id": 132,
+    "name": "한파",
+    "stock_count": 14,
+    "big_theme_id": 51,
+    "category": "환경/재해"
+  },
+  {
+    "id": 208,
+    "name": "홍수",
+    "stock_count": 9,
+    "big_theme_id": 51,
+    "category": "환경/재해"
+  },
+  {
+    "id": 124,
+    "name": "태풍/장마",
+    "stock_count": 10,
+    "big_theme_id": 51,
+    "category": "환경/재해"
+  },
+  {
+    "id": 177,
+    "name": "수돗물",
+    "stock_count": 33,
+    "big_theme_id": 51,
+    "category": "환경/재해"
+  },
+  {
+    "id": 140,
+    "name": "진드기",
+    "stock_count": 12,
+    "big_theme_id": 51,
+    "category": "환경/재해"
+  },
+  {
+    "id": 129,
+    "name": "온실가스",
+    "stock_count": 17,
+    "big_theme_id": 51,
+    "category": "환경/재해"
+  },
+  {
+    "id": 507,
+    "name": "탄소포집",
+    "stock_count": 12,
+    "big_theme_id": 51,
+    "category": "환경/재해"
+  },
+  {
+    "id": 125,
+    "name": "미세먼지/황사",
+    "stock_count": 31,
+    "big_theme_id": 51,
+    "category": "환경/재해"
+  },
+  {
+    "id": 432,
+    "name": "폐기물처리",
+    "stock_count": 12,
+    "big_theme_id": 51,
+    "category": "환경/재해"
+  }
+]

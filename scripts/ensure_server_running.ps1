@@ -1,8 +1,8 @@
 # 매일 스케줄 실행용 — 서버가 꺼져 있을 때만 기동 (이미 실행 중이면 스킵, 재기동 없음)
 param(
     [switch]$MorningWindowOnly,
-    [string]$WindowStart = '08:30',
-    [string]$WindowEnd = '08:50'
+    [string]$WindowStart = '07:55',
+    [string]$WindowEnd = '08:20'
 )
 
 $ErrorActionPreference = 'Continue'

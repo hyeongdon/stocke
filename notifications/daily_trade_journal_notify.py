@@ -40,10 +40,13 @@ def _fmt_pnl(amount: Optional[int], rate: Optional[float] = None) -> str:
     return f"{sign}{amount:,}원{rate_str}"
 
 
-def _reason_ko(code: Optional[str]) -> str:
+def _reason_ko(code: Optional[str], profit_loss=None, profit_loss_rate=None) -> str:
     if not code:
         return ""
-    return SELL_REASON_KO.get(code, code)
+    from utils.sell_reason_labels import sell_reason_ko
+    return sell_reason_ko(
+        code, profit_loss=profit_loss, profit_loss_rate=profit_loss_rate
+    )
 
 
 def _strategy_totals(today_rows: Sequence[dict]) -> List[tuple]:
@@ -135,7 +138,11 @@ def format_daily_trade_journal_html(journal: Dict[str, Any]) -> str:
         for row in list(today_rows)[:_MAX_LIST_ROWS]:
             tag = strategy_label_ko(row.get("strategy"))
             status = row.get("status") or "—"
-            reason = _reason_ko(row.get("sell_reason"))
+            reason = _reason_ko(
+                row.get("sell_reason"),
+                row.get("profit_loss") or row.get("eval_pnl"),
+                row.get("profit_loss_rate"),
+            )
             reason_part = f"/{_esc(reason)}" if reason else ""
             lines.append(
                 f"· {_esc(row.get('stock_name'))}(<code>{_esc(row.get('stock_code'))}</code>) "
@@ -152,7 +159,11 @@ def format_daily_trade_journal_html(journal: Dict[str, Any]) -> str:
         lines.append("")
         lines.append(f"<b>【금일 매도 {_esc(_fmt_int(len(sells)))}】</b>")
         for row in list(sells)[:_MAX_LIST_ROWS]:
-            reason = _reason_ko(row.get("sell_reason"))
+            reason = _reason_ko(
+                row.get("sell_reason"),
+                row.get("profit_loss") or row.get("eval_pnl"),
+                row.get("profit_loss_rate"),
+            )
             lines.append(
                 f"· {_esc(row.get('stock_name'))}(<code>{_esc(row.get('stock_code'))}</code>) "
                 f"{_esc(_fmt_int(row.get('quantity')))}주 @ {_esc(_fmt_price(row.get('price')))} "

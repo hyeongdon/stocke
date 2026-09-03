@@ -1,0 +1,74 @@
+﻿=== POSITION ===
+id: 207
+stock_code: 089970
+stock_name: 브이엠
+buy_price: 53422
+buy_quantity: 45
+buy_amount: 2404000
+buy_order_id: 0126407
+actual_buy_amount: 2404000
+stop_loss_rate: 4.0
+take_profit_rate: 7.6
+stop_loss_price: 51168
+take_profit_price: 53800
+status: HOLDING
+current_price: 55200
+current_profit_loss: 31255
+current_profit_loss_rate: 2.55
+buy_time: 2026-09-02 05:11:06.566386
+sell_time: None
+last_monitored: 2026-09-02 05:44:50.123653
+condition_id: 99999
+signal_id: 1183
+peak_price: 55200
+trailing_armed: 1
+trailing_floor_price: None
+order_quantity: 45
+buy_atr: 4135.714285714285
+buy_atr_period: 14
+strategy_key: ma1592
+breakout_level_kind: None
+breakout_level_price: 53800
+ymgp_ref_high: None
+ymgp_ref_low: None
+ymgp_ref_open: None
+ymgp_entry_leg: 1
+ymgp_tp_stage: 1
+---
+=== BUY FILLS ===
+id: 236
+position_id: 207
+stock_code: 089970
+stock_name: 브이엠
+fill_type: ADD
+signal_id: 1183
+order_id: 0126407
+price: 53400
+quantity: 32
+amount: 1708800
+planned_amount: 800000
+change_rate: None
+sizing_method: PYRAMIDING
+filled_at: 2026-09-02 05:16:44.383976
+note: 15/92홀드 2차
+condition_checks: [{"group": "\ub9e4\uc218 \uacbd\ub85c", "key": "pyramiding_add", "label": "\ud53c\ub77c\ubbf8\ub529 \ucd94\uac00\ub9e4\uc218", "enabled": true, "passed": true, "actual": "\ubcf4\uc720 \uc885\ubaa9 \uc218\uc775\ub960 \ud2b8\ub9ac\uac70", "required": "+13.0% \uc774\uc0c1", "note": ""}, {"group": "\ucd94\uac00\ub9e4\uc218", "key": "add_buy_trigger", "label": "\uc218\uc775\ub960 \ud2b8\ub9ac\uac70", "enabled": true, "passed": true, "actual": "\u2014", "required": "\u2265 +13.0%", "note": ""}, {"group": "\ucd94\uac00\ub9e4\uc218", "key": "add_buy_amount", "label": "\ucd94\uac00\ub9e4\uc218 \uae08\uc561", "enabled": true, "passed": true, "actual": "1,708,800\uc6d0", "required": "800,000\uc6d0/\ud68c", "note": ""}]
+order_quantity: 32
+---
+id: 235
+position_id: 207
+stock_code: 089970
+stock_name: 브이엠
+fill_type: INITIAL
+signal_id: 1183
+order_id: 0125011
+price: 53477
+quantity: 13
+amount: 695200
+planned_amount: 1700000
+change_rate: None
+sizing_method: PYRAMIDING
+filled_at: 2026-09-02 05:11:35.719949
+note: 15/92홀드 1차
+condition_checks: [{"group": "\ub9e4\uc218 \uacbd\ub85c", "key": "candidate_source", "label": "\ud6c4\ubcf4 \uc885\ubaa9", "enabled": true, "passed": true, "actual": "\uc790\ub3d9\ub9e4\ub9e4 \uc2a4\uce90\ub108", "required": "\uad00\uc2ec\uc885\ubaa9\u00b7\uc2a4\ud06c\ub9ac\ub108(\uac70\ub798\ub300\uae08/\uc870\uac74\uc2dd)\u00b7\uc0c1\ub530(\ub4f1\ub77d\ub960\uc0c1\uc704)\u00b7ETF \uc81c\uc678", "note": ""}, {"group": "\uac00\uaca9\u00b7\ub4f1\ub77d\ub960", "key": "min_change_rate", "label": "\ucd5c\uc18c \ub4f1\ub77d\ub960", "enabled": true, "passed": true, "actual": "\u2014", "required": "\u2265 +3.5%", "note": ""}, {"group": "\uc9c4\uc785 \uac8c\uc774\ud2b8", "key": "require_above_open", "label": "\ud604\uc7ac\uac00 \u2265 \ub2f9\uc77c \uc2dc\uac00", "enabled": true, "passed": true, "actual": "53,500\uc6d0", "required": "\u2265 51,500\uc6d0", "note": ""}, {"group": "\uc9c4\uc785 \uac8c\uc774\ud2b8", "key": "require_above_vwap", "label": "\ud604\uc7ac\uac00 \u2265 VWAP", "enabled": true, "passed": true, "actual": "53,500\uc6d0", "required": "\u2265 52,574\uc6d0", "note": ""}, {"group": "\uc9c4\uc785 \uac8c\uc774\ud2b8", "key": "day_position_min", "label": "\ub2f9\uc77c \uac00\uaca9 \uc704\uce58", "enabled": true, "passed": true, "actual": "0.88", "required": "\u2265 0.3", "note": ""}, {"group": "\uc9c4\uc785 \uac8c\uc774\ud2b8", "key": "day_position_max", "label": "\ub2f9\uc77c \uac00\uaca9 \uc704\uce58 \uc0c1\ud55c", "enabled": true, "passed": false, "actual": "0.88", "required": "\u2264 0.55", "note": ""}, {"group": "\uc9c4\uc785 \uac8c\uc774\ud2b8", "key": "volume_ratio_min", "label": "\uc804\uc77c \ub300\ube44 \uac70\ub798\ub7c9", "enabled": true, "passed": true, "actual": "79%", "required": "\u2265 76.0%", "note": ""}, {"group": "\uc9c4\uc785 \uac8c\uc774\ud2b8", "key": "legacy_rsi", "label": "\uc77c\ubd09 RSI(14)", "enabled": true, "passed": true, "actual": "36.0", "required": "30 ~ 80", "note": ""}, {"group": "\uc0ac\uc774\uc9d5", "key": "pyramiding_size", "label": "\uc5ed\ud53c\ub77c\ubbf8\ub529 \ucd08\uae30 \uae08\uc561", "enabled": true, "passed": true, "actual": "\uccb4\uacb0 695,500\uc6d0", "required": "\ub4f1\ub77d 3.5%\u21921,700,000\uc6d0 \u00b7 7.5%\u21921,300,000\uc6d0", "note": ""}, {"group": "\uacc4\uc88c\u00b7\ub9ac\uc2a4\ud06c", "key": "cash_reserve", "label": "\uc608\uc218\uae08 \ud604\uae08 \ubcf4\uc720", "enabled": true, "passed": true, "actual": "\uccb4\uacb0 \uc644\ub8cc", "required": "\uc608\uc218\uae08 10.0% \ud604\uae08 \uc720\uc9c0", "note": ""}]
+order_quantity: 13
+---

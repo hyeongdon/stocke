@@ -248,6 +248,37 @@ class ConditionMonitor:
             "watchlist_sync": watchlist_sync_status
         }
         
+        # 프랙탈(Auto-trade scanner에서 'strategy': 'fractal'로 표시된 신호 통계)
+        try:
+            fractal_info = {"enabled": False, "watching": 0, "pending": 0}
+            # AutoTradeSettings에서 사용 여부 조회
+            from core.models import AutoTradeSettings, get_db, PendingBuySignal
+            for db in get_db():
+                session = db
+                settings = session.query(AutoTradeSettings).first()
+                if settings:
+                    fractal_info["enabled"] = bool(getattr(settings, "use_fractal", False))
+                # additional_data에 JSON 문자열 안에 "strategy":"fractal" 가 포함된 레코드 수 집계
+                try:
+                    fractal_info["watching"] = session.query(PendingBuySignal).filter(
+                        PendingBuySignal.signal_type == "auto_trade",
+                        PendingBuySignal.status == "WATCHING",
+                        PendingBuySignal.additional_data.like('%"strategy":"fractal"%')
+                    ).count()
+                    fractal_info["pending"] = session.query(PendingBuySignal).filter(
+                        PendingBuySignal.signal_type == "auto_trade",
+                        PendingBuySignal.status == "PENDING",
+                        PendingBuySignal.additional_data.like('%"strategy":"fractal"%')
+                    ).count()
+                except Exception:
+                    # SQLite/DB 형식 차이로 like()가 실패하면 0으로 무시
+                    pass
+                break
+            status["fractal"] = fractal_info
+        except Exception:
+            # 프랙탈 통계 집계가 실패해도 모니터링 전체에는 영향 없음
+            pass
+        
         logger.debug(f"🔍 [CONDITION_MONITOR] 모니터링 상태: {status}")
         return status
 

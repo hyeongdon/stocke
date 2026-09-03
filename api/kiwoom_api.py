@@ -68,6 +68,12 @@ _ACCOUNT_BALANCE_FRESH_SEC = 15
 _ACCOUNT_BALANCE_STALE_SEC = 300
 _balance_fetch_lock: Optional[asyncio.Lock] = None
 _balance_inflight: Optional[asyncio.Task] = None
+
+
+def invalidate_account_balance_cache() -> None:
+    """매수/매도 주문 직후 — 15초 캐시가 예전 수량으로 포지션을 덮어쓰지 않게 무효화."""
+    global _account_balance_cache
+    _account_balance_cache = {"at": 0.0, "data": None}
 # 조건식 WS(목록/검색) — 동시 연결 시 키움이 Bye/타임아웃으로 끊는 경우 방지
 _condition_ws_lock: Optional[asyncio.Lock] = None
 _CONDITION_SEARCH_MAX_ATTEMPTS = 2
@@ -240,9 +246,19 @@ class KiwoomAPI:
         HTS 통합/NXT 차트와 MA·거래량을 맞추기 위해 분봉(ka10080)은
         기본 6자리가 아니라 `{code}_AL` 로 요청한다. 일봉·주문은 기존 6자리.
         """
+        return KiwoomAPI.quote_stk_cd(stock_code, "AL")
+
+    @staticmethod
+    def quote_stk_cd(stock_code: str, venue: str = "AL") -> str:
+        """시세 조회용 종목코드 — venue: KRX(6자리) | NX | AL(통합)."""
         base = KiwoomAPI.normalize_stock_code(stock_code)
         if not base or len(base) != 6:
             return base
+        v = (venue or "AL").strip().upper()
+        if v in ("", "KRX", "KR"):
+            return base
+        if v in ("NX", "NXT"):
+            return f"{base}_NX"
         return f"{base}_AL"
 
     async def _acquire_api_slot(
@@ -848,7 +864,7 @@ class KiwoomAPI:
 
     async def get_stock_chart_data(
         self, stock_code: str, period: str = "1D", max_bars: Optional[int] = None,
-        *, allow_off_hours: bool = False,
+        *, allow_off_hours: bool = False, cache_ttl_sec: Optional[float] = None,
     ):
         """종목 차트 데이터 조회 - 실제 키움 API 사용.
 
@@ -872,6 +888,11 @@ class KiwoomAPI:
             f"{stock_code}:AL:{normalized}" if is_minute_chart else f"{stock_code}:{normalized}"
         )
         ttl = self._daily_chart_cache_ttl if is_daily else self._chart_cache_ttl
+        if cache_ttl_sec is not None:
+            try:
+                ttl = max(1.0, float(cache_ttl_sec))
+            except (TypeError, ValueError):
+                pass
         cached = self._chart_cache.get(cache_key)
         if cached:
             data, ts = cached
@@ -1138,9 +1159,169 @@ class KiwoomAPI:
             if cached:
                 return {"success": True, "bars": cached[0], "cached": True, "warning": str(e)}
             return {"success": False, "error": str(e), "bars": []}
-    
-    async def get_current_price(self, stock_code: str, *, priority=None) -> Optional[int]:
-        """종목 현재가 조회 (캐싱 적용)"""
+
+    # ka20005 업종분봉조회 — 지수코드 매핑 (검증 페이지 지수 카드 분봉용)
+    INDEX_CHART_CODES = {
+        "kospi": "001",
+        "kosdaq": "101",
+    }
+
+    @staticmethod
+    def parse_ka20005_bars(api_response: dict, trade_yyyymmdd: str) -> List[Dict]:
+        """ka20005 응답(inds_min_pole_qry) → 해당 일자 분봉 OHLCV 리스트 (오름차순)."""
+        rows = (api_response or {}).get("inds_min_pole_qry") or []
+        bars: List[Dict] = []
+        for item in rows:
+            cntr_tm = str(item.get("cntr_tm", "") or "")
+            if len(cntr_tm) < 12 or cntr_tm[:8] != trade_yyyymmdd:
+                continue
+            formatted = f"{cntr_tm[:4]}-{cntr_tm[4:6]}-{cntr_tm[6:8]} {cntr_tm[8:10]}:{cntr_tm[10:12]}:00"
+            bars.append({
+                "timestamp": formatted,
+                "open": abs(_parse_kiwoom_float(item.get("open_pric", 0))),
+                "high": abs(_parse_kiwoom_float(item.get("high_pric", 0))),
+                "low": abs(_parse_kiwoom_float(item.get("low_pric", 0))),
+                "close": abs(_parse_kiwoom_float(item.get("cur_prc", 0))),
+                "volume": abs(_parse_kiwoom_int(item.get("trde_qty", 0))),
+            })
+        bars.sort(key=lambda x: x["timestamp"])
+        return bars
+
+    async def get_index_intraday_chart_for_date(
+        self,
+        index_key: str,
+        trade_date: str,
+        tic_scope: str = "15",
+        *,
+        priority=APIPriority.NORMAL,
+    ) -> Dict:
+        """특정 거래일(KST) 업종 지수 분봉 OHLC 조회 (ka20005, 검증 페이지 지수 카드용).
+
+        index_key: kospi / kosdaq. trade_date: YYYY-MM-DD.
+        지수 값은 소수점이 있으므로 float으로 파싱한다.
+        """
+        inds_cd = self.INDEX_CHART_CODES.get(str(index_key or "").lower())
+        if not inds_cd:
+            return {"success": False, "error": f"지원하지 않는 지수: {index_key}", "bars": []}
+
+        date_str = (trade_date or "").strip()[:10]
+        try:
+            target = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            return {"success": False, "error": "날짜 형식이 올바르지 않습니다 (YYYY-MM-DD)", "bars": []}
+
+        yyyymmdd = target.strftime("%Y%m%d")
+        cache_key = f"INDEX:{inds_cd}:M{tic_scope}:{yyyymmdd}"
+        today_kst = kst_today().strftime("%Y%m%d")
+        ttl = self._chart_cache_ttl if yyyymmdd == today_kst else 86400
+
+        cached = self._chart_cache.get(cache_key)
+        if cached:
+            data, ts = cached
+            if time.time() - ts < ttl:
+                return {"success": True, "bars": data, "cached": True}
+
+        if not self.token_manager.get_valid_token():
+            if cached:
+                return {"success": True, "bars": cached[0], "cached": True, "warning": "토큰 없음 — 캐시 사용"}
+            return {"success": False, "error": "키움 API 토큰이 없습니다", "bars": []}
+
+        use_mock = Config.KIWOOM_USE_MOCK_ACCOUNT
+        host = Config.KIWOOM_MOCK_API_URL if use_mock else Config.KIWOOM_REAL_API_URL
+        url = host + "/api/dostk/chart"
+        headers = {
+            "Content-Type": "application/json;charset=UTF-8",
+            "authorization": f"Bearer {self.token_manager.get_valid_token()}",
+            "api-id": "ka20005",
+            "cont-yn": "N",
+            "next-key": "",
+        }
+        body = {
+            "inds_cd": inds_cd,
+            "tic_scope": str(tic_scope),
+            "base_dt": yyyymmdd,
+        }
+
+        last_error = ""
+        try:
+            if not await self._acquire_api_slot("verify_index_chart", max_wait=45.0, priority=priority):
+                if cached:
+                    return {"success": True, "bars": cached[0], "cached": True, "warning": "API 슬롯 확보 실패 — 캐시 사용"}
+                return {"success": False, "error": "API 슬롯 확보 실패", "bars": []}
+
+            timeout = aiohttp.ClientTimeout(total=45)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(url, headers=headers, json=body) as resp:
+                    text = await resp.text()
+                    if resp.status == 429:
+                        api_rate_limiter.handle_api_error(Exception("429 Too Many Requests"))
+                        last_error = "API 호출 제한 (429)"
+                        data = None
+                    elif resp.status != 200:
+                        last_error = f"HTTP {resp.status}"
+                        data = None
+                    else:
+                        data = json.loads(text)
+
+            if data is None:
+                if cached:
+                    return {"success": True, "bars": cached[0], "cached": True, "warning": last_error}
+                return {"success": False, "error": last_error or "조회 실패", "bars": []}
+
+            ok = (data.get("return_code") == 0) or (data.get("returnCode") == 0) or (data.get("rt_cd") == "0")
+            if not ok:
+                last_error = data.get("return_msg") or data.get("returnMsg") or "조회 실패"
+                msg_lower = str(last_error).lower()
+                if any(k in msg_lower for k in ["rate limit", "too many", "요청 한도", "429", "제한", "초과"]):
+                    api_rate_limiter.handle_api_error(Exception(last_error))
+                if cached:
+                    return {"success": True, "bars": cached[0], "cached": True, "warning": str(last_error)}
+                return {"success": False, "error": str(last_error), "bars": []}
+
+            bars = self.parse_ka20005_bars(data, yyyymmdd)
+
+            if bars:
+                self._chart_cache[cache_key] = (bars, time.time())
+                return {"success": True, "bars": bars, "bar_count": len(bars)}
+
+            if cached:
+                return {"success": True, "bars": cached[0], "cached": True, "warning": "당일 데이터 없음 — 캐시 사용"}
+            return {"success": False, "error": last_error or "해당 일자 지수 분봉 데이터가 없습니다", "bars": []}
+
+        except Exception as e:
+            logger.error(f"지수 분봉 조회 오류: {index_key} {date_str} — {e}")
+            if cached:
+                return {"success": True, "bars": cached[0], "cached": True, "warning": str(e)}
+            return {"success": False, "error": str(e), "bars": []}
+
+    async def _get_current_price_ka10006(
+        self, stock_code: str, *, venue: str = "AL",
+    ) -> Optional[int]:
+        """ka10006 주식시세 — venue별 종목코드(_AL/_NX/KRX)로 현재가."""
+        stk = self.quote_stk_cd(stock_code, venue)
+        if not stk:
+            return None
+        resp = await self._request_stockinfo_tr("ka10006", {"stk_cd": stk})
+        if not resp.get("success"):
+            logger.debug(
+                f"ka10006 현재가 실패 ({stk}): {resp.get('error') or resp.get('return_msg') or ''}"
+            )
+            return None
+        parsed = self.parse_ka10006_basic(
+            resp.get("data") if isinstance(resp.get("data"), dict) else {}
+        )
+        px = int(parsed.get("current_price") or 0)
+        return px if px > 0 else None
+
+    async def get_current_price(
+        self, stock_code: str, *, priority=None, allow_off_hours: bool = False,
+    ) -> Optional[int]:
+        """종목 현재가 조회 (캐싱 적용).
+
+        allow_off_hours: True면 KRX 정규장 외(NXT 연장 등)에도 API 호출.
+        장외·연장 세션은 ka10006 통합(_AL)→NXT(_NX) 시세를 우선하고,
+        실패 시 기존 KRX 일봉(ka10081)으로 폴백한다.
+        """
         try:
             from utils.market_hours import is_krx_session
 
@@ -1152,7 +1333,7 @@ class KiwoomAPI:
                     logger.debug(f"💾 [CACHE_HIT] {stock_code} 캐시 사용 (나이: {age:.1f}초)")
                     return price
 
-            if not is_krx_session():
+            if not is_krx_session() and not allow_off_hours:
                 if stock_code in self._price_cache:
                     price, _ = self._price_cache[stock_code]
                     logger.debug(f"장외 시간 — 현재가 캐시 사용: {stock_code}")
@@ -1174,6 +1355,25 @@ class KiwoomAPI:
                     logger.debug(f"API 슬롯 대기 초과 — 캐시 사용: {stock_code}")
                     return price
                 return None
+
+            # NXT 연장 등: 일봉(KRX)은 정규장 종가에 고정될 수 있어 시세 TR 우선
+            if allow_off_hours and not is_krx_session():
+                for venue in ("AL", "NX"):
+                    live_px = await self._get_current_price_ka10006(
+                        stock_code, venue=venue,
+                    )
+                    if live_px and live_px > 0:
+                        self._price_cache[stock_code] = (
+                            live_px, datetime.now().timestamp(),
+                        )
+                        logger.info(
+                            f"💾 현재가 조회 성공 (ka10006/{venue}): "
+                            f"{stock_code} = {live_px:,}원"
+                        )
+                        return live_px
+                logger.debug(
+                    f"ka10006 AL/NX 실패 — KRX 일봉 폴백: {stock_code}"
+                )
             
             # 키움 API 호출 설정 - 실전/모의 분기
             use_mock = Config.KIWOOM_USE_MOCK_ACCOUNT
@@ -1543,7 +1743,7 @@ class KiwoomAPI:
         min_change_rate: 지정 시 등락률>=이 값만 채움. screener_filters면
             Config.SCREENER_MIN_CHANGE_RATE(기본 3.3)를 쓰고, 0이면 플러스(>0)만.
         max_change_rate: 지정 시 등락률>=이 값은 과열로 제외. screener_filters면
-            Config.SCREENER_MAX_CHANGE_RATE(기본 15). 0이면 상한 미적용.
+            Config.SCREENER_MAX_CHANGE_RATE(기본 12). 0이면 상한 미적용.
         min_trade_amount_eok: 당일 거래대금 하한(억원). screener_filters면
             Config.SCREENER_MIN_TRADE_AMOUNT_EOK(기본 20). 0이면 하한 미적용.
             trde_amt 단위는 백만원이므로 내부에서 ×100 변환한다.
@@ -1632,11 +1832,13 @@ class KiwoomAPI:
                 seen_codes: set[str] = set()
                 cont_yn, next_key = "N", ""
                 pages = 0
-                # 등락·대금 필터 시 비중이 크면 페이지가 더 필요할 수 있음
+                # 등락·대금 필터 시 비중이 크면 페이지가 더 필요할 수 있음.
+                # ka10030 약 100건/페이지 — limit만 커도 연속조회 필요.
                 need_paging = (
                     screener_filters or positive_change_only
                     or change_floor is not None or change_ceil is not None
                     or amount_floor_m is not None
+                    or int(limit or 0) > 100
                 )
                 max_pages = 12 if need_paging else 1
                 retry_auth = False
@@ -2598,6 +2800,51 @@ class KiwoomAPI:
         return {}
 
     @classmethod
+    def _extract_basic_row(cls, basic_data: Dict) -> Dict:
+        """ka10006 응답에서 시세 행 dict 추출. flat REST(close_pric/flu_rt) / 배열 래핑 모두 지원."""
+        if not isinstance(basic_data, dict) or not basic_data:
+            return {}
+        rows = (
+            basic_data.get("stk_mkprc")
+            or basic_data.get("output")
+            or basic_data.get("data")
+            or []
+        )
+        if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+            return rows[0]
+        if isinstance(rows, dict) and rows:
+            return rows
+        # REST flat: cur_prc 또는 close_pric/flu_rt 가 본문에 직접 있음
+        if any(
+            basic_data.get(k) not in (None, "")
+            for k in ("cur_prc", "close_pric", "flu_rt", "trde_qty", "price")
+        ):
+            return basic_data
+        return {}
+
+    @classmethod
+    def parse_ka10006_basic(cls, basic_data: Dict) -> Dict:
+        """ka10006 응답 → {stock_name, current_price, price_diff, change_rate, volume, raw_basic}."""
+        basic_row = cls._extract_basic_row(basic_data or {})
+        change_raw = cls._pick_str(basic_row, ["flu_rt", "change_rate", "12"], "0")
+        try:
+            change_rate = f"{float(str(change_raw).replace(',', '').replace('+', '').strip() or '0'):.2f}"
+        except (TypeError, ValueError):
+            change_rate = "0"
+        return {
+            "stock_name": cls._pick_str(basic_row, ["stk_nm", "stock_name", "name", "302"], ""),
+            "current_price": cls._pick_int(
+                basic_row, ["cur_prc", "close_pric", "price", "10"]
+            ),
+            "price_diff": cls._pick_int(
+                basic_row, ["pred_pre", "pre", "diff", "11"]
+            ),
+            "change_rate": change_rate,
+            "volume": cls._pick_int(basic_row, ["trde_qty", "volume", "13"]),
+            "raw_basic": basic_row,
+        }
+
+    @classmethod
     def parse_ka10004_orderbook(cls, quote_data: Dict) -> List[Dict]:
         """ka10004 응답 → [{level, ask_price, ask_qty, bid_price, bid_qty}, ...]."""
         quote_row = cls._extract_quote_row(quote_data or {})
@@ -2659,24 +2906,14 @@ class KiwoomAPI:
         basic_data = basic_resp.get("data", {})
         quote_data = quote_resp.get("data", {}) if quote_resp.get("success") else {}
 
-        basic_rows = (
-            basic_data.get("stk_mkprc")
-            or basic_data.get("output")
-            or basic_data.get("data")
-            or []
-        )
-        # ka10006도 flat 본문일 수 있음
-        if isinstance(basic_data, dict) and basic_data.get("cur_prc") not in (None, "") and not (
-            isinstance(basic_rows, list) and basic_rows
-        ):
-            basic_row = basic_data
-        else:
-            basic_row = basic_rows[0] if isinstance(basic_rows, list) and basic_rows else {}
+        parsed_basic = self.parse_ka10006_basic(basic_data if isinstance(basic_data, dict) else {})
+        basic_row = parsed_basic.get("raw_basic") or {}
 
         quote_row = self._extract_quote_row(quote_data)
         logger.info(
             f"[SNAPSHOT_RAW] stock_code={code}, basic_endpoint={basic_resp.get('endpoint','')}, "
-            f"quote_endpoint={quote_resp.get('endpoint','')}, basic_keys={list(basic_data.keys())[:20]}, "
+            f"quote_endpoint={quote_resp.get('endpoint','')}, "
+            f"basic_keys={list(basic_data.keys())[:20] if isinstance(basic_data, dict) else []}, "
             f"quote_keys={list(quote_data.keys())[:20]}"
         )
         logger.info(
@@ -2690,11 +2927,11 @@ class KiwoomAPI:
 
         snapshot = {
             "stock_code": code,
-            "stock_name": self._pick_str(basic_row, ["stk_nm", "stock_name", "name", "302"], ""),
-            "current_price": self._pick_int(basic_row, ["cur_prc", "price", "10"]),
-            "price_diff": self._pick_int(basic_row, ["pred_pre", "diff", "11"]),
-            "change_rate": self._pick_str(basic_row, ["flu_rt", "change_rate", "12"], "0"),
-            "volume": self._pick_int(basic_row, ["trde_qty", "volume", "13"]),
+            "stock_name": parsed_basic.get("stock_name") or "",
+            "current_price": int(parsed_basic.get("current_price") or 0),
+            "price_diff": int(parsed_basic.get("price_diff") or 0),
+            "change_rate": str(parsed_basic.get("change_rate") or "0"),
+            "volume": int(parsed_basic.get("volume") or 0),
             "orderbook_time": self._pick_str(
                 quote_row,
                 ["bid_req_base_tm", "hotime", "hoga_time", "time"],
@@ -2949,50 +3186,90 @@ class KiwoomAPI:
                     }
 
         # 2) ka90008 — 시간별 최신 구간
-        resp8 = await self._request_stockinfo_tr(
-            "ka90008",
-            {"amt_qty_tp": "2", "stk_cd": code, "date": today},
-        )
-        if resp8.get("success"):
-            data = resp8.get("data") or {}
-            rows = (
-                data.get("stk_tm_prm_trde_trnsn")
-                or data.get("output")
-                or data.get("data")
-                or []
-            )
-            if isinstance(rows, dict):
-                rows = [rows]
-            if isinstance(rows, list) and rows:
-                dict_rows = [r for r in rows if isinstance(r, dict)]
-                # 최신 시간 우선
-                row = sorted(
-                    dict_rows,
-                    key=lambda r: str(r.get("tm") or ""),
-                    reverse=True,
-                )[0]
-                net_qty = _to_int(
-                    row.get("prm_netprps_qty") or row.get("prm_netprps_amt")
-                )
-                return {
-                    "success": True,
-                    "stock_code": code,
-                    "net_qty": net_qty,
-                    "buy_qty": _to_int(row.get("prm_buy_qty")),
-                    "sell_qty": _to_int(row.get("prm_sell_qty")),
-                    "net_amt": _to_int(row.get("prm_netprps_amt")),
-                    "buy_amt": _to_int(row.get("prm_buy_amt")),
-                    "sell_amt": _to_int(row.get("prm_sell_amt")),
-                    "date": today,
-                    "time": str(row.get("tm") or ""),
-                    "source": "ka90008",
-                    "raw": row,
-                }
+        series = await self.get_stock_program_time_series(code, date=today)
+        rows = series.get("rows") or []
+        if series.get("success") and rows:
+            row = rows[-1]
+            return {
+                "success": True,
+                "stock_code": code,
+                "net_qty": int(row.get("net_qty") or 0),
+                "buy_qty": int(row.get("buy_qty") or 0),
+                "sell_qty": int(row.get("sell_qty") or 0),
+                "net_amt": int(row.get("net_amt") or 0),
+                "buy_amt": int(row.get("buy_amt") or 0),
+                "sell_amt": int(row.get("sell_amt") or 0),
+                "date": today,
+                "time": str(row.get("tm") or ""),
+                "source": "ka90008",
+                "raw": row.get("raw") or row,
+            }
 
-        err = (resp8.get("error") if not resp8.get("success") else None) or (
+        err = series.get("error") or (
             resp.get("error") if not resp.get("success") else "프로그램 매매 없음"
         )
         return {"success": False, "error": err, "stock_code": code}
+
+    async def get_stock_program_time_series(
+        self, stock_code: str, date: Optional[str] = None
+    ) -> Dict:
+        """종목시간별 프로그램매매 (ka90008). 행은 시간 오름차순.
+
+        한 칸은 보통 1분. 형성 중 현재 분은 호출측에서 제외한다.
+        """
+        from utils.datetime_kst import kst_today
+        from utils.program_net_continuation import program_qty_int
+
+        code = self.normalize_stock_code(stock_code)
+        if not code:
+            return {"success": False, "error": "종목코드가 비어 있습니다.", "rows": []}
+        day = (date or kst_today().strftime("%Y%m%d")).replace("-", "")[:8]
+        resp = await self._request_stockinfo_tr(
+            "ka90008",
+            {"amt_qty_tp": "2", "stk_cd": code, "date": day},
+        )
+        if not resp.get("success"):
+            return {
+                "success": False,
+                "error": resp.get("error") or "프로그램 시간대 조회 실패",
+                "stock_code": code,
+                "rows": [],
+            }
+        data = resp.get("data") or {}
+        raw_rows = (
+            data.get("stk_tm_prm_trde_trnsn")
+            or data.get("output")
+            or data.get("data")
+            or []
+        )
+        if isinstance(raw_rows, dict):
+            raw_rows = [raw_rows]
+        parsed = []
+        for row in raw_rows or []:
+            if not isinstance(row, dict):
+                continue
+            parsed.append({
+                "tm": str(row.get("tm") or row.get("time") or ""),
+                "net_qty": program_qty_int(
+                    row.get("prm_netprps_qty")
+                    if row.get("prm_netprps_qty") not in (None, "")
+                    else row.get("prm_netprps_amt")
+                ),
+                "buy_qty": program_qty_int(row.get("prm_buy_qty")),
+                "sell_qty": program_qty_int(row.get("prm_sell_qty")),
+                "net_amt": program_qty_int(row.get("prm_netprps_amt")),
+                "buy_amt": program_qty_int(row.get("prm_buy_amt")),
+                "sell_amt": program_qty_int(row.get("prm_sell_amt")),
+                "raw": row,
+            })
+        parsed.sort(key=lambda r: str(r.get("tm") or ""))
+        return {
+            "success": True,
+            "stock_code": code,
+            "date": day,
+            "source": "ka90008",
+            "rows": parsed,
+        }
 
     @staticmethod
     def _calc_tick_size(price: int) -> int:
@@ -3287,6 +3564,7 @@ class KiwoomAPI:
                     if success:
                         order_no = data.get('ord_no', '') or data.get("order_no", "")
                         logger.info(f"매수 주문 성공: {stock_code} - 주문번호: {order_no}")
+                        invalidate_account_balance_cache()
                         return {
                             "success": True,
                             "order_id": order_no,
@@ -3325,13 +3603,27 @@ class KiwoomAPI:
                 "error": str(e)
             }
 
-    async def place_sell_order(self, stock_code: str, quantity: int, price: int = 0, order_type: str = "3") -> Dict:
-        """주식 매도 주문 (키움 API kt10001 스펙 — kt10000은 매수 전용)."""
+    async def place_sell_order(
+        self,
+        stock_code: str,
+        quantity: int,
+        price: int = 0,
+        order_type: str = "3",
+        *,
+        dmst_stex_tp: str = "KRX",
+    ) -> Dict:
+        """주식 매도 주문 (키움 API kt10001 스펙 — kt10000은 매수 전용).
+
+        dmst_stex_tp: KRX | NXT | SOR. NXT 연장 세션은 시장가 미지원 → SOR+지정가 권장.
+        """
         if not self.token_manager.get_valid_token():
             logger.error("키움 API 토큰이 없습니다")
             return {"success": False, "error": "토큰 없음"}
 
         stock_code = self.normalize_stock_code(stock_code)
+        stex = (dmst_stex_tp or "KRX").strip().upper()
+        if stex not in ("KRX", "NXT", "SOR"):
+            stex = "KRX"
             
         try:
             # 계좌 타입에 따른 도메인 설정
@@ -3368,7 +3660,7 @@ class KiwoomAPI:
             # 주문 요청 데이터 (kt10001 스펙)
             account_pw = Config.KIWOOM_MOCK_ACCOUNT_PASSWORD if use_mock_account else Config.KIWOOM_ACCOUNT_PASSWORD
             request_data = {
-                'dmst_stex_tp': 'KRX',  # 국내거래소구분 KRX,NXT,SOR
+                'dmst_stex_tp': stex,
                 'acnt_no': account_no,  # 계좌번호
                 'stk_cd': stock_code,   # 종목코드
                 'ord_qty': str(quantity),  # 주문수량
@@ -3380,7 +3672,10 @@ class KiwoomAPI:
                 request_data['acnt_pwd'] = account_pw
                 request_data['acnt_pw'] = account_pw
             
-            logger.info(f"매도 주문 요청: {stock_code}, 수량: {quantity}, 가격: {price}")
+            logger.info(
+                f"매도 주문 요청: {stock_code}, 수량: {quantity}, 가격: {price}, "
+                f"타입: {order_type}, 거래소: {stex}"
+            )
             
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, headers=headers, json=request_data) as response:
@@ -3398,6 +3693,7 @@ class KiwoomAPI:
 
                             if success:
                                 order_no = response_data.get("ord_no", "") or response_data.get("order_no", "")
+                                invalidate_account_balance_cache()
                                 return {
                                     "success": True,
                                     "order_id": order_no,
@@ -3433,21 +3729,217 @@ class KiwoomAPI:
                 "error": str(e)
             }
 
+    async def get_unfilled_orders(
+        self,
+        *,
+        stock_code: str = "",
+        trde_tp: str = "0",
+        stex_tp: str = "0",
+        max_pages: int = 10,
+    ) -> Dict:
+        """미체결 주문 조회 (ka10075, /api/dostk/acnt).
+
+        trde_tp: 0 전체 / 1 매도 / 2 매수
+        반환 items: ord_no, stk_cd, ord_qty, oso_qty, io_tp_nm, trde_tp 등.
+        """
+        token = self.token_manager.get_valid_token()
+        if not token:
+            return {"success": False, "error": "토큰 없음", "items": []}
+
+        use_mock = Config.KIWOOM_USE_MOCK_ACCOUNT
+        host = Config.KIWOOM_MOCK_API_URL if use_mock else Config.KIWOOM_REAL_API_URL
+        account_no = Config.KIWOOM_MOCK_ACCOUNT_NUMBER if use_mock else Config.KIWOOM_ACCOUNT_NUMBER
+        code = self.normalize_stock_code(stock_code) if stock_code else ""
+        url = host + "/api/dostk/acnt"
+        headers_base = {
+            "Content-Type": "application/json;charset=UTF-8",
+            "authorization": f"Bearer {token}",
+            "api-id": "ka10075",
+        }
+        body = {
+            "all_stk_tp": "1" if code else "0",
+            "trde_tp": str(trde_tp or "0"),
+            "stk_cd": code,
+            "stex_tp": stex_tp,
+            "acnt_no": account_no or "",
+        }
+
+        items: List[Dict] = []
+        cont_yn, next_key = "N", ""
+        pages = 0
+
+        try:
+            timeout = aiohttp.ClientTimeout(total=30)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                while pages < max_pages:
+                    pages += 1
+                    headers = {**headers_base, "cont-yn": cont_yn, "next-key": next_key}
+                    async with session.post(url, headers=headers, json=body) as resp:
+                        text = await resp.text()
+                        resp_cont = resp.headers.get("cont-yn") or resp.headers.get("Cont-Yn") or "N"
+                        resp_next = resp.headers.get("next-key") or resp.headers.get("Next-Key") or ""
+
+                        if resp.status != 200:
+                            logger.warning(f"[UNFILLED] HTTP {resp.status} body={text[:300]}")
+                            return {"success": False, "error": f"HTTP {resp.status}", "items": items}
+
+                        data = json.loads(text)
+
+                    ok = (
+                        (data.get("return_code") == 0)
+                        or (data.get("returnCode") == 0)
+                        or (data.get("rt_cd") == "0")
+                    )
+                    if not ok:
+                        msg = data.get("return_msg") or data.get("returnMsg") or data.get("msg1") or "조회 실패"
+                        logger.warning(f"[UNFILLED] fail msg={msg}")
+                        if items:
+                            break
+                        return {"success": False, "error": msg, "items": []}
+
+                    rows = data.get("oso") or data.get("output") or data.get("unfilled_list") or []
+                    if isinstance(rows, dict):
+                        rows = [rows]
+                    for r in rows:
+                        if not isinstance(r, dict):
+                            continue
+                        items.append({
+                            "ord_no": str(r.get("ord_no") or r.get("order_no") or ""),
+                            "stk_cd": self.normalize_stock_code(str(r.get("stk_cd") or "")),
+                            "stk_nm": str(r.get("stk_nm") or ""),
+                            "ord_qty": _parse_kiwoom_int(r.get("ord_qty", "0")),
+                            "oso_qty": _parse_kiwoom_int(r.get("oso_qty", "0")),
+                            "io_tp_nm": str(r.get("io_tp_nm") or ""),
+                            "trde_tp": str(r.get("trde_tp") or ""),
+                            "ord_stt": str(r.get("ord_stt") or ""),
+                            "orig_ord_no": str(r.get("orig_ord_no") or ""),
+                        })
+
+                    cont_yn = data.get("cont_yn") or resp_cont or "N"
+                    next_key = data.get("next_key") or data.get("next-key") or resp_next or ""
+                    if str(cont_yn).upper() != "Y" or not next_key:
+                        break
+
+            logger.info(f"[UNFILLED] ka10075 success count={len(items)} pages={pages}")
+            return {"success": True, "items": items}
+        except Exception as e:
+            logger.exception(f"[UNFILLED] error={e}")
+            return {"success": False, "error": str(e), "items": items}
+
+    async def cancel_order(
+        self,
+        stock_code: str,
+        order_no: str,
+        quantity: int = 0,
+    ) -> Dict:
+        """주식 주문 취소 (kt10003, /api/dostk/ordr)."""
+        if not self.token_manager.get_valid_token():
+            logger.error("키움 API 토큰이 없습니다")
+            return {"success": False, "error": "토큰 없음"}
+
+        stock_code = self.normalize_stock_code(stock_code)
+        order_no = str(order_no or "").strip()
+        if not order_no:
+            return {"success": False, "error": "원주문번호 없음"}
+
+        try:
+            use_mock_account = Config.KIWOOM_USE_MOCK_ACCOUNT
+            host = Config.KIWOOM_MOCK_API_URL if use_mock_account else Config.KIWOOM_REAL_API_URL
+            account_no = (
+                Config.KIWOOM_MOCK_ACCOUNT_NUMBER
+                if use_mock_account
+                else Config.KIWOOM_ACCOUNT_NUMBER
+            )
+            if not account_no:
+                return {"success": False, "error": "계좌번호 없음"}
+
+            app_key = Config.KIWOOM_MOCK_APP_KEY if use_mock_account else Config.KIWOOM_APP_KEY
+            app_secret = Config.KIWOOM_MOCK_APP_SECRET if use_mock_account else Config.KIWOOM_APP_SECRET
+            url = host + "/api/dostk/ordr"
+            headers = {
+                "Content-Type": "application/json;charset=UTF-8",
+                "authorization": f"Bearer {self.token_manager.get_valid_token()}",
+                "appkey": app_key,
+                "appsecret": app_secret,
+                "cont-yn": "N",
+                "next-key": "",
+                "api-id": "kt10003",
+            }
+            cncl_qty = max(0, int(quantity or 0))
+            request_data = {
+                "dmst_stex_tp": "KRX",
+                "acnt_no": account_no,
+                "stk_cd": stock_code,
+                "orig_ord_no": order_no,
+                "cncl_qty": str(cncl_qty),  # 0이면 잔량 전량 취소로 처리되는 경우가 많음
+            }
+            account_pw = (
+                Config.KIWOOM_MOCK_ACCOUNT_PASSWORD
+                if use_mock_account
+                else Config.KIWOOM_ACCOUNT_PASSWORD
+            )
+            if account_pw:
+                request_data["acnt_pwd"] = account_pw
+                request_data["acnt_pw"] = account_pw
+
+            logger.info(f"주문 취소 요청: {stock_code} ord_no={order_no} qty={cncl_qty}")
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers, json=request_data) as response:
+                    response_text = await response.text()
+                    logger.info(f"주문 취소 응답: {response.status} - {response_text[:500]}")
+                    if response.status != 200:
+                        return {"success": False, "error": f"API 호출 실패: {response.status}"}
+                    try:
+                        response_data = json.loads(response_text)
+                    except json.JSONDecodeError:
+                        return {"success": False, "error": "응답 파싱 실패"}
+
+                    return_code = response_data.get("return_code")
+                    rt_cd = response_data.get("rt_cd")
+                    success = (return_code == 0) or (rt_cd == "0")
+                    if success:
+                        invalidate_account_balance_cache()
+                        return {
+                            "success": True,
+                            "order_id": response_data.get("ord_no") or order_no,
+                            "message": response_data.get("return_msg")
+                            or response_data.get("msg1")
+                            or "주문 취소 접수",
+                        }
+                    error_msg = (
+                        response_data.get("return_msg")
+                        or response_data.get("msg1")
+                        or "주문 취소 실패"
+                    )
+                    return {"success": False, "error": error_msg, "_response": response_data}
+        except Exception as e:
+            logger.error(f"주문 취소 중 오류: {e}")
+            return {"success": False, "error": str(e)}
+
     async def get_account_balance(
         self,
         account_number: str = None,
         *,
         priority: Optional[APIPriority] = None,
         max_wait: float = 8.0,
+        force_refresh: bool = False,
     ) -> Dict:
         """계좌 잔고 정보 조회 - 키움 API kt00004 (동시 호출은 하나로 합침).
 
         매수/손절 등 주문 경로에서는 priority=HIGH·max_wait를 넉넉히 넘겨
         스캐너 LOW 트래픽에 밀려 '계좌 정보 조회 실패'로 매수가 지연되지 않게 한다.
+        force_refresh=True면 15초 캐시를 건너뛰고 재조회(체결 직후 동기화용).
         """
+        if force_refresh:
+            invalidate_account_balance_cache()
+
         now = time.monotonic()
         cached = _account_balance_cache.get("data")
-        if cached and now - _account_balance_cache.get("at", 0.0) < _ACCOUNT_BALANCE_FRESH_SEC:
+        if (
+            not force_refresh
+            and cached
+            and now - _account_balance_cache.get("at", 0.0) < _ACCOUNT_BALANCE_FRESH_SEC
+        ):
             out = dict(cached)
             out["_cached"] = True
             return out
@@ -3456,13 +3948,22 @@ class KiwoomAPI:
         async with lock:
             now = time.monotonic()
             cached = _account_balance_cache.get("data")
-            if cached and now - _account_balance_cache.get("at", 0.0) < _ACCOUNT_BALANCE_FRESH_SEC:
+            if (
+                not force_refresh
+                and cached
+                and now - _account_balance_cache.get("at", 0.0) < _ACCOUNT_BALANCE_FRESH_SEC
+            ):
                 out = dict(cached)
                 out["_cached"] = True
                 return out
 
             global _balance_inflight
-            if _balance_inflight is not None and not _balance_inflight.done():
+            # force_refresh는 주문 직후 동기화 — 진행 중 조회(체결 전 잔고)를 재사용하지 않음
+            if (
+                not force_refresh
+                and _balance_inflight is not None
+                and not _balance_inflight.done()
+            ):
                 task = _balance_inflight
             else:
                 task = asyncio.create_task(
@@ -3655,7 +4156,7 @@ class KiwoomAPI:
             def map_holding(item: dict) -> dict:
                 if not isinstance(item, dict):
                     return {}
-                return {
+                mapped = {
                     "stk_cd": str(item.get("stk_cd") or ""),
                     "stk_nm": str(item.get("stk_nm") or ""),
                     "qty": amt_str(item.get("rmnd_qty") or item.get("qty", "0")),
@@ -3666,6 +4167,14 @@ class KiwoomAPI:
                     "cur_pr": amt_str(item.get("cur_prc") or item.get("cur_pr", "0")),
                     "avg_pr": amt_str(item.get("avg_prc") or item.get("avg_pr", "0")),
                 }
+                # 매도가능/청산가능 — 키움 필드명이 버전마다 다름
+                for sellable_key in ("clrn_alow_qty", "trde_able_qty", "ord_psbl_qty", "sellable_qty"):
+                    raw = item.get(sellable_key)
+                    if raw is None or raw == "":
+                        continue
+                    mapped["sellable_qty"] = amt_str(raw)
+                    break
+                return mapped
 
             stk_acnt_evlt_prst = []
             stk_data = api_response.get("stk_acnt_evlt_prst")
