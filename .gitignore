@@ -29,6 +29,9 @@ stock_pipeline.db
 # 로그 파일
 *.log
 stock_pipeline.log
+logs/_tmp_*.py
+logs/_tmp_*.json
+scripts/_*.py
 
 # IDE 설정
 .vscode/
