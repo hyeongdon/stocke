@@ -3236,6 +3236,8 @@ class StopLossManager:
 
         ma15 = 0.0
         ma92 = 0.0
+        bar_open_3m = 0.0
+        bar_close_3m = 0.0
         entry_leg = 1
         exec_tf = normalize_chart_tf(p.get("exec_tf") or "3M")
         interval_min = chart_tf_interval_minutes(exec_tf)
@@ -3254,6 +3256,10 @@ class StopLossManager:
                 position.stock_code, exec_tf, max_bars=150, cache_ttl_sec=60,
             )
             bars = drop_forming_minute_bar(raw or [], interval_minutes=interval_min)
+            if bars:
+                latest_3m = bars[-1]
+                bar_open_3m = float(latest_3m.get("open") or 0)
+                bar_close_3m = float(latest_3m.get("close") or 0)
             closes = []
             for b in bars:
                 try:
@@ -3303,6 +3309,8 @@ class StopLossManager:
             session_end=session_end,
             entry_leg=entry_leg,
             params=p,
+            bar_open_3m=bar_open_3m,
+            bar_close_3m=bar_close_3m,
         )
         await self._update_position_tracking(position.id, peak_i, None)
         if ex and ex.get("impulse_seen") and not impulse_seen:
@@ -3332,7 +3340,7 @@ class StopLossManager:
         mapped = reason
         if reason.startswith("TP1"):
             mapped = "TAKE_PROFIT"
-        elif reason in ("STOP_MA_DC_WIDEN", "STOP_MA_DC_CRASH", "STOP_MA_CRASH", "STOP_PCT"):
+        elif reason in ("STOP_MA_DC_WIDEN", "STOP_MA_DC_CRASH", "STOP_MA_CRASH", "STOP_PCT", "STOP_3M_BEARISH_BELOW_MA15"):
             mapped = "STOP_LOSS"
         elif reason in ("MAX_HOLD", "EOD"):
             mapped = "MARKET_CLOSE"

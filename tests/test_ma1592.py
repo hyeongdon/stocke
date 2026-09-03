@@ -552,6 +552,50 @@ class Ma1592SizingExitTests(unittest.TestCase):
         assert ex is not None
         self.assertEqual(ex["reason"], "STOP_MA_DC_CRASH")
 
+    def test_stop_long_5m_bearish_candle_below_15m_ema15(self):
+        ex = evaluate_exit(
+            state="MANAGE_FULL",
+            entry=10000,
+            last=9800,
+            close=9800,
+            open_=9800,
+            high=10000,
+            ma15=10000,
+            ma92=10000,
+            tp1_price_val=0,
+            tp1_filled=False,
+            impulse_seen=False,
+            peak=10000,
+            bars_since_peak=1,
+            hold_days=1,
+            bar_open_3m=10000,
+            bar_close_3m=9800,
+        )
+        self.assertIsNotNone(ex)
+        assert ex is not None
+        self.assertEqual(ex["reason"], "STOP_3M_BEARISH_BELOW_MA15")
+
+    def test_small_5m_drop_above_15m_ema15_does_not_exit(self):
+        ex = evaluate_exit(
+            state="MANAGE_FULL",
+            entry=10000,
+            last=9950,
+            close=9950,
+            open_=10000,
+            high=10000,
+            ma15=10000,
+            ma92=10000,
+            tp1_price_val=0,
+            tp1_filled=False,
+            impulse_seen=False,
+            peak=10000,
+            bars_since_peak=1,
+            hold_days=1,
+            bar_open_3m=10000,
+            bar_close_3m=9950,
+        )
+        self.assertIsNone(ex)
+
     def test_pre_impulse_92_break_without_dc_holds(self):
         ex = evaluate_exit(
             state="MANAGE_FULL",

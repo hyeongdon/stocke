@@ -71,6 +71,7 @@ DEFAULT_PARAMS: Dict[str, Any] = {
     "stop_mode": "ma_or_pct",
     "stop_pct": 4.0,
     "hard_break_pct": 1.0,
+    "bearish_exit_pct": 1.0,
     "large_break_pct": 0.7,
     "impulse_min_pct": 2.0,
     "crash_pct": 1.8,
@@ -1260,6 +1261,8 @@ def evaluate_exit(
     entry_leg: int = 1,
     params: Optional[Dict[str, Any]] = None,
     same_bar_backtest: bool = False,
+    bar_open_3m: Optional[float] = None,
+    bar_close_3m: Optional[float] = None,
 ) -> Optional[Dict[str, Any]]:
     p = merge_params(params)
     entry = int(entry)
@@ -1325,6 +1328,29 @@ def evaluate_exit(
     if p.get("flatten_eod") and session_end:
         return {
             "reason": "EOD",
+            "qty_frac": 1.0,
+            "new_state": "DONE",
+            "impulse_seen": impulse,
+            "tp1_filled": tp1_filled,
+            "peak": peak,
+        }
+
+    bearish_open = float(bar_open_3m or 0)
+    bearish_close = float(bar_close_3m or 0)
+    ma15_value = float(ma15 or 0)
+    bearish_drop = (
+        (bearish_close - bearish_open) / bearish_open * 100.0
+        if bearish_open > 0 else 0.0
+    )
+    if (
+        bearish_open > 0
+        and bearish_close > 0
+        and ma15_value > 0
+        and bearish_drop <= -float(p["bearish_exit_pct"])
+        and bearish_close < ma15_value
+    ):
+        return {
+            "reason": "STOP_3M_BEARISH_BELOW_MA15",
             "qty_frac": 1.0,
             "new_state": "DONE",
             "impulse_seen": impulse,
