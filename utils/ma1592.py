@@ -59,7 +59,7 @@ DEFAULT_PARAMS: Dict[str, Any] = {
     "scale_leg3_mode": "pullback",  # pullback | hold
     "scale_hold_bars": 2,  # T3 hold 모드: 2차 후 유지 봉수(기본 2≈30분)
     "prev_high_mode": "swing_lookback",
-    "prev_high_lookback_bars": 90,
+    "prev_high_lookback_bars": 200,
     "prev_high_lookback_days": 20,
     "tp1_frac": 0.5,
     "take_profit_mode": "prev_high_half",

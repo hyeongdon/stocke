@@ -144,3 +144,9 @@
 {"ts": "2026-09-03T14:51:16+09:00", "source": "SCANNER", "level": "info", "message": "[MA1592] 장부 편입: 티에프이(425420)", "strategy": "ma1592", "stock_code": "425420", "stock_name": "티에프이", "ledger_insert": true}
 {"ts": "2026-09-03T14:55:46+09:00", "source": "SCANNER", "level": "info", "message": "[MA1592] 장부 편입: 세아제강(306200)", "strategy": "ma1592", "stock_code": "306200", "stock_name": "세아제강", "ledger_insert": true}
 {"ts": "2026-09-03T14:58:06+09:00", "source": "SCANNER", "level": "info", "message": "[MA1592] 장부 편입: 롯데웰푸드(280360)", "strategy": "ma1592", "stock_code": "280360", "stock_name": "롯데웰푸드", "ledger_insert": true}
+{"ts": "2026-09-03T22:50:56+09:00", "source": "SCANNER", "level": "info", "message": "[MA1592] 장부 편입: 삼성전자(005930)", "strategy": "ma1592", "stock_code": "005930", "stock_name": "삼성전자", "ledger_insert": true}
+{"ts": "2026-09-03T22:50:56+09:00", "source": "SCANNER", "level": "info", "message": "[MA1592] 장부 편입: SK하이닉스(000660)", "strategy": "ma1592", "stock_code": "000660", "stock_name": "SK하이닉스", "ledger_insert": true}
+{"ts": "2026-09-03T22:50:56+09:00", "source": "SCANNER", "level": "info", "message": "[MA1592] 장부 편입: NAVER(035420)", "strategy": "ma1592", "stock_code": "035420", "stock_name": "NAVER", "ledger_insert": true}
+{"ts": "2026-09-03T22:50:56+09:00", "source": "SCANNER", "level": "info", "message": "[MA1592] 장부 편입: 종목0(000000)", "strategy": "ma1592", "stock_code": "000000", "stock_name": "종목0", "ledger_insert": true}
+{"ts": "2026-09-03T22:50:56+09:00", "source": "SCANNER", "level": "info", "message": "[MA1592] 장부 편입: 종목1(000001)", "strategy": "ma1592", "stock_code": "000001", "stock_name": "종목1", "ledger_insert": true}
+{"ts": "2026-09-03T22:50:57+09:00", "source": "SCANNER", "level": "info", "message": "[MA1592] 장부 편입: 삼성전자(005930)", "strategy": "ma1592", "stock_code": "005930", "stock_name": "삼성전자", "ledger_insert": true}
