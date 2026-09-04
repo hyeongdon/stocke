@@ -348,7 +348,7 @@ class AutoTradeSettings(Base):
     # gc_above(기본) | price_lead
     ma1592_entry_trigger = Column(String(32), nullable=False, default="gc_above")
     ma1592_price_lead_near_pct = Column(Float, nullable=False, default=1.5)
-    ma1592_price_lead_far_pct = Column(Float, nullable=False, default=3.0)
+    ma1592_price_lead_far_pct = Column(Float, nullable=False, default=1.0)
     ma1592_ledger_purge_tf = Column(String(8), nullable=False, default="3M")
     ma1592_leg1_pct = Column(Float, nullable=False, default=15.0)
     ma1592_leg2_pct = Column(Float, nullable=False, default=35.0)
@@ -1317,7 +1317,7 @@ def init_db() -> None:
                 ('ma1592_exec_tf', 'VARCHAR(8) DEFAULT "3M"'),
                 ('ma1592_entry_trigger', 'VARCHAR(32) DEFAULT "gc_above"'),
                 ('ma1592_price_lead_near_pct', 'FLOAT DEFAULT 1.5'),
-                ('ma1592_price_lead_far_pct', 'FLOAT DEFAULT 3.0'),
+                ('ma1592_price_lead_far_pct', 'FLOAT DEFAULT 1.0'),
                 ('ma1592_ledger_purge_tf', 'VARCHAR(8) DEFAULT "3M"'),
                 ('ma1592_leg1_pct', 'FLOAT DEFAULT 15.0'),
                 ('ma1592_leg2_pct', 'FLOAT DEFAULT 35.0'),

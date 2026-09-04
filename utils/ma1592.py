@@ -692,20 +692,23 @@ def should_exit_ma_dc_after_scale(
     ma15: float,
     ma92: float,
     *,
+    close: Optional[float] = None,
     entry_leg: int = 1,
     params: Optional[Dict[str, Any]] = None,
 ) -> Tuple[bool, str]:
-    """2차(물타기) 반영 후 — 데드크로스 + 이평 이격 확대 시 즉시 청산."""
+    """2차(물타기) 반영 후 — 역배열·이격·확정봉 종가 이탈 시 청산."""
     if int(entry_leg or 1) < 2:
         return False, ""
     if not is_trend_lost(ma15, ma92, params=params):
         return False, ""
     if not is_far_from_gc_zone(ma15, ma92, params=params):
         return False, ""
+    if close is None or not below_ma90(close, ma92):
+        return False, ""
     p = merge_params(params)
     far = float(p.get("price_lead_far_pct") or 3.0)
     gap = ema_gap_pct_below(ma15, ma92)
-    return True, f"EMA15≤92·이격 {gap:.2f}%≥{far:.1f}%"
+    return True, f"EMA15≤92·이격 {gap:.2f}%≥{far:.1f}%·3분봉 종가 EMA92 이탈({float(close):,.0f})"
 
 
 def below_ma90(close: float, ma92: float) -> bool:
@@ -1277,7 +1280,7 @@ def evaluate_exit(
     )
 
     dc_wide, dc_detail = should_exit_ma_dc_after_scale(
-        ma15, ma92, entry_leg=entry_leg, params=p,
+        ma15, ma92, close=close, entry_leg=entry_leg, params=p,
     )
     if dc_wide:
         return {

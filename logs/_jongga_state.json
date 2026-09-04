@@ -254,7 +254,7 @@
   "telegram_notified": true,
   "built_at": "2026-09-03T05:31:16.044147",
   "telegram_notified_ok": true,
-  "updated_at": "2026-09-03T05:42:05.726742",
+  "updated_at": "2026-09-04T00:01:25.491450",
   "legs": {
     "1": {
       "done": true,
@@ -263,14 +263,21 @@
       "at": "2026-09-03T05:42:05.719213"
     },
     "2": {
-      "done": false,
+      "done": true,
       "skipped": false,
-      "reason": null
+      "reason": "물타기 평단대비 +2.21% (기준 −2.0% · ≤3,282)",
+      "at": "2026-09-04T00:01:25.490449"
     },
     "3": {
       "done": false,
       "skipped": false,
       "reason": null
     }
+  },
+  "open_avg_down": {
+    "done": true,
+    "skipped": false,
+    "reason": "물타기 평단대비 +2.21% (기준 −2.0% · ≤3,282)",
+    "at": "2026-09-04T00:01:25.490449"
   }
 }

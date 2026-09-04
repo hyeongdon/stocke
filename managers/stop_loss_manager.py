@@ -1636,12 +1636,13 @@ class StopLossManager:
         from utils.ema_fractal import drop_forming_minute_bar
 
         try:
-            far_pct = float(getattr(settings, "ma1592_price_lead_far_pct", None) or 3.0)
+            far_pct = float(getattr(settings, "ma1592_price_lead_far_pct", None) or 1.0)
         except (TypeError, ValueError):
-            far_pct = 3.0
+            far_pct = 1.0
 
         ma15 = 0.0
         ma92 = 0.0
+        last_close = None
         exec_tf = normalize_chart_tf("3M")
         interval_min = chart_tf_interval_minutes(exec_tf)
         try:
@@ -1657,6 +1658,8 @@ class StopLossManager:
                     c = 0
                 if c > 0:
                     closes.append(c)
+            if closes:
+                last_close = closes[-1]
             f, s, _, _ = compute_bar_ma(closes, fast=15, slow=92, ma_type="ema")
             if f is not None:
                 ma15 = float(f)
@@ -1667,7 +1670,7 @@ class StopLossManager:
             return None
 
         return evaluate_ma_dc_exit_after_avg_down(
-            ma15, ma92, avg_down_done=True, far_pct=far_pct,
+            ma15, ma92, close=last_close, avg_down_done=True, far_pct=far_pct,
         )
 
     def _jongga_open_avg_buy_inflight(self, stock_code: str) -> bool:

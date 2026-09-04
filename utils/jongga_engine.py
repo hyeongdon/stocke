@@ -565,10 +565,11 @@ def evaluate_ma_dc_exit_after_avg_down(
     ma15: float,
     ma92: float,
     *,
+    close: Optional[float] = None,
     avg_down_done: bool,
-    far_pct: float = 3.0,
+    far_pct: float = 1.0,
 ) -> Optional[str]:
-    """2차 물타기 반영 후 EMA15≤92 + 이평 이격 확대 시 청산 사유."""
+    """2차 물타기 후 역배열·이격·확정 3분봉 종가 이탈 시 청산 사유."""
     if not avg_down_done:
         return None
     from utils.ma1592 import should_exit_ma_dc_after_scale
@@ -576,6 +577,7 @@ def evaluate_ma_dc_exit_after_avg_down(
     ok, detail = should_exit_ma_dc_after_scale(
         ma15,
         ma92,
+        close=close,
         entry_leg=2,
         params={"price_lead_far_pct": far_pct},
     )

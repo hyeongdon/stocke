@@ -280,11 +280,11 @@ class JonggaExitDayTests(unittest.TestCase):
         )
         self.assertIsNone(
             evaluate_ma_dc_exit_after_avg_down(
-                10950, 11000, avg_down_done=True, far_pct=3.0,
+                10950, 11000, close=10900, avg_down_done=True, far_pct=3.0,
             )
         )
         detail = evaluate_ma_dc_exit_after_avg_down(
-            10600, 11000, avg_down_done=True, far_pct=3.0,
+            10600, 11000, close=10900, avg_down_done=True, far_pct=3.0,
         )
         self.assertIsNotNone(detail)
         assert detail is not None
