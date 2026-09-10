@@ -62,6 +62,21 @@ def effective_sellable_qty(
     return max(0, acct - locked)
 
 
+def completed_sell_quantity(session: Session, position_id: int) -> int:
+    """Return the cumulative completed sell quantity for one position."""
+    rows = session.query(SellOrder).filter(
+        SellOrder.position_id == position_id,
+        SellOrder.status == "COMPLETED",
+    ).all()
+    return sum(int(row.sell_quantity or 0) for row in rows)
+
+
+def remaining_position_quantity(session: Session, position: Position) -> int:
+    """Return open quantity after subtracting previously completed sells."""
+    total = int(position.buy_quantity or 0)
+    return max(0, total - completed_sell_quantity(session, int(position.id)))
+
+
 def is_unfilled_sell_side(item: Optional[dict]) -> bool:
     """ka10075 한 건이 매도 미체결인지."""
     if not item:
@@ -2602,6 +2617,13 @@ class StopLossManager:
                 if dup_cleared:
                     logger.info(f"🛡️ [RECONCILE] 중복 HOLDING 정리 {dup_cleared}건")
 
+                completed_closed = self._close_positions_by_completed_sell_qty(session)
+                if completed_closed:
+                    logger.info(
+                        f"🛡️ [RECONCILE] 완료 매도수량 기준 포지션 종료 "
+                        f"{completed_closed}건"
+                    )
+
                 ordered_sells = session.query(SellOrder).filter(
                     SellOrder.status == "ORDERED",
                 ).order_by(SellOrder.ordered_at.asc()).all()
@@ -2726,7 +2748,14 @@ class StopLossManager:
                         except Exception as e:
                             logger.error(f"🛡️ [RECONCILE] COMPLETED 보정 실패: {e}")
                     elif acct_qty < pos.buy_quantity:
-                        sold_qty = int(pos.buy_quantity) - int(acct_qty)
+                        open_qty = remaining_position_quantity(session, pos)
+                        sold_qty = max(0, open_qty - int(acct_qty))
+                        if sold_qty <= 0:
+                            logger.warning(
+                                f"🛡️ [RECONCILE] 매도수량 0 — 완료 매도 누계가 포지션 수량과 일치 "
+                                f"({pos.stock_name}, 매수 {pos.buy_quantity}주, 계좌 {acct_qty}주)"
+                            )
+                            continue
                         age_min = self._sell_order_age_minutes(sell)
                         # 키움 미체결이 남아 있으면 qty 감소만으로 부분체결 확정하지 않음
                         if not unfilled_ok or locked > 0:
@@ -2813,6 +2842,7 @@ class StopLossManager:
                             p for p in session.query(Position).order_by(Position.id.desc()).all()
                             if KiwoomAPI.normalize_stock_code(p.stock_code) == code
                             and p.status != "HOLDING"
+                            and remaining_position_quantity(session, p) > 0
                         ]
                         target = candidates[0] if candidates else None
 
@@ -2970,6 +3000,46 @@ class StopLossManager:
             release_ma1592_ledger_if_flat(session, pos.stock_code)
         except Exception:
             pass
+
+    @staticmethod
+    def _close_positions_by_completed_sell_qty(session: Session) -> int:
+        """완료 매도 합계가 전체 매수 체결량 이상이면 HOLDING을 종료한다."""
+        closed = 0
+        for pos in session.query(Position).filter(Position.status == "HOLDING").all():
+            buy_fills = session.query(PositionBuyFill).filter(
+                PositionBuyFill.position_id == pos.id,
+            ).all()
+            bought_qty = sum(int(row.quantity or 0) for row in buy_fills)
+            bought_qty = bought_qty or int(pos.buy_quantity or 0)
+            sold_qty = sum(
+                int(row.sell_quantity or 0)
+                for row in session.query(SellOrder).filter(
+                    SellOrder.position_id == pos.id,
+                    SellOrder.status == "COMPLETED",
+                ).all()
+            )
+            if bought_qty <= 0 or sold_qty < bought_qty:
+                continue
+            latest = session.query(SellOrder).filter(
+                SellOrder.position_id == pos.id,
+                SellOrder.status == "COMPLETED",
+            ).order_by(SellOrder.completed_at.desc()).first()
+            if not latest:
+                continue
+            pos.status = latest.sell_reason or "MANUAL_SELL"
+            pos.sell_time = latest.completed_at or utc_now_naive()
+            log_activity(
+                "SELL",
+                f"완료 매도수량 기준 포지션 종료 — {pos.stock_name} "
+                f"(매수 {bought_qty}주, 완료 매도 {sold_qty}주)",
+                "warn",
+                stock_code=pos.stock_code,
+                reason=pos.status,
+            )
+            closed += 1
+        if closed:
+            session.flush()
+        return closed
 
     async def _execute_sell_order(
         self,
@@ -3345,8 +3415,10 @@ class StopLossManager:
             mapped = "TAKE_PROFIT"
         elif reason in ("STOP_MA_DC_WIDEN", "STOP_MA_DC_CRASH", "STOP_MA_CRASH", "STOP_PCT", "STOP_3M_BEARISH_BELOW_MA15"):
             mapped = "STOP_LOSS"
-        elif reason in ("MAX_HOLD", "EOD"):
+        elif reason == "EOD":
             mapped = "MARKET_CLOSE"
+        elif reason == "MAX_HOLD":
+            mapped = "MAX_HOLD"
 
         classified = classify_exit_reason(
             mapped, profit_loss=profit_loss, profit_loss_rate=profit_loss_rate,

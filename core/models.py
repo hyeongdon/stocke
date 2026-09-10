@@ -23,7 +23,7 @@ else:
     # SQLite용 엔진 설정 (기존 코드 유지)
     engine = create_engine(
         DATABASE_URL,
-        connect_args={"check_same_thread": False},
+        connect_args={"check_same_thread": False, "timeout": 30},
         future=True,
     )
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)

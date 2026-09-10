@@ -3048,7 +3048,7 @@ function ma1592LedgerAtHtml(s, { watch = false } = {}) {
   if (watch) return '—';
   const at = s.ledger_at || s.in_at || s.gc_at;
   if (!at) return '—';
-  const ts = esc(String(at).slice(0, 16).replace('T', ' '));
+  const ts = esc(String(at).slice(0, 19).replace('T', ' '));
   const src = s.universe_source
     ? `<div class="hint">${esc(s.universe_source)}</div>`
     : '';
@@ -3139,7 +3139,7 @@ async function loadMa1592() {
     }
     const tableHead =
       `<table class="tbl"><thead><tr>`
-      + `<th>종목</th><th>분석</th><th>장부상태</th><th class="num">장부편입<div class="hint">최신순</div></th>`
+      + `<th>종목</th><th>분석</th><th>장부상태</th><th class="num">장부 편입일시<div class="hint">최신순 · 초 단위</div></th>`
       + `<th class="num">현재가</th>`
       + `<th class="num">편입 EMA15<div class="hint">편입 EMA92</div></th>`
       + `<th class="num">현재 EMA15<div class="hint">현재 EMA92</div></th>`

@@ -7,10 +7,30 @@ import pytest
 
 from managers.stop_loss_manager import (
     StopLossManager,
+    remaining_position_quantity,
     effective_sellable_qty,
     is_sell_qty_shortage_error,
     is_unfilled_sell_side,
 )
+
+
+def test_remaining_position_quantity_excludes_completed_sells():
+    position = SimpleNamespace(id=216, buy_quantity=219)
+    completed = SimpleNamespace(position_id=216, status="COMPLETED", sell_quantity=173)
+    current = SimpleNamespace(position_id=216, status="COMPLETED", sell_quantity=23)
+    session = Mock()
+    session.query.return_value.filter.return_value.all.return_value = [completed, current]
+
+    assert remaining_position_quantity(session, position) == 23
+
+
+def test_completed_position_is_not_eligible_for_holding_recovery():
+    position = SimpleNamespace(id=217, buy_quantity=197)
+    completed = SimpleNamespace(position_id=217, status="COMPLETED", sell_quantity=197)
+    session = Mock()
+    session.query.return_value.filter.return_value.all.return_value = [completed]
+
+    assert remaining_position_quantity(session, position) == 0
 
 
 def test_detects_kiwoom_800033_message():

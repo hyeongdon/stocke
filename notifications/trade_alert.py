@@ -48,6 +48,8 @@ _SLOT_CAPACITY_MARKERS = (
     "슬롯 포화",
     "최대 동시 보유",
     "최대 보유 종목",
+    "기존 실제 잔고",
+    "기존 보유",
 )
 
 
@@ -226,7 +228,7 @@ def build_buy_slot_blocked_message(
     tag = strategy_label_ko(strategy)
     return "\n".join(
         [
-            f"⚠️ 매수 실패 — 슬롯 부족 [{tag}]",
+            f"⚠️ 매수 차단 [{tag}]",
             f"종목: {stock_name}({stock_code})",
             f"전략: {tag}",
             f"사유: {reason}",

@@ -16,9 +16,10 @@ from sqlalchemy.orm import Session
 
 from api.kiwoom_api import KiwoomAPI
 from core.config import Config
-from core.models import AutoTradeSettings, PendingBuySignal, Position, PositionBuyFill, get_db
+from core.models import AutoTradeSettings, PendingBuySignal, Position, PositionBuyFill, SellOrder, get_db
 from managers.signal_manager import SignalType, signal_manager
 from utils.auto_trade_engine import (
+    allows_strategy_new_buy,
     auto_trade_engines_allowed,
     buy_price_skip_reason,
     check_daily_limits,
@@ -820,7 +821,10 @@ class AutoTradeScanner:
             by_code.setdefault(code, {"stock_code": code, "stock_name": code, "source": "watchlist"})
 
         # 2) 상따 유니버스 — ka10027 등락률상위 풀 → 거래대금순 상위 N
-        if getattr(settings, "use_sangtta", True):
+        sangtta_time_ok, sangtta_time_reason = allows_strategy_new_buy(settings, "sangtta")
+        if getattr(settings, "use_sangtta", True) and not sangtta_time_ok:
+            logger.debug(f"📈 [AUTO_SCANNER] 상따 후보 수집 스킵 ({sangtta_time_reason})")
+        elif getattr(settings, "use_sangtta", True):
             try:
                 sang_limit = max(1, int(Config.SANGTTA_CANDIDATE_LIMIT or 20))
                 sang_pool = max(sang_limit * 5, 100)
@@ -858,7 +862,10 @@ class AutoTradeScanner:
             breakout_names = parse_condition_names(
                 getattr(settings, "breakout_condition_names", None)
             )
-            if getattr(settings, "use_breakout", False) and breakout_names:
+            breakout_time_ok, breakout_time_reason = allows_strategy_new_buy(settings, "breakout")
+            if getattr(settings, "use_breakout", False) and breakout_names and not breakout_time_ok:
+                logger.debug(f"📈 [AUTO_SCANNER] 돌파 후보 수집 스킵 ({breakout_time_reason})")
+            elif getattr(settings, "use_breakout", False) and breakout_names:
                 breakout_items, breakout_errs = await fetch_condition_target_items(
                     self.kiwoom_api, breakout_names,
                 )
@@ -884,7 +891,24 @@ class AutoTradeScanner:
             fractal_names = parse_condition_names(
                 getattr(settings, "fractal_condition_names", None)
             )
-            if getattr(settings, "use_fractal", False) and fractal_names:
+            fractal_time_ok, fractal_time_reason = allows_strategy_new_buy(settings, "fractal")
+            if getattr(settings, "use_fractal", False) and fractal_names and not fractal_time_ok:
+                # 이미 WATCHING 중인 스티키 종목은 시간 외에도 유지·재평가한다
+                logger.debug(f"📈 [AUTO_SCANNER] 프랙탈 신규 후보 수집 스킵 ({fractal_time_reason})")
+                sticky = self._fractal_sticky_watching()
+                for code, meta in sticky:
+                    src = by_code.get(code, {}).get("source")
+                    if src in ("sangtta", "breakout"):
+                        continue
+                    by_code[code] = {
+                        "stock_code": code,
+                        "stock_name": meta.get("stock_name") or code,
+                        "current_price": meta.get("current_price"),
+                        "change_rate": meta.get("change_rate"),
+                        "source": "fractal",
+                        "fractal_sticky": True,
+                    }
+            elif getattr(settings, "use_fractal", False) and fractal_names:
                 from utils.auto_trade_engine import effective_fractal_watch_slots
 
                 watch_limit = effective_fractal_watch_slots(settings)
@@ -938,7 +962,10 @@ class AutoTradeScanner:
 
         # 4b) MA1592 — L1 대금상위 → L2 GC 장부 → L3는 장부만 스캔
         try:
-            if getattr(settings, "use_ma1592", False):
+            ma1592_time_ok, ma1592_time_reason = allows_strategy_new_buy(settings, "ma1592")
+            if getattr(settings, "use_ma1592", False) and not ma1592_time_ok:
+                logger.debug(f"📈 [AUTO_SCANNER] MA1592 후보 수집 스킵 ({ma1592_time_reason})")
+            elif getattr(settings, "use_ma1592", False):
                 await self._collect_ma1592_targets(settings, by_code)
         except Exception as e:
             logger.debug(f"📈 [AUTO_SCANNER] MA1592 후보 수집 중 오류: {e}")
@@ -949,8 +976,11 @@ class AutoTradeScanner:
         capped_legacy: Dict[str, Dict] = {}
         volume_items: List[Dict] = []
 
+        legacy_time_ok, legacy_time_reason = allows_strategy_new_buy(settings, "legacy")
         if not getattr(settings, "use_legacy", True):
             logger.info("📈 [AUTO_SCANNER] 레거시 스캔 스킵 (전략 OFF)")
+        elif not legacy_time_ok:
+            logger.info(f"📈 [AUTO_SCANNER] 레거시 스캔 스킵 ({legacy_time_reason})")
         elif legacy_limit <= 0:
             logger.info(
                 f"📈 [AUTO_SCANNER] 레거시 스캔 0 "
@@ -1762,6 +1792,91 @@ class AutoTradeScanner:
         except Exception as e:
             logger.warning(f"📈 [AUTO_SCANNER] 종가배팅 슬롯 알림 오류: {e}")
 
+    async def _select_jongga_candidate_with_balance_guard(
+        self,
+        state: Dict,
+    ) -> Tuple[Optional[Dict], Optional[str]]:
+        """후보 순서대로 실제 잔고를 확인하고, 유령 포지션은 정리한다."""
+        candidates = list(state.get("candidates") or [])
+        if not candidates:
+            return None, "자동매수 후보 없음"
+        account_number = (
+            Config.KIWOOM_MOCK_ACCOUNT_NUMBER
+            if Config.KIWOOM_USE_MOCK_ACCOUNT
+            else Config.KIWOOM_ACCOUNT_NUMBER
+        )
+        balance = await self.kiwoom_api.get_account_balance(account_number)
+        if not balance or balance.get("_error"):
+            return None, "종가배팅 매수 보류: 계좌 보유종목 확인 실패"
+        holdings = balance.get("stk_acnt_evlt_prst")
+        if not isinstance(holdings, list):
+            return None, "종가배팅 매수 보류: 계좌 보유종목 확인 실패"
+        qty_by_code = {}
+        for holding in holdings:
+            code = KiwoomAPI.normalize_stock_code(holding.get("stk_cd", ""))
+            try:
+                qty = int(str(holding.get("qty") or 0).replace(",", ""))
+            except (TypeError, ValueError):
+                qty = 0
+            if code:
+                qty_by_code[code] = qty
+
+        blocked = []
+        for candidate in candidates:
+            code = KiwoomAPI.normalize_stock_code(candidate.get("stock_code", ""))
+            if not code:
+                continue
+            actual_qty = qty_by_code.get(code, 0)
+            for db in get_db():
+                rows = db.query(Position).filter(
+                    Position.stock_code == code,
+                    Position.status == "HOLDING",
+                ).all()
+                if actual_qty <= 0:
+                    for position in rows:
+                        pending = db.query(SellOrder).filter(
+                            SellOrder.position_id == position.id,
+                            SellOrder.status.in_(("PENDING", "ORDERED")),
+                        ).first()
+                        if pending:
+                            blocked.append(
+                                f"{candidate.get('stock_name') or code}: 기존 매도 주문 진행 중"
+                            )
+                            break
+                        position.status = "MANUAL_SELL"
+                        position.sell_time = utc_now_naive()
+                    else:
+                        if rows:
+                            db.commit()
+                            log_activity(
+                                "SELL",
+                                f"종가배팅 유령 포지션 정리 후 매수 허용: {candidate.get('stock_name') or code}({code})",
+                                "warn",
+                                stock_code=code,
+                                strategy="jongga",
+                            )
+                        return candidate, None
+                else:
+                    details = ", ".join(
+                        f"{p.strategy_key or 'legacy'} #{p.id} {int(p.buy_quantity or 0)}주"
+                        for p in rows
+                    ) or "DB 포지션 없음"
+                    reason = f"기존 실제 잔고 {actual_qty}주 존재 ({details})"
+                    blocked.append(f"{candidate.get('stock_name') or code}: {reason}")
+                    try:
+                        from notifications.trade_alert import notify_buy_slot_blocked_async
+                        await notify_buy_slot_blocked_async(
+                            stock_name=candidate.get("stock_name") or code,
+                            stock_code=code,
+                            reason=f"종가배팅 매수 차단: {reason}",
+                            strategy="jongga",
+                        )
+                    except Exception as e:
+                        logger.warning(f"📈 [AUTO_SCANNER] 종가배팅 잔고 차단 알림 실패: {e}")
+                break
+
+        return None, "종가배팅 후보 잔고 충돌: " + "; ".join(blocked[:3])
+
     async def _scan_jongga_session(self, settings: AutoTradeSettings) -> int:
         """종가배팅: 14:30 후보 구축 → 미선택 시 pick_end 이후 자동매수 1건."""
         if not getattr(settings, "use_jongga", False):
@@ -1877,7 +1992,7 @@ class AutoTradeScanner:
         if not after_pick:
             return 0
 
-        auto = st.get("auto_pick") or ((st.get("candidates") or [None])[0])
+        auto, balance_reason = await self._select_jongga_candidate_with_balance_guard(st)
         code = ""
         name = ""
         if auto:
@@ -1926,7 +2041,7 @@ class AutoTradeScanner:
         if not auto or not code:
             await self._record_jongga_auto_miss(
                 st,
-                reason="자동매수 후보 없음",
+                reason=balance_reason or "자동매수 후보 없음",
                 save_jongga_state=save_jongga_state,
             )
             return 0
@@ -2212,6 +2327,7 @@ class AutoTradeScanner:
                     Position.stock_code == code,
                     Position.status == "HOLDING",
                     Position.strategy_key == STRATEGY_KEY,
+                    Position.buy_time >= kst_day_start_utc_naive(),
                 )
                 .first()
             )

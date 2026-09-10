@@ -78,7 +78,7 @@ class Config:
     # 1회 스캔 총 대상 상한. 초과분은 레거시(거래대금 상위)부터 줄인다.
     SCAN_TARGET_TOTAL_LIMIT = int(os.getenv("SCAN_TARGET_TOTAL_LIMIT", "60"))
     # 레거시 스크리너 — 거래대금 상위 후보 상한(단독 시). 타 전략 편입 시 잔여 자리에 맞춰 축소.
-    SCREENER_CANDIDATE_LIMIT = int(os.getenv("SCREENER_CANDIDATE_LIMIT", "20"))
+    SCREENER_CANDIDATE_LIMIT = int(os.getenv("SCREENER_CANDIDATE_LIMIT", "30"))
     # 상따 — 등락률상위 풀에서 거래대금순으로 남길 후보 수
     SANGTTA_CANDIDATE_LIMIT = int(os.getenv("SANGTTA_CANDIDATE_LIMIT", "20"))
     # 프랙탈 스캘핑 — 동시 1분봉 조회(WATCHING) 상한

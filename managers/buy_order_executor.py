@@ -1,11 +1,18 @@
 import logging
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from api.kiwoom_api import KiwoomAPI
-from core.models import PendingBuySignal, get_db, AutoTradeCondition, AutoTradeSettings, Position
+from core.models import (
+    PendingBuySignal,
+    get_db,
+    AutoTradeCondition,
+    AutoTradeSettings,
+    Position,
+    SellOrder,
+)
 from managers.stop_loss_manager import stop_loss_manager
 from core.config import Config
 from utils.debug_tracer import debug_tracer
@@ -37,7 +44,7 @@ from utils.auto_trade_engine import (
 from managers.signal_manager import signal_manager
 from utils.market_hours import linked_trading_session_window_str
 from utils.auto_trade_activity_log import log_activity
-from utils.datetime_kst import as_kst
+from utils.datetime_kst import KST, as_kst, utc_now_naive
 from notifications.trade_alert import notify_buy_async, notify_buy_slot_blocked_async
 
 logger = logging.getLogger(__name__)
@@ -751,6 +758,14 @@ class BuyOrderExecutor:
                     "retryable": True,
                 }
 
+            if strategy == "jongga" and not is_add_buy and "raw" in account_info:
+                position_ok, position_reason = self._validate_jongga_new_session(
+                    signal.stock_code,
+                    account_info.get("raw"),
+                )
+                if not position_ok:
+                    return {"valid": False, "reason": position_reason}
+
             # meta / is_add_buy already parsed above
             # 1c. 최대 동시 보유 (신규 매수만 — 대기 신호 슬롯 포함)
             # 종가배팅은 jongga_max_slots로 별도 관리 — 전역 한도와 분리
@@ -912,13 +927,29 @@ class BuyOrderExecutor:
             if is_add_buy:
                 holding = False
                 for db in get_db():
-                    holding = db.query(Position).filter(
+                    query = db.query(Position).filter(
                         Position.stock_code == signal.stock_code,
                         Position.status == "HOLDING",
-                    ).first() is not None
+                    )
+                    if strategy == "jongga":
+                        today = as_kst().date()
+                        today_start = datetime.combine(
+                            today,
+                            datetime.min.time(),
+                            tzinfo=KST,
+                        ).astimezone(timezone.utc).replace(tzinfo=None)
+                        query = query.filter(
+                            Position.buy_time >= today_start
+                        )
+                    holding = query.first() is not None
                     break
                 if not holding:
-                    return {"valid": False, "reason": "추가매수 대상 포지션 없음"}
+                    reason = (
+                        "당일 종가배팅 추가매수 대상 포지션 없음"
+                        if strategy == "jongga"
+                        else "추가매수 대상 포지션 없음"
+                    )
+                    return {"valid": False, "reason": reason}
 
             if self.auto_trade_settings and not is_add_buy:
                 cfg = self.auto_trade_settings
@@ -1071,6 +1102,74 @@ class BuyOrderExecutor:
         except Exception as e:
             logger.error(f"💰 [BUY_EXECUTOR] 매수 조건 검증 오류: {e}")
             return {"valid": False, "reason": f"검증 오류: {e}"}
+
+    def _validate_jongga_new_session(
+        self,
+        stock_code: str,
+        balance: Optional[Dict],
+    ) -> tuple[bool, str]:
+        """신규 종가배팅은 실제 기존 잔고와 유령 포지션을 먼저 판정한다."""
+        code = KiwoomAPI.normalize_stock_code(stock_code)
+        holdings = (balance or {}).get("stk_acnt_evlt_prst")
+        if not isinstance(holdings, list):
+            return False, "종가배팅 매수 보류: 계좌 보유종목 확인 실패"
+
+        actual_qty = 0
+        for holding in holdings:
+            if KiwoomAPI.normalize_stock_code(holding.get("stk_cd", "")) != code:
+                continue
+            try:
+                actual_qty = int(str(holding.get("qty") or 0).replace(",", ""))
+            except (TypeError, ValueError):
+                actual_qty = 0
+            break
+
+        for db in get_db():
+            rows = db.query(Position).filter(
+                Position.stock_code == code,
+                Position.status == "HOLDING",
+            ).all()
+            if actual_qty <= 0:
+                cleaned = 0
+                for position in rows:
+                    pending = db.query(SellOrder).filter(
+                        SellOrder.position_id == position.id,
+                        SellOrder.status.in_(("PENDING", "ORDERED")),
+                    ).first()
+                    if pending:
+                        return False, (
+                            f"종가배팅 매수 보류: {position.stock_name} 기존 매도 주문 진행 중 "
+                            f"(position_id={position.id})"
+                        )
+                    position.status = "MANUAL_SELL"
+                    position.sell_time = utc_now_naive()
+                    cleaned += 1
+                if cleaned:
+                    db.commit()
+                    log_activity(
+                        "SELL",
+                        f"유령 포지션 자동 정리 후 신규 매수 허용: {code} {cleaned}건",
+                        "warn",
+                        stock_code=code,
+                        strategy="jongga",
+                    )
+                return True, "검증 통과"
+
+            if rows:
+                details = ", ".join(
+                    f"{p.strategy_key or 'legacy'} #{p.id} {int(p.buy_quantity or 0)}주"
+                    for p in rows
+                )
+                return False, (
+                    f"종가배팅 매수 차단: 기존 실제 잔고 {actual_qty}주 존재 "
+                    f"({details})"
+                )
+
+            return False, (
+                f"종가배팅 매수 차단: DB 포지션 없는 계좌 잔고 {actual_qty}주 존재 "
+                "(수동 확인 필요)"
+            )
+        return False, "종가배팅 매수 보류: 포지션 확인 실패"
     
     async def _get_account_info(self) -> Optional[Dict]:
         """계좌 정보 조회 — API _error/빈응답은 None (예수금 0원으로 위장하지 않음)."""
@@ -1560,7 +1659,11 @@ class BuyOrderExecutor:
                     try:
                         if is_add:
                             position = await self._add_to_existing_position(
-                                signal.stock_code, current_price, quantity, order_id,
+                                signal.stock_code,
+                                current_price,
+                                quantity,
+                                order_id,
+                                strategy_key=meta.get("strategy"),
                             )
                         else:
                             position = await self.stop_loss_manager.create_position_from_buy_signal(
@@ -1715,14 +1818,29 @@ class BuyOrderExecutor:
         add_price: int,
         add_quantity: int,
         order_id: str = "",
+        strategy_key: Optional[str] = None,
     ) -> Optional[Position]:
-        """기존 HOLDING 포지션에 추가매수 반영."""
+        """같은 전략의 활성 포지션에 추가매수 반영."""
         for db in get_db():
             session: Session = db
-            position = session.query(Position).filter(
+            query = session.query(Position).filter(
                 Position.stock_code == stock_code,
                 Position.status == "HOLDING",
-            ).first()
+            )
+            if strategy_key == "jongga":
+                today = as_kst().date()
+                today_start = datetime.combine(
+                    today,
+                    datetime.min.time(),
+                    tzinfo=KST,
+                ).astimezone(timezone.utc).replace(tzinfo=None)
+                query = query.filter(
+                    Position.strategy_key == "jongga",
+                    Position.buy_time >= today_start,
+                )
+            elif strategy_key:
+                query = query.filter(Position.strategy_key == strategy_key)
+            position = query.order_by(Position.buy_time.desc()).first()
             if not position:
                 return None
             old_qty = position.buy_quantity

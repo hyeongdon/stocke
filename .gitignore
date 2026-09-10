@@ -66,3 +66,5 @@ tools/caddy/
 deploy/caddy/data/
 deploy/caddy/config/
 logs/caddy.pid
+
+*.bak
