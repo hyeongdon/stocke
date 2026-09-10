@@ -3,6 +3,21 @@
 ## 개요
 이 가이드는 Stocke 서버의 자동화된 재시작, 상태 확인, 정리 작업을 위한 시스템을 설정하는 방법을 설명합니다.
 
+## 배치 작업 (Ubuntu)
+
+Windows 작업 스케줄러용 `.bat`는 Ubuntu에서 직접 실행할 수 없으므로 `shell/run_batch.sh`가 동일한 Python 배치를 실행합니다. 프로젝트의 가상환경과 작업 디렉토리를 자동으로 선택하고, 배치별 로그를 `logs/`에 남깁니다.
+
+```bash
+cd /home/ubuntu/project/stocke
+chmod +x shell/run_batch.sh shell/setup_batch_cron.sh
+./shell/run_batch.sh fundamental
+./shell/setup_batch_cron.sh
+```
+
+현재 등록되는 기본 일정은 평일 15:42 매수 실패 신호, 19:50 키움 손익 동기화, 19:52 매매 일지, 매일 18:00 기본적분석 마트와 테마 마트, 매월 16일 10:00 업종 배치입니다. `crontab -l`로 확인하고, 서버의 시간대가 한국 시간인지 먼저 확인하세요.
+
+`condition-alert-realtime`은 장중 계속 실행되는 프로세스이므로 cron보다 systemd 서비스로 관리해야 합니다. 또한 조건식과 키움 API 배치는 서버에서 사용하는 API 인증·네트워크 조건을 확인한 뒤 수동으로 먼저 실행하세요.
+
 ## 파일 구조
 ```
 /home/ubuntu/project/stocke/
