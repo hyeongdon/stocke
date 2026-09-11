@@ -17,7 +17,7 @@
   box-sizing: border-box;
   border-radius: 10px;
   overflow-y: auto;
-  background: #0c1018;
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
 }
 .theme-flow-map .theme-tile {

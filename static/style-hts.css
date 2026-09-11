@@ -33,6 +33,17 @@
     --font-mono: 'Consolas', 'Lucida Console', 'Courier New', monospace;
 }
 
+/* 실전투자(실계좌) 톤업 스킨 */
+body.mode-real header.bg-primary {
+    background: linear-gradient(135deg, #d97706 0%, #b45309 100%) !important;
+}
+body.mode-real header.bg-primary h1::after {
+    content: ' [⚡ 실전투자 (실계좌)]';
+    font-size: 12px;
+    font-weight: bold;
+    color: #fef3c7;
+}
+
 /* 전체 */
 * {
     box-sizing: border-box;

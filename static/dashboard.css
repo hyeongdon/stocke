@@ -26,6 +26,91 @@
   --glow: 0 0 0 1px rgba(124, 108, 240, 0.08);
 }
 
+/* ===== 실전투자 (Real Trading) 톤업 스킨 ===== */
+html.mode-real,
+body.mode-real {
+  --bg: #181e2a;
+  --bg-elevated: #202738;
+  --card: #273146;
+  --card-hover: #313d5a;
+  --border: #3b4964;
+  --border-light: #485878;
+  --text: #f8fafc;
+  --text-secondary: #cbd5e1;
+  --muted: #94a3b8;
+  --accent: #6366f1;
+  --accent-bright: #818cf8;
+  --accent-soft: rgba(99, 102, 241, 0.2);
+  --cyan: #38bdf8;
+  --up: #34d399;
+  --up-soft: rgba(52, 211, 153, 0.16);
+  --down: #f87171;
+  --down-soft: rgba(248, 113, 113, 0.16);
+  --amber: #f59e0b;
+  --amber-soft: rgba(245, 158, 11, 0.2);
+  --green: #10b981;
+  --green-soft: rgba(16, 185, 129, 0.16);
+  --shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+  --glow: 0 0 0 1px rgba(245, 158, 11, 0.25);
+}
+
+body.mode-real {
+  background: var(--bg);
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(245, 158, 11, 0.14), transparent),
+    linear-gradient(180deg, #181e2a 0%, #1e2638 100%);
+}
+
+body.mode-real .topbar {
+  background: rgba(28, 35, 49, 0.96);
+  border-bottom: 2px solid #f59e0b;
+  box-shadow: 0 2px 12px rgba(245, 158, 11, 0.15);
+}
+
+body.mode-real .brand h1 {
+  background: linear-gradient(135deg, #ffffff 0%, #fbbf24 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+body.mode-real .brand::after {
+  content: '⚡ REAL (실전)';
+  font-size: 10px;
+  font-weight: 800;
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.18);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  padding: 1px 6px;
+  border-radius: 4px;
+  letter-spacing: 0.3px;
+  margin-left: 6px;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.conn-badge.mode-real-badge {
+  background: rgba(245, 158, 11, 0.18) !important;
+  color: #f59e0b !important;
+  border: 1px solid rgba(245, 158, 11, 0.45) !important;
+  font-weight: 800;
+}
+.conn-badge.mode-real-badge .dot {
+  background: #f59e0b !important;
+  box-shadow: 0 0 6px #f59e0b !important;
+}
+
+.conn-badge.mode-mock-badge {
+  background: rgba(99, 102, 241, 0.15);
+  color: #818cf8;
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  font-weight: 700;
+}
+.conn-badge.mode-mock-badge .dot {
+  background: #818cf8;
+  box-shadow: 0 0 4px #818cf8;
+}
+
 * { box-sizing: border-box; }
 
 body {

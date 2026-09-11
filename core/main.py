@@ -3497,11 +3497,14 @@ async def get_status():
     logger.info(f"🔄 [DEBUG] kiwoom_api.websocket: {kiwoom_api.websocket}")
     logger.info(f"🔄 [DEBUG] kiwoom_api.websocket is not None: {kiwoom_api.websocket is not None}")
     
+    use_mock = Config.KIWOOM_USE_MOCK_ACCOUNT
     return {
         "running": kiwoom_api.running,
         "websocket_connected": kiwoom_api.websocket is not None,
         "token_valid": kiwoom_api.token_manager.is_token_valid(),
-        "api_rate_limit": api_rate_limiter.get_status_info()
+        "api_rate_limit": api_rate_limiter.get_status_info(),
+        "mock_mode": use_mock,
+        "account_type": "모의투자" if use_mock else "실계좌"
     }
 
 @app.get("/api/rate-limit-status")

@@ -35,24 +35,24 @@ class TelegramNotifier:
         mode = "모의" if Config.KIWOOM_USE_MOCK_ACCOUNT else "실전"
         return f"[{mode}] "
 
-    def _split_message(self, text: str) -> List[str]:
+    def _split_message(self, text: str, max_length: int = TELEGRAM_MAX_MESSAGE_LENGTH) -> List[str]:
         """길이 제한을 넘는 메시지를 줄 단위로 안전하게 분할."""
-        if len(text) <= TELEGRAM_MAX_MESSAGE_LENGTH:
+        if len(text) <= max_length:
             return [text]
 
         chunks: List[str] = []
         current = ""
         for line in text.split("\n"):
             # 한 줄 자체가 너무 긴 경우 강제로 잘라서 처리
-            while len(line) > TELEGRAM_MAX_MESSAGE_LENGTH:
+            while len(line) > max_length:
                 if current:
                     chunks.append(current)
                     current = ""
-                chunks.append(line[:TELEGRAM_MAX_MESSAGE_LENGTH])
-                line = line[TELEGRAM_MAX_MESSAGE_LENGTH:]
+                chunks.append(line[:max_length])
+                line = line[max_length:]
 
             candidate = f"{current}\n{line}" if current else line
-            if len(candidate) > TELEGRAM_MAX_MESSAGE_LENGTH:
+            if len(candidate) > max_length:
                 chunks.append(current)
                 current = line
             else:
@@ -68,11 +68,13 @@ class TelegramNotifier:
             logger.error("텔레그램 설정 누락: TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID 를 확인하세요.")
             return False
 
-        text = f"{self._mode_prefix()}{text}"
+        prefix = self._mode_prefix()
+        chunks = self._split_message(text, max_length=TELEGRAM_MAX_MESSAGE_LENGTH - len(prefix))
         url = f"{self.API_BASE}/bot{self.bot_token}/sendMessage"
         all_ok = True
 
-        for chunk in self._split_message(text):
+        for chunk in chunks:
+            chunk = f"{prefix}{chunk}"
             payload = {
                 "chat_id": self.chat_id,
                 "text": chunk,

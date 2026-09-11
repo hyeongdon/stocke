@@ -413,8 +413,12 @@ function setAccountBadge(d) {
   const acct = d._account_type ? esc(d._account_type) + ' · ' : '';
   const kiwoom = d._api_connected ? '키움 연결' : '키움 미연결';
   const cache = d._cached ? ' (캐시)' : '';
-  at.className = 'conn-badge ' + (d._api_connected ? (d._account_type === '실계좌' ? 'off' : 'warn') : 'warn');
-  at.innerHTML = `<span class="dot"></span>${acct}${kiwoom}${cache}`;
+  const isReal = d._account_type === '실계좌' || d._account_type === '실전투자' || d.mock_mode === false;
+  if (typeof window.syncAccountTheme === 'function') {
+    window.syncAccountTheme(isReal);
+  }
+  at.className = 'conn-badge ' + (isReal ? 'mode-real-badge' : 'mode-mock-badge');
+  at.innerHTML = `<span class="dot"></span>${isReal ? '⚡ ' : '🎮 '}${acct}${kiwoom}${cache}`;
 }
 
 function accountHoldingsFromBalance(d) {
@@ -989,6 +993,9 @@ async function loadStatus() {
       fetchJSON('/trading/activity-log?limit=1').catch(() => ({})),
     ]);
     const rt = activity.runtime || {};
+    if (typeof rt.mock_mode === 'boolean' && typeof window.syncAccountTheme === 'function') {
+      window.syncAccountTheme(!rt.mock_mode);
+    }
     const scanRunning = sessionActive(mon.auto_trade_scanner, 'scanner_running', rt);
     const buyRunning = sessionActive(mon.buy_executor, 'buy_executor_running', rt);
     const slRunning = typeof stopLoss.monitoring_active === 'boolean'
