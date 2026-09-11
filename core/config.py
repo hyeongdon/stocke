@@ -52,6 +52,8 @@ class Config:
     MAX_SIGNALS_PER_CONDITION_SCAN = int(os.getenv("MAX_SIGNALS_PER_CONDITION_SCAN", 1))
     # 장시간 체크 우회(테스트용). 실계좌에서는 기본 False 권장.
     ALLOW_OUT_OF_MARKET_TRADING = os.getenv("ALLOW_OUT_OF_MARKET_TRADING", "false").lower() == "true"
+    # 시장가 매수는 주문 접수 시점 가격이 현재가보다 오를 수 있어 수량 계산에 여유를 둔다.
+    MARKET_BUY_PRICE_BUFFER_PCT = float(os.getenv("MARKET_BUY_PRICE_BUFFER_PCT", "3.0"))
     # 매수 직후 키움 잔고 미반영으로 HOLDING→MANUAL_SELL 오판 방지(초). ORDERED 매도 확정은 유예 제외.
     # 90초는 잔고 반영 지연에 부족한 경우가 있어 기본 5분.
     BUY_SETTLE_GRACE_SECONDS = int(os.getenv("BUY_SETTLE_GRACE_SECONDS", "300"))

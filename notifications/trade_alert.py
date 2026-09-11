@@ -43,6 +43,10 @@ def strategy_label_ko(strategy: Optional[str]) -> str:
     return STRATEGY_LABEL_KO.get(key, key)
 
 
+def account_mode_tag() -> str:
+    return "모의" if Config.KIWOOM_USE_MOCK_ACCOUNT else "실전"
+
+
 # 전략 슬롯 포화 · 전역 최대 동시 보유(슬롯) 초과
 _SLOT_CAPACITY_MARKERS = (
     "슬롯 포화",
@@ -91,7 +95,7 @@ def build_buy_message(
     total = price * quantity
     tag = strategy_label_ko(strategy)
     lines = [
-        f"🟢 매수 체결 [{tag}]",
+        f"🟢 [{account_mode_tag()}] 매수 체결 [{tag}]",
         f"종목: {stock_name}({stock_code})",
         f"전략: {tag}",
         f"유형: {buy_type}",
@@ -132,7 +136,9 @@ def build_sell_message(
         profit_loss_rate=pnl_rate,
     )
 
-    header = "🟠 부분 매도 체결" if remaining_qty is not None else "🔴 매도 체결"
+    action = "부분 매도 체결" if remaining_qty is not None else "매도 체결"
+    icon = "🟠" if remaining_qty is not None else "🔴"
+    header = f"{icon} [{account_mode_tag()}] {action}"
     lines = [
         header,
         f"종목: {stock_name}({stock_code})",
@@ -228,7 +234,7 @@ def build_buy_slot_blocked_message(
     tag = strategy_label_ko(strategy)
     return "\n".join(
         [
-            f"⚠️ 매수 차단 [{tag}]",
+            f"⚠️ [{account_mode_tag()}] 매수 차단(슬롯 부족) [{tag}]",
             f"종목: {stock_name}({stock_code})",
             f"전략: {tag}",
             f"사유: {reason}",

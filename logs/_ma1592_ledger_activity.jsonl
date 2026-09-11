@@ -1,6 +1,3 @@
-{"ts": "2026-08-29T21:33:34+09:00", "source": "SCANNER", "level": "info", "message": "[MA1590] 장부 편입: SK하이닉스(000660)", "strategy": "ma1590", "stock_code": "000660", "stock_name": "SK하이닉스", "ledger_insert": true}
-{"ts": "2026-08-29T21:33:34+09:00", "source": "SCANNER", "level": "info", "message": "[MA1590] 장부 편입: NAVER(035420)", "strategy": "ma1590", "stock_code": "035420", "stock_name": "NAVER", "ledger_insert": true}
-{"ts": "2026-08-29T21:33:34+09:00", "source": "SCANNER", "level": "info", "message": "[MA1590] 장부 편입: 종목0(000000)", "strategy": "ma1590", "stock_code": "000000", "stock_name": "종목0", "ledger_insert": true}
 {"ts": "2026-08-29T21:33:34+09:00", "source": "SCANNER", "level": "info", "message": "[MA1590] 장부 편입: 종목1(000001)", "strategy": "ma1590", "stock_code": "000001", "stock_name": "종목1", "ledger_insert": true}
 {"ts": "2026-08-29T21:33:35+09:00", "source": "SCANNER", "level": "info", "message": "[MA1590] 장부 편입: 삼성전자(005930)", "strategy": "ma1590", "stock_code": "005930", "stock_name": "삼성전자", "ledger_insert": true}
 {"ts": "2026-08-29T21:34:19+09:00", "source": "SCANNER", "level": "info", "message": "[MA1590] 장부 편입: 삼성전자(005930)", "strategy": "ma1590", "stock_code": "005930", "stock_name": "삼성전자", "ledger_insert": true}
@@ -198,3 +195,6 @@
 {"ts": "2026-09-10T14:39:30+09:00", "source": "SCANNER", "level": "info", "message": "[MA1592] 장부 편입: 비에이치(090460)", "strategy": "ma1592", "stock_code": "090460", "stock_name": "비에이치", "ledger_insert": true}
 {"ts": "2026-09-11T09:21:54+09:00", "source": "SCANNER", "level": "info", "message": "[MA1592] 장부 편입: 티씨머티리얼즈(125020)", "strategy": "ma1592", "stock_code": "125020", "stock_name": "티씨머티리얼즈", "ledger_insert": true}
 {"ts": "2026-09-11T10:01:10+09:00", "source": "SCANNER", "level": "info", "message": "[MA1592] 장부 편입: 롯데에너지머티리얼즈(020150)", "strategy": "ma1592", "stock_code": "020150", "stock_name": "롯데에너지머티리얼즈", "ledger_insert": true}
+{"ts": "2026-09-11T13:45:58+09:00", "source": "SCANNER", "level": "info", "message": "[MA1592] 장부 편입: 메가터치(446540)", "strategy": "ma1592", "stock_code": "446540", "stock_name": "메가터치", "ledger_insert": true}
+{"ts": "2026-09-11T14:58:52+09:00", "source": "SCANNER", "level": "info", "message": "[MA1592] 장부 편입: 브이엠(089970)", "strategy": "ma1592", "stock_code": "089970", "stock_name": "브이엠", "ledger_insert": true}
+{"ts": "2026-09-11T15:01:51+09:00", "source": "SCANNER", "level": "info", "message": "[MA1592] 장부 편입: 롯데렌탈(089860)", "strategy": "ma1592", "stock_code": "089860", "stock_name": "롯데렌탈", "ledger_insert": true}

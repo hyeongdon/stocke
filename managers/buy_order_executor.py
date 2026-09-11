@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import math
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 from sqlalchemy.orm import Session
@@ -88,6 +89,21 @@ class BuyOrderExecutor:
             return False
         lower = reason.lower()
         return any(m.lower() in lower for m in _TRANSIENT_BUY_REASON_MARKERS)
+
+    @staticmethod
+    def _buy_sizing_price(current_price: int, settings: Optional[AutoTradeSettings]) -> int:
+        """시장가 매수는 가격 상승 여유를 반영해 주문 수량을 보수적으로 계산한다."""
+        if current_price <= 0:
+            return 0
+        order_price, order_type = order_params(settings, current_price) if settings else (0, "3")
+        if order_type != "3":
+            return current_price
+        try:
+            buffer_pct = float(Config.MARKET_BUY_PRICE_BUFFER_PCT)
+        except (TypeError, ValueError):
+            buffer_pct = 3.0
+        buffer_pct = min(20.0, max(0.0, buffer_pct))
+        return max(current_price, math.ceil(current_price * (1.0 + buffer_pct / 100.0)))
 
     def invalidate_settings_cache(self) -> None:
         self.auto_trade_settings = None
@@ -1396,7 +1412,8 @@ class BuyOrderExecutor:
             return {"success": False, "error": "현재가를 조회할 수 없습니다."}
 
         planned_amount = int(baseline * pct / 100.0)
-        quantity = compute_quantity(planned_amount, current_price)
+        sizing_price = self._buy_sizing_price(current_price, settings)
+        quantity = compute_quantity(planned_amount, sizing_price)
         if quantity <= 0:
             return {"success": False, "error": "설정 비율로는 1주를 주문할 수 없습니다."}
 
@@ -1405,7 +1422,7 @@ class BuyOrderExecutor:
             return {"success": False, "error": "계좌 정보를 조회할 수 없습니다."}
         investable = int(account_info.get("investable_cash") or 0)
         capped_amount = cap_buy_amount_by_cash(planned_amount, investable)
-        quantity = compute_quantity(capped_amount, current_price)
+        quantity = compute_quantity(capped_amount, sizing_price)
         if quantity <= 0:
             return {"success": False, "error": "주문 가능한 예수금이 부족합니다."}
 
@@ -1591,11 +1608,13 @@ class BuyOrderExecutor:
                     f"매수금액 {amount:,}→{capped:,}원 (가능 {investable:,}원)"
                 )
             amount = capped
-            quantity = compute_quantity(amount, current_price)
+            sizing_price = self._buy_sizing_price(current_price, self.auto_trade_settings)
+            quantity = compute_quantity(amount, sizing_price)
 
             logger.info(
                 f"💰 [BUY_EXECUTOR] 매수 수량: {quantity}주 "
-                f"(금액={amount:,}원, add={is_add_buy}, 등락={change_rate})"
+                f"(금액={amount:,}원, 수량계산가={sizing_price:,}원, "
+                f"add={is_add_buy}, 등락={change_rate})"
             )
             return quantity, int(amount or 0)
 

@@ -1,7 +1,8 @@
 """전략 키 → 한국어 라벨 / 정규화 (체결 로그·알림 오분류 방지)."""
 import unittest
+from unittest import mock
 
-from notifications.trade_alert import build_buy_message, strategy_label_ko
+from notifications.trade_alert import build_buy_message, build_sell_message, strategy_label_ko
 from utils.stock_exit_replay import STRATEGY_LABELS, _normalize_strategy
 
 
@@ -30,6 +31,25 @@ class StrategyLabelKoTests(unittest.TestCase):
         self.assertIn("[15/92홀드]", msg)
         self.assertIn("전략: 15/92홀드", msg)
         self.assertNotIn("거래대금", msg)
+
+    @mock.patch("notifications.trade_alert.Config.KIWOOM_USE_MOCK_ACCOUNT", False)
+    def test_trade_messages_show_real_account_tag(self):
+        buy = build_buy_message(
+            stock_name="테스트",
+            stock_code="000000",
+            quantity=10,
+            price=1000,
+        )
+        sell = build_sell_message(
+            stock_name="테스트",
+            stock_code="000000",
+            quantity=10,
+            sell_price=1100,
+            buy_price=1000,
+            sell_reason="TAKE_PROFIT",
+        )
+        self.assertIn("[실전]", buy)
+        self.assertIn("[실전]", sell)
 
 
 class NormalizeStrategyTests(unittest.TestCase):

@@ -60,11 +60,11 @@ def enqueue_trade_buy_tray(
     is_add_buy: bool = False,
     strategy: Optional[str] = None,
 ) -> bool:
-    from notifications.trade_alert import strategy_label_ko
+    from notifications.trade_alert import account_mode_tag, strategy_label_ko
 
     tag = strategy_label_ko(strategy)
     buy_type = "추가매수" if is_add_buy else "신규매수"
-    title = f"Stocke · {buy_type}"
+    title = f"Stocke · [{account_mode_tag()}] · {buy_type}"
     body = (
         f"{stock_name}({stock_code})\n"
         f"{quantity:,}주 @ {int(price):,}원 · {tag}"
@@ -82,14 +82,14 @@ def enqueue_trade_sell_tray(
     profit_loss: Optional[int] = None,
     profit_loss_rate: Optional[float] = None,
 ) -> bool:
-    from notifications.trade_alert import sell_reason_ko, _fmt_pnl
+    from notifications.trade_alert import account_mode_tag, sell_reason_ko, _fmt_pnl
 
     reason = sell_reason_ko(
         sell_reason,
         profit_loss=profit_loss,
         profit_loss_rate=profit_loss_rate,
     )
-    title = f"Stocke · 매도 · {reason}"
+    title = f"Stocke · [{account_mode_tag()}] · 매도 · {reason}"
     pnl = ""
     if profit_loss is not None:
         pnl = f"\n{_fmt_pnl(profit_loss, profit_loss_rate)}"
