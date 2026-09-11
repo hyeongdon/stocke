@@ -1375,65 +1375,87 @@ class KiwoomAPI:
                     f"ka10006 AL/NX 실패 — KRX 일봉 폴백: {stock_code}"
                 )
             
-            # 키움 API 호출 설정 - 실전/모의 분기
-            use_mock = Config.KIWOOM_USE_MOCK_ACCOUNT
-            host = Config.KIWOOM_MOCK_API_URL if use_mock else Config.KIWOOM_REAL_API_URL
-            endpoint = '/api/dostk/chart'
-            url = host + endpoint
-            
-            # 요청 헤더
-            headers = {
-                'Content-Type': 'application/json;charset=UTF-8',
-                'authorization': f'Bearer {self.token_manager.get_valid_token()}',
-                'cont-yn': 'N',
-                'next-key': '',
-                'api-id': 'ka10081',  # 일봉 차트 API 사용
-            }
-            
-            # 요청 데이터 (최근 1일 데이터만 조회)
-            # 최근 거래일 계산 (주말 제외)
-            today = now_kst()
-            if today.weekday() == 5:  # 토요일
-                base_dt = (today - timedelta(days=1)).strftime('%Y%m%d')
-            elif today.weekday() == 6:  # 일요일
-                base_dt = (today - timedelta(days=2)).strftime('%Y%m%d')
-            else:  # 평일
-                base_dt = today.strftime('%Y%m%d')
-            
-            request_data = {
-                'dmst_stex_tp': 'KRX',
-                'stk_cd': stock_code,
-                'period': '1D',
-                'limit': 1,
-                'base_dt': base_dt,  # 기준일자 추가
-                'upd_stkpc_tp': '1'  # 주가 업데이트 타입 추가
-            }
-            
-            # SSL 검증 완화 및 타임아웃 설정 (모의투자 서버 연결 문제 해결)
-            timeout = aiohttp.ClientTimeout(total=60, connect=20, sock_read=30)
-            # SSL 컨텍스트 생성 - 인증서 검증 비활성화
-            ssl_context = ssl.create_default_context()
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
-            connector = aiohttp.TCPConnector(ssl=ssl_context)
-            
+            current_price = await self._get_current_price_ka10081(stock_code)
+            if current_price and current_price > 0:
+                self._price_cache[stock_code] = (current_price, datetime.now().timestamp())
+                logger.info(f"💾 현재가 조회 성공 (캐시 저장): {stock_code} = {current_price:,}원")
+                return current_price
+
+            # 개장 직후 등: 당일 일봉(ka10081)이 아직 생성되지 않아 0/실패로 오는 경우가 있어
+            # 실시간 시세(ka10006)로 한 번 더 시도한다.
+            live_px = await self._get_current_price_ka10006(stock_code, venue="KRX")
+            if live_px and live_px > 0:
+                self._price_cache[stock_code] = (live_px, datetime.now().timestamp())
+                logger.info(f"💾 현재가 조회 성공 (ka10006 폴백): {stock_code} = {live_px:,}원")
+                return live_px
+            return None
+
+        except Exception as e:
+            logger.error(f"현재가 조회 중 오류: {e}")
+            return None
+
+    async def _get_current_price_ka10081(self, stock_code: str) -> Optional[int]:
+        """ka10081 일봉 차트로 현재가(종가) 조회."""
+        # 키움 API 호출 설정 - 실전/모의 분기
+        use_mock = Config.KIWOOM_USE_MOCK_ACCOUNT
+        host = Config.KIWOOM_MOCK_API_URL if use_mock else Config.KIWOOM_REAL_API_URL
+        endpoint = '/api/dostk/chart'
+        url = host + endpoint
+
+        # 요청 헤더
+        headers = {
+            'Content-Type': 'application/json;charset=UTF-8',
+            'authorization': f'Bearer {self.token_manager.get_valid_token()}',
+            'cont-yn': 'N',
+            'next-key': '',
+            'api-id': 'ka10081',  # 일봉 차트 API 사용
+        }
+
+        # 요청 데이터 (최근 1일 데이터만 조회)
+        # 최근 거래일 계산 (주말 제외)
+        today = now_kst()
+        if today.weekday() == 5:  # 토요일
+            base_dt = (today - timedelta(days=1)).strftime('%Y%m%d')
+        elif today.weekday() == 6:  # 일요일
+            base_dt = (today - timedelta(days=2)).strftime('%Y%m%d')
+        else:  # 평일
+            base_dt = today.strftime('%Y%m%d')
+
+        request_data = {
+            'dmst_stex_tp': 'KRX',
+            'stk_cd': stock_code,
+            'period': '1D',
+            'limit': 1,
+            'base_dt': base_dt,  # 기준일자 추가
+            'upd_stkpc_tp': '1'  # 주가 업데이트 타입 추가
+        }
+
+        # SSL 검증 완화 및 타임아웃 설정 (모의투자 서버 연결 문제 해결)
+        timeout = aiohttp.ClientTimeout(total=60, connect=20, sock_read=30)
+        # SSL 컨텍스트 생성 - 인증서 검증 비활성화
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+        connector = aiohttp.TCPConnector(ssl=ssl_context)
+
+        try:
             async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
                 async with session.post(url, headers=headers, json=request_data) as response:
                     if response.status == 200:
                         try:
                             response_data = await response.json()
-                            
+
                             # 응답 데이터 파싱 및 디버깅
                             rt_cd = response_data.get("rt_cd")
                             return_msg = response_data.get("return_msg", "")
-                            
+
                             # 디버깅: 전체 응답 구조 로깅
                             logger.debug(f"현재가 조회 응답 - {stock_code}: rt_cd={rt_cd}, return_msg={return_msg}")
                             logger.debug(f"응답 데이터 키: {list(response_data.keys())}")
-                            
+
                             # 성공 조건 확인 (rt_cd가 "0"이거나 "정상적으로 처리되었습니다" 메시지)
                             is_success = (rt_cd == "0" or rt_cd == "1" or "정상적으로 처리되었습니다" in return_msg)
-                            
+
                             if is_success:
                                 # 다양한 가능한 필드명 시도
                                 chart_list = None
@@ -1444,41 +1466,35 @@ class KiwoomAPI:
                                     'chart_data',
                                     'stock_data'
                                 ]
-                                
+
                                 for field in possible_fields:
                                     if field in response_data and response_data[field]:
                                         chart_list = response_data[field]
                                         logger.debug(f"데이터 필드 발견: {field}")
                                         break
-                                
+
                                 if chart_list and len(chart_list) > 0:
                                     # 다양한 가격 필드명 시도
                                     price_fields = ['cur_prc', 'close_price', 'price', 'current_price', 'close', 'last_price']
                                     current_price = None
-                                    
+
                                     for price_field in price_fields:
                                         if price_field in chart_list[0]:
                                             current_price = int(chart_list[0].get(price_field, 0))
                                             logger.debug(f"가격 필드 발견: {price_field} = {current_price}")
                                             break
-                                    
+
                                     if current_price and current_price > 0:
-                                        # 캐시에 저장
-                                        self._price_cache[stock_code] = (current_price, datetime.now().timestamp())
-                                        logger.info(f"💾 현재가 조회 성공 (캐시 저장): {stock_code} = {current_price:,}원")
                                         return current_price
-                                    else:
-                                        logger.warning(f"유효한 가격 데이터 없음: {stock_code}")
-                                        logger.debug(f"차트 데이터: {chart_list[0]}")
-                                        return None
-                                else:
-                                    logger.warning(f"차트 데이터 없음: {stock_code}")
-                                    logger.debug(f"전체 응답: {response_data}")
+                                    logger.warning(f"유효한 가격 데이터 없음: {stock_code}")
+                                    logger.debug(f"차트 데이터: {chart_list[0]}")
                                     return None
-                            else:
-                                logger.error(f"현재가 조회 실패: {stock_code} - rt_cd={rt_cd}, return_msg={return_msg}")
+                                logger.warning(f"차트 데이터 없음: {stock_code}")
+                                logger.debug(f"전체 응답: {response_data}")
                                 return None
-                                
+                            logger.error(f"현재가 조회 실패: {stock_code} - rt_cd={rt_cd}, return_msg={return_msg}")
+                            return None
+
                         except json.JSONDecodeError as e:
                             logger.error(f"현재가 조회 응답 파싱 실패: {e}")
                             return None
@@ -1489,14 +1505,14 @@ class KiwoomAPI:
                             logger.error(f"   - 종목코드: {stock_code}")
                             logger.error(f"   - API URL: {url}")
                             logger.error(f"   - 응답 헤더: {dict(response.headers)}")
-                            
+
                             # 응답 본문 확인
                             try:
                                 error_body = await response.text()
                                 logger.error(f"   - 응답 본문: {error_body}")
                             except:
                                 pass
-                            
+
                             logger.error(f"   ⚠️  해결방법:")
                             logger.error(f"      1. API 호출 간격을 더 늘리세요 (현재: {api_rate_limiter.min_call_interval}초)")
                             logger.error(f"      2. 동시에 여러 종목 조회를 줄이세요")
@@ -1508,11 +1524,10 @@ class KiwoomAPI:
                                 logger.error(f"   - 오류 내용: {error_body}")
                             except:
                                 pass
-                        
+
                         return None
-                        
         except Exception as e:
-            logger.error(f"현재가 조회 중 오류: {e}")
+            logger.error(f"현재가 조회(ka10081) 중 오류: {e}")
             return None
 
     async def _request_stockinfo_tr(self, api_id: str, request_data: Dict) -> Dict:

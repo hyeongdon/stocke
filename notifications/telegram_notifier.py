@@ -30,6 +30,11 @@ class TelegramNotifier:
         """봇 토큰과 채팅 ID가 모두 설정되어 있는지 확인."""
         return bool(self.bot_token) and bool(self.chat_id)
 
+    @staticmethod
+    def _mode_prefix() -> str:
+        mode = "모의" if Config.KIWOOM_USE_MOCK_ACCOUNT else "실전"
+        return f"[{mode}] "
+
     def _split_message(self, text: str) -> List[str]:
         """길이 제한을 넘는 메시지를 줄 단위로 안전하게 분할."""
         if len(text) <= TELEGRAM_MAX_MESSAGE_LENGTH:
@@ -63,6 +68,7 @@ class TelegramNotifier:
             logger.error("텔레그램 설정 누락: TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID 를 확인하세요.")
             return False
 
+        text = f"{self._mode_prefix()}{text}"
         url = f"{self.API_BASE}/bot{self.bot_token}/sendMessage"
         all_ok = True
 

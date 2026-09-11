@@ -925,13 +925,17 @@ class BuyOrderExecutor:
 
             # 5. 대시보드 매수 조건 (가격/등락률) — 추가매수는 수익률 트리거로 이미 검증됨
             if is_add_buy:
+                # 익일 시초 물타기(open_avg_down)는 전날 매수 포지션이 대상이라 '당일' 제한을 걸면 안 됨
+                is_open_avg_down = bool(meta.get("open_avg_down")) or str(
+                    meta.get("source") or ""
+                ) == "jongga_open_avg_down"
                 holding = False
                 for db in get_db():
                     query = db.query(Position).filter(
                         Position.stock_code == signal.stock_code,
                         Position.status == "HOLDING",
                     )
-                    if strategy == "jongga":
+                    if strategy == "jongga" and not is_open_avg_down:
                         today = as_kst().date()
                         today_start = datetime.combine(
                             today,
