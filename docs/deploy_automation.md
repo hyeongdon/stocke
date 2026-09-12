@@ -14,7 +14,7 @@ chmod +x shell/run_batch.sh shell/setup_batch_cron.sh
 ./shell/setup_batch_cron.sh
 ```
 
-현재 등록되는 기본 일정은 평일 15:42 매수 실패 신호, 19:50 키움 손익 동기화, 19:52 매매 일지, 매일 18:00 기본적분석 마트와 테마 마트, 매월 16일 10:00 업종 배치입니다. `crontab -l`로 확인하고, 서버의 시간대가 한국 시간인지 먼저 확인하세요.
+현재 등록되는 기본 일정은 매일 02:00 소스 동기화 및 변경 시 서버 재시작, 평일 15:42 매수 실패 신호, 19:50 키움 손익 동기화, 19:52 매매 일지, 매일 18:00 기본적분석 마트와 테마 마트, 매월 16일 10:00 업종 배치입니다. `crontab -l`로 확인하고, 서버의 시간대가 한국 시간인지 먼저 확인하세요.
 
 `condition-alert-realtime`은 장중 계속 실행되는 프로세스이므로 cron보다 systemd 서비스로 관리해야 합니다. 또한 조건식과 키움 API 배치는 서버에서 사용하는 API 인증·네트워크 조건을 확인한 뒤 수동으로 먼저 실행하세요.
 
@@ -39,6 +39,7 @@ cd /home/ubuntu/project/stocke
 chmod +x restart_server.sh
 chmod +x health_check.sh
 chmod +x setup_cron.sh
+chmod +x shell/sync_production_source.sh
 ```
 
 ### 2. Cron Job 설정
@@ -48,6 +49,9 @@ chmod +x setup_cron.sh
 
 ### 3. 수동 테스트
 ```bash
+# 소스 동기화 및 변경 시 서버 재시작 테스트
+./shell/sync_production_source.sh
+
 # 서버 재시작 테스트
 ./restart_server.sh
 
@@ -61,7 +65,7 @@ chmod +x setup_cron.sh
 |------|------|------|
 | 매 30분 | 서버 상태 확인 | 프로세스, 응답, API 엔드포인트 확인 |
 | 매일 01:00 | 만료된 관심종목 정리 | 이전 날 조건식 종목들 정리 |
-| 매일 02:00 | 서버 재시작 | 최신 코드 반영 및 메모리 정리 |
+| 매일 02:00 | 소스 동기화 | 변경 시 서버 재시작, 성공·실패 결과 텔레그램 |
 | 매주 일요일 03:00 | 로그 파일 정리 | 7일 이상 된 로그 파일 삭제 |
 | 매월 1일 04:00 | 데이터베이스 백업 | SQLite 데이터베이스 백업 |
 
@@ -71,6 +75,9 @@ chmod +x setup_cron.sh
 ```bash
 # 재시작 로그
 tail -f /home/ubuntu/project/stocke/logs/restart.log
+
+# 소스 동기화 및 알림 로그
+tail -f /home/ubuntu/project/stocke/logs/source_sync.log
 
 # 상태 확인 로그
 tail -f /home/ubuntu/project/stocke/logs/health_check.log
@@ -90,6 +97,12 @@ tail -f /home/ubuntu/project/stocke/logs/cron.log
 ```bash
 cd /home/ubuntu/project/stocke
 ./restart_server.sh
+```
+
+### 소스 동기화
+```bash
+cd /home/ubuntu/project/stocke
+./shell/sync_production_source.sh
 ```
 
 ### 서버 상태 확인
