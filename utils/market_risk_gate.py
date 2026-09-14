@@ -5,6 +5,7 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from utils.market_indices import fetch_market_indices
+from core.config import get_account_mode
 
 logger = logging.getLogger(__name__)
 
@@ -471,6 +472,7 @@ def evaluate_market_risk(
 def strategy_limited_when_bad(settings: Any, strategy: Optional[str]) -> bool:
     """장세 나쁠 때 해당 전략에 횟수 제한을 적용할지."""
     key = normalize_strategy_key(strategy)
+    account_mode = get_account_mode()
     if key == "sangtta":
         return _as_bool(settings, "market_risk_block_sangtta", True)
     if key == "breakout":
@@ -535,6 +537,8 @@ def count_strategy_new_buys_today(
         .all()
     )
     for pos in positions:
+        if getattr(pos, "account_mode", None) not in (None, account_mode):
+            continue
         code = str(pos.stock_code or "")
         if code.startswith("SAMPLE_"):
             continue
@@ -555,6 +559,8 @@ def count_strategy_new_buys_today(
         .all()
     )
     for sig in signals:
+        if getattr(sig, "account_mode", None) not in (None, account_mode):
+            continue
         meta = parse_signal_meta(sig)
         if meta.get("is_add_buy"):
             continue

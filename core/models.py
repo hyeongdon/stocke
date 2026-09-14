@@ -49,6 +49,7 @@ class PendingBuySignal(Base):
     reference_candle_date = Column(DateTime, nullable=True)  # 기준봉 날짜
     target_price = Column(Integer, nullable=True)  # 목표가 (고가의 절반)
     additional_data = Column(JSON, nullable=True)  # 스캐너 메타 (등락률, is_add_buy 등)
+    account_mode = Column(String(10), nullable=True, index=True)  # mock|real
 
     __table_args__ = (
         # 일자별로 같은 조건식/종목은 하나만 유지 (일자별 관리)
@@ -502,6 +503,7 @@ class Position(Base):
     signal_id = Column(Integer, nullable=True)  # 매수 신호 ID
     # 전략 키(예: "sangtta", "legacy") — 포지션별 전략 태그
     strategy_key = Column(String(50), nullable=True, index=True)
+    account_mode = Column(String(10), nullable=True, index=True)  # mock|real
     breakout_level_kind = Column(String(20), nullable=True)
     breakout_level_price = Column(Integer, nullable=True)
     ymgp_ref_high = Column(Integer, nullable=True)
@@ -961,6 +963,10 @@ def init_db() -> None:
             if 'additional_data' not in columns:
                 conn.execute(text("ALTER TABLE pending_buy_signals ADD COLUMN additional_data TEXT"))
                 conn.commit()
+            if 'account_mode' not in columns:
+                conn.execute(text("ALTER TABLE pending_buy_signals ADD COLUMN account_mode VARCHAR(10)"))
+                conn.execute(text("UPDATE pending_buy_signals SET account_mode = :mode WHERE account_mode IS NULL"), {"mode": "mock" if Config.KIWOOM_USE_MOCK_ACCOUNT else "real"})
+                conn.commit()
 
             # sell_orders 실현손익 비용 마이그레이션
             result = conn.execute(text("PRAGMA table_info('sell_orders')"))
@@ -1057,6 +1063,10 @@ def init_db() -> None:
                     conn.commit()
                 except Exception:
                     pass
+            if pos_columns and 'account_mode' not in pos_columns:
+                conn.execute(text("ALTER TABLE positions ADD COLUMN account_mode VARCHAR(10)"))
+                conn.execute(text("UPDATE positions SET account_mode = :mode WHERE account_mode IS NULL"), {"mode": "mock" if Config.KIWOOM_USE_MOCK_ACCOUNT else "real"})
+                conn.commit()
             if pos_columns and 'breakout_level_kind' not in pos_columns:
                 conn.execute(text("ALTER TABLE positions ADD COLUMN breakout_level_kind VARCHAR(20)"))
                 conn.commit()

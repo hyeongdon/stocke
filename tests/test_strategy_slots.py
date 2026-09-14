@@ -8,6 +8,7 @@ from utils.auto_trade_engine import (
     is_strategy_slot_available,
     utc_now_naive,
 )
+from core.config import Config
 
 
 class _FakeQuery:
@@ -70,6 +71,22 @@ def test_legacy_holding_fills_legacy_slot():
     assert _count_strategy_slots(session, "legacy") == 1
     assert is_strategy_slot_available(_settings(1), session, "legacy", for_new_signal=True) is False
     assert is_strategy_slot_available(_settings(1), session, "legacy", for_new_signal=False) is True
+
+
+def test_real_holding_does_not_fill_mock_slot(monkeypatch):
+    monkeypatch.setattr(Config, "KIWOOM_USE_MOCK_ACCOUNT", True)
+    pos = SimpleNamespace(stock_code="005860", status="HOLDING", strategy_key="legacy", account_mode="real")
+    session = _FakeSession(positions=[pos])
+    assert _count_strategy_slots(session, "legacy") == 0
+    assert is_strategy_slot_available(_settings(1), session, "legacy", for_new_signal=True) is True
+
+
+def test_mock_holding_does_not_fill_real_slot(monkeypatch):
+    monkeypatch.setattr(Config, "KIWOOM_USE_MOCK_ACCOUNT", False)
+    pos = SimpleNamespace(stock_code="005860", status="HOLDING", strategy_key="legacy", account_mode="mock")
+    session = _FakeSession(positions=[pos])
+    assert _count_strategy_slots(session, "legacy") == 0
+    assert is_strategy_slot_available(_settings(1), session, "legacy", for_new_signal=True) is True
 
 
 def test_untagged_holding_counts_as_legacy_for_backward_compatibility():

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from api.kiwoom_api import KiwoomAPI, _parse_kiwoom_int
 from core.models import Position, PositionBuyFill, PendingBuySignal, SellOrder, AutoTradeSettings, get_db
-from core.config import Config
+from core.config import Config, get_account_mode
 from utils.debug_tracer import debug_tracer
 from utils.auto_trade_activity_log import log_activity
 from utils.market_hours import (
@@ -3752,6 +3752,7 @@ class StopLossManager:
                 existing = session.query(Position).filter(
                     Position.stock_code == code,
                     Position.status == "HOLDING",
+                    Position.account_mode == get_account_mode(),
                 ).first()
                 if existing:
                     old_qty = existing.buy_quantity or 0
@@ -3808,6 +3809,7 @@ class StopLossManager:
                     status="HOLDING",
                     # 전략 키를 신호의 additional_data.strategy에서 복사 (예: "sangtta")
                     strategy_key=strategy_key,
+                    account_mode=get_account_mode(),
                     breakout_level_kind=signal_meta.get("level_kind"),
                     breakout_level_price=(
                         int(signal_meta.get("breakout_level_price") or signal_meta.get("level_price") or 0)

@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from core.models import PendingBuySignal, get_db
 from api.api_rate_limiter import api_rate_limiter
 from utils.datetime_kst import kst_today, now_kst, utc_now_naive
+from core.config import get_account_mode
 
 logger = logging.getLogger(__name__)
 
@@ -339,7 +340,8 @@ class SignalManager:
                     "status": initial_status,
                     "detected_at": utc_now_naive(),
                     "detected_date": kst_today(),  # KST 일자
-                    "signal_type": signal_type.value
+                    "signal_type": signal_type.value,
+                    "account_mode": get_account_mode(),
                 }
                 
                 # 추가 데이터 → JSON 컬럼 저장

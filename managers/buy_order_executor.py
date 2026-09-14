@@ -15,7 +15,7 @@ from core.models import (
     SellOrder,
 )
 from managers.stop_loss_manager import stop_loss_manager
-from core.config import Config
+from core.config import Config, get_account_mode
 from utils.debug_tracer import debug_tracer
 from utils.auto_trade_engine import (
     auto_trade_engines_allowed,
@@ -227,6 +227,10 @@ class BuyOrderExecutor:
                     .order_by(PendingBuySignal.detected_at.asc())
                     .all()
                 )
+                signals = [
+                    signal for signal in signals
+                    if getattr(signal, "account_mode", None) in (None, get_account_mode())
+                ]
                 break
             except Exception as e:
                 logger.error(f"💰 [BUY_EXECUTOR] WATCHING 조회 오류: {e}")
@@ -426,6 +430,10 @@ class BuyOrderExecutor:
                 signals = session.query(PendingBuySignal).filter(
                     PendingBuySignal.status == "PENDING"
                 ).order_by(PendingBuySignal.detected_at.asc()).all()
+                signals = [
+                    signal for signal in signals
+                    if getattr(signal, "account_mode", None) in (None, get_account_mode())
+                ]
                 break
             except Exception as e:
                 logger.error(f"💰 [BUY_EXECUTOR] 신호 조회 오류: {e}")
@@ -439,6 +447,12 @@ class BuyOrderExecutor:
         logger.info(f"💰 [BUY_EXECUTOR] 신호 처리 시작 - {signal.stock_name}({signal.stock_code})")
         
         try:
+            if getattr(signal, "account_mode", None) not in (None, get_account_mode()):
+                logger.warning(
+                    "💰 [BUY_EXECUTOR] 다른 계좌 모드 신호 건너뜀 - %s",
+                    signal.stock_code,
+                )
+                return
             # 처리 중 상태로 먼저 변경 (자기 자신을 '대기 주문'으로 인식하는 문제 방지)
             debug_tracer.log_checkpoint("상태 변경: PROCESSING", "BUY_EXECUTOR")
             await self._update_signal_status(signal.id, "PROCESSING")
@@ -1849,6 +1863,7 @@ class BuyOrderExecutor:
             query = session.query(Position).filter(
                 Position.stock_code == stock_code,
                 Position.status == "HOLDING",
+                Position.account_mode == get_account_mode(),
             )
             if strategy_key == "jongga":
                 today = as_kst().date()

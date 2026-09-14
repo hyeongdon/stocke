@@ -4,6 +4,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def get_account_mode() -> str:
+    return "mock" if Config.KIWOOM_USE_MOCK_ACCOUNT else "real"
+
 class Config:
     # 프로젝트 기본 설정 (core/ 상위 = 저장소 루트)
     PROJECT_ROOT = Path(__file__).resolve().parent.parent

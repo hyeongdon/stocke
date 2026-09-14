@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
-from core.config import Config
+from core.config import Config, get_account_mode
 from core.models import AutoTradeSettings, SellOrder, get_db
 from api.api_rate_limiter import api_rate_limiter
 from utils.market_hours import (
@@ -3046,19 +3046,23 @@ def prune_stale_buy_slot_reservations(session: Session) -> int:
     """미체결·만료 매수 신호 정리 — 동시보유 슬롯 누수 방지. WATCHING은 슬롯 외이지만 장기 방치 정리."""
     from core.models import PendingBuySignal, Position
 
+    account_mode = get_account_mode()
     now = utc_now_naive()
     stale_cutoff = now - timedelta(minutes=STALE_BUY_ORDERED_MINUTES)
     watching_cutoff = now - timedelta(hours=STALE_WATCHING_HOURS)
     holding_codes = {
-        (c or "").strip()
-        for (c,) in session.query(Position.stock_code).filter(Position.status == "HOLDING").all()
-        if c
+        (position.stock_code or "").strip()
+        for position in session.query(Position).filter(Position.status == "HOLDING").all()
+        if getattr(position, "account_mode", None) in (None, account_mode)
+        and position.stock_code
     }
     n = 0
     open_sigs = session.query(PendingBuySignal).filter(
         PendingBuySignal.status.in_(["PENDING", "PROCESSING", "ORDERED", "WATCHING"]),
     ).all()
     for sig in open_sigs:
+        if getattr(sig, "account_mode", None) not in (None, account_mode):
+            continue
         code = (sig.stock_code or "").strip()
         if sig.status == "WATCHING":
             if sig.detected_at and sig.detected_at < watching_cutoff:
@@ -3089,16 +3093,20 @@ def describe_open_position_slots(session: Session) -> Dict[str, int]:
     """슬롯 구성(보유·대기) — 로그/디버그용."""
     from core.models import PendingBuySignal, Position
 
+    account_mode = get_account_mode()
     holding_codes = {
-        (c or "").strip()
-        for (c,) in session.query(Position.stock_code).filter(Position.status == "HOLDING").all()
-        if c
+        (position.stock_code or "").strip()
+        for position in session.query(Position).filter(Position.status == "HOLDING").all()
+        if getattr(position, "account_mode", None) in (None, account_mode)
+        and position.stock_code
     }
     in_flight_cutoff = utc_now_naive() - timedelta(minutes=IN_FLIGHT_BUY_ORDERED_MINUTES)
     reserved: set = set()
     for sig in session.query(PendingBuySignal).filter(
         PendingBuySignal.status.in_(["PENDING", "PROCESSING", "ORDERED"]),
     ).all():
+        if getattr(sig, "account_mode", None) not in (None, account_mode):
+            continue
         if parse_signal_meta(sig).get("is_add_buy"):
             continue
         code = (sig.stock_code or "").strip()
@@ -3160,9 +3168,11 @@ def _count_strategy_slots(session: Session, strategy_key: str) -> int:
     from core.models import PendingBuySignal, Position
 
     strategy_key = _normalize_strategy_key(strategy_key)
+    account_mode = get_account_mode()
     holding_codes = {
         (p.stock_code or "").strip()
         for p in session.query(Position).filter(Position.status == "HOLDING").all()
+        if getattr(p, "account_mode", None) in (None, account_mode)
         if _normalize_strategy_key(getattr(p, "strategy_key", None) or "legacy") == strategy_key
         and (p.stock_code or "").strip()
     }
@@ -3171,6 +3181,8 @@ def _count_strategy_slots(session: Session, strategy_key: str) -> int:
     for sig in session.query(PendingBuySignal).filter(
         PendingBuySignal.status.in_(["PENDING", "PROCESSING", "ORDERED"]),
     ).all():
+        if getattr(sig, "account_mode", None) not in (None, account_mode):
+            continue
         meta = parse_signal_meta(sig)
         if _normalize_strategy_key(meta.get("strategy") or "legacy") != strategy_key:
             continue
