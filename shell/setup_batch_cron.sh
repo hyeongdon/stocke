@@ -16,17 +16,19 @@ fi
 CURRENT_CRON="$(crontab -l 2>/dev/null || true)"
 FILTERED_CRON="$(printf '%s\n' "$CURRENT_CRON" | awk -v begin="$CRON_BEGIN" -v end="$CRON_END" '$0 == begin {skip=1; next} $0 == end {skip=0; next} !skip')"
 
+# 서버 TZ=UTC 기준. 괄호는 의도한 KST(UTC+9).
 NEW_CRON=$(cat <<EOF
 $FILTERED_CRON
 $CRON_BEGIN
-# weekday post-market batches
-42 15 * * 1-5 $RUNNER failed-buy-signals
-50 19 * * 1-5 $RUNNER kiwoom-pnl-sync
-52 19 * * 1-5 $RUNNER daily-trade-journal
-# daily and monthly data batches
-0 18 * * * $RUNNER fundamental
-0 18 * * * $RUNNER theme-mart
-0 10 16 * * $RUNNER trade-industry
+# weekday post-market batches (UTC = KST-9)
+42 6 * * 1-5 $RUNNER failed-buy-signals
+50 10 * * 1-5 $RUNNER kiwoom-pnl-sync
+52 10 * * 1-5 $RUNNER daily-trade-journal
+# daily and monthly data batches (UTC = KST-9)
+# fundamental / theme-mart 동시 실행 시 OOM → 30분 간격
+0 9 * * * $RUNNER fundamental
+30 9 * * * $RUNNER theme-mart
+0 11 16 * * $RUNNER trade-industry
 $CRON_END
 EOF
 )
