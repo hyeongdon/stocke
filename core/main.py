@@ -5828,6 +5828,17 @@ async def get_ma1592_candidates():
             except Exception:
                 return 0.0
 
+        def _ledger_at_api(value: Optional[str]) -> Optional[str]:
+            """장부 편입 ISO(naive UTC) → API ISO(Z). 프론트는 KST로 표시."""
+            if not value:
+                return None
+            s = str(value).strip()
+            try:
+                dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            except Exception:
+                return s
+            return utc_naive_to_api_iso(dt)
+
         ledger_codes = {str(r.stock_code or "").replace("A", "").zfill(6) for r in store.all_rows()}
 
         def _gate_fields(close_px, ma15_val, ma92_val):
@@ -5888,7 +5899,7 @@ async def get_ma1592_candidates():
             in_ma15 = float(row.in_ma15) if row.in_ma15 else None
             in_ma92 = float(row.in_ma92) if row.in_ma92 else None
             close_for_gate = current_price or disp.get("bar_close")
-            ledger_at = row.in_at or row.gc_at or None
+            ledger_at = _ledger_at_api(row.in_at or row.gc_at or None)
             payload = {
                 "stock_code": code,
                 "stock_name": row.stock_name or code,
@@ -5901,7 +5912,7 @@ async def get_ma1592_candidates():
                 "in_price": row.in_price or row.gc_price or None,
                 "in_ma15": round(in_ma15, 2) if in_ma15 else None,
                 "in_ma92": round(in_ma92, 2) if in_ma92 else None,
-                "gc_at": row.gc_at,
+                "gc_at": _ledger_at_api(row.gc_at),
                 "gc_date": row.gc_date,
                 "gc_price": row.gc_price or None,
                 "current_price": current_price,
