@@ -57,6 +57,8 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
 fi
 # 미추적(.env, *.db, logs 등)은 유지. 추적 파일만 원격과 동일하게 맞춤.
 git reset --hard origin/main
+# Windows에서 커밋된 스크립트는 +x가 빠질 수 있어 재부여
+chmod +x "$PROJECT_DIR"/shell/*.sh 2>/dev/null || true
 log "Git sync 완료: $(git rev-parse --short HEAD)"
 
 # 3. 가상환경 활성화 및 의존성 확인
