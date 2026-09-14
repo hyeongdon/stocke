@@ -26,11 +26,10 @@ dist/
 *.sqlite3
 stock_pipeline.db
 
-# 로그 파일
+# 로그 파일 (서버/로컬 환경마다 내용이 다르므로 전체 제외)
 *.log
 stock_pipeline.log
-logs/_tmp_*.py
-logs/_tmp_*.json
+logs/
 scripts/_*.py
 
 # IDE 설정
