@@ -48,9 +48,16 @@ else
     log "실행 중인 서버 프로세스가 없습니다"
 fi
 
-# 2. Git 최신 코드 가져오기
+# 2. Git 최신 코드 가져오기 (실전 서버는 origin/main 고정)
 log "Git 최신 코드 가져오기 중..."
-git pull origin main
+git fetch origin main
+if ! git diff --quiet || ! git diff --cached --quiet; then
+    log "경고: 로컬 추적 파일 변경 감지 → origin/main 기준으로 버림"
+    git status --short | tee -a "$RESTART_LOG" || true
+fi
+# 미추적(.env, *.db, logs 등)은 유지. 추적 파일만 원격과 동일하게 맞춤.
+git reset --hard origin/main
+log "Git sync 완료: $(git rev-parse --short HEAD)"
 
 # 3. 가상환경 활성화 및 의존성 확인
 log "가상환경 활성화 중..."
