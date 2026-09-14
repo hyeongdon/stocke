@@ -50,6 +50,51 @@ def allocate_target_net(current: Sequence[int], target_net: int) -> List[int]:
     return out
 
 
+def allocate_net_from_gross(
+    grosses: Sequence[int],
+    fees: Sequence[int],
+    taxes: Sequence[int],
+    target_net: int,
+) -> List[int]:
+    """건별 순손익 = 매매차익 − 수수료 − 거래세. 키움 합과의 차이는 마지막 건에 몰기."""
+    n = len(grosses)
+    if n == 0:
+        return []
+    nets = [
+        int(grosses[i]) - int(fees[i]) - int(taxes[i])
+        for i in range(n)
+    ]
+    nets[-1] += int(target_net) - sum(nets)
+    return nets
+
+
+def _sell_proceeds(sell: Any) -> int:
+    qty = int(getattr(sell, "sell_quantity", None) or 0)
+    price = int(getattr(sell, "sell_price", None) or 0)
+    return int(getattr(sell, "sell_amount", None) or 0) or (price * qty)
+
+
+def _sell_gross(sell: Any, buy_price: Optional[int]) -> int:
+    qty = int(getattr(sell, "sell_quantity", None) or 0)
+    sell_px = int(getattr(sell, "sell_price", None) or 0)
+    if buy_price and sell_px and qty > 0:
+        return (sell_px - int(buy_price)) * qty
+    pl = int(getattr(sell, "profit_loss", None) or 0)
+    fee = int(getattr(sell, "trading_commission", None) or 0)
+    tax = int(getattr(sell, "transaction_tax", None) or 0)
+    return pl + fee + tax
+
+
+def _ordered_sells(sells: Sequence[SellOrder]) -> List[SellOrder]:
+    return sorted(
+        list(sells),
+        key=lambda s: (
+            getattr(s, "completed_at", None) or getattr(s, "created_at", None) or datetime.min,
+            int(getattr(s, "id", None) or 0),
+        ),
+    )
+
+
 def allocate_by_sell_amount(sells: Sequence[SellOrder], target: int) -> List[int]:
     """키움 일/종목 합계 비용을 매도금액 비중으로 배분."""
     if not sells:
@@ -229,20 +274,69 @@ def _apply_sell_financials(
     target_net: int,
     target_fee: int,
     target_tax: int,
+    positions_by_id: Optional[Dict[int, Position]] = None,
 ) -> List[Dict[str, Any]]:
-    """순손익·수수료·거래세 합계를 개별 매도 건에 배분해 저장."""
-    current = [int(getattr(s, "profit_loss", None) or 0) for s in sells]
-    allocated_net = allocate_target_net(current, int(target_net))
-    allocated_fee = allocate_by_sell_amount(sells, int(target_fee))
-    allocated_tax = allocate_by_sell_amount(sells, int(target_tax))
+    """수수료·거래세는 매도금액 비중, 순손익은 매매차익에서 차감. 키움 합 차이는 마지막 건."""
+    ordered = _ordered_sells(sells)
+    if not ordered:
+        return []
+    positions_by_id = positions_by_id or {}
+    allocated_fee = allocate_by_sell_amount(ordered, int(target_fee))
+    allocated_tax = allocate_by_sell_amount(ordered, int(target_tax))
+    buy_prices: List[Optional[int]] = []
+    for sell in ordered:
+        pos = positions_by_id.get(int(getattr(sell, "position_id", None) or 0))
+        bp = None
+        if pos is not None and getattr(pos, "buy_price", None):
+            bp = int(pos.buy_price)
+        elif getattr(sell, "buy_price", None):
+            bp = int(sell.buy_price)
+        buy_prices.append(bp)
+    grosses = [_sell_gross(s, bp) for s, bp in zip(ordered, buy_prices)]
+    allocated_net = allocate_net_from_gross(
+        grosses, allocated_fee, allocated_tax, int(target_net),
+    )
+    pos_counts: Dict[int, int] = {}
+    for sell in ordered:
+        pid = int(getattr(sell, "position_id", None) or 0)
+        if pid:
+            pos_counts[pid] = pos_counts.get(pid, 0) + 1
+
     updates: List[Dict[str, Any]] = []
-    for sell, new_pl, new_fee, new_tax in zip(
-        sells, allocated_net, allocated_fee, allocated_tax,
+    last_idx = len(ordered) - 1
+    for i, (sell, new_pl, new_fee, new_tax) in enumerate(
+        zip(ordered, allocated_net, allocated_fee, allocated_tax),
     ):
         old_pl = int(getattr(sell, "profit_loss", None) or 0)
         old_fee = int(getattr(sell, "trading_commission", None) or 0)
         old_tax = int(getattr(sell, "transaction_tax", None) or 0)
-        if old_pl == new_pl and old_fee == new_fee and old_tax == new_tax:
+        pid = int(getattr(sell, "position_id", None) or 0)
+        pos = positions_by_id.get(pid) if pid else None
+        buy_changed = False
+        old_buy = int(pos.buy_price) if pos is not None and pos.buy_price else None
+        # 키움 장부단가와 우리 매수가 차이 → 마지막 건(그리고 그 포지션이 이 배치에 1건뿐일 때) 매수가 보정
+        if i == last_idx and pos is not None and pos_counts.get(pid, 0) == 1:
+            qty = int(getattr(sell, "sell_quantity", None) or 0)
+            implied_gross = int(new_pl) + int(new_fee) + int(new_tax)
+            proceeds = _sell_proceeds(sell)
+            if qty > 0:
+                new_buy = int(round((proceeds - implied_gross) / qty))
+                if new_buy > 0:
+                    if new_buy != int(pos.buy_price or 0):
+                        pos.buy_price = new_buy
+                        pq = int(pos.buy_quantity or qty)
+                        pos.buy_amount = new_buy * pq
+                        buy_changed = True
+                    display_gross = (
+                        int(getattr(sell, "sell_price", None) or 0) - new_buy
+                    ) * qty
+                    new_pl = display_gross - int(new_fee) - int(new_tax)
+        if (
+            old_pl == new_pl
+            and old_fee == new_fee
+            and old_tax == new_tax
+            and not buy_changed
+        ):
             continue
         sell.profit_loss = new_pl
         sell.trading_commission = new_fee
@@ -250,7 +344,7 @@ def _apply_sell_financials(
         rate = _sell_rate(sell, new_pl)
         if rate is not None:
             sell.profit_loss_rate = rate
-        updates.append({
+        rec = {
             "sell_id": getattr(sell, "id", None),
             "position_id": getattr(sell, "position_id", None),
             "old": old_pl,
@@ -259,8 +353,20 @@ def _apply_sell_financials(
             "new_fee": new_fee,
             "old_tax": old_tax,
             "new_tax": new_tax,
-        })
+        }
+        if buy_changed:
+            rec["old_buy_price"] = old_buy
+            rec["new_buy_price"] = int(pos.buy_price)
+        updates.append(rec)
     return updates
+
+
+def _positions_for_sells(session: Session, sells: Sequence[SellOrder]) -> Dict[int, Position]:
+    ids = [int(s.position_id) for s in sells if getattr(s, "position_id", None)]
+    if not ids:
+        return {}
+    rows = session.query(Position).filter(Position.id.in_(ids)).all()
+    return {int(p.id): p for p in rows}
 
 
 def _closed_position_for_day(session: Session, code: str, day: date) -> Optional[Position]:
@@ -420,7 +526,10 @@ def apply_realized_diffs(session: Session, diffs: List[Dict[str, Any]]) -> Dict[
             continue
 
         if sells:
-            changes = _apply_sell_financials(sells, int(kiwoom_net), fee, tax)
+            pos_map = _positions_for_sells(session, sells)
+            changes = _apply_sell_financials(
+                sells, int(kiwoom_net), fee, tax, positions_by_id=pos_map,
+            )
             updated_sells += len(changes)
             pos_ids.extend(int(c["position_id"]) for c in changes if c.get("position_id"))
             row["applied"] = changes
@@ -453,7 +562,9 @@ def apply_realized_diffs(session: Session, diffs: List[Dict[str, Any]]) -> Dict[
                 "reason": "매도 이력 생성 실패",
             })
             continue
-        _apply_sell_financials([sell], int(kiwoom_net), fee, tax)
+        _apply_sell_financials(
+            [sell], int(kiwoom_net), fee, tax, positions_by_id={int(pos.id): pos},
+        )
         backfilled += 1
         updated_sells += 1
         pos_ids.append(int(pos.id))

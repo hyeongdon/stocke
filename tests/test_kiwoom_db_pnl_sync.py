@@ -5,10 +5,12 @@ from unittest.mock import MagicMock
 
 from notifications.kiwoom_db_pnl_sync_notify import format_kiwoom_db_pnl_sync_html
 from utils.kiwoom_db_pnl_sync import (
+    _apply_sell_financials,
     aggregate_db_sells,
     aggregate_ka10074_daily,
     aggregate_kiwoom_realized,
     allocate_by_sell_amount,
+    allocate_net_from_gross,
     allocate_target_net,
     compare_daily_totals,
     compare_realized,
@@ -39,6 +41,59 @@ class AllocateTargetNetTests(unittest.TestCase):
             SimpleNamespace(sell_amount=100_000, sell_price=0, sell_quantity=0),
         ]
         self.assertEqual(allocate_by_sell_amount(sells, 400), [300, 100])
+
+    def test_net_from_gross_dumps_kiwoom_gap_on_last(self):
+        out = allocate_net_from_gross([3640, 15120], [709, 760], [96, 104], 17871)
+        self.assertEqual(out[0], 3640 - 709 - 96)
+        self.assertEqual(sum(out), 17871)
+        self.assertEqual(out[1], 17871 - out[0])
+
+
+class ApplySellFinancialsTests(unittest.TestCase):
+    def test_row_identity_and_last_buy_price_absorbs_kiwoom(self):
+        pos1 = SimpleNamespace(id=1, buy_price=13510, buy_quantity=26, buy_amount=13510 * 26)
+        pos2 = SimpleNamespace(id=2, buy_price=13510, buy_quantity=27, buy_amount=13510 * 27)
+        s1 = SimpleNamespace(
+            id=1, position_id=1, sell_price=13650, sell_quantity=26,
+            sell_amount=13650 * 26, profit_loss=3640,
+            trading_commission=0, transaction_tax=0,
+            completed_at=datetime(2026, 9, 14, 0, 43),
+        )
+        s2 = SimpleNamespace(
+            id=2, position_id=2, sell_price=14070, sell_quantity=27,
+            sell_amount=14070 * 27, profit_loss=15120,
+            trading_commission=0, transaction_tax=0,
+            completed_at=datetime(2026, 9, 14, 6, 30),
+        )
+        _apply_sell_financials(
+            [s2, s1], 17871, 1469, 200,
+            positions_by_id={1: pos1, 2: pos2},
+        )
+        self.assertEqual(s1.profit_loss, 3640 - s1.trading_commission - s1.transaction_tax)
+        self.assertEqual(s1.trading_commission + s2.trading_commission, 1469)
+        self.assertEqual(s1.transaction_tax + s2.transaction_tax, 200)
+        last_gross = (s2.sell_price - pos2.buy_price) * s2.sell_quantity
+        self.assertEqual(
+            s2.profit_loss,
+            last_gross - s2.trading_commission - s2.transaction_tax,
+        )
+        self.assertLessEqual(abs(s1.profit_loss + s2.profit_loss - 17871), s2.sell_quantity)
+        self.assertEqual(pos1.buy_price, 13510)
+
+    def test_single_sell_aligns_buy_price_to_kiwoom_basis(self):
+        pos = SimpleNamespace(id=1, buy_price=264000, buy_quantity=1, buy_amount=264000)
+        sell = SimpleNamespace(
+            id=1, position_id=1, sell_price=265500, sell_quantity=1,
+            sell_amount=265500, profit_loss=1500,
+            trading_commission=0, transaction_tax=0,
+            completed_at=datetime(2026, 9, 14, 5, 36),
+        )
+        _apply_sell_financials([sell], 410, 60, 530, positions_by_id={1: pos})
+        self.assertEqual(sell.profit_loss, 410)
+        self.assertEqual(sell.trading_commission, 60)
+        self.assertEqual(sell.transaction_tax, 530)
+        self.assertEqual(pos.buy_price, 264500)
+        self.assertEqual((sell.sell_price - pos.buy_price) * sell.sell_quantity, 410 + 60 + 530)
 
 
 class CompareRealizedTests(unittest.TestCase):
