@@ -360,4 +360,39 @@ async def get_theme_trade_flow(
     payload["cached"] = False
     if payload.get("success"):
         save_theme_trade_flow_cache(payload)
+        return payload
+
+    # 빌드 실패(장 마감·API 오류): 마지막 성공 캐시가 있으면 stale 플래그로 제공
+    # (스키마/날짜 무관하게 items가 있으면 사용)
+    if cached and (cached.get("items") or []):
+        items = list(cached.get("items") or [])
+        items = [r for r in items if str(r.get("theme") or "") != UNMAPPED_THEME]
+        sort_mode = "change_rate" if str(sort_by).strip().lower() == "change_rate" else "trade_amount"
+        if sort_mode == "change_rate":
+            items.sort(
+                key=lambda x: (
+                    _f(x.get("avg_change_rate"), 0.0),
+                    _f(x.get("trade_amount"), 0.0),
+                ),
+                reverse=True,
+            )
+        else:
+            items.sort(key=lambda x: _f(x.get("trade_amount"), 0.0), reverse=True)
+        items = items[: max(1, int(top_n))]
+        for i, row in enumerate(items, start=1):
+            row["rank"] = i
+        out = dict(cached)
+        out["cached"] = True
+        out["stale"] = True  # 장 마감·API 실패로 인한 구 캐시 제공
+        out["items"] = items
+        out["theme_count"] = len(items)
+        out["sort_by"] = sort_mode
+        out["stale_reason"] = payload.get("error") or "거래대금 조회 실패 (장 마감 또는 API 오류)"
+        logger.info(
+            "theme_trade_flow: 빌드 실패(%s) → stale 캐시 제공 (built_at=%s)",
+            out["stale_reason"],
+            cached.get("built_at"),
+        )
+        return out
+
     return payload

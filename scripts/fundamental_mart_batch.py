@@ -35,13 +35,19 @@ LOG_FILE = os.path.join(LOG_DIR, "fundamental_mart_batch.log")
 
 def setup_logging() -> None:
     os.makedirs(LOG_DIR, exist_ok=True)
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    try:
+        handlers.insert(0, logging.FileHandler(LOG_FILE, encoding="utf-8"))
+    except PermissionError as e:
+        # 동일 파일을 다른 프로세스가 점유 중인 경우(Windows 잠금) stdout 전용으로 계속 실행
+        print(
+            f"[WARNING] 로그 파일 열기 실패({e}) — 콘솔 출력 전용으로 계속 실행합니다.",
+            file=sys.stderr,
+        )
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[
-            logging.FileHandler(LOG_FILE, encoding="utf-8"),
-            logging.StreamHandler(sys.stdout),
-        ],
+        handlers=handlers,
     )
 
 
@@ -71,6 +77,7 @@ def main() -> int:
     setup_logging()
     args = parse_args()
     log = logging.getLogger(__name__)
+    log.info("===== fundamental_mart_batch 시작 =====")
 
     if args.as_of:
         as_of_date = datetime.strptime(args.as_of.strip()[:10], "%Y-%m-%d").date()
@@ -98,6 +105,7 @@ def main() -> int:
 
     saved = upsert_many(rows, as_of_date=as_of_date)
     log.info("완료 — %d건 upsert (as_of=%s)", saved, as_of_date)
+    log.info("===== fundamental_mart_batch 종료 =====")
     return 0
 
 

@@ -232,18 +232,19 @@ async function loadThemeTradeFlow(rebuild = false) {
     const qs = new URLSearchParams({ sort_by: sortBy });
     if (rebuild) qs.set("rebuild", "1");
     const d = await fetchJSON(`/themes/trade-amount-map?${qs.toString()}`, { timeoutMs: 120000 });
-    if (!d.success) {
+    if (!d.success && !(d.stale && (d.items || []).length)) {
       map.innerHTML = emptyRow(d.error || "테마 대금 맵 조회 실패", "⚠️");
       if (hint) hint.textContent = "";
       return;
     }
     const items = d.items || [];
     _themeFlowItems = items;
-    const cacheTag = d.cached ? "캐시" : "실시간";
+    const cacheTag = d.stale ? "⚠️구캐시" : (d.cached ? "캐시" : "실시간");
     const sortTag = d.sort_by === "change_rate" ? "등락률순" : "거래대금순";
     const built = d.built_at ? new Date(d.built_at + (String(d.built_at).endsWith("Z") ? "" : "Z")).toLocaleTimeString("ko-KR") : "-";
     if (hint) {
-      hint.textContent = `${items.length}테마 · ${sortTag} · 종목 ${num(d.stock_universe || 0)} · 전체 소속테마 중복합산 · ${cacheTag} ${built}`;
+      const staleNote = d.stale ? ` (장 마감·API 오류로 구 데이터)` : "";
+      hint.textContent = `${items.length}테마 · ${sortTag} · 종목 ${num(d.stock_universe || 0)} · 전체 소속테마 중복합산 · ${cacheTag} ${built}${staleNote}`;
     }
     renderThemeFlowMap(items);
   } catch (e) {
