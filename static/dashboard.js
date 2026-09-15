@@ -406,6 +406,22 @@ async function pingServer() {
   }
 }
 
+function applySiteSwitchLink(isMock) {
+  const a = $('btnSiteSwitch');
+  if (!a) return;
+  const realUrl = window._realSiteUrl || 'http://144.24.81.83:8001/dashboard';
+  const mockUrl = window._mockSiteUrl || 'http://127.0.0.1:8000/dashboard';
+  if (isMock) {
+    a.href = realUrl;
+    a.textContent = '실전으로';
+    a.title = '실전투자 사이트로 이동';
+  } else {
+    a.href = mockUrl;
+    a.textContent = '모의로';
+    a.title = '모의투자 사이트로 이동';
+  }
+}
+
 function setAccountBadge(d) {
   const at = $('accountType');
   if (!at) return;
@@ -417,6 +433,7 @@ function setAccountBadge(d) {
   if (typeof window.syncAccountTheme === 'function') {
     window.syncAccountTheme(isReal);
   }
+  applySiteSwitchLink(!isReal);
   at.className = 'conn-badge ' + (isReal ? 'mode-real-badge' : 'mode-mock-badge');
   at.innerHTML = `<span class="dot"></span>${isReal ? '⚡ ' : '🎮 '}${acct}${kiwoom}${cache}`;
 }
@@ -995,6 +1012,7 @@ async function loadStatus() {
     const rt = activity.runtime || {};
     if (typeof rt.mock_mode === 'boolean' && typeof window.syncAccountTheme === 'function') {
       window.syncAccountTheme(!rt.mock_mode);
+      applySiteSwitchLink(rt.mock_mode);
     }
     const scanRunning = sessionActive(mon.auto_trade_scanner, 'scanner_running', rt);
     const buyRunning = sessionActive(mon.buy_executor, 'buy_executor_running', rt);
@@ -4805,6 +4823,15 @@ function startActivityPolling() {
 
 document.addEventListener('DOMContentLoaded', () => {
   syncDashStickyOffsets();
+  try {
+    const cached = sessionStorage.getItem('account_mock_mode');
+    if (cached !== null) applySiteSwitchLink(cached === 'true');
+  } catch (_) {}
+  fetchJSON('/api/status').then((s) => {
+    if (s.real_site_url) window._realSiteUrl = s.real_site_url;
+    if (s.mock_site_url) window._mockSiteUrl = s.mock_site_url;
+    if (typeof s.mock_mode === 'boolean') applySiteSwitchLink(s.mock_mode);
+  }).catch(() => {});
   window.addEventListener('resize', syncDashStickyOffsets);
   document.querySelectorAll('.tab[data-tab]').forEach(t => {
     t.onclick = (e) => { e.preventDefault(); switchTab(t.dataset.tab); };

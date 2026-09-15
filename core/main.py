@@ -48,7 +48,7 @@ from core.models import (
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from managers.condition_monitor import condition_monitor
-from api.kiwoom_api import KiwoomAPI
+from api.kiwoom_api import KiwoomAPI, invalidate_account_balance_cache
 from core.config import Config
 from utils.naver_discussion_crawler import NaverStockDiscussionCrawler
 
@@ -3504,7 +3504,9 @@ async def get_status():
         "token_valid": kiwoom_api.token_manager.is_token_valid(),
         "api_rate_limit": api_rate_limiter.get_status_info(),
         "mock_mode": use_mock,
-        "account_type": "모의투자" if use_mock else "실계좌"
+        "account_type": "모의투자" if use_mock else "실계좌",
+        "real_site_url": Config.REAL_SITE_URL,
+        "mock_site_url": Config.MOCK_SITE_URL,
     }
 
 @app.get("/api/rate-limit-status")

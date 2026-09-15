@@ -1928,7 +1928,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
     font-size: 9px;
     padding: 3px 6px;
   }
-  .topbar-legacy { display: none; }
+  .topbar-site-switch { flex: 0 0 auto; }
   .topbar-updated { flex: 1 1 auto; min-width: 0; }
 
   .wrap { padding: 10px 8px; }
