@@ -48,7 +48,9 @@ def is_krx_session(now: Optional[datetime] = None) -> bool:
 # 손절/익절 모니터 — NXT(넥스트레이드) 포함 연장 세션. 매수 창과 무관.
 # NXT에서 급락하면 익일까지 두면 손절폭이 과도해지므로 장전·장후에도 청산 감시.
 STOP_LOSS_MONITOR_START = dt_time(8, 0)
-STOP_LOSS_MONITOR_END = dt_time(19, 30)
+# After-market(extended) monitoring end time (KST). Extend to 20:00 to cover
+# NXT/after-market trading until 20:00.
+STOP_LOSS_MONITOR_END = dt_time(20, 0)
 
 
 def stop_loss_monitoring_bounds() -> Tuple[dt_time, dt_time]:

@@ -105,7 +105,8 @@ class Config:
     PORT = int(os.getenv("PORT", 8000))
     # 매일 KST 이 시각 이후 uvicorn 프로세스 자동 종료 (장마감 배치·테마 마트는 별도 스케줄)
     SERVER_AUTO_SHUTDOWN_ENABLED = os.getenv("SERVER_AUTO_SHUTDOWN_ENABLED", "true").lower() == "true"
-    SERVER_AUTO_SHUTDOWN_TIME = os.getenv("SERVER_AUTO_SHUTDOWN_TIME", "19:30")
+    # Default auto-shutdown time moved to 20:00 to match extended stop-loss monitoring.
+    SERVER_AUTO_SHUTDOWN_TIME = os.getenv("SERVER_AUTO_SHUTDOWN_TIME", "20:00")
 
     # ===== 웹 UI 세션 인증 =====
     # AUTH_PASSWORD는 평문으로 env에 두고, 검증 시 PBKDF2 해시로만 비교한다.
