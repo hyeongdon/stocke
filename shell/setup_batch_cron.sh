@@ -25,9 +25,11 @@ $CRON_BEGIN
 50 10 * * 1-5 $RUNNER kiwoom-pnl-sync
 52 10 * * 1-5 $RUNNER daily-trade-journal
 # daily and monthly data batches (UTC = KST-9)
-# fundamental / theme-mart 동시 실행 시 OOM → 30분 간격
+# fundamental / theme-mart 시간 분리 (서버 부하 방지)
+# fundamental: 09:00 UTC = 18:00 KST
+# theme-mart:  13:00 UTC = 22:00 KST (KeyBERT CPU 스파이크가 서버에 영향 없도록 장 마감 후 충분히 분리)
 0 9 * * * $RUNNER fundamental
-30 9 * * * $RUNNER theme-mart
+0 13 * * * $RUNNER theme-mart
 0 11 16 * * $RUNNER trade-industry
 $CRON_END
 EOF
