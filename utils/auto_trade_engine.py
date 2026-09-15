@@ -2529,6 +2529,7 @@ async def _eval_ma1592_hold(
     # EMA92 시드용 — 최소 ~100봉
     raw_bars = await kiwoom_api.get_stock_chart_data(
         stock_code, exec_tf, max_bars=150, cache_ttl_sec=ttl,
+        allow_off_hours=True,  # NXT 애프터마켓(15:30~20:00)에도 분봉 조회 허용
     )
     bars = drop_forming_minute_bar(raw_bars or [], now=now, interval_minutes=interval_min)
     ma_slow = int(p.get("ma_slow") or 92)
@@ -2717,6 +2718,7 @@ async def _eval_ma1592_scale_leg(
     ttl = float(getattr(Config, "MA1592_CHART_CACHE_TTL", 60) or 60)
     raw_15 = await kiwoom_api.get_stock_chart_data(
         stock_code, "15M", max_bars=120, cache_ttl_sec=ttl,
+        allow_off_hours=True,  # NXT 애프터마켓(15:30~20:00)에도 15분봉 조회 허용
     )
     bars = drop_forming_minute_bar(raw_15 or [], now=now, interval_minutes=15)
     if not bars or len(bars) < 20:

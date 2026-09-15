@@ -1663,6 +1663,7 @@ class StopLossManager:
         try:
             raw = await self.kiwoom_api.get_stock_chart_data(
                 position.stock_code, exec_tf, max_bars=150, cache_ttl_sec=60,
+                allow_off_hours=True,  # NXT 애프터마켓(15:30~20:00) 손절 모니터용
             )
             bars = drop_forming_minute_bar(raw or [], interval_minutes=interval_min)
             closes = []
@@ -3327,6 +3328,7 @@ class StopLossManager:
         try:
             raw = await self.kiwoom_api.get_stock_chart_data(
                 position.stock_code, exec_tf, max_bars=150, cache_ttl_sec=60,
+                allow_off_hours=True,  # NXT 애프터마켓(15:30~20:00) 3분봉 청산 판단용
             )
             bars = drop_forming_minute_bar(raw or [], interval_minutes=interval_min)
             if bars:
