@@ -46,8 +46,14 @@ class Ma1592UniverseScheduler:
             try:
                 now = time.time()
                 if now >= self._fail_until and now - self._last_run >= _MAINTAIN_INTERVAL_SEC:
+                    # 장부 TTL 만료·추세전환(DC) 정리는 정규장에서만 실행
+                    # (애프터마켓에서는 차트 조회 필요 없는 만료 정리만 수행)
                     if is_krx_session():
                         await self._run_maintenance()
+                    else:
+                        # 정규장 외: TTL 만료된 GC_WATCH 종목만 조용히 정리
+                        from utils.ma1592 import get_universe_store
+                        get_universe_store().expire_stale()
                     self._last_run = now
             except Exception as e:
                 self._fail_until = time.time() + 300

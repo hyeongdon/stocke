@@ -961,12 +961,21 @@ class AutoTradeScanner:
             logger.debug(f"📈 [AUTO_SCANNER] 프랙탈 후보 수집 중 오류: {e}")
 
         # 4b) MA1592 — L1 대금상위 → L2 GC 장부 → L3는 장부만 스캔
+        # 장부편입(sync_universe_from_condition)은 시간창과 무관하게 항상 실행해
+        # 스티키 유니버스를 축적한다. 실제 매수 후보(by_code)에 추가하는 것만
+        # 매수 시간창 내에서만 허용한다.
         try:
             ma1592_time_ok, ma1592_time_reason = allows_strategy_new_buy(settings, "ma1592")
-            if getattr(settings, "use_ma1592", False) and not ma1592_time_ok:
-                logger.debug(f"📈 [AUTO_SCANNER] MA1592 후보 수집 스킵 ({ma1592_time_reason})")
-            elif getattr(settings, "use_ma1592", False):
-                await self._collect_ma1592_targets(settings, by_code)
+            if getattr(settings, "use_ma1592", False):
+                # 시간창 내: 장부편입 + L3 스캔 결과 → by_code
+                # 시간창 외: 장부편입만 실행 (빈 dict 전달 → by_code 미반영)
+                scan_target = by_code if ma1592_time_ok else {}
+                if not ma1592_time_ok:
+                    logger.debug(
+                        f"📈 [AUTO_SCANNER] MA1592 L3 스캔 스킵 ({ma1592_time_reason})"
+                        f" — 장부편입은 계속 실행"
+                    )
+                await self._collect_ma1592_targets(settings, scan_target)
         except Exception as e:
             logger.debug(f"📈 [AUTO_SCANNER] MA1592 후보 수집 중 오류: {e}")
 
