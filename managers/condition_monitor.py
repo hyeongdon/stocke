@@ -15,6 +15,7 @@ from managers.signal_manager import signal_manager, SignalType, SignalStatus
 from api.api_rate_limiter import api_rate_limiter
 from managers.buy_order_executor import buy_order_executor
 from managers.watchlist_sync_manager import watchlist_sync_manager
+from managers.realtime_candle_manager import realtime_candle_manager
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,10 @@ class ConditionMonitor:
         self.start_time: Optional[datetime] = None  # 모니터링 시작 시간
         
         # 기준봉 전략 제거됨 - 현재 매매전략에 집중
+
+        # RealtimeCandleManager 연동 (WebSocket 실시간 체결 → 3분봉 집계)
+        realtime_candle_manager.set_kiwoom_api(self.kiwoom_api)
+        self.kiwoom_api.register_realtime_callback(realtime_candle_manager.on_realtime_trade)
     
     async def start_monitoring(self, condition_id: int, condition_name: str) -> bool:
         """조건식 모니터링 시작 (조건식 결과 -> PendingBuySignal 신호 생성)"""
@@ -64,6 +69,11 @@ class ConditionMonitor:
                     stock_name = stock.get("stock_name") or stock_code
                     if not stock_code:
                         continue
+
+                    # 📡 실시간 3분봉 구독 (API 제한 없이 데이터 수집)
+                    if not realtime_candle_manager.is_subscribed(stock_code):
+                        asyncio.create_task(realtime_candle_manager.subscribe(stock_code))
+                        logger.info(f"📡 [REALTIME_CANDLE] 조건식 편입 종목 실시간 구독: {stock_code} ({stock_name})")
 
                     ok = await signal_manager.create_signal(
                         condition_id=condition_id_int,

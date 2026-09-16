@@ -3048,6 +3048,66 @@ async def stop_monitoring():
         logger.error(f"🌐 [API] 모니터링 중지 오류: {e}")
         raise HTTPException(status_code=500, detail="모니터링 중지 중 오류가 발생했습니다.")
 
+
+# ===== 실시간 3분봉 API (WebSocket 체결 집계, API 제한 없음) =====
+
+@app.get("/api/realtime-candles/{stock_code}")
+async def get_realtime_candles(stock_code: str, count: int = 20, period_min: int = 3):
+    """
+    WebSocket 실시간 체결 데이터로 집계된 N분봉 조회.
+    REST API(ka10080) 없이 실시간 스트림에서 직접 생성 → API 제한 없음.
+
+    - stock_code: 종목코드 (예: 005930)
+    - count: 반환할 최근 봉 수 (기본 20)
+    - period_min: 분봉 단위 (기본 3, 변경하면 서버 재시작 필요)
+    """
+    from managers.realtime_candle_manager import realtime_candle_manager
+    code = stock_code.strip().lstrip("A")
+
+    # 구독 중이 아니면 자동 구독 시작
+    if not realtime_candle_manager.is_subscribed(code):
+        await realtime_candle_manager.subscribe(code)
+        return {
+            "stock_code": code,
+            "bars": [],
+            "subscribed": True,
+            "message": "실시간 구독을 시작했습니다. 잠시 후 데이터가 쌓입니다.",
+        }
+
+    bars = realtime_candle_manager.get_candles(code, count=count, include_current=True)
+    return {
+        "stock_code": code,
+        "period_min": realtime_candle_manager.period_min,
+        "bars": bars,
+        "count": len(bars),
+        "subscribed": True,
+    }
+
+
+@app.post("/api/realtime-candles/subscribe/{stock_code}")
+async def subscribe_realtime_candle(stock_code: str):
+    """종목 실시간 체결 구독 시작 (3분봉 집계용)."""
+    from managers.realtime_candle_manager import realtime_candle_manager
+    code = stock_code.strip().lstrip("A")
+    ok = await realtime_candle_manager.subscribe(code)
+    return {"stock_code": code, "subscribed": ok}
+
+
+@app.delete("/api/realtime-candles/subscribe/{stock_code}")
+async def unsubscribe_realtime_candle(stock_code: str):
+    """종목 실시간 체결 구독 해제."""
+    from managers.realtime_candle_manager import realtime_candle_manager
+    code = stock_code.strip().lstrip("A")
+    ok = await realtime_candle_manager.unsubscribe(code)
+    return {"stock_code": code, "unsubscribed": ok}
+
+
+@app.get("/api/realtime-candles/stats")
+async def get_realtime_candle_stats():
+    """실시간 3분봉 집계 현황 (구독 종목 수, 봉 수 등)."""
+    from managers.realtime_candle_manager import realtime_candle_manager
+    return realtime_candle_manager.get_stats()
+
 # ===== 디버그 모드 제어 API =====
 
 @app.post("/debug/enable")

@@ -231,6 +231,11 @@ class KiwoomAPI:
         self._chart_cache_ttl = 300  # 분봉 등: 5분
         self._daily_chart_cache_ttl = 43200  # 일봉: 12시간 (ATR은 stop_loss에서 일 1회 캐시)
 
+        # 실시간 체결 구독 종목 집합 (WebSocket REG/UNREG 관리)
+        self._realtime_subscribed: set = set()
+        # 실시간 REAL 메시지 수신 콜백 [(stock_code, values) -> Awaitable]
+        self._realtime_trade_callbacks: list = []
+
     @staticmethod
     def normalize_stock_code(stock_code: str) -> str:
         """키움 종목코드 정규화 — A 접두사·거래소 접미사(_NX/_AL/_L/_K 등) 제거."""
@@ -380,6 +385,11 @@ class KiwoomAPI:
             
             # 메시지 핸들러 태스크 생성
             self.message_task = asyncio.create_task(self._message_handler())
+
+            # 재연결 시 실시간 구독 복구
+            if self._realtime_subscribed:
+                asyncio.create_task(self._restore_realtime_subscriptions())
+
             return True
             
         except websockets.exceptions.InvalidStatusCode as e:
@@ -393,6 +403,100 @@ class KiwoomAPI:
             logger.error(f"웹소켓 연결 실패: {type(e).__name__}: {e}")
             return False
             
+    # ── 실시간 체결 구독 (WebSocket REG/UNREG) ──────────────────────────────
+
+    async def _restore_realtime_subscriptions(self):
+        """WebSocket 재연결 후 기존 실시간 구독 복구."""
+        codes = list(self._realtime_subscribed)
+        self._realtime_subscribed.clear()
+        await asyncio.sleep(0.5)  # 연결 안정화 대기
+        for code in codes:
+            await self.subscribe_realtime_stock(code)
+            await asyncio.sleep(0.05)
+        logger.info(f"📡 [REALTIME] 재연결 후 {len(codes)}종목 구독 복구 완료")
+
+    async def subscribe_realtime_stock(self, stock_code: str) -> bool:
+        """
+        종목 실시간 체결 데이터 구독 (WebSocket REG 전송).
+        RealtimeCandleManager.on_realtime_trade()가 REAL 메시지를 수신한다.
+
+        키움 WebSocket REG 형식:
+          {"trnm":"REG","data":[{"item":["005930"],"type":["0D"]}]}
+        0D = 주식체결 실시간
+        """
+        code = str(stock_code or "").strip().lstrip("A")
+        if not code:
+            return False
+        if code in self._realtime_subscribed:
+            return True
+        if not self.websocket or not self.running:
+            logger.warning(f"📡 [REALTIME] WebSocket 미연결 — 구독 보류: {code}")
+            return False
+        try:
+            msg = {"trnm": "REG", "data": [{"item": [code], "type": ["0D"]}]}
+            await self.websocket.send(json.dumps(msg))
+            self._realtime_subscribed.add(code)
+            logger.info(f"📡 [REALTIME] 실시간 체결 구독: {code}")
+            return True
+        except Exception as e:
+            logger.error(f"📡 [REALTIME] REG 전송 실패 {code}: {e}")
+            return False
+
+    async def unsubscribe_realtime_stock(self, stock_code: str) -> bool:
+        """종목 실시간 체결 구독 해제 (WebSocket UNREG)."""
+        code = str(stock_code or "").strip().lstrip("A")
+        self._realtime_subscribed.discard(code)
+        if not self.websocket or not self.running:
+            return False
+        try:
+            msg = {"trnm": "UNREG", "data": [{"item": [code], "type": ["0D"]}]}
+            await self.websocket.send(json.dumps(msg))
+            logger.info(f"📡 [REALTIME] 실시간 체결 구독 해제: {code}")
+            return True
+        except Exception as e:
+            logger.error(f"📡 [REALTIME] UNREG 전송 실패 {code}: {e}")
+            return False
+
+    def register_realtime_callback(self, callback) -> None:
+        """
+        실시간 체결 콜백 등록.
+        callback(stock_code: str, values: dict) — 코루틴 또는 일반 함수.
+        """
+        self._realtime_trade_callbacks.append(callback)
+
+    async def _dispatch_realtime(self, data: dict) -> None:
+        """WebSocket REAL 메시지를 파싱해 등록된 콜백들에 전달."""
+        try:
+            items = data.get("data")
+            if not isinstance(items, list):
+                # flat REAL
+                items = [data] if data.get("values") else []
+            for item in items:
+                data_type = item.get("type", "")
+                if data_type != "0D":
+                    continue
+                # 종목코드
+                code = (
+                    item.get("name")
+                    or item.get("item")
+                    or (item.get("values") or {}).get("9001")
+                    or ""
+                )
+                code = str(code).strip().lstrip("A")
+                if not code:
+                    continue
+                values = item.get("values") or {}
+                for cb in self._realtime_trade_callbacks:
+                    try:
+                        if asyncio.iscoroutinefunction(cb):
+                            await cb(code, values)
+                        else:
+                            cb(code, values)
+                    except Exception as e:
+                        logger.warning(f"📡 [REALTIME] 콜백 오류: {e}")
+        except Exception as e:
+            logger.warning(f"📡 [REALTIME] REAL 메시지 처리 오류: {e}")
+
     async def disconnect(self):
         """웹소켓 연결 종료 (빠르고 안전하게)"""
         logger.info("🔄 [DEBUG] self.running을 False로 설정 (disconnect 메서드)")
@@ -436,13 +540,21 @@ class KiwoomAPI:
                 
                 # 안전한 키 접근으로 수정
                 message_type = data.get("type")
-                if message_type == "condition":
+                trnm = data.get("trnm")
+
+                # ── 실시간 체결 메시지 (REAL 0D) ─────────────────────
+                if trnm == "REAL":
+                    await self._dispatch_realtime(data)
+                elif trnm == "PING":
+                    if self.websocket:
+                        await self.websocket.send(json.dumps({"trnm": "PONG"}))
+                elif message_type == "condition":
                     condition_name = data.get("condition_name")
                     if condition_name and condition_name in self.condition_callbacks:
                         await self.condition_callbacks[condition_name](data)
                 else:
                     # 예상하지 못한 메시지 타입 로깅
-                    logger.debug(f"알 수 없는 메시지 타입: {message_type}, 데이터: {data}")
+                    logger.debug(f"알 수 없는 메시지 타입: trnm={trnm} type={message_type}")
                     
             except websockets.exceptions.ConnectionClosed as e:
                 logger.warning(f"🔄 [DEBUG] ConnectionClosed 예외 발생 - 코드: {e.code}, 이유: {e.reason}")
