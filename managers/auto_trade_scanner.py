@@ -1066,6 +1066,24 @@ class AutoTradeScanner:
             capped_legacy = dict(pool[:legacy_limit])
             by_code.update(capped_legacy)
 
+            # 📡 레거시 후보 → 실시간 현재가 구독 (3분봉 집계용)
+            try:
+                from managers.realtime_candle_manager import realtime_candle_manager  # noqa: PLC0415
+                new_legacy_codes = [
+                    c for c in capped_legacy
+                    if not realtime_candle_manager.is_subscribed(c)
+                ]
+                if new_legacy_codes:
+                    asyncio.create_task(
+                        realtime_candle_manager.subscribe_batch(new_legacy_codes)
+                    )
+                    logger.info(
+                        f"📡 [REALTIME_CANDLE] 레거시 후보 {len(new_legacy_codes)}종목 실시간 구독: "
+                        f"{new_legacy_codes}"
+                    )
+            except Exception as _re:
+                logger.warning(f"📡 [REALTIME_CANDLE] 레거시 후보 구독 실패: {_re}")
+
             logger.info(
                 f"📈 [AUTO_SCANNER] 후보 수집 — 총한도 {total_limit} · 비레거시 {reserved} "
                 f"· 레거시 상위 {legacy_limit}/{screener_cap} "
@@ -1160,6 +1178,17 @@ class AutoTradeScanner:
             cache_ttl_sec=float(getattr(Config, "MA1592_CHART_CACHE_TTL", 60) or 60),
         )
 
+        # 📡 MA1592 장부 편입 종목 → 실시간 3분봉 자동 구독
+        try:
+            from managers.realtime_candle_manager import realtime_candle_manager  # noqa: PLC0415
+            for _row in store.all_rows():
+                _code = str(_row.stock_code or "").strip().lstrip("A")
+                if _code and not realtime_candle_manager.is_subscribed(_code):
+                    asyncio.create_task(realtime_candle_manager.subscribe(_code))
+                    logger.info(f"📡 [REALTIME_CANDLE] MA1592 장부편입 실시간 구독: {_code} ({_row.stock_name})")
+        except Exception as _ce:
+            logger.warning(f"📡 [REALTIME_CANDLE] MA1592 장부편입 구독 실패: {_ce}")
+
         maint = await maintain_ma1592_universe(
             self.kiwoom_api, params=p, store=store,
             cache_ttl_sec=float(getattr(Config, "MA1592_CHART_CACHE_TTL", 60) or 60),
@@ -1174,6 +1203,24 @@ class AutoTradeScanner:
             logger.info(
                 f"📈 [AUTO_SCANNER] MA1592 관찰 상한 초과 정리: {', '.join(trimmed)}"
             )
+        # 📡 장부에서 제거된 종목 → HOLDING 아니면 구독 해제
+        _removed_codes = [c for c in (purged + trimmed) if c]
+        if _removed_codes:
+            try:
+                from core.models import Position, get_db  # noqa: PLC0415
+                from managers.realtime_candle_manager import realtime_candle_manager  # noqa: PLC0415
+                holding_codes: set = set()
+                for _db in get_db():
+                    rows = _db.query(Position).filter(Position.status == "HOLDING").all()
+                    holding_codes = {str(r.stock_code or "").strip().lstrip("A") for r in rows if r.stock_code}
+                    break
+                for _code in _removed_codes:
+                    _c = str(_code).strip().lstrip("A")
+                    if _c and _c not in holding_codes and realtime_candle_manager.is_subscribed(_c):
+                        asyncio.create_task(realtime_candle_manager.unsubscribe(_c))
+                        logger.info(f"📡 [REALTIME_CANDLE] MA1592 장부 제거 → 구독 해제: {_c}")
+            except Exception as _ue:
+                logger.warning(f"📡 [REALTIME_CANDLE] MA1592 장부 제거 구독 해제 실패: {_ue}")
 
         l3 = select_l3_codes_for_scan(store, params=p)
         l3_total = len(store.l3_codes())
@@ -1249,6 +1296,22 @@ class AutoTradeScanner:
         name = item.get("stock_name") or code
         if not code:
             return False, "no_price"
+
+        # 📡 실시간 구독 가격이 있으면 우선 사용 (REST API snapshot 호출 절감)
+        try:
+            from managers.realtime_candle_manager import realtime_candle_manager  # noqa: PLC0415
+            rt_bar = realtime_candle_manager.get_latest_bar(code)
+            if rt_bar and rt_bar.get("close", 0) > 0:
+                old_price = item.get("current_price")
+                item = dict(item)  # 원본 dict 보호
+                item["current_price"] = rt_bar["close"]
+                if old_price and old_price != rt_bar["close"]:
+                    logger.debug(
+                        f"📡 [REALTIME_CANDLE] {name}({code}) "
+                        f"현재가 갱신: {old_price:,} → {rt_bar['close']:,} (실시간)"
+                    )
+        except Exception:
+            pass
 
         if await self._has_open_interest(code):
             src = item.get("source")

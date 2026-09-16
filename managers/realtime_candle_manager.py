@@ -359,12 +359,16 @@ class RealtimeCandleManager:
             return []
 
     def _get_pending_signal_codes(self) -> list:
-        """DB에서 활성 장부편입 신호(WATCHING/PENDING) 종목코드 목록을 반환."""
+        """DB에서 활성 장부편입 신호(WATCHING/PENDING) 종목코드 목록을 반환.
+        + Ma1592UniverseStore 장부 편입 종목도 함께 포함한다.
+        """
+        codes: list = []
+
+        # 1) PendingBuySignal (jongga / 조건식 신호)
         try:
             from core.models import PendingBuySignal, get_db  # noqa: PLC0415
             from datetime import date
             today = date.today()
-            codes = []
             for db in get_db():
                 rows = db.query(PendingBuySignal).filter(
                     PendingBuySignal.detected_date == today,
@@ -376,10 +380,27 @@ class RealtimeCandleManager:
                     if r.stock_code
                 ]
                 break
-            return codes
         except Exception as e:
             logger.warning(f"📡 [REALTIME_CANDLE] 장부편입 신호 조회 실패: {e}")
-            return []
+
+        # 2) Ma1592UniverseStore 장부 종목 (GC_WATCH / WAIT_HOLD / MANAGE_FULL 등 활성 상태)
+        try:
+            from utils.ma1592 import get_universe_store  # noqa: PLC0415
+            store = get_universe_store()
+            universe_codes = [
+                str(r.stock_code).strip().lstrip("A")
+                for r in store.all_rows()
+                if r.stock_code
+            ]
+            if universe_codes:
+                logger.info(
+                    f"📡 [REALTIME_CANDLE] Ma1592 장부 종목 {len(universe_codes)}개 재구독 포함: {universe_codes}"
+                )
+            codes = list(dict.fromkeys(codes + universe_codes))  # 중복 제거
+        except Exception as e:
+            logger.warning(f"📡 [REALTIME_CANDLE] Ma1592 장부 종목 조회 실패: {e}")
+
+        return codes
 
     async def on_market_close(self, log_prefix: str = "[장종료]"):
         """

@@ -3074,6 +3074,42 @@ async def realtime_candle_market_close_cleanup():
     }
 
 
+@app.post("/api/realtime-candles/resubscribe-universe")
+async def realtime_candle_resubscribe_universe():
+    """MA1592 장부편입 종목 + HOLDING 포지션 실시간 구독 누락분 보정.
+
+    서버 재시작 없이 Ma1592UniverseStore 장부와 PendingBuySignal을
+    다시 읽어 미구독 종목을 즉시 구독한다.
+    """
+    from managers.realtime_candle_manager import realtime_candle_manager
+    stats_before = realtime_candle_manager.get_stats()
+
+    # HOLDING
+    holding_codes = realtime_candle_manager._get_holding_codes()
+    # PendingBuySignal + Ma1592Universe
+    pending_codes = realtime_candle_manager._get_pending_signal_codes()
+
+    all_codes = list(dict.fromkeys(holding_codes + pending_codes))
+    newly_subscribed = []
+    for code in all_codes:
+        if not realtime_candle_manager.is_subscribed(code):
+            ok = await realtime_candle_manager.subscribe(code)
+            if ok:
+                newly_subscribed.append(code)
+
+    logger.info(
+        f"📡 [API] resubscribe-universe — 대상 {len(all_codes)}종목, "
+        f"신규구독 {len(newly_subscribed)}종목: {newly_subscribed}"
+    )
+    return {
+        "message": "장부편입 + HOLDING 누락 구독 보정 완료",
+        "target_codes": all_codes,
+        "newly_subscribed": newly_subscribed,
+        "before": stats_before,
+        "after": realtime_candle_manager.get_stats(),
+    }
+
+
 @app.get("/api/realtime-candles/{stock_code}")
 async def get_realtime_candles(stock_code: str, count: int = 20, period_min: int = 3):
     """
