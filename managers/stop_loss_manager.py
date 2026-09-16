@@ -2925,9 +2925,10 @@ class StopLossManager:
             for sell in open_sells:
                 if sell.status == "ORDERED":
                     self._finalize_sell_in_session(session, sell, pos)
+                    _sell_px_str = f" @ {int(sell.sell_price):,}원" if sell.sell_price else ""
                     log_activity(
                         "SELL",
-                        f"매도 체결 확정 — {pos.stock_name} {sell.sell_quantity}주 ({sell.sell_reason})",
+                        f"매도 체결 확정 — {pos.stock_name} {sell.sell_quantity}주{_sell_px_str} ({sell.sell_reason})",
                         "info",
                         stock_code=pos.stock_code,
                         reason=sell.sell_reason,
@@ -2953,7 +2954,8 @@ class StopLossManager:
             if last_done:
                 pos.status = last_done.sell_reason or "MANUAL_SELL"
                 pos.sell_time = last_done.completed_at or utc_now_naive()
-                detail = f"계좌 미보유 — DB 정리 ({pos.stock_name} → {pos.status})"
+                _dp_str = f" @ {int(last_done.sell_price):,}원" if last_done.sell_price else ""
+                detail = f"계좌 미보유 — DB 정리 ({pos.stock_name}{_dp_str} → {pos.status})"
             else:
                 pos.status = "MANUAL_SELL"
                 pos.sell_time = utc_now_naive()
