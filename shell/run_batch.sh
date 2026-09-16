@@ -17,7 +17,7 @@ mkdir -p "$ROOT_DIR/logs"
 
 usage() {
     echo "Usage: $0 <batch-name>"
-    echo "Batches: condition-alert, condition-alert-realtime, daily-trade-journal, failed-buy-signals, fundamental, kiwoom-pnl-sync, theme-mart, trade-industry"
+    echo "Batches: condition-alert, condition-alert-realtime, daily-trade-journal, failed-buy-signals, fundamental, kiwoom-pnl-sync, realtime-candle-cleanup, theme-mart, trade-industry"
 }
 
 if [[ $# -ne 1 ]]; then
@@ -65,6 +65,11 @@ case "$1" in
         SCRIPT="scripts/trade_industry_batch.py"
         ARGS=(--months 24 --sleep 0.15)
         LOG_FILE="$ROOT_DIR/logs/trade_industry_batch.log"
+        ;;
+    realtime-candle-cleanup)
+        SCRIPT="scripts/realtime_candle_cleanup_batch.py"
+        ARGS=()
+        LOG_FILE="$ROOT_DIR/logs/realtime_candle_cleanup_batch.log"
         ;;
     *)
         echo "Unknown batch: $1" >&2

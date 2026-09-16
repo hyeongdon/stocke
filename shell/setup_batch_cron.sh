@@ -24,6 +24,8 @@ $CRON_BEGIN
 42 6 * * 1-5 $RUNNER failed-buy-signals
 50 10 * * 1-5 $RUNNER kiwoom-pnl-sync
 52 10 * * 1-5 $RUNNER daily-trade-journal
+# 애프터장(NXT 야간장) 종료 후 실시간 체결 구독 해제 (KST 20:00 = UTC 11:00)
+0 11 * * 1-5 $RUNNER realtime-candle-cleanup
 # daily and monthly data batches (UTC = KST-9)
 # fundamental / theme-mart 시간 분리 (서버 부하 방지)
 # fundamental: 09:00 UTC = 18:00 KST

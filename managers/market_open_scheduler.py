@@ -54,6 +54,9 @@ class MarketOpenScheduler:
         self._poll_sec = 30
         self._last_auto_start_date: Optional[date] = None
         self._last_auto_stop_date: Optional[date] = None
+        # 실시간 봉 초기화(HOLDING 재구독)는 엔진 세션과 독립적으로
+        # 손절 모니터 시작 시각(08:00)에 일 1회 실행
+        self._realtime_init_date: Optional[date] = None
 
     async def start_scheduler(self):
         if self.is_running:
@@ -104,6 +107,20 @@ class MarketOpenScheduler:
         now = as_kst()
         today = now.date()
 
+        # ── 실시간 봉 08:00 초기화 (엔진 세션과 독립) ──────────────────
+        # 손절 모니터가 08:00에 시작하므로, 그 전에 HOLDING 재구독 완료.
+        # 엔진이 아직 안 떠도, 서버가 08:00에 켜져 있기만 하면 실행됨.
+        from utils.market_hours import STOP_LOSS_MONITOR_START
+        realtime_ready = now.time() >= STOP_LOSS_MONITOR_START  # 08:00 이후
+        if realtime_ready and self._realtime_init_date != today:
+            self._realtime_init_date = today
+            try:
+                from managers.realtime_candle_manager import realtime_candle_manager
+                await realtime_candle_manager.on_market_open()
+                logger.info("🕗 [MARKET_OPEN] 08:00 실시간 봉 초기화 + HOLDING 재구독 완료")
+            except Exception as e:
+                logger.warning(f"🕗 [MARKET_OPEN] 실시간 봉 초기화 오류: {e}")
+
         if not in_engine_session(settings, now):
             if engines_running():
                 from core.main import apply_auto_trade_state
@@ -112,6 +129,11 @@ class MarketOpenScheduler:
                 if self._last_auto_stop_date != today:
                     log_activity("SYSTEM", "매매 종료 시각 이후 자동매매 루프 자동 중지", "warn")
                     logger.info("🕗 [MARKET_OPEN] 매매 종료 이후 자동매매 루프 중지")
+                    # ※ 실시간 구독은 여기서 해제하지 않는다.
+                    # 애프터장(NXT 야간장)이 20:00까지 운영되므로
+                    # 손절 모니터가 20:00까지 3분봉 데이터를 사용할 수 있어야 함.
+                    # 실시간 구독 해제는 20:00 배치(run_realtime_candle_cleanup.bat)
+                    # 또는 서버 자동 종료(20:00) 시 메모리 소멸로 처리한다.
                 self._last_auto_stop_date = today
             return
 
@@ -132,6 +154,7 @@ class MarketOpenScheduler:
             logger.warning(f"🕗 [MARKET_OPEN] 손절 루프 점검 경고: {e}")
 
         if self._last_auto_start_date != today:
+            # on_market_open()은 08:00 블록에서 이미 처리됨 (중복 호출 없음)
             await self._enable_auto_trade(settings, reason="거래일 자동 기동")
             self._last_auto_start_date = today
             self._last_auto_stop_date = None

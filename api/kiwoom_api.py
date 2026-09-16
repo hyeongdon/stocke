@@ -442,6 +442,29 @@ class KiwoomAPI:
             logger.error(f"📡 [REALTIME] REG 전송 실패 {code}: {e}")
             return False
 
+    async def subscribe_realtime_stocks_batch(self, stock_codes: list) -> bool:
+        """
+        여러 종목 실시간 체결 구독 — WebSocket REG 1회 전송 (효율적).
+        개별 subscribe_realtime_stock()을 반복 호출하는 것보다 서버 부하가 적다.
+        """
+        codes = [str(c or "").strip().lstrip("A") for c in stock_codes]
+        codes = [c for c in codes if c and c not in self._realtime_subscribed]
+        if not codes:
+            return True
+        if not self.websocket or not self.running:
+            logger.warning(f"📡 [REALTIME] WebSocket 미연결 — 배치 구독 보류: {codes}")
+            return False
+        try:
+            msg = {"trnm": "REG", "data": [{"item": codes, "type": ["0D"]}]}
+            await self.websocket.send(json.dumps(msg))
+            for code in codes:
+                self._realtime_subscribed.add(code)
+            logger.info(f"📡 [REALTIME] 배치 구독 REG 전송: {len(codes)}종목 → {codes}")
+            return True
+        except Exception as e:
+            logger.error(f"📡 [REALTIME] 배치 REG 전송 실패: {e}")
+            return False
+
     async def unsubscribe_realtime_stock(self, stock_code: str) -> bool:
         """종목 실시간 체결 구독 해제 (WebSocket UNREG)."""
         code = str(stock_code or "").strip().lstrip("A")

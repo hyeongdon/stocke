@@ -23,9 +23,15 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────────────────
 #  상수
 # ──────────────────────────────────────────────────────────────────
-_MAX_BARS_PER_STOCK = 200   # 종목당 최대 보관 봉 수
+# 09:00~20:00 (애프터장 포함) 3분봉 최대 220봉 → 여유 280개 보관
+_MAX_BARS_PER_STOCK = 280
 _MARKET_OPEN  = dt_time(9, 0)
-_MARKET_CLOSE = dt_time(15, 30)
+_MARKET_CLOSE = dt_time(20, 0)   # 애프터장(NXT 야간장) 종료 시각
+
+# 키움 REST API WebSocket 실시간 구독 한도
+# 공식 문서 미명시, 실사용 기준 ~97개. 여유를 두고 95개로 제한.
+# 10종목 이하 운용 시 사실상 무관.
+_MAX_REALTIME_SUBSCRIPTIONS = 95
 
 
 @dataclass
@@ -109,15 +115,65 @@ class RealtimeCandleManager:
         """
         종목 실시간 체결 구독.
         KiwoomAPI 연결 후 호출해야 REG 명령이 전송된다.
+
+        ※ 키움 REST API WebSocket 구독 한도: 실사용 기준 ~97개.
+           _MAX_REALTIME_SUBSCRIPTIONS(95)를 초과하면 구독을 거부한다.
         """
         code = stock_code.strip().lstrip("A")
         if code in self._subscribed:
             return True
+
+        # 한도 초과 체크
+        if len(self._subscribed) >= _MAX_REALTIME_SUBSCRIPTIONS:
+            logger.warning(
+                f"📡 [REALTIME_CANDLE] 구독 한도 도달({_MAX_REALTIME_SUBSCRIPTIONS}개) "
+                f"— {code} 구독 건너뜀. 불필요한 종목을 먼저 해제하세요."
+            )
+            return False
+
         self._subscribed.add(code)
-        logger.info(f"📡 [REALTIME_CANDLE] 구독 등록: {code}")
+        logger.info(f"📡 [REALTIME_CANDLE] 구독 등록: {code} (현재 {len(self._subscribed)}개)")
         if self._kiwoom_api:
             return await self._kiwoom_api.subscribe_realtime_stock(code)
         return True
+
+    async def subscribe_batch(self, stock_codes: list) -> dict:
+        """
+        여러 종목 한꺼번에 구독 (WebSocket REG 1회 전송 → 효율적).
+
+        Returns: {"ok": [...], "skipped": [...], "reason": ...}
+        """
+        ok_codes, skipped = [], []
+        new_codes = []
+
+        for raw in stock_codes:
+            code = str(raw or "").strip().lstrip("A")
+            if not code:
+                continue
+            if code in self._subscribed:
+                ok_codes.append(code)
+                continue
+            if len(self._subscribed) + len(new_codes) >= _MAX_REALTIME_SUBSCRIPTIONS:
+                skipped.append(code)
+                continue
+            new_codes.append(code)
+
+        if new_codes:
+            for code in new_codes:
+                self._subscribed.add(code)
+            logger.info(
+                f"📡 [REALTIME_CANDLE] 배치 구독: {new_codes} "
+                f"(현재 {len(self._subscribed)}개/{_MAX_REALTIME_SUBSCRIPTIONS}개)"
+            )
+            # 한 번의 REG로 묶어서 전송
+            if self._kiwoom_api:
+                await self._kiwoom_api.subscribe_realtime_stocks_batch(new_codes)
+            ok_codes.extend(new_codes)
+
+        if skipped:
+            logger.warning(f"📡 [REALTIME_CANDLE] 한도 초과로 건너뜀: {skipped}")
+
+        return {"ok": ok_codes, "skipped": skipped}
 
     async def unsubscribe(self, stock_code: str) -> bool:
         code = stock_code.strip().lstrip("A")
@@ -244,10 +300,99 @@ class RealtimeCandleManager:
             },
         }
 
-    # ── 유틸 ────────────────────────────────────────────────────────
+    # ── 장 시작 / 종료 훅 ────────────────────────────────────────────
+
+    async def on_market_open(self):
+        """
+        장 시작(09:00) 시 호출.
+        1) 전날 봉 히스토리 초기화
+        2) DB에서 HOLDING 포지션 조회 → 오버나잇 종목 자동 재구독
+
+        왜 오버나잇 재구독이 필요한가?
+        - 20:00에 전체 구독 해제됨
+        - 오버나잇 종목은 조건식에서 새로 편입되지 않으면 구독이 안 됨
+        - 손절/익절 모니터가 3분봉을 REST API 없이 바로 쓸 수 있어야 함
+        """
+        # 봉 히스토리·진행 중인 봉 초기화 (구독 목록도 비워서 재구독 준비)
+        self._history.clear()
+        self._current.clear()
+        self._subscribed.clear()
+        if self._kiwoom_api:
+            self._kiwoom_api._realtime_subscribed.clear()
+
+        logger.info("📡 [REALTIME_CANDLE] 장 시작 — 봉 히스토리·구독 초기화 완료")
+
+        # DB에서 오버나잇(HOLDING) 포지션 조회 → 재구독
+        holding_codes = self._get_holding_codes()
+        if holding_codes:
+            logger.info(f"📡 [REALTIME_CANDLE] 오버나잇 포지션 {len(holding_codes)}종목 재구독: {holding_codes}")
+            await self.subscribe_batch(holding_codes)
+        else:
+            logger.info("📡 [REALTIME_CANDLE] 오버나잇 포지션 없음 — 조건식 편입 시 구독 시작")
+
+    def _get_holding_codes(self) -> list:
+        """DB에서 HOLDING 상태 포지션의 종목코드 목록을 반환."""
+        try:
+            from core.models import Position, get_db  # noqa: PLC0415
+            codes = []
+            for db in get_db():
+                rows = db.query(Position).filter(
+                    Position.status == "HOLDING"
+                ).all()
+                codes = [
+                    str(r.stock_code or "").strip().lstrip("A")
+                    for r in rows
+                    if r.stock_code
+                ]
+                break
+            return codes
+        except Exception as e:
+            logger.warning(f"📡 [REALTIME_CANDLE] HOLDING 포지션 조회 실패: {e}")
+            return []
+
+    async def on_market_close(self, log_prefix: str = "[장종료]"):
+        """
+        애프터장(NXT 야간장) 종료(20:00) 이후 호출.
+        모든 구독을 해제하고 봉 히스토리를 초기화한다.
+
+        호출 시점:
+          - run_realtime_candle_cleanup.bat (평일 20:00 작업 스케줄러)
+          - POST /api/realtime-candles/market-close-cleanup (API 직접 호출)
+          - 서버 자동 종료(20:00) 전 shutdown 훅 (선택적)
+        """
+        codes = list(self._subscribed)
+        if codes and self._kiwoom_api:
+            try:
+                # 한 번의 UNREG로 전체 해제
+                if self.websocket_connected():
+                    msg = {
+                        "trnm": "UNREG",
+                        "data": [{"item": codes, "type": ["0D"]}],
+                    }
+                    import json as _json
+                    await self._kiwoom_api.websocket.send(_json.dumps(msg))
+                    logger.info(f"📡 [REALTIME_CANDLE] {log_prefix} UNREG 전송: {len(codes)}종목")
+            except Exception as e:
+                logger.warning(f"📡 [REALTIME_CANDLE] {log_prefix} UNREG 전송 실패: {e}")
+
+        self._subscribed.clear()
+        self._history.clear()
+        self._current.clear()
+        if self._kiwoom_api:
+            self._kiwoom_api._realtime_subscribed.clear()
+
+        logger.info(f"📡 [REALTIME_CANDLE] {log_prefix} 구독 전체 해제({len(codes)}종목), 봉 초기화 완료")
+
+    def websocket_connected(self) -> bool:
+        """KiwoomAPI WebSocket이 연결된 상태인지 확인."""
+        if not self._kiwoom_api:
+            return False
+        return bool(getattr(self._kiwoom_api, "websocket", None)) and bool(
+            getattr(self._kiwoom_api, "running", False)
+        )
 
     def flush_old_bars(self):
-        """장 종료 후 당일 봉 히스토리 정리 (메모리 관리용)."""
+        """봉 히스토리만 초기화 (구독 유지). 메모리 관리용."""
         self._history.clear()
         self._current.clear()
         logger.info("📡 [REALTIME_CANDLE] 봉 히스토리 초기화 완료")
