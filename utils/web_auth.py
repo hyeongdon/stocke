@@ -102,6 +102,10 @@ def is_public_path(path: str) -> bool:
         "/docs",
         "/openapi.json",
         "/redoc",
+        "/api/realtime-candles/stats",   # 실시간 구독 현황 (모니터링용)
     }:
+        return True
+    # 실시간 봉 조회/구독 API — 배치·모니터링 스크립트에서 인증 없이 접근
+    if path.startswith("/api/realtime-candles/"):
         return True
     return False

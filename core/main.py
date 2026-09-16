@@ -3050,6 +3050,29 @@ async def stop_monitoring():
 
 
 # ===== 실시간 3분봉 API (WebSocket 체결 집계, API 제한 없음) =====
+# ※ 고정 경로(stats, market-close-cleanup)를 {stock_code} 앞에 선언해야
+#   FastAPI가 파라미터 라우트보다 먼저 매칭한다.
+
+@app.get("/api/realtime-candles/stats")
+async def get_realtime_candle_stats():
+    """실시간 3분봉 집계 현황 (구독 종목 수, 봉 수 등)."""
+    from managers.realtime_candle_manager import realtime_candle_manager
+    return realtime_candle_manager.get_stats()
+
+
+@app.post("/api/realtime-candles/market-close-cleanup")
+async def realtime_candle_market_close_cleanup():
+    """장 종료 후 실시간 체결 구독 전체 해제 + 봉 히스토리 초기화."""
+    from managers.realtime_candle_manager import realtime_candle_manager
+    stats_before = realtime_candle_manager.get_stats()
+    await realtime_candle_manager.on_market_close(log_prefix="[배치 장종료 정리]")
+    logger.info("🧹 [API] /api/realtime-candles/market-close-cleanup 호출됨")
+    return {
+        "message": "실시간 구독 해제 및 봉 히스토리 초기화 완료",
+        "before": stats_before,
+        "after": realtime_candle_manager.get_stats(),
+    }
+
 
 @app.get("/api/realtime-candles/{stock_code}")
 async def get_realtime_candles(stock_code: str, count: int = 20, period_min: int = 3):
@@ -3101,30 +3124,6 @@ async def unsubscribe_realtime_candle(stock_code: str):
     ok = await realtime_candle_manager.unsubscribe(code)
     return {"stock_code": code, "unsubscribed": ok}
 
-
-@app.get("/api/realtime-candles/stats")
-async def get_realtime_candle_stats():
-    """실시간 3분봉 집계 현황 (구독 종목 수, 봉 수 등)."""
-    from managers.realtime_candle_manager import realtime_candle_manager
-    return realtime_candle_manager.get_stats()
-
-
-@app.post("/api/realtime-candles/market-close-cleanup")
-async def realtime_candle_market_close_cleanup():
-    """
-    장 종료 후 실시간 체결 구독 전체 해제 + 봉 히스토리 초기화.
-    배치/작업 스케줄러(20:00 이후)에서 호출해 당일 구독 상태를 정리한다.
-    서버가 실행 중일 때만 의미 있음.
-    """
-    from managers.realtime_candle_manager import realtime_candle_manager
-    stats_before = realtime_candle_manager.get_stats()
-    await realtime_candle_manager.on_market_close(log_prefix="[배치 장종료 정리]")
-    logger.info("🧹 [API] /api/realtime-candles/market-close-cleanup 호출됨")
-    return {
-        "message": "실시간 구독 해제 및 봉 히스토리 초기화 완료",
-        "before": stats_before,
-        "after": realtime_candle_manager.get_stats(),
-    }
 
 # ===== 디버그 모드 제어 API =====
 

@@ -304,14 +304,14 @@ class RealtimeCandleManager:
 
     async def on_market_open(self):
         """
-        장 시작(09:00) 시 호출.
+        장 시작(08:00) 시 호출.
         1) 전날 봉 히스토리 초기화
-        2) DB에서 HOLDING 포지션 조회 → 오버나잇 종목 자동 재구독
+        2) DB에서 HOLDING 포지션 + 활성 장부편입 신호 조회 → 자동 재구독
 
-        왜 오버나잇 재구독이 필요한가?
+        왜 재구독이 필요한가?
         - 20:00에 전체 구독 해제됨
-        - 오버나잇 종목은 조건식에서 새로 편입되지 않으면 구독이 안 됨
-        - 손절/익절 모니터가 3분봉을 REST API 없이 바로 쓸 수 있어야 함
+        - HOLDING: 오버나잇 손절/익절 모니터가 3분봉을 바로 써야 함
+        - PendingBuySignal(WATCHING/PENDING): 현재가 모니터링으로 REST API 대신 실시간 데이터 사용
         """
         # 봉 히스토리·진행 중인 봉 초기화 (구독 목록도 비워서 재구독 준비)
         self._history.clear()
@@ -322,13 +322,21 @@ class RealtimeCandleManager:
 
         logger.info("📡 [REALTIME_CANDLE] 장 시작 — 봉 히스토리·구독 초기화 완료")
 
-        # DB에서 오버나잇(HOLDING) 포지션 조회 → 재구독
+        # 1) HOLDING 포지션
         holding_codes = self._get_holding_codes()
-        if holding_codes:
-            logger.info(f"📡 [REALTIME_CANDLE] 오버나잇 포지션 {len(holding_codes)}종목 재구독: {holding_codes}")
-            await self.subscribe_batch(holding_codes)
+        # 2) 활성 장부편입 신호 (WATCHING / PENDING)
+        pending_codes = self._get_pending_signal_codes()
+
+        all_codes = list(dict.fromkeys(holding_codes + pending_codes))  # 중복 제거, 순서 유지
+        if all_codes:
+            logger.info(
+                f"📡 [REALTIME_CANDLE] 재구독 — "
+                f"HOLDING {len(holding_codes)}종목 + 장부편입 {len(pending_codes)}종목 "
+                f"= 총 {len(all_codes)}종목: {all_codes}"
+            )
+            await self.subscribe_batch(all_codes)
         else:
-            logger.info("📡 [REALTIME_CANDLE] 오버나잇 포지션 없음 — 조건식 편입 시 구독 시작")
+            logger.info("📡 [REALTIME_CANDLE] 재구독 대상 없음 — 조건식 편입 시 구독 시작")
 
     def _get_holding_codes(self) -> list:
         """DB에서 HOLDING 상태 포지션의 종목코드 목록을 반환."""
@@ -348,6 +356,29 @@ class RealtimeCandleManager:
             return codes
         except Exception as e:
             logger.warning(f"📡 [REALTIME_CANDLE] HOLDING 포지션 조회 실패: {e}")
+            return []
+
+    def _get_pending_signal_codes(self) -> list:
+        """DB에서 활성 장부편입 신호(WATCHING/PENDING) 종목코드 목록을 반환."""
+        try:
+            from core.models import PendingBuySignal, get_db  # noqa: PLC0415
+            from datetime import date
+            today = date.today()
+            codes = []
+            for db in get_db():
+                rows = db.query(PendingBuySignal).filter(
+                    PendingBuySignal.detected_date == today,
+                    PendingBuySignal.status.in_(["WATCHING", "PENDING"]),
+                ).all()
+                codes = [
+                    str(r.stock_code or "").strip().lstrip("A")
+                    for r in rows
+                    if r.stock_code
+                ]
+                break
+            return codes
+        except Exception as e:
+            logger.warning(f"📡 [REALTIME_CANDLE] 장부편입 신호 조회 실패: {e}")
             return []
 
     async def on_market_close(self, log_prefix: str = "[장종료]"):

@@ -2040,6 +2040,28 @@ class BuyOrderExecutor:
                         logger.info(f"💰 [BUY_EXECUTOR] 신호 상태 변경: ID {signal_id} -> {status}, reason={reason}")
                     else:
                         logger.info(f"💰 [BUY_EXECUTOR] 신호 상태 변경: ID {signal_id} -> {status}")
+
+                    # 장부편입 구독 해제: 더 이상 모니터링이 필요없는 최종 상태
+                    # FILLED/ORDERED는 HOLDING 포지션으로 이어지므로 구독 유지
+                    _TERMINAL_UNSUBSCRIBE_STATUSES = {"FAILED", "EXPIRED", "CANCELLED"}
+                    if status in _TERMINAL_UNSUBSCRIBE_STATUSES and signal and signal.stock_code:
+                        stock_code = str(signal.stock_code).strip().lstrip("A")
+                        # HOLDING 포지션이 있으면 구독 유지
+                        from core.models import Position  # noqa: PLC0415
+                        has_holding = session.query(Position).filter(
+                            Position.stock_code == stock_code,
+                            Position.status == "HOLDING",
+                        ).first() is not None
+                        if not has_holding:
+                            try:
+                                from managers.realtime_candle_manager import realtime_candle_manager  # noqa: PLC0415
+                                if realtime_candle_manager.is_subscribed(stock_code):
+                                    asyncio.create_task(realtime_candle_manager.unsubscribe(stock_code))
+                                    logger.info(
+                                        f"📡 [REALTIME_CANDLE] 장부편입 {status} → 구독 해제: {stock_code}"
+                                    )
+                            except Exception as _ue:
+                                logger.warning(f"📡 [REALTIME_CANDLE] 구독 해제 실패: {_ue}")
                 break
         except Exception as e:
             logger.error(f"💰 [BUY_EXECUTOR] 신호 상태 업데이트 오류: {e}")
