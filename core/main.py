@@ -876,6 +876,7 @@ def enrich_balance_cash_reserve(balance_data: dict) -> dict:
 
     settings = None
     cash_snapshot = None
+    holding_invested = 0  # HOLDING 포지션 투자금 합산 (entr T+2 지연 보정용)
     for db in get_db():
         settings = db.query(AutoTradeSettings).first()
         snap = (
@@ -891,9 +892,22 @@ def enrich_balance_cash_reserve(balance_data: dict) -> dict:
                 "settlement_gap": int(snap.settlement_gap or 0),
                 "synced_at": snap.synced_at.isoformat() if snap.synced_at else None,
             }
+        # 키움 entr(주문가능금액)은 당일 체결을 T+2 기준으로 지연 반영하므로
+        # 현재 HOLDING 중인 포지션의 실제 투자금을 차감하여 investable_cash를 보정한다
+        holding_rows = db.query(Position.actual_buy_amount).filter(
+            Position.status == "HOLDING"
+        ).all()
+        holding_invested = sum(r[0] or 0 for r in holding_rows)
         break
+    # entr에서 이미 투자된 금액을 차감한 실질 주문가능금액
+    entr_adjusted = max(0, entr - holding_invested)
+    if holding_invested > 0:
+        logger.info(
+            f"💰 [BALANCE] entr 보정: {entr:,}원 - HOLDING투자금 {holding_invested:,}원"
+            f" = 실질가용 {entr_adjusted:,}원"
+        )
     pct = cash_reserve_pct(settings) if settings else 10.0
-    investable_raw, reserve = compute_investable_cash(entr, settings)
+    investable_raw, reserve = compute_investable_cash(entr_adjusted, settings)
     investable = investable_raw
     d2_cap_applied = False
     if d2 <= 0:
@@ -916,6 +930,8 @@ def enrich_balance_cash_reserve(balance_data: dict) -> dict:
     balance_data["investable_cash"] = investable
     balance_data["balance_breakdown"] = {
         "deposit": entr,
+        "deposit_adjusted": entr_adjusted,
+        "holding_invested": holding_invested,
         "d2_deposit": d2,
         "stock_eval_api": stock_eval_api,
         "stock_eval_holdings_sum": stock_eval_sum,
