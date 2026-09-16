@@ -916,7 +916,10 @@ def enrich_balance_cash_reserve(balance_data: dict) -> dict:
         investable = d2
         d2_cap_applied = True
 
-    computed_total = entr + stock_eval
+    # T+2 정산 지연 보정: entr에 당일 매수대금이 미반영된 경우 이중 계산 방지.
+    # holding_invested만큼 차감된 entr_adjusted를 사용하면
+    # computed_total ≈ prsm_dpst_aset_amt (total_asset) 에 수렴한다.
+    computed_total = entr_adjusted + stock_eval
     total_gap = total_asset - computed_total if total_asset > 0 else 0
     if holding_count == 0:
         effective_total = entr
