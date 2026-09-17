@@ -106,6 +106,15 @@ KNOWN_BATCHES: List[Dict[str, Any]] = [
         "description": "네이버 기본적분석 데이터 → DB 마트",
     },
     {
+        "id": "log_cleanup",
+        "label": "로그 7일 정리",
+        "task_name": "stocke-log-cleanup",
+        "process_needles": ["log_cleanup_batch.py", "run_log_cleanup_batch.bat"],
+        "log_file": os.path.join(LOG_DIR, "log_cleanup_batch.log"),
+        "default_schedule": "매일 23:00",
+        "description": "앱·배치 로그를 최근 7일만 남김. 계속 커지는 stock_pipeline.log·server.log·cron.log 본문도 자름.",
+    },
+    {
         "id": "stock_news",
         "label": "전체 종목 뉴스/키워드",
         "task_name": "stocke-stock-news-batch",

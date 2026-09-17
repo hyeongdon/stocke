@@ -29,8 +29,9 @@ cat > /tmp/new_crontab << EOF
 # 매일 오전 1시에 만료된 관심종목 정리
 0 1 * * * curl -X POST http://localhost:8001/watchlist/sync/cleanup >> $CRON_LOG 2>&1
 
-# 매주 일요일 오전 3시에 로그 파일 정리 (7일 이상 된 로그 삭제)
-0 3 * * 0 find $PROJECT_DIR/logs -name "*.log" -mtime +7 -delete >> $CRON_LOG 2>&1
+# 매일 23:00 KST (서버 UTC 14:00) 로그 7일 보관 정리
+# stock_pipeline.log / cron.log 처럼 계속 커지는 파일은 본문을 자른다.
+0 14 * * * cd $PROJECT_DIR && ./venv/bin/python scripts/log_cleanup_batch.py >> $CRON_LOG 2>&1
 
 # 매월 1일 오전 4시에 데이터베이스 백업
 0 4 1 * * cd $PROJECT_DIR && cp stock_pipeline.db "backup/stock_pipeline_$(date +%Y%m%d).db" >> $CRON_LOG 2>&1
@@ -48,7 +49,7 @@ echo "설정된 작업:"
 echo "- 매일 오전 2시: 소스 동기화, 변경 시 서버 재시작, 결과 텔레그램"
 echo "- 매 30분: 서버 상태 확인"
 echo "- 매일 오전 1시: 만료된 관심종목 정리"
-echo "- 매주 일요일 오전 3시: 로그 파일 정리"
+echo "- 매일 23:00 KST: 로그 7일 보관 정리"
 echo "- 매월 1일 오전 4시: 데이터베이스 백업"
 echo ""
 echo "로그 파일: $CRON_LOG"
