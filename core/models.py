@@ -337,7 +337,7 @@ class AutoTradeSettings(Base):
     ma1592_impulse_min_pct = Column(Float, nullable=False, default=2.0)
     ma1592_crash_pct = Column(Float, nullable=False, default=1.8)
     ma1592_crash_bars = Column(Integer, nullable=False, default=3)
-    ma1592_setup_expire_days = Column(Integer, nullable=False, default=8)
+    ma1592_setup_expire_days = Column(Integer, nullable=False, default=1)
     ma1592_max_hold_days = Column(Integer, nullable=False, default=10)
     ma1592_flatten_eod = Column(Boolean, nullable=False, default=True)
     ma1592_risk_per_trade_pct = Column(Float, nullable=False, default=2.0)
@@ -1316,7 +1316,7 @@ def init_db() -> None:
                 ('ma1592_impulse_min_pct', 'FLOAT DEFAULT 2.0'),
                 ('ma1592_crash_pct', 'FLOAT DEFAULT 1.8'),
                 ('ma1592_crash_bars', 'INTEGER DEFAULT 3'),
-                ('ma1592_setup_expire_days', 'INTEGER DEFAULT 8'),
+                ('ma1592_setup_expire_days', 'INTEGER DEFAULT 1'),
                 ('ma1592_max_hold_days', 'INTEGER DEFAULT 10'),
                 ('ma1592_flatten_eod', 'BOOLEAN DEFAULT 1'),
                 ('ma1592_risk_per_trade_pct', 'FLOAT DEFAULT 2.0'),
@@ -1355,6 +1355,15 @@ def init_db() -> None:
                 conn.execute(text(
                     "UPDATE auto_trade_settings SET breakout_entry_soft_polls = 3 "
                     "WHERE breakout_entry_soft_polls IS NULL OR breakout_entry_soft_polls <= 0"
+                ))
+                conn.commit()
+            except Exception:
+                pass
+            # MA1592 관찰 장부 TTL: 기본 8일 → 1일 (편입 당일만 유지)
+            try:
+                conn.execute(text(
+                    "UPDATE auto_trade_settings SET ma1592_setup_expire_days = 1 "
+                    "WHERE ma1592_setup_expire_days IS NULL OR ma1592_setup_expire_days = 8"
                 ))
                 conn.commit()
             except Exception:

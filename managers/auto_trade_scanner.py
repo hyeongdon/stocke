@@ -1152,8 +1152,8 @@ class AutoTradeScanner:
             names = [Config.MA1592_DEFAULT_CONDITION_NAME]
 
         store = get_universe_store()
-        store.expire_stale()
         p = params_from_settings(settings)
+        store.expire_stale(params=p)
 
         items, errs = await fetch_condition_target_items(self.kiwoom_api, names)
         if errs:

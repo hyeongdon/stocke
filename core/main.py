@@ -5913,8 +5913,8 @@ async def get_ma1592_candidates():
 
         store = get_universe_store()
         store.load()
-        store.expire_stale()
         ma_params = params_from_settings(settings)
+        store.expire_stale(params=ma_params)
         chart_ttl = float(getattr(Config, "MA1592_CHART_CACHE_TTL", 60) or 60)
 
         condition_rows, cond_errors = await fetch_condition_target_items(

@@ -40,12 +40,15 @@ def _fmt_pnl(amount: Optional[int], rate: Optional[float] = None) -> str:
     return f"{sign}{amount:,}원{rate_str}"
 
 
-def _reason_ko(code: Optional[str], profit_loss=None, profit_loss_rate=None) -> str:
+def _reason_ko(code: Optional[str], profit_loss=None, profit_loss_rate=None, detail=None) -> str:
     if not code:
         return ""
     from utils.sell_reason_labels import sell_reason_ko
     return sell_reason_ko(
-        code, profit_loss=profit_loss, profit_loss_rate=profit_loss_rate
+        code,
+        profit_loss=profit_loss,
+        profit_loss_rate=profit_loss_rate,
+        detail=detail,
     )
 
 
@@ -142,6 +145,7 @@ def format_daily_trade_journal_html(journal: Dict[str, Any]) -> str:
                 row.get("sell_reason"),
                 row.get("profit_loss") or row.get("eval_pnl"),
                 row.get("profit_loss_rate"),
+                row.get("sell_reason_detail"),
             )
             reason_part = f"/{_esc(reason)}" if reason else ""
             lines.append(
@@ -163,6 +167,7 @@ def format_daily_trade_journal_html(journal: Dict[str, Any]) -> str:
                 row.get("sell_reason"),
                 row.get("profit_loss") or row.get("eval_pnl"),
                 row.get("profit_loss_rate"),
+                row.get("sell_reason_detail"),
             )
             lines.append(
                 f"· {_esc(row.get('stock_name'))}(<code>{_esc(row.get('stock_code'))}</code>) "

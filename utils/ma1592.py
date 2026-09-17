@@ -76,7 +76,7 @@ DEFAULT_PARAMS: Dict[str, Any] = {
     "impulse_min_pct": 2.0,
     "crash_pct": 1.8,
     "crash_bars": 3,
-    "setup_expire_days": 8,
+    "setup_expire_days": 1,
     "setup_expire_bars": 0,
     "max_hold_days": 10,
     "flatten_eod": True,
@@ -1464,6 +1464,49 @@ class UniverseRow:
         return cls(**{k: v for k, v in raw.items() if k in known})
 
 
+def _parse_ledger_date(raw: Any) -> Optional[date]:
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(str(raw).strip()[:10])
+    except Exception:
+        return None
+
+
+def ledger_gc_date(row: UniverseRow) -> Optional[date]:
+    for raw in (row.gc_date, (row.gc_at or "")[:10], row.in_at):
+        parsed = _parse_ledger_date(raw)
+        if parsed:
+            return parsed
+    return None
+
+
+def is_ledger_ttl_expired(
+    row: UniverseRow,
+    *,
+    today: Optional[date] = None,
+    params: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """관찰 장부 TTL. 기본 1일 = 편입 당일 유지, 다음날 만료.
+
+    추세전환(DC) 정리는 별도. 여기선 날짜만 본다.
+    """
+    today = today or date.today()
+    p = merge_params(params)
+    try:
+        ttl = int(p.get("setup_expire_days") if p.get("setup_expire_days") is not None else 1)
+    except (TypeError, ValueError):
+        ttl = 1
+    ttl = max(1, ttl)
+    gc = ledger_gc_date(row)
+    if gc is not None:
+        return (today - gc).days >= ttl
+    exp = _parse_ledger_date(row.expire_date)
+    if exp is None:
+        return False
+    return today >= exp
+
+
 class Ma1592UniverseStore:
     """P0: 프로세스 메모리 + logs/_ma1592_universe.json."""
 
@@ -1541,19 +1584,20 @@ class Ma1592UniverseStore:
         self.save()
         return row
 
-    def expire_stale(self, today: Optional[date] = None) -> List[str]:
+    def expire_stale(
+        self,
+        today: Optional[date] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> List[str]:
         today = today or date.today()
         expired = []
         for code, row in list(self._rows.items()):
-            if not row.expire_date:
+            if row.state not in ("GC_WATCH", "WAIT_HOLD"):
                 continue
-            try:
-                exp = date.fromisoformat(row.expire_date[:10])
-            except Exception:
+            if not is_ledger_ttl_expired(row, today=today, params=params):
                 continue
-            if today > exp and row.state in ("GC_WATCH", "WAIT_HOLD"):
-                expired.append(code)
-                self.set_state(code, "DONE")
+            expired.append(code)
+            self.set_state(code, "DONE")
         return expired
 
 
@@ -1600,14 +1644,10 @@ def evaluate_setup_on_bar(
         "entry_leg": 1,
     }
 
-    if row.expire_date:
-        try:
-            if date.today() > date.fromisoformat(row.expire_date[:10]):
-                row.state = "DONE"
-                out.update(status="fail", reason="셋업 만료", reason_code="SETUP_EXPIRED")
-                return out
-        except Exception:
-            pass
+    if is_ledger_ttl_expired(row, params=p):
+        row.state = "DONE"
+        out.update(status="fail", reason="셋업 만료", reason_code="SETUP_EXPIRED")
+        return out
 
     if already_in_position:
         out.update(status="fail", reason="이미 보유/대기", reason_code="ALREADY_IN_POSITION")
@@ -2281,7 +2321,7 @@ async def maintain_ma1592_universe(
     """장부 TTL 만료 + 추세 전환 + 청산된 MANAGE_* 정리."""
     store = store or get_universe_store()
     store.load()
-    expired = store.expire_stale()
+    expired = store.expire_stale(params=params)
     trimmed = trim_l3_over_limit(store, params=params)
     purged = await purge_l3_trend_lost(
         kiwoom_api,

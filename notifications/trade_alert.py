@@ -134,6 +134,7 @@ def build_sell_message(
         sell_reason,
         profit_loss=profit_loss,
         profit_loss_rate=pnl_rate,
+        detail=sell_reason_detail,
     )
 
     action = "부분 매도 체결" if remaining_qty is not None else "매도 체결"

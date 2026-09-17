@@ -21,6 +21,7 @@ from utils.market_hours import (
 )
 from utils.auto_trade_engine import get_auto_trade_settings_sync
 from utils.datetime_kst import as_kst, kst_today, now_kst, utc_now_naive, KST
+from utils.sell_reason_labels import coarse_position_status
 from utils.position_peak_since_buy import (
     buy_time_utc_naive_to_kst,
     max_high_full_holding_days,
@@ -34,8 +35,18 @@ logger = logging.getLogger(__name__)
 # 청산 사유 우선순위 (낮을수록 긴급). TAKE_PROFIT > TRAILING 등 하위 주문 덮어쓰기용.
 SELL_REASON_PRIORITY = {
     "MARKET_CLOSE": 0,
+    "EOD": 0,
     "TAKE_PROFIT": 1,
+    "TP1_HIGH": 1,
+    "TP1_GAP": 1,
+    "TP1_FALLBACK": 1,
+    "MAX_HOLD": 1,
     "STOP_LOSS": 2,
+    "STOP_MA_DC_WIDEN": 2,
+    "STOP_MA_DC_CRASH": 2,
+    "STOP_MA_CRASH": 2,
+    "STOP_PCT": 2,
+    "STOP_3M_BEARISH_BELOW_MA15": 2,
     "PROFIT_LOCK": 3,
     "TRAILING": 4,
     "MANUAL": 5,
@@ -174,7 +185,10 @@ def _collapse_duplicate_holdings(session: Session) -> int:
                 SellOrder.position_id == dup.id,
                 SellOrder.status == "COMPLETED",
             ).order_by(SellOrder.completed_at.desc()).first()
-            dup.status = (last_done.sell_reason if last_done else "DUPLICATE_HOLDING")
+            dup.status = (
+                coarse_position_status(last_done.sell_reason)
+                if last_done else "DUPLICATE_HOLDING"
+            )
             dup.sell_time = (last_done.completed_at if last_done else utc_now_naive())
             logger.warning(
                 f"🛡️ [RECONCILE] 중복 HOLDING 정리 — {dup.stock_name} "
@@ -2650,9 +2664,10 @@ class StopLossManager:
                             continue
                         # 기본 매도 확정 처리
                         self._finalize_sell_in_session(session, sell, pos)
+                        _sell_px_str = f" @ {int(sell.sell_price):,}원" if sell.sell_price else ""
                         log_activity(
                             "SELL",
-                            f"매도 체결 확정 — {pos.stock_name} {sell.sell_quantity}주 ({sell.sell_reason})",
+                            f"매도 체결 확정 — {pos.stock_name} {sell.sell_quantity}주{_sell_px_str} ({sell.sell_reason})",
                             "info",
                             stock_code=pos.stock_code,
                             reason=sell.sell_reason,
@@ -2952,7 +2967,7 @@ class StopLossManager:
             ).order_by(SellOrder.completed_at.desc()).first()
 
             if last_done:
-                pos.status = last_done.sell_reason or "MANUAL_SELL"
+                pos.status = coarse_position_status(last_done.sell_reason)
                 pos.sell_time = last_done.completed_at or utc_now_naive()
                 _dp_str = f" @ {int(last_done.sell_price):,}원" if last_done.sell_price else ""
                 detail = f"계좌 미보유 — DB 정리 ({pos.stock_name}{_dp_str} → {pos.status})"
@@ -2993,7 +3008,7 @@ class StopLossManager:
         if sell.status != "COMPLETED":
             sell.status = "COMPLETED"
             sell.completed_at = utc_now_naive()
-        pos.status = sell.sell_reason or "MANUAL_SELL"
+        pos.status = coarse_position_status(sell.sell_reason)
         pos.sell_time = sell.completed_at or utc_now_naive()
         if sell.profit_loss is None and pos.buy_price and sell.sell_price:
             sell.profit_loss = (sell.sell_price - pos.buy_price) * sell.sell_quantity
@@ -3029,7 +3044,7 @@ class StopLossManager:
             ).order_by(SellOrder.completed_at.desc()).first()
             if not latest:
                 continue
-            pos.status = latest.sell_reason or "MANUAL_SELL"
+            pos.status = coarse_position_status(latest.sell_reason)
             pos.sell_time = latest.completed_at or utc_now_naive()
             log_activity(
                 "SELL",
@@ -3414,15 +3429,8 @@ class StopLossManager:
             sell_n = min(sell_n, qty - 1)
 
         detail = f"MA1592 {reason} · frac={qty_frac} · {sell_n}/{qty}주"
-        mapped = reason
-        if reason.startswith("TP1"):
-            mapped = "TAKE_PROFIT"
-        elif reason in ("STOP_MA_DC_WIDEN", "STOP_MA_DC_CRASH", "STOP_MA_CRASH", "STOP_PCT", "STOP_3M_BEARISH_BELOW_MA15"):
-            mapped = "STOP_LOSS"
-        elif reason == "EOD":
-            mapped = "MARKET_CLOSE"
-        elif reason == "MAX_HOLD":
-            mapped = "MAX_HOLD"
+        # 구체 사유(TP1_GAP, STOP_MA_DC_WIDEN 등)를 그대로 저장. 장마감만 기존 코드와 맞춤.
+        mapped = "MARKET_CLOSE" if reason == "EOD" else reason
 
         classified = classify_exit_reason(
             mapped, profit_loss=profit_loss, profit_loss_rate=profit_loss_rate,

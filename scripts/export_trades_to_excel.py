@@ -33,11 +33,14 @@ SELL_REASON_KO = {
 }
 
 
-def _sell_reason_ko(reason: str, profit_loss=None, profit_loss_rate=None) -> str:
+def _sell_reason_ko(reason: str, profit_loss=None, profit_loss_rate=None, detail=None) -> str:
     try:
         from utils.sell_reason_labels import sell_reason_ko
         return sell_reason_ko(
-            reason, profit_loss=profit_loss, profit_loss_rate=profit_loss_rate
+            reason,
+            profit_loss=profit_loss,
+            profit_loss_rate=profit_loss_rate,
+            detail=detail,
         )
     except Exception:
         return SELL_REASON_KO.get(reason, reason)
@@ -249,7 +252,10 @@ def fetch_trade_rows(conn: sqlite3.Connection) -> tuple:
             d = dict(r)
             reason = d.get("sell_reason", "")
             d["매도사유한글"] = _sell_reason_ko(
-                reason, d.get("profit_loss"), d.get("profit_loss_rate")
+                reason,
+                d.get("profit_loss"),
+                d.get("profit_loss_rate"),
+                d.get("sell_reason_detail"),
             )
             d["주문시각"] = _fmt_dt(d.get("created_at"))
             d["체결시각"] = _fmt_dt(d.get("completed_at"))
@@ -404,6 +410,7 @@ def export_excel(db_path: Path, out_path: Path) -> Path:
                             s.get("sell_reason", ""),
                             s.get("profit_loss"),
                             s.get("profit_loss_rate"),
+                            s.get("sell_reason_detail"),
                         ),
                         "매도상세": s.get("sell_reason_detail"),
                         "매도금액": s.get("sell_amount"),

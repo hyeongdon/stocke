@@ -560,7 +560,7 @@ class StrategyManager {
                     <div class="mb-3">
                         <label class="form-label">장부 TTL / 최대보유 (일)</label>
                         <div class="input-group">
-                            <input type="number" class="form-control" id="ma1592Expire" value="${parameters.setup_expire_days || 8}">
+                            <input type="number" class="form-control" id="ma1592Expire" value="${parameters.setup_expire_days || 1}">
                             <input type="number" class="form-control" id="ma1592MaxHold" value="${parameters.max_hold_days || 10}">
                         </div>
                     </div>

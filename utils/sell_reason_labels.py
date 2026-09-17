@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import re
 from typing import Optional, Union
 
 SELL_REASON_KO = {
@@ -24,12 +25,34 @@ SELL_REASON_KO = {
     "STOP_MA_DC_CRASH": "DC+급락 손절",
     "STOP_MA_CRASH": "급락+큰이탈",
     "STOP_PCT": "%손절",
+    "STOP_3M_BEARISH_BELOW_MA15": "3분 음봉 MA15 이탈",
     "MAX_HOLD": "보유만기",
     "EOD": "장종료 청산",
 }
 
 # 손익 부호로 재분류하는 메커니즘 (트레일·잠금)
 _PROFIT_MECHANISMS = frozenset({"TRAILING", "PROFIT_LOCK"})
+# 상세 문자열에서 꺼낼 때 너무 뭉개진 코드는 후순위
+_GENERIC_MECHANISMS = frozenset({"STOP_LOSS", "TAKE_PROFIT", "MANUAL", "MANUAL_SELL"})
+_MECH_PREFIX_RE = re.compile(r"^([A-Z][A-Z0-9_]{1,40})(?:→[A-Z][A-Z0-9_]{1,40})?\b")
+
+# Position.status 는 VARCHAR(20). 긴 매도 사유는 여기서 줄인다.
+_COARSE_POSITION_STATUS = {
+    "TAKE_PROFIT": "TAKE_PROFIT",
+    "TP1_HIGH": "TAKE_PROFIT",
+    "TP1_GAP": "TAKE_PROFIT",
+    "TP1_FALLBACK": "TAKE_PROFIT",
+    "MARKET_CLOSE": "MARKET_CLOSE",
+    "EOD": "MARKET_CLOSE",
+    "MAX_HOLD": "MAX_HOLD",
+    "MANUAL": "MANUAL_SELL",
+    "MANUAL_SELL": "MANUAL_SELL",
+    "TRAILING": "TRAILING",
+    "PROFIT_LOCK": "PROFIT_LOCK",
+    "INDICATOR": "INDICATOR",
+    "DUPLICATE_HOLDING": "DUPLICATE_HOLDING",
+    "STOP_LOSS": "STOP_LOSS",
+}
 
 
 def _sign_of_profit(
@@ -54,6 +77,44 @@ def _sign_of_profit(
     return None
 
 
+def mechanism_from_detail(detail: Optional[str]) -> Optional[str]:
+    """sell_reason_detail 에서 구체 메커니즘 코드 추출.
+
+    예: 'TP1_GAP | MA1592 TP1_GAP · …', 'TRAILING→STOP_LOSS | TRAILING 청산: …'
+    """
+    text = (detail or "").strip()
+    if not text:
+        return None
+    m = _MECH_PREFIX_RE.match(text)
+    prefix = m.group(1) if m else None
+    if prefix and prefix in SELL_REASON_KO and prefix not in _GENERIC_MECHANISMS:
+        return prefix
+    found: list[str] = []
+    for code in SELL_REASON_KO:
+        if code in _GENERIC_MECHANISMS:
+            continue
+        if re.search(rf"\b{re.escape(code)}\b", text):
+            found.append(code)
+    if found:
+        found.sort(key=lambda k: text.find(k))
+        return found[0]
+    if prefix in SELL_REASON_KO:
+        return prefix
+    return None
+
+
+def coarse_position_status(reason: Optional[str]) -> str:
+    """SellOrder.sell_reason → Position.status (최대 20자)."""
+    r = (reason or "").strip().upper() or "MANUAL_SELL"
+    if r in _COARSE_POSITION_STATUS:
+        return _COARSE_POSITION_STATUS[r]
+    if r.startswith("TP1"):
+        return "TAKE_PROFIT"
+    if len(r) <= 20:
+        return r
+    return "STOP_LOSS"
+
+
 def classify_exit_reason(
     mechanism: Optional[str],
     *,
@@ -66,7 +127,7 @@ def classify_exit_reason(
     - TRAILING / PROFIT_LOCK + 손실(−) → STOP_LOSS
     - STOP_LOSS + 수익(+) → TAKE_PROFIT  (상따 이탈·구조 이탈 등 수익 청산)
     - TAKE_PROFIT + 손실(−) → STOP_LOSS
-    - 그 외(장마감·수동 등)는 메커니즘 코드 유지
+    - 그 외(장마감·수동·TP1·STOP_MA 등)는 메커니즘 코드 유지
     """
     mech = (mechanism or "").strip().upper() or "MANUAL"
     sign = _sign_of_profit(profit_loss, profit_loss_rate)
@@ -93,9 +154,14 @@ def sell_reason_ko(
     *,
     profit_loss: Optional[Union[int, float]] = None,
     profit_loss_rate: Optional[Union[int, float]] = None,
+    detail: Optional[str] = None,
 ) -> str:
-    """표시용 한글 사유. 과거 STOP_LOSS(+수익)·TRAILING(+수익) 기록도 익절로 보이게 함."""
-    raw = (reason or "").strip().upper()
+    """표시용 한글 사유. 과거 STOP_LOSS(+수익)·TRAILING(+수익) 기록도 익절로 보이게 함.
+
+    detail 이 있으면 구체 코드(TP1_GAP, STOP_MA_DC_WIDEN, TRAILING 등)를 우선한다.
+    """
+    mech = mechanism_from_detail(detail)
+    raw = (mech or reason or "").strip().upper()
     if not raw:
         return "기타"
     classified = classify_exit_reason(

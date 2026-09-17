@@ -328,8 +328,43 @@ const REASON_LABEL = {
   MANUAL_SELL: '수동 매도',
   INDICATOR: '지표 매도',
   DUPLICATE_HOLDING: '중복 보유 정리',
+  TP1_HIGH: '전고 반익절',
+  TP1_GAP: '전고 갭 반익절',
+  TP1_FALLBACK: '폴백% 반익절',
+  STOP_MA_DC_WIDEN: 'DC+이격 확대',
+  STOP_MA_DC_CRASH: 'DC+급락 손절',
+  STOP_MA_CRASH: '급락+큰이탈',
+  STOP_PCT: '%손절',
+  STOP_3M_BEARISH_BELOW_MA15: '3분 음봉 MA15 이탈',
+  MAX_HOLD: '보유만기',
+  EOD: '장종료 청산',
   '체결': '체결',
 };
+const GENERIC_SELL_REASONS = new Set(['STOP_LOSS', 'TAKE_PROFIT', 'MANUAL', 'MANUAL_SELL']);
+function mechanismFromDetail(detail) {
+  const text = String(detail || '').trim();
+  if (!text) return '';
+  const m = text.match(/^([A-Z][A-Z0-9_]{1,40})(?:→[A-Z][A-Z0-9_]{1,40})?\b/);
+  const prefix = m ? m[1] : '';
+  if (prefix && REASON_LABEL[prefix] && !GENERIC_SELL_REASONS.has(prefix)) return prefix;
+  let best = '';
+  let bestAt = Infinity;
+  Object.keys(REASON_LABEL).forEach((code) => {
+    if (GENERIC_SELL_REASONS.has(code) || code === '체결') return;
+    const at = text.indexOf(code);
+    if (at >= 0 && at < bestAt) {
+      best = code;
+      bestAt = at;
+    }
+  });
+  if (best) return best;
+  return (prefix && REASON_LABEL[prefix]) ? prefix : '';
+}
+function sellReasonCode(o) {
+  const fromDetail = mechanismFromDetail(o && o.sell_reason_detail);
+  if (fromDetail) return fromDetail;
+  return String((o && o.sell_reason) || '').trim();
+}
 function reasonLabel(r, pl, rate) {
   const raw = (r || '').toUpperCase();
   const sign = (pl != null && !Number.isNaN(Number(pl)))
@@ -347,6 +382,16 @@ function reasonLabel(r, pl, rate) {
   if (raw === 'STOP_LOSS' && sign > 0) return '익절 (이탈)';
   if (raw === 'TAKE_PROFIT' && sign < 0) return '손절';
   return REASON_LABEL[raw] || REASON_LABEL[r] || r || '기타';
+}
+function sellReasonLabel(o) {
+  const pl = parseNum(o && o.profit_loss);
+  const rate = parseNum(o && o.profit_loss_rate);
+  return reasonLabel(sellReasonCode(o), pl, rate);
+}
+function sellPriceTag(o) {
+  if (!o || o.sell_price == null || o.sell_price === '') return '';
+  const px = parseNum(o.sell_price);
+  return px > 0 ? `@ ${num(px)}원` : '';
 }
 
 let toastTimer;
@@ -2001,7 +2046,7 @@ async function loadSells() {
         <td class="num cost">${amtOrDash(o.transaction_tax)}</td>
         <td class="num ${signClass(pl)}">${pnlStr(pl)}</td>
         <td class="num ${signClass(rate)}">${rateStr(rate)}</td>
-        <td>${esc(reasonLabel(o.sell_reason, pl, rate))}</td></tr>`;
+        <td>${esc(sellReasonLabel(o))}</td></tr>`;
     }).join('');
     $('sellsBody').innerHTML = `<table class="tbl"><thead><tr>
       <th>일자</th><th title="포지션 매수 시각">매수</th><th title="매도 체결 시각">매도</th><th>종목</th>
@@ -2072,11 +2117,11 @@ function orderReasonBuy(o) {
 }
 
 function orderReasonSell(o) {
-  const pl = parseNum(o.profit_loss);
-  const rate = parseNum(o.profit_loss_rate);
-  if (o.status === 'FAILED') return o.sell_reason_detail || o.sell_order_id || reasonLabel(o.sell_reason, pl, rate) || '사유 미기록';
+  if (o.status === 'FAILED') return o.sell_reason_detail || o.sell_order_id || sellReasonLabel(o) || '사유 미기록';
   if (o.status === 'CANCELLED') return o.sell_reason_detail || '주문 취소(만료·중복 정리)';
-  return reasonLabel(o.sell_reason, pl, rate) || o.sell_reason_detail || '-';
+  const label = sellReasonLabel(o) || o.sell_reason_detail || '-';
+  const px = sellPriceTag(o);
+  return px ? `${label} ${px}` : label;
 }
 
 async function loadOrders() {
@@ -2570,12 +2615,15 @@ async function loadActivity() {
 
 /* ===== 자동매매 로그 ===== */
 function logReasonForSell(o) {
-  const pl = parseNum(o.profit_loss);
-  const rate = parseNum(o.profit_loss_rate);
   if (o.status === 'FAILED') {
-    return o.sell_reason_detail || o.sell_order_id || reasonLabel(o.sell_reason, pl, rate) || '사유 미기록';
+    return o.sell_reason_detail || o.sell_order_id || sellReasonLabel(o) || '사유 미기록';
   }
-  return reasonLabel(o.sell_reason, pl, rate) || o.sell_reason_detail || '';
+  const label = sellReasonLabel(o) || o.sell_reason_detail || '';
+  const filled = o.status === 'COMPLETED' || o.status === 'FILLED';
+  if (!filled) return label;
+  const q = o.sell_quantity != null ? `${num(o.sell_quantity)}주` : '';
+  const p = sellPriceTag(o);
+  return [label, q, p].filter(Boolean).join(' ');
 }
 function logReasonForBuy(o) {
   if (o.status === 'FAILED') {
@@ -2637,16 +2685,21 @@ function logTradeDateKst(ts) {
 /** 체결 로그 → 검증: 체결된 매도(익절·손절·트레일·수익잠금·장마감 등) */
 const LOG_VERIFY_SELL_REASONS = new Set([
   'STOP_LOSS', 'TAKE_PROFIT', 'TRAILING', 'PROFIT_LOCK', 'MARKET_CLOSE',
+  'TP1_HIGH', 'TP1_GAP', 'TP1_FALLBACK',
+  'STOP_MA_DC_WIDEN', 'STOP_MA_DC_CRASH', 'STOP_MA_CRASH', 'STOP_PCT',
+  'STOP_3M_BEARISH_BELOW_MA15', 'MAX_HOLD', 'EOD',
 ]);
 function isLogVerifyEligibleSell(o, filled) {
   if (!filled) return false;
-  const raw = String(o.sell_reason || '').trim().toUpperCase();
+  const raw = sellReasonCode(o).toUpperCase();
   if (LOG_VERIFY_SELL_REASONS.has(raw)) return true;
-  const label = reasonLabel(o.sell_reason, o.profit_loss, o.profit_loss_rate);
+  const label = sellReasonLabel(o);
   return (
     label.startsWith('익절')
     || label.startsWith('손절')
     || label.startsWith('장마감')
+    || label.includes('반익절')
+    || label.includes('이탈')
   );
 }
 
@@ -4096,7 +4149,7 @@ function renderSettingsForm(s) {
         ${field('3차%', fNum('ma1592_leg3_pct', s, '50'))}
         ${field('이격%(15분)', fNum('ma1592_scale_gap_pct', s, '1'))}
         ${field('3차 유지봉', fNum('ma1592_scale_hold_bars', s, '2'), 'hold 모드 시만')}
-        ${field('장부 TTL(일)', fNum('ma1592_setup_expire_days', s, '8'))}
+        ${field('장부 TTL(일)', fNum('ma1592_setup_expire_days', s, '1'), '편입 당일 유지 · 다음날 만료 · DC면 즉시 정리')}
         ${field('최대 보유(일)', fNum('ma1592_max_hold_days', s, '10'))}
         ${field('1회 리스크(%)', fNum('ma1592_risk_per_trade_pct', s, '2'))}
         ${field('손절%', fNum('ma1592_stop_pct', s, '4'))}

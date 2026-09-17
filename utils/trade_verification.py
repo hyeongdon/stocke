@@ -747,6 +747,7 @@ def _serialize_sell_order(so: SellOrder) -> Dict[str, Any]:
             so.sell_reason,
             profit_loss=int(so.profit_loss) if so.profit_loss is not None else None,
             profit_loss_rate=float(so.profit_loss_rate) if so.profit_loss_rate is not None else None,
+            detail=so.sell_reason_detail,
         ),
         "reason_code": so.sell_reason,
         "reason_detail": so.sell_reason_detail,
@@ -907,7 +908,7 @@ def _exit_notes(pos: Position, sells: List[SellOrder], sell_rows: Optional[List[
             f"@ {int(s.sell_price):,}원"
         )
         notes.append(
-            f"청산 사유: {sell_reason_ko(s.sell_reason, profit_loss=int(s.profit_loss) if s.profit_loss is not None else None, profit_loss_rate=float(s.profit_loss_rate) if s.profit_loss_rate is not None else None)}"
+            f"청산 사유: {sell_reason_ko(s.sell_reason, profit_loss=int(s.profit_loss) if s.profit_loss is not None else None, profit_loss_rate=float(s.profit_loss_rate) if s.profit_loss_rate is not None else None, detail=s.sell_reason_detail)}"
         )
         if s.sell_reason_detail:
             notes.append(f"상세: {s.sell_reason_detail}")
@@ -923,7 +924,7 @@ def _exit_notes(pos: Position, sells: List[SellOrder], sell_rows: Optional[List[
         s = pending[-1]
         notes.append(
             f"매도 주문 {SELL_STATUS_KO.get(s.status, s.status)}: "
-            f"{sell_reason_ko(s.sell_reason)}"
+            f"{sell_reason_ko(s.sell_reason, detail=s.sell_reason_detail)}"
         )
         notes.append(f"주문 {int(s.sell_price):,}원 × {int(s.sell_quantity):,}주")
         if s.sell_reason_detail:
@@ -1220,6 +1221,7 @@ async def build_verification_report(
                 sell.sell_reason,
                 profit_loss=int(sell.profit_loss) if sell.profit_loss is not None else None,
                 profit_loss_rate=float(sell.profit_loss_rate) if sell.profit_loss_rate is not None else None,
+                detail=sell.sell_reason_detail,
             ) if sell
             else (primary_sell_row.get("reason") if primary_sell_row else None)
         )

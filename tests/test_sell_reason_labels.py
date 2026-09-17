@@ -76,6 +76,43 @@ class SellReasonLabelsTests(unittest.TestCase):
             "MARKET_CLOSE",
         )
 
+    def test_ma1592_codes_keep_specific_label(self):
+        self.assertEqual(
+            sell_reason_ko("STOP_LOSS", detail="TP1_GAP | MA1592 TP1_GAP · frac=0.5 · 196/393주"),
+            "전고 갭 반익절",
+        )
+        self.assertEqual(
+            sell_reason_ko(
+                "STOP_LOSS",
+                profit_loss=-20000,
+                detail="STOP_MA_DC_WIDEN | MA1592 STOP_MA_DC_WIDEN · frac=1.0 · 209/209주",
+            ),
+            "DC+이격 확대",
+        )
+        self.assertEqual(sell_reason_ko("TP1_HIGH", profit_loss=5000), "전고 반익절")
+        self.assertEqual(
+            sell_reason_ko("STOP_LOSS", detail="TRAILING→STOP_LOSS | TRAILING 청산: 현재가 1000"),
+            "트레일링 스탑",
+        )
+        self.assertEqual(
+            sell_reason_ko(
+                "STOP_LOSS",
+                profit_loss=-1000,
+                detail="TRAILING→STOP_LOSS | TRAILING 청산: 현재가 1000",
+            ),
+            "손절 (트레일)",
+        )
+
+    def test_coarse_position_status_fits_varchar20(self):
+        from utils.sell_reason_labels import coarse_position_status
+        self.assertEqual(coarse_position_status("TP1_GAP"), "TAKE_PROFIT")
+        self.assertEqual(coarse_position_status("STOP_MA_DC_WIDEN"), "STOP_MA_DC_WIDEN")
+        self.assertEqual(
+            coarse_position_status("STOP_3M_BEARISH_BELOW_MA15"),
+            "STOP_LOSS",
+        )
+        self.assertLessEqual(len(coarse_position_status("STOP_3M_BEARISH_BELOW_MA15")), 20)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -52,8 +52,14 @@ class Ma1592UniverseScheduler:
                         await self._run_maintenance()
                     else:
                         # 정규장 외: TTL 만료된 GC_WATCH 종목만 조용히 정리
-                        from utils.ma1592 import get_universe_store
-                        get_universe_store().expire_stale()
+                        from core.models import AutoTradeSettings, get_db
+                        from utils.ma1592 import get_universe_store, params_from_settings
+
+                        settings = None
+                        for db in get_db():
+                            settings = db.query(AutoTradeSettings).first()
+                            break
+                        get_universe_store().expire_stale(params=params_from_settings(settings))
                     self._last_run = now
             except Exception as e:
                 self._fail_until = time.time() + 300
@@ -66,19 +72,19 @@ class Ma1592UniverseScheduler:
         from utils.ma1592 import get_universe_store, maintain_ma1592_universe, params_from_settings
 
         store = get_universe_store()
-        if not store.l3_codes():
-            store.expire_stale()
-            return
-
         settings = None
         for db in get_db():
             settings = db.query(AutoTradeSettings).first()
             break
+        p = params_from_settings(settings)
+        if not store.l3_codes():
+            store.expire_stale(params=p)
+            return
 
         chart_ttl = float(getattr(Config, "MA1592_CHART_CACHE_TTL", 60) or 60)
         result = await maintain_ma1592_universe(
             kiwoom_api,
-            params=params_from_settings(settings),
+            params=p,
             store=store,
             cache_ttl_sec=chart_ttl,
         )

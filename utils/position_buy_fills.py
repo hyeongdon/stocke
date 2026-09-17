@@ -220,6 +220,30 @@ def order_and_filled_totals(
     return order_qty, filled_qty
 
 
+def _completed_sell_qty(session: Session, position_id: Optional[int]) -> int:
+    """이 포지션의 완료 매도 수량. 조회 실패 시 0 (테스트 mock 호환)."""
+    if not position_id:
+        return 0
+    try:
+        from sqlalchemy import func
+
+        from core.models import SellOrder  # noqa: PLC0415
+
+        sold = (
+            session.query(func.coalesce(func.sum(SellOrder.sell_quantity), 0))
+            .filter(
+                SellOrder.position_id == int(position_id),
+                SellOrder.status == "COMPLETED",
+            )
+            .scalar()
+        )
+        return int(sold or 0)
+    except (TypeError, ValueError):
+        return 0
+    except Exception:
+        return 0
+
+
 def reconcile_position_buy_with_fills(
     session: Session,
     position,
@@ -308,7 +332,19 @@ def reconcile_position_buy_with_fills(
 
         if len(rows) == 1 and (rows[0].fill_type or "").upper() == "INITIAL":
             row = rows[0]
-            if int(row.quantity or 0) != filled_qty or int(row.amount or 0) != filled_amt:
+            completed_sold = _completed_sell_qty(session, getattr(position, "id", None))
+            # 부분매도 후 키움 잔량은 '남은 보유'이지 매수 체결량이 아님.
+            # 체결 로그가 잔량(197)으로 깎이지 않게 이력은 유지·복구한다.
+            if completed_sold > 0:
+                expected_bought = int(filled_qty or 0) + completed_sold
+                ord_qty = int(row.order_quantity or 0)
+                cur = int(row.quantity or 0)
+                if expected_bought > cur and (ord_qty <= 0 or expected_bought == ord_qty):
+                    px = int(row.price or filled_price or 0)
+                    row.quantity = expected_bought
+                    if px > 0:
+                        row.amount = px * expected_bought
+            elif int(row.quantity or 0) != filled_qty or int(row.amount or 0) != filled_amt:
                 row.quantity = filled_qty
                 row.amount = filled_amt
                 if filled_price > 0:

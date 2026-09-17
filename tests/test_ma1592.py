@@ -2,7 +2,7 @@
 import tempfile
 import unittest
 from unittest.mock import patch
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from utils.ma1592 import (
@@ -21,6 +21,7 @@ from utils.ma1592 import (
     is_golden_cross_bar,
     is_golden_cross_overlay,
     is_far_from_gc_zone,
+    is_ledger_ttl_expired,
     is_scale_gap_open,
     is_scale_pullback_bar,
     is_trend_lost,
@@ -1044,6 +1045,44 @@ class Ma1592TrendLostTests(unittest.TestCase):
             self.assertEqual(stats["added"], 1)
             self.assertEqual(stats["limit_skipped"], 1)
             self.assertEqual(len(store.l3_codes()), 1)
+
+    def test_ledger_ttl_keeps_entry_day_expires_next_day(self):
+        today = date(2026, 9, 16)
+        row = UniverseRow(
+            stock_code="011070",
+            state="GC_WATCH",
+            gc_date="2026-09-16",
+            gc_at="2026-09-16T12:05:43",
+            expire_date="2026-09-24",
+        )
+        self.assertFalse(is_ledger_ttl_expired(row, today=today, params={"setup_expire_days": 1}))
+        self.assertTrue(is_ledger_ttl_expired(
+            row, today=today + timedelta(days=1), params={"setup_expire_days": 1},
+        ))
+
+    def test_expire_stale_uses_ttl_not_old_expire_date(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "u.json"
+            store = Ma1592UniverseStore(path)
+            store.upsert(UniverseRow(
+                stock_code="011070",
+                state="GC_WATCH",
+                gc_date="2026-09-15",
+                expire_date="2026-09-24",
+            ))
+            store.upsert(UniverseRow(
+                stock_code="003280",
+                state="GC_WATCH",
+                gc_date="2026-09-16",
+                expire_date="2026-09-24",
+            ))
+            removed = store.expire_stale(
+                today=date(2026, 9, 16),
+                params={"setup_expire_days": 1},
+            )
+            self.assertEqual(removed, ["011070"])
+            self.assertNotIn("011070", store.l3_codes())
+            self.assertIn("003280", store.l3_codes())
 
 
 if __name__ == "__main__":

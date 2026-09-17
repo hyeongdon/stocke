@@ -78,7 +78,7 @@ class StrategyManager:
         except Exception:
             self.default_strategies["MA1592"] = {
                 "ma_fast": 15, "ma_slow": 92, "ma_type": "ema", "ma_source": "bar",
-                "hold_bars": 6, "setup_expire_days": 8,
+                "hold_bars": 6, "setup_expire_days": 1,
             }
 
     def _to_native_json(self, value: Any) -> Any:
