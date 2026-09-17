@@ -11,7 +11,7 @@ def get_account_mode() -> str:
 class Config:
     # 프로젝트 기본 설정 (core/ 상위 = 저장소 루트)
     PROJECT_ROOT = Path(__file__).resolve().parent.parent
-    LOG_LEVEL = os.getenv("LOG_LEVEL", "DEBUG")
+    LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
     LOG_FILE = os.getenv("LOG_FILE", str(PROJECT_ROOT / "logs" / "app.log"))
     # 현재 파일 + 백업 N개. 기본 50MB × 3 ≈ 최대 200MB
     LOG_MAX_BYTES = int(os.getenv("LOG_MAX_BYTES", str(50 * 1024 * 1024)))

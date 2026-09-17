@@ -137,7 +137,8 @@ function Start-StockeServer([int]$Port, [string]$BindHost) {
     $screenerLimit = Get-EnvServerSetting -Name 'SCREENER_CANDIDATE_LIMIT' -Default '20'
     $env:SCREENER_CANDIDATE_LIMIT = $screenerLimit
 
-    $args = @('-m', 'uvicorn', 'core.main:app', '--host', $BindHost, '--port', "$Port")
+    $logLevel = (Get-EnvServerSetting -Name 'LOG_LEVEL' -Default 'INFO').ToLower()
+    $args = @('-m', 'uvicorn', 'core.main:app', '--host', $BindHost, '--port', "$Port", '--log-level', $logLevel)
     Write-Host "서버 시작: http://${BindHost}:$Port (bind=$BindHost)"
     Write-Host "스크리너 후보: 거래대금 상위 $screenerLimit 종목"
     Write-Host "로컬: http://127.0.0.1:$Port/dashboard"
