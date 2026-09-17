@@ -10,6 +10,7 @@ import asyncio
 import time
 from typing import Optional, Dict, Any, List
 import logging
+from logging.handlers import RotatingFileHandler
 from datetime import datetime
 from urllib.parse import quote
 import httpx
@@ -86,6 +87,7 @@ from utils.market_hours import (
 )
 from utils.auto_trade_activity_log import activity_log, log_activity, merge_activity_events
 from utils.datetime_kst import kst_today, kst_now_iso, utc_naive_to_api_iso
+from utils.log_cleanup import cap_oversized_log
 from utils.stock_news_progress import get_stock_news_progress
 from utils.web_auth import (
     clear_session,
@@ -118,11 +120,18 @@ config = Config()
 
 # 로깅 설정
 import sys
+
+cap_oversized_log(config.LOG_FILE, config.LOG_MAX_BYTES)
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(config.LOG_FILE, encoding='utf-8'),
+        RotatingFileHandler(
+            config.LOG_FILE,
+            maxBytes=max(1, config.LOG_MAX_BYTES),
+            backupCount=max(1, config.LOG_BACKUP_COUNT),
+            encoding='utf-8',
+        ),
         logging.StreamHandler(sys.stdout)
     ]
 )

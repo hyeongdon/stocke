@@ -6,6 +6,7 @@ from pathlib import Path
 
 from utils.datetime_kst import KST
 from utils.log_cleanup import (
+    cap_oversized_log,
     cleanup_logs,
     parse_log_line_ts,
     format_bytes,
@@ -84,6 +85,17 @@ class LogCleanupTests(unittest.TestCase):
     def test_format_bytes(self):
         self.assertEqual(format_bytes(500), "500B")
         self.assertIn("KB", format_bytes(2048))
+
+    def test_cap_oversized_log_keeps_tail(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "stock_pipeline.log"
+            p.write_bytes(b"HEAD" + (b"x" * 100) + b"TAIL")
+            self.assertTrue(cap_oversized_log(str(p), 8))
+            data = p.read_bytes()
+            self.assertEqual(len(data), 8)
+            self.assertTrue(data.endswith(b"TAIL"))
+            self.assertFalse(cap_oversized_log(str(p), 8))
+            self.assertEqual(p.read_bytes(), data)
 
 
 if __name__ == "__main__":

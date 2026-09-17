@@ -85,6 +85,9 @@ CONDITION_MONITOR_INTERVAL=600
 # 로깅 설정
 LOG_LEVEL=INFO
 LOG_FILE=logs/app.log
+# 앱 로그 로테이션 (현재 파일 + 백업). 기본 50MB × 3 ≈ 최대 200MB
+LOG_MAX_BYTES=52428800
+LOG_BACKUP_COUNT=3
 
 # KRX 추가 휴장일 (쉼표 구분 YYYY-MM-DD) — DB 외 env 임시 추가용
 # 대시보드 「자동매매」탭 → 거래소 휴장일 에서 DB 관리 권장

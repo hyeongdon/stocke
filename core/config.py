@@ -13,6 +13,9 @@ class Config:
     PROJECT_ROOT = Path(__file__).resolve().parent.parent
     LOG_LEVEL = os.getenv("LOG_LEVEL", "DEBUG")
     LOG_FILE = os.getenv("LOG_FILE", str(PROJECT_ROOT / "logs" / "app.log"))
+    # 현재 파일 + 백업 N개. 기본 50MB × 3 ≈ 최대 200MB
+    LOG_MAX_BYTES = int(os.getenv("LOG_MAX_BYTES", str(50 * 1024 * 1024)))
+    LOG_BACKUP_COUNT = int(os.getenv("LOG_BACKUP_COUNT", "3"))
     
     # 데이터베이스 설정
     DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{PROJECT_ROOT / 'stock_pipeline.db'}")

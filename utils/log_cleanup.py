@@ -2,6 +2,9 @@
 
 계속 append 되는 stock_pipeline.log / cron.log 는 mtime이 항상 오늘이라
 파일 삭제만으로는 안 줄어든다. 타임스탬프 기준으로 본문을 자른다.
+
+앱 파일(LOG_FILE)은 RotatingFileHandler(50MB×3)로 크기도 막는다.
+이미 한도를 넘긴 기존 파일은 기동 시 cap_oversized_log 로 꼬리만 남긴다.
 """
 from __future__ import annotations
 
@@ -128,6 +131,32 @@ def _is_live_log(path: Path) -> bool:
 
 def _file_mtime_kst(path: Path) -> datetime:
     return datetime.fromtimestamp(path.stat().st_mtime, tz=KST)
+
+
+def cap_oversized_log(path: str, max_bytes: int) -> bool:
+    """파일이 max_bytes 이상이면 꼬리만 남긴다. 같은 inode를 유지한다.
+
+    RotatingFileHandler 기동 전에 호출해야 1GB+ 파일이 .1 백업으로 남아
+    디스크가 안 줄어드는 일을 막는다. 잘렸으면 True.
+    """
+    limit = int(max_bytes)
+    if limit <= 0:
+        return False
+    p = Path(path)
+    try:
+        size = p.stat().st_size
+    except OSError:
+        return False
+    if size <= limit:
+        return False
+    keep = limit
+    with p.open("r+b") as f:
+        f.seek(size - keep)
+        tail = f.read()
+        f.seek(0)
+        f.write(tail)
+        f.truncate()
+    return True
 
 
 def _replace_keep_inode(original: Path, tmp: Path) -> None:
