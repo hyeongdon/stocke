@@ -113,6 +113,56 @@ class SellReasonLabelsTests(unittest.TestCase):
         )
         self.assertLessEqual(len(coarse_position_status("STOP_3M_BEARISH_BELOW_MA15")), 20)
 
+    def test_t1_gap_alias_and_compound_codes(self):
+        self.assertEqual(sell_reason_ko("T1_GAP"), "전고 갭 반익절")
+        self.assertEqual(
+            sell_reason_ko("T1_GAP STOP_3M_BEARISH_BELOW_MA15"),
+            "전고 갭 반익절 · 3분 음봉 MA15 이탈",
+        )
+        self.assertEqual(
+            sell_reason_ko("TP1_GAP STOP_3M_BEARISH_BELOW_MA15"),
+            "전고 갭 반익절 · 3분 음봉 MA15 이탈",
+        )
+        self.assertEqual(
+            sell_reason_ko("STOP_3M_BEARISH_BELOW_MA15"),
+            "3분 음봉 MA15 이탈",
+        )
+
+    def test_detail_ko_replaces_codes(self):
+        from utils.sell_reason_labels import sell_reason_detail_ko
+        text = sell_reason_detail_ko(
+            "TP1_GAP | MA1592 TP1_GAP · frac=0.5 · 196/393주"
+        )
+        self.assertIn("전고 갭 반익절", text)
+        self.assertNotIn("TP1_GAP", text)
+
+    def test_effective_sell_price_fallbacks(self):
+        from types import SimpleNamespace
+        from utils.position_sell_backfill import effective_sell_price
+
+        self.assertEqual(
+            effective_sell_price(SimpleNamespace(sell_price=12345, sell_quantity=10, sell_amount=0, profit_loss=None)),
+            12345,
+        )
+        self.assertEqual(
+            effective_sell_price(SimpleNamespace(sell_price=0, sell_quantity=10, sell_amount=50000, profit_loss=None)),
+            5000,
+        )
+        self.assertEqual(
+            effective_sell_price(
+                SimpleNamespace(sell_price=0, sell_quantity=10, sell_amount=0, profit_loss=20000),
+                buy_price=1000,
+            ),
+            3000,
+        )
+        self.assertEqual(
+            effective_sell_price(
+                SimpleNamespace(sell_price=0, sell_quantity=10, sell_amount=0, profit_loss=None),
+                fallback_price=7777,
+            ),
+            7777,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

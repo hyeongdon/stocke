@@ -21,7 +21,7 @@ from utils.market_hours import (
 )
 from utils.auto_trade_engine import get_auto_trade_settings_sync
 from utils.datetime_kst import as_kst, kst_today, now_kst, utc_now_naive, KST
-from utils.sell_reason_labels import coarse_position_status
+from utils.sell_reason_labels import coarse_position_status, sell_reason_ko
 from utils.position_peak_since_buy import (
     buy_time_utc_naive_to_kst,
     max_high_full_holding_days,
@@ -31,6 +31,29 @@ from utils.position_peak_since_buy import (
 from notifications.trade_alert import notify_sell_filled_async, sell_fill_snapshot
 
 logger = logging.getLogger(__name__)
+
+
+def _sell_reason_display(reason: Optional[str], sell=None, *, detail: Optional[str] = None) -> str:
+    """활동 로그·주문 메시지용 한글 매도 사유."""
+    pl = getattr(sell, "profit_loss", None) if sell is not None else None
+    rate = getattr(sell, "profit_loss_rate", None) if sell is not None else None
+    det = detail if detail is not None else (
+        getattr(sell, "sell_reason_detail", None) if sell is not None else None
+    )
+    return sell_reason_ko(reason, profit_loss=pl, profit_loss_rate=rate, detail=det)
+
+
+def _sell_price_tag(sell, pos=None) -> str:
+    from utils.position_sell_backfill import effective_sell_price, _infer_sell_price
+
+    fallback = _infer_sell_price(pos) if pos is not None else None
+    px = effective_sell_price(
+        sell,
+        buy_price=getattr(pos, "buy_price", None) if pos is not None else None,
+        fallback_price=fallback,
+    )
+    return f" @ {int(px):,}원" if px else ""
+
 
 # 청산 사유 우선순위 (낮을수록 긴급). TAKE_PROFIT > TRAILING 등 하위 주문 덮어쓰기용.
 SELL_REASON_PRIORITY = {
@@ -2664,10 +2687,11 @@ class StopLossManager:
                             continue
                         # 기본 매도 확정 처리
                         self._finalize_sell_in_session(session, sell, pos)
-                        _sell_px_str = f" @ {int(sell.sell_price):,}원" if sell.sell_price else ""
+                        _sell_px_str = _sell_price_tag(sell, pos)
+                        _reason_ko = _sell_reason_display(sell.sell_reason, sell)
                         log_activity(
                             "SELL",
-                            f"매도 체결 확정 — {pos.stock_name} {sell.sell_quantity}주{_sell_px_str} ({sell.sell_reason})",
+                            f"매도 체결 확정 — {pos.stock_name} {sell.sell_quantity}주{_sell_px_str} ({_reason_ko})",
                             "info",
                             stock_code=pos.stock_code,
                             reason=sell.sell_reason,
@@ -2814,9 +2838,11 @@ class StopLossManager:
                             pos.buy_quantity = acct_qty
                         log_activity(
                             "SELL",
-                            f"부분 매도 확정 — {pos.stock_name} {sold_qty}주 체결, 잔량 {acct_qty}주",
+                            f"부분 매도 확정 — {pos.stock_name} {sold_qty}주{_sell_price_tag(sell, pos)} "
+                            f"({_sell_reason_display(sell.sell_reason, sell)}), 잔량 {acct_qty}주",
                             "info",
                             stock_code=pos.stock_code,
+                            reason=sell.sell_reason,
                         )
                         logger.info(f"🛡️ [RECONCILE] 부분 매도 — {pos.stock_name} 잔량 {acct_qty}주")
                         snap = sell_fill_snapshot(sell, pos)
@@ -2940,10 +2966,11 @@ class StopLossManager:
             for sell in open_sells:
                 if sell.status == "ORDERED":
                     self._finalize_sell_in_session(session, sell, pos)
-                    _sell_px_str = f" @ {int(sell.sell_price):,}원" if sell.sell_price else ""
+                    _sell_px_str = _sell_price_tag(sell, pos)
+                    _reason_ko = _sell_reason_display(sell.sell_reason, sell)
                     log_activity(
                         "SELL",
-                        f"매도 체결 확정 — {pos.stock_name} {sell.sell_quantity}주{_sell_px_str} ({sell.sell_reason})",
+                        f"매도 체결 확정 — {pos.stock_name} {sell.sell_quantity}주{_sell_px_str} ({_reason_ko})",
                         "info",
                         stock_code=pos.stock_code,
                         reason=sell.sell_reason,
@@ -2969,8 +2996,9 @@ class StopLossManager:
             if last_done:
                 pos.status = coarse_position_status(last_done.sell_reason)
                 pos.sell_time = last_done.completed_at or utc_now_naive()
-                _dp_str = f" @ {int(last_done.sell_price):,}원" if last_done.sell_price else ""
-                detail = f"계좌 미보유 — DB 정리 ({pos.stock_name}{_dp_str} → {pos.status})"
+                _dp_str = _sell_price_tag(last_done, pos)
+                _reason_ko = _sell_reason_display(last_done.sell_reason, last_done)
+                detail = f"계좌 미보유 — DB 정리 ({pos.stock_name}{_dp_str} → {_reason_ko})"
             else:
                 pos.status = "MANUAL_SELL"
                 pos.sell_time = utc_now_naive()
@@ -3005,6 +3033,24 @@ class StopLossManager:
     @staticmethod
     def _finalize_sell_in_session(session: Session, sell: SellOrder, pos: Position):
         """매도 체결 확정 — SellOrder COMPLETED, Position 청산 상태."""
+        from utils.position_sell_backfill import effective_sell_price, _infer_sell_price
+
+        qty = int(sell.sell_quantity or 0)
+        px = effective_sell_price(
+            sell,
+            buy_price=pos.buy_price,
+            fallback_price=_infer_sell_price(pos),
+        )
+        if px and (not sell.sell_price or int(sell.sell_price) <= 0):
+            sell.sell_price = int(px)
+            if qty > 0:
+                sell.sell_amount = int(px) * qty
+            if pos.buy_price and qty:
+                sell.profit_loss = (int(px) - pos.buy_price) * qty
+                try:
+                    sell.profit_loss_rate = (int(px) - pos.buy_price) / pos.buy_price * 100
+                except Exception:
+                    pass
         if sell.status != "COMPLETED":
             sell.status = "COMPLETED"
             sell.completed_at = utc_now_naive()
@@ -3086,7 +3132,7 @@ class StopLossManager:
                 )
                 log_activity(
                     "SELL",
-                    f"매도 생략 — {position.stock_name} ({sell_reason}): 동일/상위 주문 대기 중",
+                    f"매도 생략 — {position.stock_name} ({_sell_reason_display(sell_reason, detail=sell_reason_detail)}): 동일/상위 주문 대기 중",
                     "info",
                     stock_code=position.stock_code,
                     reason=sell_reason,
@@ -3214,7 +3260,8 @@ class StopLossManager:
             
             if result.get("success"):
                 msg = (
-                    f"매도 주문 {sell_reason} — {position.stock_name} {qty}주 "
+                    f"매도 주문 {_sell_reason_display(sell_reason, detail=sell_reason_detail)} — "
+                    f"{position.stock_name} {qty}주 "
                     f"@ {sell_price:,}원 ({order_label})"
                 )
                 logger.info(f"🛡️ [STOP_LOSS] 매도 주문 성공 - {position.stock_name}: {qty}주 ({order_label})")
@@ -3657,7 +3704,8 @@ class StopLossManager:
                 self._account_missing_strikes.pop(pos.id, None)
                 log_activity(
                     "SELL",
-                    f"매도 확정(중복주문·잔고0) — {pos.stock_name} {sell.sell_quantity}주 ({sell_reason})",
+                    f"매도 확정(중복주문·잔고0) — {pos.stock_name} {sell.sell_quantity}주"
+                    f"{_sell_price_tag(sell, pos)} ({_sell_reason_display(sell_reason, sell)})",
                     "info",
                     stock_code=pos.stock_code,
                     reason=sell_reason,
@@ -3684,6 +3732,9 @@ class StopLossManager:
         """매도 주문 생성 — DB id 반환 (세션 분리 안전)."""
         try:
             qty = int(quantity) if quantity and int(quantity) > 0 else int(position.buy_quantity or 0)
+            if not sell_price:
+                from utils.position_sell_backfill import _infer_sell_price
+                sell_price = _infer_sell_price(position)
             sell_order_id = None
             for db in get_db():
                 session: Session = db

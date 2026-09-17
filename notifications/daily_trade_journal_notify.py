@@ -27,7 +27,13 @@ def _fmt_int(n: Optional[int]) -> str:
 def _fmt_price(value: Optional[int]) -> str:
     if value is None:
         return "—"
-    return f"{int(value):,}원"
+    try:
+        px = int(value)
+    except (TypeError, ValueError):
+        return "—"
+    if px <= 0:
+        return "—"
+    return f"{px:,}원"
 
 
 def _fmt_pnl(amount: Optional[int], rate: Optional[float] = None) -> str:

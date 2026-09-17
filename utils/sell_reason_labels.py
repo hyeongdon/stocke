@@ -30,6 +30,15 @@ SELL_REASON_KO = {
     "EOD": "장종료 청산",
 }
 
+# 표시/기록 축약 별칭 (TP1_GAP → T1_GAP 등)
+_CODE_ALIASES = {
+    "T1_GAP": "TP1_GAP",
+    "T1_HIGH": "TP1_HIGH",
+    "T1_FALLBACK": "TP1_FALLBACK",
+}
+_TOKEN_SPLIT_RE = re.compile(r"[\s|·→/,;]+")
+_CODE_TOKEN_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,40}$")
+
 # 손익 부호로 재분류하는 메커니즘 (트레일·잠금)
 _PROFIT_MECHANISMS = frozenset({"TRAILING", "PROFIT_LOCK"})
 # 상세 문자열에서 꺼낼 때 너무 뭉개진 코드는 후순위
@@ -53,6 +62,37 @@ _COARSE_POSITION_STATUS = {
     "DUPLICATE_HOLDING": "DUPLICATE_HOLDING",
     "STOP_LOSS": "STOP_LOSS",
 }
+
+
+def normalize_reason_code(code: Optional[str]) -> str:
+    raw = (code or "").strip().upper()
+    return _CODE_ALIASES.get(raw, raw)
+
+
+def _known_codes_in(text: Optional[str]) -> list[str]:
+    """문자열에서 알려진 매도 코드만 추출 (긴 코드 우선, 중복 제거)."""
+    blob = (text or "").strip().upper()
+    if not blob:
+        return []
+    found: list[str] = []
+    seen: set[str] = set()
+    for token in _TOKEN_SPLIT_RE.split(blob):
+        token = normalize_reason_code(token)
+        if token in SELL_REASON_KO and token not in seen:
+            found.append(token)
+            seen.add(token)
+    if found:
+        return found
+    # 공백 없이 이어 붙은 경우 대비
+    for code in sorted(SELL_REASON_KO.keys(), key=len, reverse=True):
+        if code in blob and code not in seen:
+            found.append(code)
+            seen.add(code)
+    for alias, code in _CODE_ALIASES.items():
+        if alias in blob and code not in seen:
+            found.append(code)
+            seen.add(code)
+    return found
 
 
 def _sign_of_profit(
@@ -86,7 +126,7 @@ def mechanism_from_detail(detail: Optional[str]) -> Optional[str]:
     if not text:
         return None
     m = _MECH_PREFIX_RE.match(text)
-    prefix = m.group(1) if m else None
+    prefix = normalize_reason_code(m.group(1) if m else None)
     if prefix and prefix in SELL_REASON_KO and prefix not in _GENERIC_MECHANISMS:
         return prefix
     found: list[str] = []
@@ -105,7 +145,9 @@ def mechanism_from_detail(detail: Optional[str]) -> Optional[str]:
 
 def coarse_position_status(reason: Optional[str]) -> str:
     """SellOrder.sell_reason → Position.status (최대 20자)."""
-    r = (reason or "").strip().upper() or "MANUAL_SELL"
+    codes = _known_codes_in(reason)
+    r = (codes[-1] if codes else (reason or "").strip().upper()) or "MANUAL_SELL"
+    r = normalize_reason_code(r)
     if r in _COARSE_POSITION_STATUS:
         return _COARSE_POSITION_STATUS[r]
     if r.startswith("TP1"):
@@ -149,21 +191,12 @@ def classify_exit_reason(
     return mech
 
 
-def sell_reason_ko(
-    reason: Optional[str],
+def _label_one(
+    raw: str,
     *,
     profit_loss: Optional[Union[int, float]] = None,
     profit_loss_rate: Optional[Union[int, float]] = None,
-    detail: Optional[str] = None,
 ) -> str:
-    """표시용 한글 사유. 과거 STOP_LOSS(+수익)·TRAILING(+수익) 기록도 익절로 보이게 함.
-
-    detail 이 있으면 구체 코드(TP1_GAP, STOP_MA_DC_WIDEN, TRAILING 등)를 우선한다.
-    """
-    mech = mechanism_from_detail(detail)
-    raw = (mech or reason or "").strip().upper()
-    if not raw:
-        return "기타"
     classified = classify_exit_reason(
         raw, profit_loss=profit_loss, profit_loss_rate=profit_loss_rate
     )
@@ -180,4 +213,65 @@ def sell_reason_ko(
         return "익절 (이탈)"
     if raw == "TAKE_PROFIT" and classified == "STOP_LOSS":
         return "손절"
-    return SELL_REASON_KO.get(classified, SELL_REASON_KO.get(raw, reason or "기타"))
+    return SELL_REASON_KO.get(classified) or SELL_REASON_KO.get(raw) or ""
+
+
+def sell_reason_ko(
+    reason: Optional[str],
+    *,
+    profit_loss: Optional[Union[int, float]] = None,
+    profit_loss_rate: Optional[Union[int, float]] = None,
+    detail: Optional[str] = None,
+) -> str:
+    """표시용 한글 사유. 과거 STOP_LOSS(+수익)·TRAILING(+수익) 기록도 익절로 보이게 함.
+
+    detail 이 있으면 구체 코드(TP1_GAP, STOP_MA_DC_WIDEN, TRAILING 등)를 우선한다.
+    공백으로 이어 붙인 복수 코드(T1_GAP STOP_3M_…)도 각각 한글로 풀어 준다.
+    """
+    combined = " ".join(part for part in (reason, detail) if part)
+    codes = _known_codes_in(combined)
+    specific = [c for c in codes if c not in _GENERIC_MECHANISMS]
+    if len(specific) > 1:
+        return " · ".join(
+            _label_one(c, profit_loss=profit_loss, profit_loss_rate=profit_loss_rate)
+            or SELL_REASON_KO.get(c, c)
+            for c in specific
+        )
+
+    mech = mechanism_from_detail(detail)
+    blob = (mech or reason or "").strip()
+    if not blob:
+        if not codes:
+            return "기타"
+        return " · ".join(
+            _label_one(c, profit_loss=profit_loss, profit_loss_rate=profit_loss_rate) or c
+            for c in codes
+        )
+
+    raw = normalize_reason_code(blob.upper())
+    one = _label_one(raw, profit_loss=profit_loss, profit_loss_rate=profit_loss_rate)
+    if one:
+        return one
+
+    if codes:
+        return " · ".join(
+            _label_one(c, profit_loss=profit_loss, profit_loss_rate=profit_loss_rate)
+            or SELL_REASON_KO.get(c, c)
+            for c in codes
+        )
+    return reason or "기타"
+
+
+def sell_reason_detail_ko(detail: Optional[str]) -> str:
+    """상세 문자열 안의 영문 코드를 한글로 치환."""
+    text = (detail or "").strip()
+    if not text:
+        return ""
+    # 긴 코드부터 치환해 STOP_MA_CRASH ⊂ STOP_MA_DC_CRASH 충돌을 피한다.
+    for alias, code in sorted(_CODE_ALIASES.items(), key=lambda kv: len(kv[0]), reverse=True):
+        if alias in text:
+            text = text.replace(alias, SELL_REASON_KO.get(code, code))
+    for code in sorted(SELL_REASON_KO.keys(), key=len, reverse=True):
+        if code in text:
+            text = text.replace(code, SELL_REASON_KO[code])
+    return text

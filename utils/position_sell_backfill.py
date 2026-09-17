@@ -16,6 +16,48 @@ def _infer_sell_price(pos: Position) -> int:
     return 0
 
 
+def effective_sell_price(
+    sell,
+    *,
+    buy_price: Optional[int] = None,
+    fallback_price: Optional[int] = None,
+) -> Optional[int]:
+    """표시·보정용 매도가. 0/미기록이면 금액·손익·포지션 현재가로 추정."""
+    try:
+        px = int(getattr(sell, "sell_price", 0) or 0)
+    except (TypeError, ValueError):
+        px = 0
+    if px > 0:
+        return px
+    try:
+        qty = int(getattr(sell, "sell_quantity", 0) or 0)
+    except (TypeError, ValueError):
+        qty = 0
+    try:
+        amt = int(getattr(sell, "sell_amount", 0) or 0)
+    except (TypeError, ValueError):
+        amt = 0
+    if qty > 0 and amt > 0:
+        return amt // qty
+    pl = getattr(sell, "profit_loss", None)
+    try:
+        bp = int(buy_price or 0)
+    except (TypeError, ValueError):
+        bp = 0
+    if pl is not None and qty > 0 and bp > 0:
+        try:
+            inferred = bp + int(pl) // qty
+        except (TypeError, ValueError):
+            inferred = 0
+        if inferred > 0:
+            return inferred
+    try:
+        fb = int(fallback_price or 0)
+    except (TypeError, ValueError):
+        fb = 0
+    return fb if fb > 0 else None
+
+
 def ensure_completed_sell_order(
     session: Session,
     pos: Position,

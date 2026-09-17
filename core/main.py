@@ -464,6 +464,7 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
                     "/indicators",
                     "/verify",
                     "/exit-replay",
+                    "/api-explorer",
                     "/status",
                 }
             )
@@ -1142,6 +1143,11 @@ async def exit_replay_page():
     """단일 종목 청산 규칙 역사 시뮬레이션 페이지"""
     return RedirectResponse(url="/static/exit_replay.html")
 
+@app.get("/api-explorer")
+async def api_explorer_page():
+    """엔드포인트 목록·호출 확인 페이지"""
+    return RedirectResponse(url="/static/api_explorer.html")
+
 @app.get("/api/stock-exit-replay")
 async def api_stock_exit_replay(
     code: str,
@@ -1483,12 +1489,9 @@ async def api_info():
     return {
         "message": "키움증권 조건식 모니터링 시스템 API",
         "version": "1.0.0",
-        "endpoints": {
-            "conditions": "/conditions/",
-            "signals": "/signals/",
-            "monitoring": "/monitoring/",
-            "kiwoom": "/kiwoom/"
-        }
+        "docs": "/docs",
+        "explorer": "/api-explorer",
+        "openapi": "/openapi.json",
     }
 
 
@@ -5313,13 +5316,15 @@ async def get_sell_orders(status: str = "ALL", limit: int = 50):
             strategy_by_pos: Dict[int, Optional[str]] = {}
             buy_price_by_pos: Dict[int, Optional[int]] = {}
             buy_time_by_pos: Dict[int, Optional[datetime]] = {}
+            current_price_by_pos: Dict[int, Optional[int]] = {}
             if pos_ids:
-                for pid, sk, bp, bt in (
+                for pid, sk, bp, bt, cp in (
                     session.query(
                         Position.id,
                         Position.strategy_key,
                         Position.buy_price,
                         Position.buy_time,
+                        Position.current_price,
                     )
                     .filter(Position.id.in_(pos_ids))
                     .all()
@@ -5327,16 +5332,23 @@ async def get_sell_orders(status: str = "ALL", limit: int = 50):
                     strategy_by_pos[int(pid)] = sk
                     buy_price_by_pos[int(pid)] = int(bp) if bp else None
                     buy_time_by_pos[int(pid)] = bt
+                    current_price_by_pos[int(pid)] = int(cp) if cp else None
+            from utils.position_sell_backfill import effective_sell_price
+            from utils.sell_reason_labels import sell_reason_ko
             for order in rows:
                 raw_sk = strategy_by_pos.get(int(order.position_id)) if order.position_id else None
                 strategy_key = _normalize_strategy(raw_sk) if raw_sk else None
                 buy_price = buy_price_by_pos.get(int(order.position_id)) if order.position_id else None
                 buy_time = buy_time_by_pos.get(int(order.position_id)) if order.position_id else None
+                fallback_px = current_price_by_pos.get(int(order.position_id)) if order.position_id else None
                 qty = int(order.sell_quantity or 0)
-                sell_px = int(order.sell_price or 0)
+                sell_px = effective_sell_price(
+                    order, buy_price=buy_price, fallback_price=fallback_px,
+                )
+                sell_px_int = int(sell_px) if sell_px else 0
                 gross = (
-                    (sell_px - int(buy_price)) * qty
-                    if buy_price and sell_px and qty > 0
+                    (sell_px_int - int(buy_price)) * qty
+                    if buy_price and sell_px_int and qty > 0
                     else None
                 )
                 fee = getattr(order, "trading_commission", None)
@@ -5349,11 +5361,17 @@ async def get_sell_orders(status: str = "ALL", limit: int = 50):
                         "stock_name": order.stock_name,
                         "buy_price": buy_price,
                         "buy_time": utc_naive_to_api_iso(buy_time) if buy_time else None,
-                        "sell_price": order.sell_price,
+                        "sell_price": sell_px_int or order.sell_price,
                         "sell_quantity": order.sell_quantity,
                         "sell_amount": order.sell_amount,
                         "sell_reason": order.sell_reason,
                         "sell_reason_detail": order.sell_reason_detail,
+                        "sell_reason_label": sell_reason_ko(
+                            order.sell_reason,
+                            profit_loss=order.profit_loss,
+                            profit_loss_rate=order.profit_loss_rate,
+                            detail=order.sell_reason_detail,
+                        ),
                         "gross_profit_loss": gross,
                         "trading_commission": int(fee) if fee is not None else None,
                         "transaction_tax": int(tax) if tax is not None else None,

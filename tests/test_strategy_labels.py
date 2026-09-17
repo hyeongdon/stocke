@@ -51,6 +51,22 @@ class StrategyLabelKoTests(unittest.TestCase):
         self.assertIn("[실전]", buy)
         self.assertIn("[실전]", sell)
 
+    def test_sell_message_translates_compound_reason_and_skips_zero_price(self):
+        msg = build_sell_message(
+            stock_name="테스트",
+            stock_code="000000",
+            quantity=10,
+            sell_price=0,
+            buy_price=1000,
+            sell_reason="T1_GAP STOP_3M_BEARISH_BELOW_MA15",
+            sell_reason_detail="T1_GAP | MA1592 STOP_3M_BEARISH_BELOW_MA15",
+        )
+        self.assertIn("전고 갭 반익절", msg)
+        self.assertIn("3분 음봉 MA15 이탈", msg)
+        self.assertNotIn("T1_GAP", msg)
+        self.assertNotIn("STOP_3M_BEARISH_BELOW_MA15", msg)
+        self.assertIn("매도가: N/A", msg)
+
 
 class NormalizeStrategyTests(unittest.TestCase):
     def test_ma1592_not_collapsed_to_legacy(self):

@@ -593,7 +593,7 @@ function renderTradeTable(trades, openIdx) {
       <td class="num">${num(buy.price)}</td>
       <td class="num">${num(buy.quantity)}</td>
       <td>${esc(sell.time || (t.status === 'HOLDING' ? '보유' : '-'))}</td>
-      <td class="num">${sell.price != null ? num(sell.price) : '-'}</td>
+      <td class="num">${sell.price > 0 ? num(sell.price) : '-'}</td>
       <td>${esc(sell.reason || '-')}${t.sangtta_exit_label && !(sell.reason || '').includes(t.sangtta_exit_label) ? ` ${sangttaExitPill(t)}` : ''}</td>
       <td class="num ${pnlClass(pl)}">${pl != null ? pnlStr(pl) : '-'}</td>
       <td class="num ${pnlClass(sell.profit_loss_rate)}">${rateStr(sell.profit_loss_rate)}</td>
@@ -672,7 +672,7 @@ function buildTradeCard(t, i, isOpen) {
           ${t.strategy_key ? `<div class="v-kv"><div class="k">전략</div><div class="v">strategy=${esc(t.strategy_key)}${t.signal && t.signal.gate_pack ? ` · gate=${esc(t.signal.gate_pack)}` : ''}${t.breakout_level_kind ? ` · ${esc(t.breakout_level_kind)} ${num(t.breakout_level_price)}원` : ''}</div></div>` : ''}
           <div class="v-kv"><div class="k">매수</div><div class="v">${esc(buy.time)} · ${num(buy.price)}원 × ${num(buy.quantity)}주</div></div>
           <div class="v-kv"><div class="k">매수금액</div><div class="v">${num(buy.amount)}원${buy.actual_amount ? ` (실매입 ${num(buy.actual_amount)}원)` : ''}</div></div>
-          ${sell.time ? `<div class="v-kv"><div class="k">매도</div><div class="v">${esc(sell.time)} · ${num(sell.price)}원 · ${esc(sell.reason)}</div></div>` : ''}
+          ${sell.time ? `<div class="v-kv"><div class="k">매도</div><div class="v">${esc(sell.time)} · ${sell.price > 0 ? num(sell.price) + '원' : '-'} · ${esc(sell.reason)}</div></div>` : ''}
           ${sell.reason_detail ? `<div class="v-kv"><div class="k">매도 상세</div><div class="v">${esc(sell.reason_detail)}</div></div>` : ''}
           ${t.peak_price ? `<div class="v-kv"><div class="k">진입 후 고점</div><div class="v">${num(t.peak_price)}원</div></div>` : ''}
         </div>

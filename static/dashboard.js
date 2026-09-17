@@ -331,6 +331,9 @@ const REASON_LABEL = {
   TP1_HIGH: '전고 반익절',
   TP1_GAP: '전고 갭 반익절',
   TP1_FALLBACK: '폴백% 반익절',
+  T1_HIGH: '전고 반익절',
+  T1_GAP: '전고 갭 반익절',
+  T1_FALLBACK: '폴백% 반익절',
   STOP_MA_DC_WIDEN: 'DC+이격 확대',
   STOP_MA_DC_CRASH: 'DC+급락 손절',
   STOP_MA_CRASH: '급락+큰이탈',
@@ -340,20 +343,25 @@ const REASON_LABEL = {
   EOD: '장종료 청산',
   '체결': '체결',
 };
+const REASON_ALIAS = { T1_GAP: 'TP1_GAP', T1_HIGH: 'TP1_HIGH', T1_FALLBACK: 'TP1_FALLBACK' };
 const GENERIC_SELL_REASONS = new Set(['STOP_LOSS', 'TAKE_PROFIT', 'MANUAL', 'MANUAL_SELL']);
+function normalizeReasonCode(code) {
+  const raw = String(code || '').trim().toUpperCase();
+  return REASON_ALIAS[raw] || raw;
+}
 function mechanismFromDetail(detail) {
   const text = String(detail || '').trim();
   if (!text) return '';
   const m = text.match(/^([A-Z][A-Z0-9_]{1,40})(?:→[A-Z][A-Z0-9_]{1,40})?\b/);
-  const prefix = m ? m[1] : '';
+  const prefix = normalizeReasonCode(m ? m[1] : '');
   if (prefix && REASON_LABEL[prefix] && !GENERIC_SELL_REASONS.has(prefix)) return prefix;
   let best = '';
   let bestAt = Infinity;
   Object.keys(REASON_LABEL).forEach((code) => {
     if (GENERIC_SELL_REASONS.has(code) || code === '체결') return;
-    const at = text.indexOf(code);
+    const at = text.toUpperCase().indexOf(code);
     if (at >= 0 && at < bestAt) {
-      best = code;
+      best = normalizeReasonCode(code);
       bestAt = at;
     }
   });
@@ -361,12 +369,19 @@ function mechanismFromDetail(detail) {
   return (prefix && REASON_LABEL[prefix]) ? prefix : '';
 }
 function sellReasonCode(o) {
+  const blob = [o && o.sell_reason, o && o.sell_reason_detail].filter(Boolean).join(' ');
+  const parts = String(blob).split(/[\s|·→/,;]+/).map(normalizeReasonCode).filter((p) => (
+    REASON_LABEL[p] && !GENERIC_SELL_REASONS.has(p)
+  ));
+  const unique = [];
+  parts.forEach((p) => { if (p && !unique.includes(p)) unique.push(p); });
+  if (unique.length > 1) return unique.join(' ');
   const fromDetail = mechanismFromDetail(o && o.sell_reason_detail);
   if (fromDetail) return fromDetail;
   return String((o && o.sell_reason) || '').trim();
 }
-function reasonLabel(r, pl, rate) {
-  const raw = (r || '').toUpperCase();
+function reasonLabelOne(r, pl, rate) {
+  const raw = normalizeReasonCode(r);
   const sign = (pl != null && !Number.isNaN(Number(pl)))
     ? Math.sign(Number(pl))
     : ((rate != null && !Number.isNaN(Number(rate))) ? Math.sign(Number(rate)) : null);
@@ -383,14 +398,40 @@ function reasonLabel(r, pl, rate) {
   if (raw === 'TAKE_PROFIT' && sign < 0) return '손절';
   return REASON_LABEL[raw] || REASON_LABEL[r] || r || '기타';
 }
+function reasonLabel(r, pl, rate) {
+  const parts = String(r || '').split(/[\s|·→/,;]+/).map(normalizeReasonCode).filter(Boolean);
+  const unique = [];
+  parts.forEach((p) => { if (p && !unique.includes(p)) unique.push(p); });
+  if (unique.length > 1) {
+    const labels = unique
+      .filter((p) => REASON_LABEL[p])
+      .map((p) => reasonLabelOne(p, pl, rate));
+    if (labels.length) return labels.join(' · ');
+  }
+  return reasonLabelOne(unique[0] || r, pl, rate);
+}
 function sellReasonLabel(o) {
+  if (o && o.sell_reason_label) return o.sell_reason_label;
   const pl = parseNum(o && o.profit_loss);
   const rate = parseNum(o && o.profit_loss_rate);
   return reasonLabel(sellReasonCode(o), pl, rate);
 }
+function resolveSellPrice(o) {
+  if (!o) return 0;
+  let px = parseNum(o.sell_price);
+  if (px > 0) return px;
+  const qty = parseNum(o.sell_quantity);
+  const amt = parseNum(o.sell_amount);
+  if (qty > 0 && amt > 0) return Math.round(amt / qty);
+  const buy = parseNum(o.buy_price);
+  if (qty > 0 && buy > 0 && o.profit_loss != null && o.profit_loss !== '') {
+    const inferred = Math.round(buy + parseNum(o.profit_loss) / qty);
+    if (inferred > 0) return inferred;
+  }
+  return 0;
+}
 function sellPriceTag(o) {
-  if (!o || o.sell_price == null || o.sell_price === '') return '';
-  const px = parseNum(o.sell_price);
+  const px = resolveSellPrice(o);
   return px > 0 ? `@ ${num(px)}원` : '';
 }
 
@@ -2039,7 +2080,7 @@ async function loadSells() {
         <td title="매도">${esc(when.time)}</td>
         <td><span class="stock-name">${esc(o.stock_name)}</span><span class="stock-code">${esc(o.stock_code)}</span></td>
         <td class="num">${o.buy_price != null ? num(o.buy_price) : '-'}</td>
-        <td class="num">${num(o.sell_price)}</td>
+        <td class="num">${resolveSellPrice(o) > 0 ? num(resolveSellPrice(o)) : '-'}</td>
         <td class="num">${num(o.sell_quantity)}</td>
         <td class="num ${gross != null ? signClass(gross) : ''}">${gross != null ? pnlStr(gross) : '-'}</td>
         <td class="num cost">${amtOrDash(o.trading_commission)}</td>
@@ -2685,7 +2726,7 @@ function logTradeDateKst(ts) {
 /** 체결 로그 → 검증: 체결된 매도(익절·손절·트레일·수익잠금·장마감 등) */
 const LOG_VERIFY_SELL_REASONS = new Set([
   'STOP_LOSS', 'TAKE_PROFIT', 'TRAILING', 'PROFIT_LOCK', 'MARKET_CLOSE',
-  'TP1_HIGH', 'TP1_GAP', 'TP1_FALLBACK',
+  'TP1_HIGH', 'TP1_GAP', 'TP1_FALLBACK', 'T1_HIGH', 'T1_GAP', 'T1_FALLBACK',
   'STOP_MA_DC_WIDEN', 'STOP_MA_DC_CRASH', 'STOP_MA_CRASH', 'STOP_PCT',
   'STOP_3M_BEARISH_BELOW_MA15', 'MAX_HOLD', 'EOD',
 ]);

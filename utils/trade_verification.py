@@ -32,7 +32,7 @@ SIGNAL_TYPE_KO = {
     "auto_trade": "자동매매 스캐너",
 }
 
-from utils.sell_reason_labels import SELL_REASON_KO, sell_reason_ko
+from utils.sell_reason_labels import SELL_REASON_KO, sell_reason_detail_ko, sell_reason_ko
 
 SELL_REASON_KO = SELL_REASON_KO  # re-export
 
@@ -735,12 +735,15 @@ def _pnl_calc(buy_price: int, sell_price: int, qty: int, recorded: Optional[int]
 
 
 def _serialize_sell_order(so: SellOrder) -> Dict[str, Any]:
+    from utils.position_sell_backfill import effective_sell_price
+
+    px = effective_sell_price(so)
     return {
         "id": so.id,
         "time": _fmt_dt_kst(so.completed_at or so.ordered_at or so.created_at),
         "ordered_at": _fmt_dt_kst(so.ordered_at),
         "completed_at": _fmt_dt_kst(so.completed_at),
-        "price": int(so.sell_price),
+        "price": int(px) if px else (int(so.sell_price) if so.sell_price else None),
         "quantity": int(so.sell_quantity),
         "amount": int(so.sell_amount),
         "reason": sell_reason_ko(
@@ -885,7 +888,7 @@ def _exit_notes(pos: Position, sells: List[SellOrder], sell_rows: Optional[List[
             )
             notes.append(f"청산 사유: {primary.get('reason') or '-'}")
             if primary.get("reason_detail"):
-                notes.append(f"상세: {primary['reason_detail']}")
+                notes.append(f"상세: {sell_reason_detail_ko(primary['reason_detail']) or primary['reason_detail']}")
             if primary.get("profit_loss") is not None:
                 notes.append(f"실현 손익: {int(primary['profit_loss']):+,}원")
             if primary.get("is_backfill"):
@@ -911,7 +914,7 @@ def _exit_notes(pos: Position, sells: List[SellOrder], sell_rows: Optional[List[
             f"청산 사유: {sell_reason_ko(s.sell_reason, profit_loss=int(s.profit_loss) if s.profit_loss is not None else None, profit_loss_rate=float(s.profit_loss_rate) if s.profit_loss_rate is not None else None, detail=s.sell_reason_detail)}"
         )
         if s.sell_reason_detail:
-            notes.append(f"상세: {s.sell_reason_detail}")
+            notes.append(f"상세: {sell_reason_detail_ko(s.sell_reason_detail) or s.sell_reason_detail}")
         if s.profit_loss is not None:
             notes.append(f"실현 손익: {int(s.profit_loss):+,}원")
         if pos.buy_time and s.completed_at:
@@ -928,7 +931,7 @@ def _exit_notes(pos: Position, sells: List[SellOrder], sell_rows: Optional[List[
         )
         notes.append(f"주문 {int(s.sell_price):,}원 × {int(s.sell_quantity):,}주")
         if s.sell_reason_detail:
-            notes.append(f"상세: {s.sell_reason_detail}")
+            notes.append(f"상세: {sell_reason_detail_ko(s.sell_reason_detail) or s.sell_reason_detail}")
     elif failed:
         s = failed[-1]
         notes.append(f"매도 실패: {s.sell_reason_detail or '사유 없음'}")
@@ -1300,8 +1303,13 @@ async def build_verification_report(
                     else (primary_sell_row.get("reason_code") if primary_sell_row else _infer_sell_reason_from_position(pos))
                 ),
                 "reason_detail": (
-                    sell.sell_reason_detail if sell
-                    else (primary_sell_row.get("reason_detail") if primary_sell_row else None)
+                    sell_reason_detail_ko(
+                        sell.sell_reason_detail if sell
+                        else (primary_sell_row.get("reason_detail") if primary_sell_row else None)
+                    ) or (
+                        sell.sell_reason_detail if sell
+                        else (primary_sell_row.get("reason_detail") if primary_sell_row else None)
+                    )
                 ),
                 "status": sell.status if sell else (
                     primary_sell_row.get("status") if primary_sell_row else None

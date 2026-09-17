@@ -17,7 +17,7 @@ from utils.datetime_kst import now_kst
 
 logger = logging.getLogger(__name__)
 
-from utils.sell_reason_labels import SELL_REASON_KO, sell_reason_ko  # noqa: F401
+from utils.sell_reason_labels import SELL_REASON_KO, sell_reason_detail_ko, sell_reason_ko  # noqa: F401
 
 STRATEGY_LABEL_KO = {
     "legacy": "거래대금",
@@ -67,7 +67,13 @@ def is_buy_slot_capacity_reason(reason: Optional[str]) -> bool:
 def _fmt_price(value: Optional[int]) -> str:
     if value is None:
         return "N/A"
-    return f"{int(value):,}원"
+    try:
+        px = int(value)
+    except (TypeError, ValueError):
+        return "N/A"
+    if px <= 0:
+        return "N/A"
+    return f"{px:,}원"
 
 
 def _fmt_pnl(amount: Optional[int], rate: Optional[float]) -> str:
@@ -154,8 +160,9 @@ def build_sell_message(
         lines.append(f"손익: {_fmt_pnl(profit_loss, pnl_rate)}")
     if remaining_qty is not None:
         lines.append(f"잔량: {remaining_qty:,}주")
-    if sell_reason_detail:
-        lines.append(f"상세: {sell_reason_detail}")
+    detail_ko = sell_reason_detail_ko(sell_reason_detail)
+    if detail_ko and detail_ko != reason_ko:
+        lines.append(f"상세: {detail_ko}")
     lines.append(f"시각: {now}")
     return "\n".join(lines)
 
@@ -278,8 +285,14 @@ async def notify_buy_slot_blocked_async(**kwargs) -> bool:
 
 def sell_fill_snapshot(sell, position) -> dict:
     """세션 종료 전 매도 알림용 필드 스냅샷."""
+    from utils.position_sell_backfill import effective_sell_price, _infer_sell_price
+
     qty = sell.sell_quantity or position.buy_quantity or 0
-    sell_price = sell.sell_price or position.current_price or position.buy_price or 0
+    sell_price = effective_sell_price(
+        sell,
+        buy_price=position.buy_price,
+        fallback_price=_infer_sell_price(position),
+    ) or 0
     buy_price = position.buy_price
     profit_loss = sell.profit_loss
     if profit_loss is None and buy_price and sell_price and qty:

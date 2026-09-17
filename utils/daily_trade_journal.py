@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from core.models import Position, PositionBuyFill, SellOrder
 from utils.datetime_kst import kst_day_end_utc_naive_exclusive, kst_day_start_utc_naive, kst_today
+from utils.position_sell_backfill import effective_sell_price
 
 KST = timezone(timedelta(hours=9))
 
@@ -138,12 +139,27 @@ def collect_daily_trade_journal(
             flat += 1
         reason = str(r.sell_reason or "MANUAL").strip() or "MANUAL"
         reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        pos = pos_cache.get(int(r.position_id))
+        buy_px = None
+        fallback_px = None
+        if pos is not None:
+            try:
+                if pos.buy_price:
+                    buy_px = int(pos.buy_price)
+            except (TypeError, ValueError):
+                buy_px = None
+            try:
+                if pos.current_price:
+                    fallback_px = int(pos.current_price)
+            except (TypeError, ValueError):
+                fallback_px = None
+        px = effective_sell_price(r, buy_price=buy_px, fallback_price=fallback_px)
         row = {
             "position_id": int(r.position_id),
             "stock_code": r.stock_code,
             "stock_name": r.stock_name,
             "quantity": int(r.sell_quantity or 0),
-            "price": int(r.sell_price or 0),
+            "price": int(px or r.sell_price or 0),
             "amount": int(r.sell_amount or 0),
             "sell_reason": reason,
             "sell_reason_detail": r.sell_reason_detail or "",

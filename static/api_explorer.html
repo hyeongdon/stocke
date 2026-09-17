@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <title>API 탐색</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/dashboard.css?v=115">
+  <link rel="stylesheet" href="/static/api_explorer.css?v=1">
+  <script src="/static/theme-sync.js?v=1"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <h1>API 탐색</h1>
+        <span class="sub">엔드포인트 목록 · 파라미터 · 바로 호출</span>
+      </div>
+      <nav class="tabs">
+        <a href="/dashboard" class="tab">대시보드</a>
+        <a href="/analysis" class="tab-link">분석 ↗</a>
+        <a href="/verify" class="tab-link">검증 ↗</a>
+        <a href="/api-explorer" class="tab active">API</a>
+        <a href="/docs" class="tab-link" target="_blank" rel="noopener">Swagger ↗</a>
+        <a href="/static/glossary.html" class="tab-link">용어정리 ↗</a>
+      </nav>
+      <div class="topbar-actions">
+        <input type="search" id="apiSearch" class="api-search" placeholder="경로·설명 검색 (예: sell-orders, 잔고)" autocomplete="off">
+        <button class="btn sm primary" id="btnRefresh" type="button">새로고침</button>
+        <span class="updated">총 <span id="apiCount">-</span>개</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="wrap api-wrap">
+    <p class="hint api-hint">
+      로그인된 세션으로 실제 서버 API를 호출합니다. GET은 바로 조회하고, POST/PUT/DELETE는 확인 후 실행됩니다.
+      OpenAPI 원본은 <a href="/docs" target="_blank" rel="noopener">/docs</a> ·
+      <a href="/redoc" target="_blank" rel="noopener">/redoc</a> ·
+      <a href="/openapi.json" target="_blank" rel="noopener">/openapi.json</a>.
+    </p>
+    <div class="api-groups" id="groupNav"></div>
+    <div id="apiList"><div class="skeleton">OpenAPI 스키마 로딩 중…</div></div>
+  </div>
+
+  <script src="/static/api_explorer.js?v=1"></script>
+</body>
+</html>
