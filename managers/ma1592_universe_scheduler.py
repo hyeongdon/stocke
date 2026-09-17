@@ -7,7 +7,7 @@ import logging
 import time
 
 from core.config import Config
-from utils.market_hours import is_krx_session
+from utils.market_hours import is_stop_loss_monitoring_session
 
 logger = logging.getLogger(__name__)
 
@@ -46,12 +46,11 @@ class Ma1592UniverseScheduler:
             try:
                 now = time.time()
                 if now >= self._fail_until and now - self._last_run >= _MAINTAIN_INTERVAL_SEC:
-                    # 장부 TTL 만료·추세전환(DC) 정리는 정규장에서만 실행
-                    # (애프터마켓에서는 차트 조회 필요 없는 만료 정리만 수행)
-                    if is_krx_session():
+                    # NXT 연장(08:00~20:00)에도 DC 정리·차트 조회. 그 외는 TTL만.
+                    if is_stop_loss_monitoring_session():
                         await self._run_maintenance()
                     else:
-                        # 정규장 외: TTL 만료된 GC_WATCH 종목만 조용히 정리
+                        # 세션 외: TTL 만료된 GC_WATCH 종목만 조용히 정리
                         from core.models import AutoTradeSettings, get_db
                         from utils.ma1592 import get_universe_store, params_from_settings
 

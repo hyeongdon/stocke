@@ -12,6 +12,7 @@ from core.models import AutoTradeSettings, SellOrder, get_db
 from api.api_rate_limiter import api_rate_limiter
 from utils.market_hours import (
     auto_trade_engine_block_reason,
+    is_krx_session,
     is_krx_trading_day,
     trading_day_block_reason,
 )
@@ -1046,6 +1047,25 @@ def order_params(settings: AutoTradeSettings, current_price: int) -> Tuple[int, 
     if method == "LIMIT" and current_price > 0:
         return current_price, "0"
     return 0, "3"
+
+
+def buy_order_route(
+    settings: Optional[AutoTradeSettings],
+    current_price: int,
+    now: Optional[datetime] = None,
+) -> Tuple[int, str, str]:
+    """(주문가격, trde_tp, dmst_stex_tp).
+
+    KRX 정규장(09:00~15:30): 설정 그대로(기본 시장가/KRX).
+    NXT 연장(그 외 거래 가능 시간): 시장가 미지원 → SOR+지정가.
+    """
+    price, trde = order_params(settings, current_price) if settings else (0, "3")
+    if is_krx_session(now):
+        return price, trde, "KRX"
+    px = int(current_price or 0)
+    if px <= 0:
+        px = int(price or 0)
+    return px, "0", "SOR"
 
 
 def get_today_realized_pnl() -> int:
@@ -2501,6 +2521,7 @@ async def _eval_ma1592_hold(
         is_golden_cross_bar,
         normalize_chart_tf,
         params_from_settings,
+        release_stale_wait_hold,
         scale_leg_qty,
         size_position,
     )
@@ -2522,6 +2543,10 @@ async def _eval_ma1592_hold(
         return False, "MA1592 탈락: L2 장부 없음"
 
     p = params_from_settings(settings)
+    if str(p.get("hold_mode") or "scale_in_gc").strip().lower() == "scale_in_gc":
+        if release_stale_wait_hold(stock_code, store=store):
+            row = store.get(stock_code) or row
+            logger.info(f"📈 [MA1592] 1차 미체결 → 재관찰 GC_WATCH {stock_code}")
     entry_trigger = str(p.get("entry_trigger") or "gc_above").strip().lower()
     exec_tf = normalize_chart_tf(p.get("exec_tf") or "3M")
     interval_min = chart_tf_interval_minutes(exec_tf)

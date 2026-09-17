@@ -4192,14 +4192,18 @@ function renderSettingsForm(s) {
         ${field('3차 유지봉', fNum('ma1592_scale_hold_bars', s, '2'), 'hold 모드 시만')}
         ${field('장부 TTL(일)', fNum('ma1592_setup_expire_days', s, '1'), '편입 당일 유지 · 다음날 만료 · DC면 즉시 정리')}
         ${field('최대 보유(일)', fNum('ma1592_max_hold_days', s, '10'))}
-        ${field('1회 리스크(%)', fNum('ma1592_risk_per_trade_pct', s, '2'))}
-        ${field('손절%', fNum('ma1592_stop_pct', s, '4'))}
-        ${field('하드이탈%', fNum('ma1592_hard_break_pct', s, '1'), '리스크 손절가(사이징) · 시세 전 청산은 급락+DC')}
-        ${field('92선이탈%', fNum('ma1592_large_break_pct', s, '0.7'), 'impulse 후 STOP_MA_CRASH · 종가가 EMA92 대비 이탈%')}
-        ${field('급락%', fNum('ma1592_crash_pct', s, '1.8'), '고점 대비 하락% · STOP_MA_DC_CRASH/CRASH 공통')}
+      </div>
+      <div class="box-title" style="margin-top:14px;">사이징 · 청산</div>
+      <div class="desc"><b>하드이탈%</b>=수량 계산만(이 값으로 안 팜). <b>급락%</b>=고점 대비 하락 · 시세 전은 DC와, 시세 후는 92선이탈과 같이 봐야 청산.</div>
+      <div class="form-grid">
+        ${field('1회 리스크(%)', fNum('ma1592_risk_per_trade_pct', s, '2'), '계좌 대비 · 가상 손절가까지 거리로 몇 주 살지 계산')}
+        ${field('손절%', fNum('ma1592_stop_pct', s, '4'), '매수가 대비 · 이하면 STOP_PCT 청산 · 사이징 손절가에도 사용')}
+        ${field('하드이탈% (수량만)', fNum('ma1592_hard_break_pct', s, '1'), 'EMA92×(1−이값)=가상 손절가. 몇 주 살지만 정함. 이 %로 매도하지 않음')}
+        ${field('92선이탈% (청산)', fNum('ma1592_large_break_pct', s, '0.7'), '시세 후 · 종가가 EMA92를 이 % 하향 + 급락 → STOP_MA_CRASH')}
+        ${field('급락% (고점↓)', fNum('ma1592_crash_pct', s, '1.8'), '최근고점 대비 하락(고점 후 3봉 이내). 시세 전=+DC, 시세 후=+92선이탈일 때만 청산')}
       </div>
       ${fCheck('ma1592_flatten_eod', s, '장종료 전량청산 (flatten_eod)')}
-      <div class="exit-note">${esc(ma1592Start)}~${esc(ma1592End)} · 슬롯 ${esc(ma1592Slots)} · 1차=가격선행 · 분할 15/35/50 · 3차=EMA92유지+15선눌림 · 익절=전고 50% · 장부OUT=추세전환</div>
+      <div class="exit-note">${esc(ma1592Start)}~${esc(ma1592End)} · 슬롯 ${esc(ma1592Slots)} · 1차=가격선행 · 분할 15/35/50 · 익절=전고 50% · 시세전=급락+DC · 시세후=급락+92선이탈 · 하드이탈=수량만</div>
     </div>
   </div>`;
 

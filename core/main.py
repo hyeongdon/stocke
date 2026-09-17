@@ -3836,12 +3836,32 @@ async def place_buy_order(req: BuyOrderRequest):
             mapped_order_type = "3"
         elif mapped_order_type in ("00", "limit", "LIMIT"):
             mapped_order_type = "0"
-        
+
+        from utils.market_hours import is_krx_session
+        stex = "KRX"
+        price = int(req.price or 0)
+        if not is_krx_session():
+            stex = "SOR"
+            if mapped_order_type == "3":
+                mapped_order_type = "0"
+            if price <= 0:
+                live_px = await kiwoom_api.get_current_price(
+                    req.stock_code, allow_off_hours=True,
+                )
+                if not live_px:
+                    return {
+                        "success": False,
+                        "message": "NXT/연장 매수: 현재가를 조회할 수 없습니다",
+                        "stock_code": req.stock_code,
+                    }
+                price = int(live_px)
+
         result = await kiwoom_api.place_buy_order(
             stock_code=req.stock_code,
             quantity=req.quantity,
-            price=req.price,
-            order_type=mapped_order_type
+            price=price,
+            order_type=mapped_order_type,
+            dmst_stex_tp=stex,
         )
         
         if result.get("success"):

@@ -549,13 +549,24 @@ class StrategyManager {
                                value="${parameters.tp1_frac || 0.5}" min="0.1" max="0.9" step="0.1">
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">하드/큰이탈/급락 % · 손절%</label>
-                        <div class="input-group">
-                            <input type="number" class="form-control" id="ma1592Hard" value="${parameters.hard_break_pct || 1.0}" step="0.1" title="hard">
-                            <input type="number" class="form-control" id="ma1592Large" value="${parameters.large_break_pct ?? 0.7}" step="0.1" title="impulse 후 EMA92 이탈%">
-                            <input type="number" class="form-control" id="ma1592Crash" value="${parameters.crash_pct ?? 1.8}" step="0.1" title="고점 대비 급락%">
-                            <input type="number" class="form-control" id="ma1592Stop" value="${parameters.stop_pct || 4.0}" step="0.1" title="stop">
-                        </div>
+                        <label class="form-label">하드이탈% (수량만)</label>
+                        <input type="number" class="form-control" id="ma1592Hard" value="${parameters.hard_break_pct || 1.0}" step="0.1">
+                        <div class="form-text">EMA92 대비 가상 손절가. 몇 주 살지만 정함. 이 값으로 매도하지 않음.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">92선이탈% (청산)</label>
+                        <input type="number" class="form-control" id="ma1592Large" value="${parameters.large_break_pct ?? 0.7}" step="0.1">
+                        <div class="form-text">시세 후 · 종가가 EMA92를 이 % 하향 + 급락이면 STOP_MA_CRASH</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">급락% (고점 대비)</label>
+                        <input type="number" class="form-control" id="ma1592Crash" value="${parameters.crash_pct ?? 1.8}" step="0.1">
+                        <div class="form-text">최근고점 대비 하락. 시세 전은 DC와, 시세 후는 92선이탈과 같이 봐야 청산.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">손절%</label>
+                        <input type="number" class="form-control" id="ma1592Stop" value="${parameters.stop_pct || 4.0}" step="0.1">
+                        <div class="form-text">매수가 대비. 이하면 STOP_PCT 청산. 사이징 손절가에도 사용.</div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label">장부 TTL / 최대보유 (일)</label>

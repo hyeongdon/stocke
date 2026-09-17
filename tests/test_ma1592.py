@@ -30,6 +30,7 @@ from utils.ma1592 import (
     normalize_chart_tf,
     remove_on_below_ma90,
     remove_on_ema90_break,
+    release_stale_wait_hold,
     scale_leg_quantities,
     scale_leg_qty,
     size_position,
@@ -742,6 +743,17 @@ class Ma1592UniverseTests(unittest.TestCase):
             codes2 = {r.stock_code for r in store.all_rows()}
             self.assertEqual(codes2, {"222222", "333333"})
             self.assertEqual(set(store.l3_codes()), {"222222"})
+
+    def test_release_stale_wait_hold_when_leg1_not_inflight(self):
+        with tempfile.TemporaryDirectory() as td:
+            store = Ma1592UniverseStore(Path(td) / "u.json")
+            store.upsert(UniverseRow(stock_code="005930", state="WAIT_HOLD"))
+            with patch("utils.ma1592.ma1592_leg1_signal_inflight", return_value=True):
+                self.assertFalse(release_stale_wait_hold("005930", store=store))
+                self.assertEqual(store.get("005930").state, "WAIT_HOLD")
+            with patch("utils.ma1592.ma1592_leg1_signal_inflight", return_value=False):
+                self.assertTrue(release_stale_wait_hold("005930", store=store))
+                self.assertEqual(store.get("005930").state, "GC_WATCH")
 
     def test_condition_sync_add_and_remove(self):
         from utils.ma1592 import (

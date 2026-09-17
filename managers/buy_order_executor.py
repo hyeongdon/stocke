@@ -37,7 +37,7 @@ from utils.auto_trade_engine import (
     is_breakout_watching_reason,
     is_max_concurrent_positions_reached,
     max_concurrent_positions_limit,
-    order_params,
+    buy_order_route,
     parse_signal_meta,
     buy_price_skip_reason,
     passes_buy_price_conditions,
@@ -95,7 +95,7 @@ class BuyOrderExecutor:
         """시장가 매수는 가격 상승 여유를 반영해 주문 수량을 보수적으로 계산한다."""
         if current_price <= 0:
             return 0
-        order_price, order_type = order_params(settings, current_price) if settings else (0, "3")
+        order_price, order_type, _stex = buy_order_route(settings, current_price) if settings else (0, "3", "KRX")
         if order_type != "3":
             return current_price
         try:
@@ -1344,7 +1344,9 @@ class BuyOrderExecutor:
         try:
             # 기존 구현은 get_stock_info()를 호출했는데 KiwoomAPI에 해당 메서드가 없어 항상 실패했음.
             # 최소 검증으로 현재가 조회 성공 여부로 거래 가능 여부를 판단한다.
-            current_price = await self.kiwoom_api.get_current_price(stock_code)
+            current_price = await self.kiwoom_api.get_current_price(
+                stock_code, allow_off_hours=True,
+            )
             if not current_price or current_price <= 0:
                 return {"tradeable": False, "reason": "현재가 조회 실패/0원"}
             return {"tradeable": True, "reason": "정상(현재가 조회 성공)"}
@@ -1378,10 +1380,11 @@ class BuyOrderExecutor:
             return False
     
     async def _get_current_price(self, stock_code: str) -> Optional[int]:
-        """현재가 조회"""
+        """현재가 조회 — NXT 애프터(15:30~20:00)도 허용."""
         try:
-            # 키움 API로 현재가 조회
-            current_price = await self.kiwoom_api.get_current_price(stock_code)
+            current_price = await self.kiwoom_api.get_current_price(
+                stock_code, allow_off_hours=True,
+            )
             return current_price
         except Exception as e:
             logger.error(f"💰 [BUY_EXECUTOR] 현재가 조회 오류: {e}")
@@ -1440,12 +1443,15 @@ class BuyOrderExecutor:
         if quantity <= 0:
             return {"success": False, "error": "주문 가능한 예수금이 부족합니다."}
 
-        order_price, order_type = order_params(settings, current_price) if settings else (0, "3")
+        order_price, order_type, stex = buy_order_route(settings, current_price)
+        if stex != "KRX" and order_price <= 0:
+            return {"success": False, "error": "NXT/연장 매수 단가 없음"}
         result = await self.kiwoom_api.place_buy_order(
             stock_code=position.stock_code,
             quantity=quantity,
             price=order_price,
             order_type=order_type,
+            dmst_stex_tp=stex,
         )
         if not result.get("success"):
             return {"success": False, "error": result.get("error") or "물타기 매수 주문 실패"}
@@ -1642,17 +1648,24 @@ class BuyOrderExecutor:
             try:
                 logger.info(f"💰 [BUY_EXECUTOR] 매수 주문 시도 {attempt + 1}/{self.max_retry_attempts} - {signal.stock_name}")
                 
-                # 키움 API로 매수 주문
-                order_price, order_type = order_params(
-                    self.auto_trade_settings,
-                    current_price,
-                ) if self.auto_trade_settings else (0, "3")
-                order_kind = "시장가" if order_type == "3" else "지정가"
+                # 키움 API로 매수 주문. NXT 연장은 시장가 미지원 → SOR+지정가
+                order_price, order_type, stex = buy_order_route(
+                    self.auto_trade_settings, current_price,
+                )
+                if stex != "KRX" and order_price <= 0:
+                    await self._update_signal_status(
+                        signal.id, "FAILED", "NXT/연장 매수 단가 없음",
+                    )
+                    return
+                order_kind = "시장가" if order_type == "3" else (
+                    f"{stex}지정가" if stex != "KRX" else "지정가"
+                )
                 result = await self.kiwoom_api.place_buy_order(
                     stock_code=signal.stock_code,
                     quantity=quantity,
                     price=order_price,
                     order_type=order_type,
+                    dmst_stex_tp=stex,
                 )
                 
                 if result.get("success"):
@@ -2036,6 +2049,23 @@ class BuyOrderExecutor:
                                 "strategy": meta.get("strategy") or meta.get("source"),
                             }
                     session.commit()
+                    if status == "FAILED":
+                        try:
+                            meta = parse_signal_meta(signal)
+                            if (
+                                str(meta.get("strategy") or "") == "ma1592"
+                                and not meta.get("is_add_buy")
+                            ):
+                                from utils.ma1592 import release_stale_wait_hold
+                                if release_stale_wait_hold(
+                                    signal.stock_code, session=session,
+                                ):
+                                    logger.info(
+                                        f"💰 [BUY_EXECUTOR] MA1592 1차 실패 → "
+                                        f"재관찰 {signal.stock_name}({signal.stock_code})"
+                                    )
+                        except Exception as e:
+                            logger.debug(f"💰 [BUY_EXECUTOR] WAIT_HOLD 해제 스킵: {e}")
                     if reason:
                         logger.info(f"💰 [BUY_EXECUTOR] 신호 상태 변경: ID {signal_id} -> {status}, reason={reason}")
                     else:

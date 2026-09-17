@@ -8,16 +8,23 @@ from utils.auto_trade_engine import compute_quantity
 
 
 class MarketBuyBufferTests(unittest.TestCase):
+    @mock.patch("utils.auto_trade_engine.is_krx_session", return_value=True)
     @mock.patch("managers.buy_order_executor.Config.MARKET_BUY_PRICE_BUFFER_PCT", 3.0)
-    def test_market_order_reserves_price_buffer(self):
+    def test_market_order_reserves_price_buffer(self, _krx):
         settings = SimpleNamespace(order_method="MARKET")
         sizing_price = BuyOrderExecutor._buy_sizing_price(10_000, settings)
         self.assertEqual(sizing_price, 10_300)
         self.assertEqual(compute_quantity(1_000_000, sizing_price), 97)
 
+    @mock.patch("utils.auto_trade_engine.is_krx_session", return_value=True)
     @mock.patch("managers.buy_order_executor.Config.MARKET_BUY_PRICE_BUFFER_PCT", 3.0)
-    def test_limit_order_does_not_use_market_buffer(self):
+    def test_limit_order_does_not_use_market_buffer(self, _krx):
         settings = SimpleNamespace(order_method="LIMIT")
+        self.assertEqual(BuyOrderExecutor._buy_sizing_price(10_000, settings), 10_000)
+
+    @mock.patch("utils.auto_trade_engine.is_krx_session", return_value=False)
+    def test_nxt_session_sizes_at_limit_price(self, _krx):
+        settings = SimpleNamespace(order_method="MARKET")
         self.assertEqual(BuyOrderExecutor._buy_sizing_price(10_000, settings), 10_000)
 
 

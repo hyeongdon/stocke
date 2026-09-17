@@ -332,9 +332,12 @@ class AutoTradeSettings(Base):
     ma1592_tp1_frac = Column(Float, nullable=False, default=0.5)
     ma1592_take_profit_pct = Column(Float, nullable=False, default=4.0)
     ma1592_stop_pct = Column(Float, nullable=False, default=4.0)
+    # 수량 계산만(안 팜). 가상 손절가 = EMA92×(1−hard_break%)
     ma1592_hard_break_pct = Column(Float, nullable=False, default=1.0)
+    # 시세 후 청산. 종가 < EMA92×(1−large_break%) + 급락 → STOP_MA_CRASH
     ma1592_large_break_pct = Column(Float, nullable=False, default=0.7)
     ma1592_impulse_min_pct = Column(Float, nullable=False, default=2.0)
+    # 고점 대비 하락%. 시세 전=+DC, 시세 후=+92선이탈일 때만 청산
     ma1592_crash_pct = Column(Float, nullable=False, default=1.8)
     ma1592_crash_bars = Column(Integer, nullable=False, default=3)
     ma1592_setup_expire_days = Column(Integer, nullable=False, default=1)

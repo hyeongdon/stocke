@@ -3626,8 +3626,19 @@ class KiwoomAPI:
             logger.error(f"계좌수익률 요청 오류: {e}")
             return {"positions": [], "_data_source": "API_ERROR"}
 
-    async def place_buy_order(self, stock_code: str, quantity: int, price: int = 0, order_type: str = "3") -> Dict:
-        """주식 매수 주문 (키움 API kt10000 스펙)"""
+    async def place_buy_order(
+        self,
+        stock_code: str,
+        quantity: int,
+        price: int = 0,
+        order_type: str = "3",
+        *,
+        dmst_stex_tp: str = "KRX",
+    ) -> Dict:
+        """주식 매수 주문 (키움 API kt10000 스펙).
+
+        dmst_stex_tp: KRX | NXT | SOR. NXT 연장 세션은 시장가 미지원 → SOR+지정가 권장.
+        """
         if not self.token_manager.get_valid_token():
             logger.error("키움 API 토큰이 없습니다")
             return {"success": False, "error": "토큰 없음"}
@@ -3655,8 +3666,12 @@ class KiwoomAPI:
 
             # 주문 요청 데이터 (kt10000 스펙)
             account_pw = Config.KIWOOM_MOCK_ACCOUNT_PASSWORD if use_mock_account else Config.KIWOOM_ACCOUNT_PASSWORD
+            stock_code = self.normalize_stock_code(stock_code)
+            stex = (dmst_stex_tp or "KRX").strip().upper()
+            if stex not in ("KRX", "NXT", "SOR"):
+                stex = "KRX"
             request_data = {
-                'dmst_stex_tp': 'KRX',  # 국내거래소구분 KRX,NXT,SOR
+                'dmst_stex_tp': stex,  # 국내거래소구분 KRX,NXT,SOR
                 'acnt_no': account_no,  # 계좌번호
                 'stk_cd': stock_code,   # 종목코드
                 'ord_qty': str(quantity),  # 주문수량
@@ -3674,7 +3689,7 @@ class KiwoomAPI:
             order_kind = "시장가" if order_type == "3" else "지정가"
             logger.info(
                 f"매수 주문 요청: {stock_code}, 수량: {quantity}, "
-                f"가격: {price}, 타입: {order_type}({order_kind})"
+                f"가격: {price}, 타입: {order_type}({order_kind}), 거래소: {stex}"
             )
 
             async def _do_request() -> tuple[int, Optional[dict], str]:

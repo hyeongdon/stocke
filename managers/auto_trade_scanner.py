@@ -1340,7 +1340,7 @@ class AutoTradeScanner:
                     except (TypeError, ValueError):
                         change_rate = None
             else:
-                price = await self.kiwoom_api.get_current_price(code)
+                price = await self.kiwoom_api.get_current_price(code, allow_off_hours=True)
         if not price or price <= 0:
             src = item.get("source")
             if src in ("sangtta", "breakout", "fractal", "ma1592"):
@@ -2134,7 +2134,7 @@ class AutoTradeScanner:
         except (TypeError, ValueError):
             price = 0
         if price <= 0:
-            price = await self.kiwoom_api.get_current_price(code) or 0
+            price = await self.kiwoom_api.get_current_price(code, allow_off_hours=True) or 0
         if not price:
             st["last_auto_skip_reason"] = "현재가 없음"
             save_jongga_state(st)
@@ -2302,7 +2302,7 @@ class AutoTradeScanner:
             if await self._in_cooldown(code, min(60, int(settings.reorder_cooldown_sec or 300))):
                 continue
 
-            price = await self.kiwoom_api.get_current_price(code) or 0
+            price = await self.kiwoom_api.get_current_price(code, allow_off_hours=True) or 0
             if not price:
                 continue
             buy_px = int(getattr(pos, "buy_price", None) or 0)
@@ -2423,7 +2423,9 @@ class AutoTradeScanner:
             if past_hm(leg2_start, DEFAULT_LEG2_START):
                 # 3차 창에 들어가면 2차 조건 미충족 시 스킵 처리
                 force_skip = past_hm(leg3_start, DEFAULT_LEG3_START)
-                price = await self.kiwoom_api.get_current_price(code) or 0
+                price = await self.kiwoom_api.get_current_price(
+                    code, allow_off_hours=True,
+                ) or 0
                 if not price:
                     if force_skip:
                         mark_leg(st, 2, skipped=True, reason="현재가 없음")
@@ -2513,7 +2515,7 @@ class AutoTradeScanner:
             log_activity("BUY", skip_msg, "warn", stock_code=code, strategy="jongga")
             return created
 
-        price = await self.kiwoom_api.get_current_price(code) or 0
+        price = await self.kiwoom_api.get_current_price(code, allow_off_hours=True) or 0
         if not price:
             return created
 
@@ -2633,7 +2635,7 @@ class AutoTradeScanner:
             if not pos:
                 continue
 
-            price = await self.kiwoom_api.get_current_price(code) or int(pos.buy_price or 0)
+            price = await self.kiwoom_api.get_current_price(code, allow_off_hours=True) or int(pos.buy_price or 0)
             if not price:
                 continue
             name = pos.stock_name or urec.stock_name or code
@@ -2715,7 +2717,7 @@ class AutoTradeScanner:
             if pending:
                 continue
 
-            price = await self.kiwoom_api.get_current_price(pos.stock_code)
+            price = await self.kiwoom_api.get_current_price(pos.stock_code, allow_off_hours=True)
             if not price or not pos.buy_price:
                 continue
             profit_rate = (price - pos.buy_price) / pos.buy_price * 100

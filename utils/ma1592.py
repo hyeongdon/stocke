@@ -70,11 +70,11 @@ DEFAULT_PARAMS: Dict[str, Any] = {
     "tp_fallback": "hard_pct",
     "stop_mode": "ma_or_pct",
     "stop_pct": 4.0,
-    "hard_break_pct": 1.0,
+    "hard_break_pct": 1.0,  # 사이징만. EMA92 가상 손절가. 이 값으로 매도하지 않음
     "bearish_exit_pct": 1.0,
-    "large_break_pct": 0.7,
+    "large_break_pct": 0.7,  # 시세 후 청산. 종가 EMA92 이탈% + 급락
     "impulse_min_pct": 2.0,
-    "crash_pct": 1.8,
+    "crash_pct": 1.8,  # 고점 대비 하락%. 시세 전=+DC, 시세 후=+92선이탈
     "crash_bars": 3,
     "setup_expire_days": 1,
     "setup_expire_bars": 0,
@@ -1070,6 +1070,7 @@ async def fetch_live_universe_metrics(
     norm = getattr(kiwoom_api, "normalize_stock_code", lambda c: c)
     raw = await kiwoom_api.get_stock_chart_data(
         norm(code), tf, max_bars=max_bars, cache_ttl_sec=cache_ttl_sec,
+        allow_off_hours=True,  # NXT 애프터(15:30~20:00) 신규 편입용
     )
     bars = drop_forming_minute_bar(raw or [], now=now, interval_minutes=interval_min)
     slow = int(p.get("ma_slow") or 92)
@@ -1177,6 +1178,7 @@ def size_position(
     max_invest_amount: int = 0,
     tp1_frac: float = 0.5,
 ) -> Dict[str, Any]:
+    """리스크 기반 수량. hard_break_pct는 EMA92 가상 손절가(사이징)만 — 청산 트리거 아님."""
     entry = int(entry)
     risk_amount = float(equity or 0) * (float(risk_per_trade_pct) / 100.0)
     stop_by_pct = entry * (1.0 - float(stop_pct) / 100.0)
@@ -1609,6 +1611,53 @@ def get_universe_store() -> Ma1592UniverseStore:
     if _STORE is None:
         _STORE = Ma1592UniverseStore()
     return _STORE
+
+
+_OPEN_LEG1_STATUSES = ("PENDING", "WATCHING", "PROCESSING", "ORDERED")
+
+
+def ma1592_leg1_signal_inflight(stock_code: str, session: Any = None) -> bool:
+    """1차 매수 신호가 아직 진행 중이면 True."""
+    from core.models import PendingBuySignal, get_db
+
+    code = str(stock_code or "").replace("A", "").strip()
+    if not code:
+        return False
+
+    def _open(sess: Any) -> bool:
+        return (
+            sess.query(PendingBuySignal)
+            .filter(
+                PendingBuySignal.stock_code == code,
+                PendingBuySignal.status.in_(_OPEN_LEG1_STATUSES),
+            )
+            .first()
+            is not None
+        )
+
+    if session is not None:
+        return _open(session)
+    for db in get_db():
+        return _open(db)
+    return False
+
+
+def release_stale_wait_hold(
+    stock_code: str,
+    *,
+    store: Optional[Ma1592UniverseStore] = None,
+    session: Any = None,
+) -> bool:
+    """1차 주문이 끝났는데 WAIT_HOLD면 GC_WATCH로 되돌려 재관찰."""
+    store = store or get_universe_store()
+    code = str(stock_code or "").replace("A", "").strip()
+    row = store.get(code)
+    if not row or row.state != "WAIT_HOLD":
+        return False
+    if ma1592_leg1_signal_inflight(code, session=session):
+        return False
+    store.set_state(code, "GC_WATCH")
+    return True
 
 
 def evaluate_setup_on_bar(
