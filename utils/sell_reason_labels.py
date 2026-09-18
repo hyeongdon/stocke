@@ -23,6 +23,7 @@ SELL_REASON_KO = {
     "TP1_FALLBACK": "폴백% 반익절",
     "STOP_MA_DC_WIDEN": "DC+이격 확대",
     "STOP_MA_DC_CRASH": "DC+급락 손절",
+    "STOP_MA_TRAIL": "고점 트레일",
     "STOP_MA_CRASH": "급락+큰이탈",
     "STOP_PCT": "%손절",
     "STOP_3M_BEARISH_BELOW_MA15": "3분 음봉 MA15 이탈",

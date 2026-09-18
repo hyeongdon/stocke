@@ -473,9 +473,19 @@ class Ma1592SizingExitTests(unittest.TestCase):
         self.assertEqual(px, 12000)
 
     def test_size_half(self):
-        s = size_position(10_000_000, 10000, 9900, risk_per_trade_pct=2.0, stop_pct=4.0)
+        s = size_position(
+            10_000_000, 10000, 9900,
+            risk_per_trade_pct=2.0, stop_pct=4.0, tp1_frac=0.5,
+        )
         self.assertGreaterEqual(s["qty"], 2)
         self.assertEqual(s["qty_tp1"] + s["qty_remain"], s["qty"])
+
+    def test_size_no_tp1_by_default(self):
+        s = size_position(10_000_000, 10000, 9900, risk_per_trade_pct=2.0, stop_pct=4.0)
+        self.assertGreaterEqual(s["qty"], 1)
+        self.assertEqual(s["qty_tp1"], 0)
+        self.assertEqual(s["qty_remain"], s["qty"])
+        self.assertTrue(s["tp1_skip"])
 
     def test_impulse_sticky(self):
         self.assertTrue(
@@ -490,8 +500,8 @@ class Ma1592SizingExitTests(unittest.TestCase):
             update_impulse_seen(True, tp1_filled=False, entry=10000, peak=10000)
         )
 
-    def test_exit_tp1_then_hard_not_after_impulse(self):
-        # TP1 hit
+    def test_exit_tp1_disabled_by_default(self):
+        """기본 take_profit_mode=none → 전고 도달해도 반익절 안 함."""
         ex = evaluate_exit(
             state="MANAGE_FULL",
             entry=10000,
@@ -500,12 +510,34 @@ class Ma1592SizingExitTests(unittest.TestCase):
             open_=12000,
             high=12600,
             ma15=11000,
+            ma92=10900,
             tp1_price_val=12400,
             tp1_filled=False,
             impulse_seen=False,
             peak=12600,
             bars_since_peak=0,
             hold_days=1,
+        )
+        self.assertIsNone(ex)
+
+    def test_exit_tp1_legacy_when_enabled(self):
+        # 레거시: take_profit_mode=prev_high_half 일 때만 TP1
+        ex = evaluate_exit(
+            state="MANAGE_FULL",
+            entry=10000,
+            last=12500,
+            close=12500,
+            open_=12000,
+            high=12600,
+            ma15=11000,
+            ma92=10900,
+            tp1_price_val=12400,
+            tp1_filled=False,
+            impulse_seen=False,
+            peak=12600,
+            bars_since_peak=0,
+            hold_days=1,
+            params={"take_profit_mode": "prev_high_half", "tp1_frac": 0.5},
         )
         self.assertIsNotNone(ex)
         assert ex is not None
@@ -528,7 +560,14 @@ class Ma1592SizingExitTests(unittest.TestCase):
             peak=12600,
             bars_since_peak=10,
             hold_days=2,
-            params={"hard_break_pct": 0.4, "large_break_pct": 1.0, "crash_pct": 2.5},
+            params={
+                "take_profit_mode": "prev_high_half",
+                "tp1_frac": 0.5,
+                "hard_break_pct": 0.4,
+                "large_break_pct": 1.0,
+                "crash_pct": 2.5,
+                "trail_pct": 0,
+            },
         )
         self.assertIsNone(ex2)
 
@@ -698,11 +737,66 @@ class Ma1592SizingExitTests(unittest.TestCase):
             peak=12600,
             bars_since_peak=2,
             hold_days=2,
-            params={"crash_pct": 2.5, "crash_bars": 3, "large_break_pct": 1.0},
+            # trail 끄고 급락+92선만 검증
+            params={
+                "crash_pct": 2.5,
+                "crash_bars": 3,
+                "large_break_pct": 1.0,
+                "trail_pct": 0,
+            },
         )
         self.assertIsNotNone(ex)
         assert ex is not None
         self.assertEqual(ex["reason"], "STOP_MA_CRASH")
+
+    def test_stop_ma_trail_before_crash_92(self):
+        # 시세 후: 고점 −5%면 92선 위여도 트레일 청산
+        ex = evaluate_exit(
+            state="MANAGE_FULL",
+            entry=10000,
+            last=11400,  # peak 12000 대비 −5%
+            close=11400,
+            open_=11500,
+            high=12000,
+            ma15=10500,
+            ma92=10400,  # 아직 92선 위
+            tp1_price_val=0,
+            tp1_filled=False,
+            impulse_seen=True,
+            peak=12000,
+            bars_since_peak=10,
+            hold_days=1,
+            params={"trail_pct": 5.0, "crash_pct": 1.8, "large_break_pct": 0.7},
+        )
+        self.assertIsNotNone(ex)
+        assert ex is not None
+        self.assertEqual(ex["reason"], "STOP_MA_TRAIL")
+
+    def test_stop_ma_trail_not_before_impulse(self):
+        # 시세 전: 고점 −5%여도 트레일 미적용 (DC/급락 경로)
+        ex = evaluate_exit(
+            state="MANAGE_FULL",
+            entry=10000,
+            last=9500,
+            close=9500,
+            open_=9600,
+            high=10000,
+            ma15=9800,
+            ma92=9700,  # GC 유지 → DC 아님
+            tp1_price_val=0,
+            tp1_filled=False,
+            impulse_seen=False,
+            peak=10000,
+            bars_since_peak=1,
+            hold_days=0,
+            params={
+                "trail_pct": 5.0,
+                "impulse_min_pct": 99.0,  # MFE로 impulse 켜지지 않게
+                "crash_pct": 1.8,
+                "stop_pct": 10.0,
+            },
+        )
+        self.assertIsNone(ex)
 
 
 class Ma1592UniverseTests(unittest.TestCase):

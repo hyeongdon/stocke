@@ -5,7 +5,7 @@
   T2: 15분봉 이격 (종가−EMA15)/EMA15 ≥ 1% → 35%
   T3: 2차 후 EMA92 유지 + EMA15 눌림 반등(기본) → 잔여 50%
     (scale_leg3_mode=hold 시 레거시: N개 15분봉 유지)
-전고 50% 익절 후 잔량은 impulse 뒤 급락+큰이탈로만 청산.
+전고 반익절 없음(기본). 잔량 전량은 impulse 뒤 고점트레일·급락+큰이탈·%손절·만기·EOD로 청산.
 시세 전 손절은 급락+DC(EMA15≤EMA92) 또는 %손절.
 
 외부 I/O 없음(유니버스 JSON 제외). 유닛테스트·게이트·StopLoss에서 재사용.
@@ -61,8 +61,8 @@ DEFAULT_PARAMS: Dict[str, Any] = {
     "prev_high_mode": "swing_lookback",
     "prev_high_lookback_bars": 150,
     "prev_high_lookback_days": 20,
-    "tp1_frac": 0.5,
-    "take_profit_mode": "prev_high_half",
+    "tp1_frac": 0.0,  # 0 = 전고 반익절 비활성
+    "take_profit_mode": "none",  # none | prev_high_half (레거시)
     "take_profit_pct": 4.0,
     "tp_trigger": "last",
     "tp_fill": "market",
@@ -73,6 +73,7 @@ DEFAULT_PARAMS: Dict[str, Any] = {
     "hard_break_pct": 1.0,  # 사이징만. EMA92 가상 손절가. 이 값으로 매도하지 않음
     "bearish_exit_pct": 1.0,
     "large_break_pct": 0.7,  # 시세 후 청산. 종가 EMA92 이탈% + 급락
+    "trail_pct": 5.0,  # 시세 후 고점 대비 트레일%. 급락+92선보다 먼저 청산
     "impulse_min_pct": 2.0,
     "crash_pct": 1.8,  # 고점 대비 하락%. 시세 전=+DC, 시세 후=+92선이탈
     "crash_bars": 3,
@@ -94,7 +95,8 @@ SKIP_REASONS = frozenset({
 })
 EXIT_REASONS = frozenset({
     "TP1_HIGH", "TP1_GAP", "TP1_FALLBACK", "TP1_SKIP_QTY",
-    "STOP_MA_DC_WIDEN", "STOP_MA_DC_CRASH", "STOP_MA_CRASH", "STOP_PCT", "MAX_HOLD", "EOD",
+    "STOP_MA_DC_WIDEN", "STOP_MA_DC_CRASH", "STOP_MA_TRAIL", "STOP_MA_CRASH",
+    "STOP_PCT", "MAX_HOLD", "EOD",
 })
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -1155,6 +1157,18 @@ async def enrich_ma1592_display_row(
     }
 
 
+def tp1_enabled(params: Optional[Dict[str, Any]] = None) -> bool:
+    """전고 반익절 ON 여부. 기본은 none(비활성)."""
+    p = merge_params(params)
+    mode = str(p.get("take_profit_mode") or "none").strip().lower()
+    if mode in ("", "none", "off", "disabled"):
+        return False
+    try:
+        return float(p.get("tp1_frac") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def tp1_price(
     prev_high: Optional[int], entry: int, take_profit_pct: float = 4.0,
 ) -> Tuple[int, str]:
@@ -1176,7 +1190,7 @@ def size_position(
     stop_pct: float = 4.0,
     hard_break_pct: float = 1.0,
     max_invest_amount: int = 0,
-    tp1_frac: float = 0.5,
+    tp1_frac: float = 0.0,
 ) -> Dict[str, Any]:
     """리스크 기반 수량. hard_break_pct는 EMA92 가상 손절가(사이징)만 — 청산 트리거 아님."""
     entry = int(entry)
@@ -1192,16 +1206,26 @@ def size_position(
     if max_invest_amount and max_invest_amount > 0 and entry > 0:
         qty = min(qty, int(max_invest_amount // entry))
     qty = max(0, qty)
-    if qty < 2:
+    frac = float(tp1_frac or 0)
+    if qty <= 0:
+        return {
+            "qty": 0,
+            "qty_tp1": 0,
+            "qty_remain": 0,
+            "stop_price": stop_price,
+            "tp1_skip": True,
+            "reason": "RISK_LIMIT",
+        }
+    if frac <= 0 or qty < 2:
         return {
             "qty": qty,
             "qty_tp1": 0,
             "qty_remain": qty,
             "stop_price": stop_price,
             "tp1_skip": True,
-            "reason": "TP1_SKIP_QTY" if qty > 0 else "RISK_LIMIT",
+            "reason": None if frac <= 0 else ("TP1_SKIP_QTY" if qty > 0 else "RISK_LIMIT"),
         }
-    qty_tp1 = max(1, int(math.floor(qty * float(tp1_frac))))
+    qty_tp1 = max(1, int(math.floor(qty * frac)))
     qty_tp1 = min(qty_tp1, qty - 1)
     return {
         "qty": qty,
@@ -1222,12 +1246,15 @@ def mfe_pct(entry: int, peak: int) -> float:
 def update_impulse_seen(
     impulse_seen: bool,
     *,
-    tp1_filled: bool,
+    tp1_filled: bool = False,
     entry: int,
     peak: int,
     impulse_min_pct: float = 2.0,
 ) -> bool:
-    if impulse_seen or tp1_filled:
+    """시세(impulse) 스티키. 전고 반익절 비활성 시 tp1_filled는 무시(레거시 호환만)."""
+    if impulse_seen:
+        return True
+    if tp1_filled:
         return True
     return mfe_pct(entry, peak) >= float(impulse_min_pct)
 
@@ -1295,7 +1322,13 @@ def evaluate_exit(
             "detail": dc_detail,
         }
 
-    if not tp1_filled and tp1 > 0 and state in ("MANAGE_FULL",):
+    # 전고 반익절 — take_profit_mode=none(기본)이면 스킵
+    if (
+        tp1_enabled(p)
+        and not tp1_filled
+        and tp1 > 0
+        and state in ("MANAGE_FULL",)
+    ):
         hit = False
         reason = "TP1_HIGH"
         fill_px = tp1
@@ -1364,6 +1397,7 @@ def evaluate_exit(
         }
 
     large = float(p["large_break_pct"])
+    trail_pct = float(p.get("trail_pct") or 0)
     stop_pct = float(p["stop_pct"])
     ma_stop = structural_stop_ma(ma15, ma92)
     crash = is_crash(
@@ -1392,6 +1426,19 @@ def evaluate_exit(
                 "peak": peak,
             }
         return None
+
+    # 시세 후: 고점 트레일이 급락+92선이탈보다 우선 (큰 시세 후 92까지 반납 방지)
+    if peak > 0 and trail_pct > 0:
+        peak_drop = (float(peak) - float(last)) / float(peak) * 100.0
+        if peak_drop >= trail_pct:
+            return {
+                "reason": "STOP_MA_TRAIL",
+                "qty_frac": 1.0,
+                "new_state": "DONE",
+                "impulse_seen": True,
+                "tp1_filled": tp1_filled,
+                "peak": peak,
+            }
 
     large_break = ma_stop > 0 and hard_break_below_ma92(close, ma_stop, large)
     if crash and large_break:
@@ -2412,6 +2459,7 @@ def params_from_settings(settings: Any) -> Dict[str, Any]:
         "ma1592_stop_pct": "stop_pct",
         "ma1592_hard_break_pct": "hard_break_pct",
         "ma1592_large_break_pct": "large_break_pct",
+        "ma1592_trail_pct": "trail_pct",
         "ma1592_impulse_min_pct": "impulse_min_pct",
         "ma1592_crash_pct": "crash_pct",
         "ma1592_crash_bars": "crash_bars",
@@ -2444,6 +2492,9 @@ def params_from_settings(settings: Any) -> Dict[str, Any]:
         val = getattr(settings, sk, None)
         if val is not None:
             raw[pk] = val
+    # 전고 반익절 고정 OFF (DB에 tp1_frac이 남아 있어도 무시)
+    raw["take_profit_mode"] = "none"
+    raw["tp1_frac"] = 0.0
     return merge_params(raw)
 
 
@@ -2461,10 +2512,15 @@ def build_buy_additional_data(
     reason: Optional[str] = None,
 ) -> Dict[str, Any]:
     p = merge_params(params)
-    tp_px, tp_label = tp1_price(prev_high, entry, float(p["take_profit_pct"]))
     full_qty = int(sizing.get("qty") or row.planned_qty or 0)
     leg = max(1, min(3, int(entry_leg or 1)))
     qty = int(suggested_qty) if suggested_qty is not None else scale_leg_qty(full_qty, leg, p)
+    use_tp1 = tp1_enabled(p)
+    if use_tp1:
+        tp_px, tp_label = tp1_price(prev_high, entry, float(p["take_profit_pct"]))
+        qty_tp1 = int(sizing.get("qty_tp1") or 0)
+    else:
+        tp_px, tp_label, qty_tp1 = 0, None, 0
     return {
         "strategy": "ma1592",
         "gate_pack": "ma1592_hold",
@@ -2477,14 +2533,14 @@ def build_buy_additional_data(
         "prev_high": int(prev_high or 0),
         "tp1_price": tp_px,
         "tp1_label": tp_label,
-        "tp1_frac": float(p["tp1_frac"]),
+        "tp1_frac": float(p["tp1_frac"]) if use_tp1 else 0.0,
         "tp_mode": p["take_profit_mode"],
-        "take_profit_price": tp_px,
+        "take_profit_price": tp_px if use_tp1 else None,
         "stop_price": int(sizing.get("stop_price") or 0),
         "suggested_stop": int(sizing.get("stop_price") or 0),
         "suggested_qty": int(qty),
         "planned_qty": int(full_qty),
-        "qty_tp1": int(sizing.get("qty_tp1") or 0),
+        "qty_tp1": qty_tp1,
         "entry_leg": leg,
         "ma1592_entry_leg": leg,
         "is_add_buy": leg >= 2,

@@ -2814,9 +2814,14 @@ async def _eval_ma1592_scale_leg(
         full_qty = int(sizing.get("qty") or 0)
         row.planned_qty = full_qty
     else:
+        frac = float(p.get("tp1_frac") or 0)
+        qty_tp1 = 0
+        if frac > 0 and full_qty >= 2:
+            qty_tp1 = max(1, int(full_qty * frac))
+            qty_tp1 = min(qty_tp1, full_qty - 1)
         sizing = {
             "qty": full_qty,
-            "qty_tp1": max(1, int(full_qty * float(p["tp1_frac"]))) if full_qty >= 2 else full_qty,
+            "qty_tp1": qty_tp1,
             "stop_price": int(row.entry_price or current_price or 0),
         }
 

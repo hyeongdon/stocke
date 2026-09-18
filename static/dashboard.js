@@ -336,6 +336,7 @@ const REASON_LABEL = {
   T1_FALLBACK: '폴백% 반익절',
   STOP_MA_DC_WIDEN: 'DC+이격 확대',
   STOP_MA_DC_CRASH: 'DC+급락 손절',
+  STOP_MA_TRAIL: '고점 트레일',
   STOP_MA_CRASH: '급락+큰이탈',
   STOP_PCT: '%손절',
   STOP_3M_BEARISH_BELOW_MA15: '3분 음봉 MA15 이탈',
@@ -2727,7 +2728,7 @@ function logTradeDateKst(ts) {
 const LOG_VERIFY_SELL_REASONS = new Set([
   'STOP_LOSS', 'TAKE_PROFIT', 'TRAILING', 'PROFIT_LOCK', 'MARKET_CLOSE',
   'TP1_HIGH', 'TP1_GAP', 'TP1_FALLBACK', 'T1_HIGH', 'T1_GAP', 'T1_FALLBACK',
-  'STOP_MA_DC_WIDEN', 'STOP_MA_DC_CRASH', 'STOP_MA_CRASH', 'STOP_PCT',
+  'STOP_MA_DC_WIDEN', 'STOP_MA_DC_CRASH', 'STOP_MA_TRAIL', 'STOP_MA_CRASH', 'STOP_PCT',
   'STOP_3M_BEARISH_BELOW_MA15', 'MAX_HOLD', 'EOD',
 ]);
 function isLogVerifyEligibleSell(o, filled) {
@@ -4194,16 +4195,17 @@ function renderSettingsForm(s) {
         ${field('최대 보유(일)', fNum('ma1592_max_hold_days', s, '10'))}
       </div>
       <div class="box-title" style="margin-top:14px;">사이징 · 청산</div>
-      <div class="desc"><b>하드이탈%</b>=수량 계산만(이 값으로 안 팜). <b>급락%</b>=고점 대비 하락 · 시세 전은 DC와, 시세 후는 92선이탈과 같이 봐야 청산.</div>
+      <div class="desc"><b>하드이탈%</b>=수량 계산만(이 값으로 안 팜). <b>시세 후</b>=고점트레일 우선, 그다음 급락+92선이탈.</div>
       <div class="form-grid">
         ${field('1회 리스크(%)', fNum('ma1592_risk_per_trade_pct', s, '2'), '계좌 대비 · 가상 손절가까지 거리로 몇 주 살지 계산')}
         ${field('손절%', fNum('ma1592_stop_pct', s, '4'), '매수가 대비 · 이하면 STOP_PCT 청산 · 사이징 손절가에도 사용')}
         ${field('하드이탈% (수량만)', fNum('ma1592_hard_break_pct', s, '1'), 'EMA92×(1−이값)=가상 손절가. 몇 주 살지만 정함. 이 %로 매도하지 않음')}
+        ${field('고점 트레일% (시세 후)', fNum('ma1592_trail_pct', s, '5'), '시세 후 · 고점 대비 이 % 하락 → STOP_MA_TRAIL (급락+92선보다 먼저)')}
         ${field('92선이탈% (청산)', fNum('ma1592_large_break_pct', s, '0.7'), '시세 후 · 종가가 EMA92를 이 % 하향 + 급락 → STOP_MA_CRASH')}
         ${field('급락% (고점↓)', fNum('ma1592_crash_pct', s, '1.8'), '최근고점 대비 하락(고점 후 3봉 이내). 시세 전=+DC, 시세 후=+92선이탈일 때만 청산')}
       </div>
       ${fCheck('ma1592_flatten_eod', s, '장종료 전량청산 (flatten_eod)')}
-      <div class="exit-note">${esc(ma1592Start)}~${esc(ma1592End)} · 슬롯 ${esc(ma1592Slots)} · 1차=가격선행 · 분할 15/35/50 · 익절=전고 50% · 시세전=급락+DC · 시세후=급락+92선이탈 · 하드이탈=수량만</div>
+      <div class="exit-note">${esc(ma1592Start)}~${esc(ma1592End)} · 슬롯 ${esc(ma1592Slots)} · 1차=가격선행 · 분할 15/35/50 · 전고익절 없음 · 시세전=급락+DC · 시세후=고점트레일→급락+92선 · 하드이탈=수량만</div>
     </div>
   </div>`;
 

@@ -648,6 +648,7 @@ class TradingSettingsRequest(BaseModel):
     ma1592_stop_pct: Optional[float] = None
     ma1592_hard_break_pct: Optional[float] = None
     ma1592_large_break_pct: Optional[float] = None
+    ma1592_trail_pct: Optional[float] = None
     ma1592_impulse_min_pct: Optional[float] = None
     ma1592_crash_pct: Optional[float] = None
     ma1592_crash_bars: Optional[int] = None
@@ -821,7 +822,8 @@ AUTO_TRADE_FIELDS = [
     "ma1592_break_before_entry_pct", "ma1592_touch_buffer_pct",
     "ma1592_require_bullish_candle", "ma1592_prev_high_lookback_days",
     "ma1592_tp1_frac", "ma1592_take_profit_pct", "ma1592_stop_pct",
-    "ma1592_hard_break_pct", "ma1592_large_break_pct", "ma1592_impulse_min_pct",
+    "ma1592_hard_break_pct", "ma1592_large_break_pct", "ma1592_trail_pct",
+    "ma1592_impulse_min_pct",
     "ma1592_crash_pct", "ma1592_crash_bars", "ma1592_setup_expire_days",
     "ma1592_max_hold_days", "ma1592_flatten_eod", "ma1592_risk_per_trade_pct",
     "ma1592_max_invest_amount", "ma1592_trade_start_time", "ma1592_trade_end_time",

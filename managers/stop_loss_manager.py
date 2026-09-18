@@ -67,6 +67,7 @@ SELL_REASON_PRIORITY = {
     "STOP_LOSS": 2,
     "STOP_MA_DC_WIDEN": 2,
     "STOP_MA_DC_CRASH": 2,
+    "STOP_MA_TRAIL": 2,
     "STOP_MA_CRASH": 2,
     "STOP_PCT": 2,
     "STOP_3M_BEARISH_BELOW_MA15": 2,
@@ -3345,24 +3346,28 @@ class StopLossManager:
         profit_loss_rate,
         settings,
     ) -> None:
-        """MA1592: 전고 반익절 + impulse 분기 청산. 글로벌 트레일 미사용(H9)."""
+        """MA1592 청산: impulse 분기 전량 청산. 전고 반익절·글로벌 트레일 미사용."""
         from utils.ma1592 import (
             chart_tf_interval_minutes,
             compute_bar_ma,
             evaluate_exit,
             normalize_chart_tf,
             params_from_settings,
+            tp1_enabled,
         )
         from utils.ema_fractal import drop_forming_minute_bar
         from utils.sell_reason_labels import classify_exit_reason
 
         p = params_from_settings(settings)
-        tp1_filled = int(getattr(position, "ymgp_tp_stage", None) or 0) >= 1
-        # trailing_armed 재사용: impulse_seen
-        impulse_seen = bool(getattr(position, "trailing_armed", False)) or tp1_filled
-        tp1_px = int(getattr(position, "take_profit_price", None) or 0)
+        # impulse sticky — Position.trailing_armed만 사용 (ymgp_tp_stage 미사용)
+        impulse_seen = bool(getattr(position, "trailing_armed", False))
         entry = int(buy_price or 0)
-        state = "MANAGE_HALF" if tp1_filled else "MANAGE_FULL"
+        use_tp1 = tp1_enabled(p)
+        tp1_filled = False
+        tp1_px = 0
+        if use_tp1:
+            tp1_px = int(getattr(position, "take_profit_price", None) or 0)
+        state = "MANAGE_FULL"
 
         hold_days = 0
         try:
@@ -3379,14 +3384,15 @@ class StopLossManager:
         entry_leg = 1
         exec_tf = normalize_chart_tf(p.get("exec_tf") or "3M")
         interval_min = chart_tf_interval_minutes(exec_tf)
+        code = KiwoomAPI.normalize_stock_code(position.stock_code or "")
         try:
             from utils.ma1592 import get_universe_store
 
-            row = get_universe_store().get(
-                KiwoomAPI.normalize_stock_code(position.stock_code or "")
-            )
+            row = get_universe_store().get(code)
             if row:
                 entry_leg = max(1, int(row.entry_leg or 1))
+                if bool(getattr(row, "impulse_seen", False)):
+                    impulse_seen = True
         except Exception:
             entry_leg = 1
         try:
@@ -3452,17 +3458,9 @@ class StopLossManager:
             bar_close_3m=bar_close_3m,
         )
         await self._update_position_tracking(position.id, peak_i, None)
+
         if ex and ex.get("impulse_seen") and not impulse_seen:
-            # impulse sticky → trailing_armed
-            try:
-                for db in get_db():
-                    pos = db.query(Position).filter(Position.id == position.id).first()
-                    if pos:
-                        pos.trailing_armed = True
-                        db.commit()
-                    break
-            except Exception:
-                pass
+            await self._persist_ma1592_impulse(position.id, code)
 
         if not ex:
             return
@@ -3471,12 +3469,15 @@ class StopLossManager:
         qty_frac = float(ex.get("qty_frac") or 1.0)
         qty = int(position.buy_quantity or 0)
         sell_n = qty
-        if qty_frac < 1.0 and qty >= 2:
+        # 전고 반익절 비활성(기본): 항상 전량. 레거시 TP1 ON일 때만 부분매도.
+        if use_tp1 and qty_frac < 1.0 and qty >= 2:
             sell_n = max(1, int(qty * qty_frac))
             sell_n = min(sell_n, qty - 1)
+        else:
+            qty_frac = 1.0
+            sell_n = qty
 
         detail = f"MA1592 {reason} · frac={qty_frac} · {sell_n}/{qty}주"
-        # 구체 사유(TP1_GAP, STOP_MA_DC_WIDEN 등)를 그대로 저장. 장마감만 기존 코드와 맞춤.
         mapped = "MARKET_CLOSE" if reason == "EOD" else reason
 
         classified = classify_exit_reason(
@@ -3493,38 +3494,46 @@ class StopLossManager:
         if await self._has_pending_sell_order(position.id, for_reason=mapped):
             return
 
-        if qty_frac < 1.0 and sell_n < qty:
-            await self._bump_ymgp_tp_stage(position.id, 1)
-            try:
-                for db in get_db():
-                    pos = db.query(Position).filter(Position.id == position.id).first()
-                    if pos:
-                        pos.trailing_armed = True
-                        db.commit()
-                    break
-            except Exception:
-                pass
+        if use_tp1 and qty_frac < 1.0 and sell_n < qty:
+            await self._persist_ma1592_impulse(position.id, code)
             try:
                 from utils.ma1592 import get_universe_store
-                get_universe_store().set_state(
-                    KiwoomAPI.normalize_stock_code(position.stock_code or ""),
-                    "MANAGE_HALF",
-                )
+                get_universe_store().set_state(code, "MANAGE_HALF", tp1_filled=True)
             except Exception:
                 pass
         else:
             try:
                 from utils.ma1592 import get_universe_store
-                get_universe_store().set_state(
-                    KiwoomAPI.normalize_stock_code(position.stock_code or ""),
-                    "DONE",
-                )
+                get_universe_store().set_state(code, "DONE")
             except Exception:
                 pass
 
         await self._execute_sell_order(
             position, current_price, mapped, detail, quantity=sell_n,
         )
+
+    async def _persist_ma1592_impulse(self, position_id: int, stock_code: str = "") -> None:
+        """impulse_seen 스티키 → Position.trailing_armed + 장부."""
+        try:
+            for db in get_db():
+                pos = db.query(Position).filter(Position.id == position_id).first()
+                if pos:
+                    pos.trailing_armed = True
+                    db.commit()
+                break
+        except Exception:
+            pass
+        code = (stock_code or "").strip()
+        if not code:
+            return
+        try:
+            from utils.ma1592 import get_universe_store
+            store = get_universe_store()
+            row = store.get(code)
+            if row:
+                store.set_state(code, row.state or "MANAGE_FULL", impulse_seen=True)
+        except Exception:
+            pass
 
     async def _bump_ymgp_tp_stage(self, position_id: int, stage: int) -> None:
         try:
@@ -3908,25 +3917,17 @@ class StopLossManager:
                         )
                 if str(signal_meta.get("strategy") or "").strip().lower() == "ma1592":
                     stop_px = int(signal_meta.get("stop_price") or signal_meta.get("suggested_stop") or 0) or None
-                    tp_px = int(
-                        signal_meta.get("tp1_price")
-                        or signal_meta.get("take_profit_price")
-                        or 0
-                    ) or None
                     prev_h = int(signal_meta.get("prev_high") or 0) or None
                     position.stop_loss_price = stop_px
-                    position.take_profit_price = tp_px
+                    # 전고 반익절 비활성: take_profit_price / ymgp_tp_stage 미사용
+                    position.take_profit_price = None
                     position.breakout_level_price = prev_h
-                    position.ymgp_tp_stage = 0
                     position.trailing_armed = False
                     if stop_px and buy_price:
                         position.stop_loss_rate = round(
                             abs(buy_price - stop_px) / buy_price * 100.0, 4
                         )
-                    if tp_px and buy_price:
-                        position.take_profit_rate = round(
-                            abs(tp_px - buy_price) / buy_price * 100.0, 4
-                        )
+                    position.take_profit_rate = None
                     try:
                         from utils.ma1592 import get_universe_store
                         from utils.datetime_kst import now_kst
@@ -3938,7 +3939,9 @@ class StopLossManager:
                         planned = int(signal_meta.get("planned_qty") or 0)
                         fields = {
                             "entry_price": int(buy_price or 0),
-                            "tp1_price": int(tp_px or 0),
+                            "tp1_price": 0,
+                            "tp1_filled": False,
+                            "impulse_seen": False,
                             "prev_high": int(prev_h or 0),
                             "entry_leg": max(leg, 1),
                         }

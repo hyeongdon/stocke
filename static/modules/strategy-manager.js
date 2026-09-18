@@ -513,7 +513,7 @@ class StrategyManager {
                 break;
             case 'MA1592':
                 configHtml = `
-                    <div class="alert alert-info small">15/92 홀드 — <b>3분봉 EMA15가 EMA92 상향돌파</b> 후 분할 매수. 익절=전고 50%.</div>
+                    <div class="alert alert-info small">15/92 홀드 — <b>3분봉 EMA15가 EMA92 상향돌파</b> 후 분할 매수. 전고 반익절 없음 · 급락+구조선으로 전량 청산.</div>
                     <div class="mb-3">
                         <label class="form-label">MA 소스 / 타입</label>
                         <select class="form-select" id="ma1592MaSource">
@@ -542,16 +542,18 @@ class StrategyManager {
                         <label class="form-label">전고 lookback (일)</label>
                         <input type="number" class="form-control" id="ma1592PrevHighDays"
                                value="${parameters.prev_high_lookback_days || 20}" min="5" max="60">
+                        <div class="form-text">장부 표시용. 전고 반익절은 사용하지 않음.</div>
                     </div>
-                    <div class="mb-3">
-                        <label class="form-label">TP1 비율</label>
-                        <input type="number" class="form-control" id="ma1592Tp1Frac"
-                               value="${parameters.tp1_frac || 0.5}" min="0.1" max="0.9" step="0.1">
-                    </div>
+                    <input type="hidden" id="ma1592Tp1Frac" value="0">
                     <div class="mb-3">
                         <label class="form-label">하드이탈% (수량만)</label>
                         <input type="number" class="form-control" id="ma1592Hard" value="${parameters.hard_break_pct || 1.0}" step="0.1">
                         <div class="form-text">EMA92 대비 가상 손절가. 몇 주 살지만 정함. 이 값으로 매도하지 않음.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">고점 트레일% (시세 후)</label>
+                        <input type="number" class="form-control" id="ma1592Trail" value="${parameters.trail_pct ?? 5.0}" step="0.1">
+                        <div class="form-text">시세 후 · 고점 대비 이 % 하락 시 STOP_MA_TRAIL (급락+92선보다 먼저)</div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label">92선이탈% (청산)</label>
@@ -673,8 +675,9 @@ class StrategyManager {
                     hold_bars: parseInt(document.getElementById('ma1592HoldBars').value),
                     break_before_entry_pct: parseFloat(document.getElementById('ma1592BreakPre').value),
                     prev_high_lookback_days: parseInt(document.getElementById('ma1592PrevHighDays').value),
-                    tp1_frac: parseFloat(document.getElementById('ma1592Tp1Frac').value),
+                    tp1_frac: 0,
                     hard_break_pct: parseFloat(document.getElementById('ma1592Hard').value),
+                    trail_pct: parseFloat(document.getElementById('ma1592Trail').value),
                     large_break_pct: parseFloat(document.getElementById('ma1592Large').value),
                     crash_pct: parseFloat(document.getElementById('ma1592Crash').value),
                     stop_pct: parseFloat(document.getElementById('ma1592Stop').value),

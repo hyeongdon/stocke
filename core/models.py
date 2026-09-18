@@ -329,13 +329,15 @@ class AutoTradeSettings(Base):
     ma1592_touch_buffer_pct = Column(Float, nullable=False, default=0.15)
     ma1592_require_bullish_candle = Column(Boolean, nullable=False, default=True)
     ma1592_prev_high_lookback_days = Column(Integer, nullable=False, default=20)
-    ma1592_tp1_frac = Column(Float, nullable=False, default=0.5)
+    ma1592_tp1_frac = Column(Float, nullable=False, default=0.0)  # 0=전고 반익절 OFF
     ma1592_take_profit_pct = Column(Float, nullable=False, default=4.0)
     ma1592_stop_pct = Column(Float, nullable=False, default=4.0)
     # 수량 계산만(안 팜). 가상 손절가 = EMA92×(1−hard_break%)
     ma1592_hard_break_pct = Column(Float, nullable=False, default=1.0)
     # 시세 후 청산. 종가 < EMA92×(1−large_break%) + 급락 → STOP_MA_CRASH
     ma1592_large_break_pct = Column(Float, nullable=False, default=0.7)
+    # 시세 후 고점 대비 트레일%. 급락+92선보다 먼저 STOP_MA_TRAIL
+    ma1592_trail_pct = Column(Float, nullable=False, default=5.0)
     ma1592_impulse_min_pct = Column(Float, nullable=False, default=2.0)
     # 고점 대비 하락%. 시세 전=+DC, 시세 후=+92선이탈일 때만 청산
     ma1592_crash_pct = Column(Float, nullable=False, default=1.8)
@@ -1311,11 +1313,12 @@ def init_db() -> None:
                 ('ma1592_touch_buffer_pct', 'FLOAT DEFAULT 0.15'),
                 ('ma1592_require_bullish_candle', 'BOOLEAN DEFAULT 1'),
                 ('ma1592_prev_high_lookback_days', 'INTEGER DEFAULT 20'),
-                ('ma1592_tp1_frac', 'FLOAT DEFAULT 0.5'),
+                ('ma1592_tp1_frac', 'FLOAT DEFAULT 0.0'),
                 ('ma1592_take_profit_pct', 'FLOAT DEFAULT 4.0'),
                 ('ma1592_stop_pct', 'FLOAT DEFAULT 4.0'),
                 ('ma1592_hard_break_pct', 'FLOAT DEFAULT 1.0'),
                 ('ma1592_large_break_pct', 'FLOAT DEFAULT 0.7'),
+                ('ma1592_trail_pct', 'FLOAT DEFAULT 5.0'),
                 ('ma1592_impulse_min_pct', 'FLOAT DEFAULT 2.0'),
                 ('ma1592_crash_pct', 'FLOAT DEFAULT 1.8'),
                 ('ma1592_crash_bars', 'INTEGER DEFAULT 3'),
