@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy.orm import Session
 
 from core.config import Config, get_account_mode
-from core.models import AutoTradeSettings, SellOrder, get_db
+from core.models import AutoTradeSettings, SellOrder, get_auto_trade_settings_row, get_db
 from api.api_rate_limiter import api_rate_limiter
 from utils.market_hours import (
     auto_trade_engine_block_reason,
@@ -904,7 +904,7 @@ def allows_new_buy(settings: Optional[AutoTradeSettings], now: Optional[datetime
 def get_auto_trade_settings_sync() -> Optional[AutoTradeSettings]:
     """세션 판단용 — 캐시 없이 DB 최신 설정."""
     for db in get_db():
-        return db.query(AutoTradeSettings).first()
+        return get_auto_trade_settings_row(db)
     return None
 
 
@@ -1197,7 +1197,7 @@ def disable_auto_trade(reason: str) -> bool:
         mark_daily_limit_halt(reason)
     for db in get_db():
         session: Session = db
-        settings = session.query(AutoTradeSettings).first()
+        settings = get_auto_trade_settings_row(session)
         if settings and settings.is_enabled:
             settings.is_enabled = False
             settings.updated_at = utc_now_naive()

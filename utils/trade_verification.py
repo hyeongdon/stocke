@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
-from core.models import AutoTradeSettings, PendingBuySignal, Position, PositionBuyFill, SellOrder
+from core.models import AutoTradeSettings, PendingBuySignal, Position, PositionBuyFill, SellOrder, get_auto_trade_settings_row
 from utils.auto_trade_engine import compute_buy_amount, parse_signal_meta
 from utils.buy_condition_checks import build_buy_condition_checklist, checklist_summary
 from utils.sell_condition_checks import (
@@ -1100,7 +1100,7 @@ async def build_verification_report(
     limit: int = 100,
     trade_date: Optional[str] = None,
 ) -> Dict[str, Any]:
-    settings_row = session.query(AutoTradeSettings).first()
+    settings_row = get_auto_trade_settings_row(session)
     settings = _settings_dict(settings_row)
     date_filter = _parse_trade_filter(trade_date)
 

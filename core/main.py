@@ -45,12 +45,13 @@ from core.models import (
     Position,
     PositionBuyFill,
     AccountBalanceSnapshot,
+    get_auto_trade_settings_row,
 )
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from managers.condition_monitor import condition_monitor
 from api.kiwoom_api import KiwoomAPI, invalidate_account_balance_cache
-from core.config import Config
+from core.config import Config, get_account_mode
 from utils.naver_discussion_crawler import NaverStockDiscussionCrawler
 
 # 개선된 모듈들 import
@@ -296,16 +297,15 @@ async def lifespan(app: FastAPI):
     
     # 자동매매 실행기: 장 시작 자동 기동 또는 DB is_enabled에 따라 시작
     try:
-        from core.models import AutoTradeSettings as _ATS
         settings_row = None
         for _db in get_db():
-            settings_row = _db.query(_ATS).first()
+            settings_row = get_auto_trade_settings_row(_db)
             break
 
         if should_auto_start_now(settings_row):
             if settings_row and not settings_row.is_enabled:
                 for _db in get_db():
-                    _s = _db.query(_ATS).first()
+                    _s = get_auto_trade_settings_row(_db)
                     if _s:
                         _s.is_enabled = True
                         _s.updated_at = datetime.utcnow()
@@ -890,7 +890,7 @@ def enrich_balance_cash_reserve(balance_data: dict) -> dict:
     cash_snapshot = None
     holding_invested = 0  # HOLDING 포지션 투자금 합산 (entr T+2 지연 보정용)
     for db in get_db():
-        settings = db.query(AutoTradeSettings).first()
+        settings = get_auto_trade_settings_row(db)
         snap = (
             db.query(AccountBalanceSnapshot)
             .order_by(AccountBalanceSnapshot.as_of_date.desc())
@@ -1526,7 +1526,7 @@ async def get_pending_signals(limit: int = 100, status: str = "PENDING", skip_pr
             logger.info(f"[PENDING_API] rows fetched={len(rows)}")
             
             # 자동매매 설정을 미리 조회 (반복문 밖으로 이동)
-            auto_trade_settings = session.query(AutoTradeSettings).first()
+            auto_trade_settings = get_auto_trade_settings_row(session)
             max_invest_amount = auto_trade_settings.max_invest_amount if auto_trade_settings else 100000
             
             for i, r in enumerate(rows):
@@ -1602,17 +1602,7 @@ async def get_trading_settings():
     try:
         for db in get_db():
             session: Session = db
-            settings = session.query(AutoTradeSettings).first()
-            if not settings:
-                # 기본 설정 생성
-                settings = AutoTradeSettings(
-                    is_enabled=False,
-                    max_invest_amount=1000000,
-                    stop_loss_rate=5,
-                    take_profit_rate=10
-                )
-                session.add(settings)
-                session.commit()
+            settings = get_auto_trade_settings_row(session, create_default=True)
 
             result = {f: getattr(settings, f, None) for f in AUTO_TRADE_FIELDS}
             result["updated_at"] = settings.updated_at.isoformat() if settings.updated_at else None
@@ -1633,7 +1623,7 @@ async def get_trading_readiness():
     try:
         settings = None
         for db in get_db():
-            settings = db.query(AutoTradeSettings).first()
+            settings = get_auto_trade_settings_row(db)
             break
 
         mock = Config.KIWOOM_USE_MOCK_ACCOUNT
@@ -1692,7 +1682,7 @@ async def get_trading_activity_log(limit: int = 80):
     try:
         settings = None
         for db in get_db():
-            settings = db.query(AutoTradeSettings).first()
+            settings = get_auto_trade_settings_row(db)
             break
 
         scan = auto_trade_scanner.get_status()
@@ -1773,9 +1763,9 @@ async def save_trading_settings(req: TradingSettingsRequest):
         result: dict = {}
         for db in get_db():
             session: Session = db
-            settings = session.query(AutoTradeSettings).first()
+            settings = get_auto_trade_settings_row(session)
             if not settings:
-                settings = AutoTradeSettings()
+                settings = AutoTradeSettings(account_mode=get_account_mode())
                 session.add(settings)
 
             # 전달된 값만 반영 (None은 기존값 유지, 수익잠금은 요청에 포함된 null로 비활성화)
@@ -3265,7 +3255,7 @@ async def get_monitoring_status():
 
         settings_row = None
         for db in get_db():
-            settings_row = db.query(AutoTradeSettings).first()
+            settings_row = get_auto_trade_settings_row(db)
             break
         session_window = (
             linked_trading_session_window_str(settings_row) if settings_row else None
@@ -5130,7 +5120,7 @@ async def get_positions(status: str = "HOLDING", limit: int = 50, with_levels: b
         for db in get_db():
             session: Session = db
             from core.models import AutoTradeSettings, Position
-            global_settings = session.query(AutoTradeSettings).first()
+            global_settings = get_auto_trade_settings_row(session)
             query = session.query(Position)
             if status != "ALL":
                 query = query.filter(Position.status == status)
@@ -5763,7 +5753,7 @@ async def get_breakout_candidates(limit: int = 30):
 
         settings = None
         for db in get_db():
-            settings = db.query(AutoTradeSettings).first()
+            settings = get_auto_trade_settings_row(db)
             break
         names = parse_condition_names(getattr(settings, "breakout_condition_names", None))
         if not names:
@@ -5859,7 +5849,7 @@ async def get_fractal_candidates(limit: int = 20):
 
         settings = None
         for db in get_db():
-            settings = db.query(AutoTradeSettings).first()
+            settings = get_auto_trade_settings_row(db)
             break
         names = parse_condition_names(getattr(settings, "fractal_condition_names", None))
         if not names:
@@ -5946,7 +5936,7 @@ async def get_ma1592_candidates():
 
         settings = None
         for db in get_db():
-            settings = db.query(AutoTradeSettings).first()
+            settings = get_auto_trade_settings_row(db)
             break
 
         names = parse_condition_names(
@@ -6207,7 +6197,7 @@ async def get_jongga_candidates(rebuild: bool = False):
 
         settings = None
         for db in get_db():
-            settings = db.query(AutoTradeSettings).first()
+            settings = get_auto_trade_settings_row(db)
             break
         st = today_state_or_empty()
         if rebuild or not (st.get("candidates") or []):
@@ -6309,7 +6299,7 @@ async def pick_jongga_candidate(body: JonggaPickRequest):
 
         settings = None
         for db in get_db():
-            settings = db.query(AutoTradeSettings).first()
+            settings = get_auto_trade_settings_row(db)
             break
         if not settings or not getattr(settings, "use_jongga", False):
             raise HTTPException(status_code=400, detail="종가배팅이 비활성입니다.")

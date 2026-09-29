@@ -1,11 +1,11 @@
 """자동매매 설정 확인"""
 import sys, io
-from core.models import get_db, AutoTradeSettings
+from core.models import get_db, get_auto_trade_settings_row
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
 db = next(get_db())
-settings = db.query(AutoTradeSettings).first()
+settings = get_auto_trade_settings_row(db)
 
 print("=" * 60)
 print("⚙️  자동매매 설정")

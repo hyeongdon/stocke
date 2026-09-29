@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -93,7 +94,16 @@ def _condition_name(conn: sqlite3.Connection, condition_id: Optional[int]) -> st
 def _load_settings(conn: sqlite3.Connection) -> Dict[str, Any]:
     if not _table_exists(conn, "auto_trade_settings"):
         return {}
-    row = conn.execute("SELECT * FROM auto_trade_settings LIMIT 1").fetchone()
+    mode = "mock" if os.getenv("KIWOOM_USE_MOCK_ACCOUNT", "true").lower() == "true" else "real"
+    row = None
+    try:
+        row = conn.execute(
+            "SELECT * FROM auto_trade_settings WHERE account_mode = ? LIMIT 1", (mode,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        pass
+    if row is None:
+        row = conn.execute("SELECT * FROM auto_trade_settings LIMIT 1").fetchone()
     return dict(row) if row else {}
 
 

@@ -262,10 +262,10 @@ class ConditionMonitor:
         try:
             fractal_info = {"enabled": False, "watching": 0, "pending": 0}
             # AutoTradeSettings에서 사용 여부 조회
-            from core.models import AutoTradeSettings, get_db, PendingBuySignal
+            from core.models import get_auto_trade_settings_row, get_db, PendingBuySignal
             for db in get_db():
                 session = db
-                settings = session.query(AutoTradeSettings).first()
+                settings = get_auto_trade_settings_row(session)
                 if settings:
                     fractal_info["enabled"] = bool(getattr(settings, "use_fractal", False))
                 # additional_data에 JSON 문자열 안에 "strategy":"fractal" 가 포함된 레코드 수 집계

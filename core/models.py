@@ -1,9 +1,10 @@
 from datetime import datetime
-from typing import Generator
+from typing import Generator, Optional
 
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, create_engine, UniqueConstraint, Date, text, JSON, Float, Index, Text
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, create_engine, UniqueConstraint, Date, text, JSON, Float, Index, Text, inspect
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
-from .config import Config
+from .config import Config, get_account_mode
 
 # 데이터베이스 설정 (SQLite 또는 PostgreSQL 지원)
 DATABASE_URL = Config.DATABASE_URL
@@ -75,6 +76,7 @@ class AutoTradeSettings(Base):
     __tablename__ = "auto_trade_settings"
 
     id = Column(Integer, primary_key=True, index=True)
+    account_mode = Column(String(10), nullable=True, index=True)  # mock|real — 모드별 1행
     is_enabled = Column(Boolean, nullable=False, default=False, index=True)
     max_invest_amount = Column(Integer, nullable=False, default=1000000)  # 최대 투자 금액
     stop_loss_rate = Column(Float, nullable=False, default=5.0)  # 손절 비율 (%) — 음수/소수 허용
@@ -949,6 +951,60 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
+def _ensure_mode_settings_row(mode: str) -> None:
+    """현재 모드 행이 없으면 레거시(account_mode NULL) 행을 승계하거나 다른 모드 행을 복제."""
+    s: Session = SessionLocal()
+    try:
+        if s.query(AutoTradeSettings.id).filter(AutoTradeSettings.account_mode == mode).first():
+            return
+        legacy = (
+            s.query(AutoTradeSettings)
+            .filter(AutoTradeSettings.account_mode.is_(None))
+            .order_by(AutoTradeSettings.id)
+            .first()
+        )
+        if legacy is not None:
+            legacy.account_mode = mode
+        else:
+            src = s.query(AutoTradeSettings).order_by(AutoTradeSettings.id).first()
+            if src is None:
+                return
+            values = {
+                c.name: getattr(src, c.name)
+                for c in AutoTradeSettings.__table__.columns
+                if c.name != "id"
+            }
+            values["account_mode"] = mode
+            s.add(AutoTradeSettings(**values))
+        s.commit()
+    except IntegrityError:
+        s.rollback()
+    finally:
+        s.close()
+
+
+def get_auto_trade_settings_row(session: Session, create_default: bool = False) -> Optional["AutoTradeSettings"]:
+    """현재 계좌 모드(mock|real)의 자동매매 설정 행. 실전/모의 서버가 같은 DB를 공유해도 서로 간섭하지 않는다."""
+    mode = get_account_mode()
+    q = session.query(AutoTradeSettings).filter(AutoTradeSettings.account_mode == mode)
+    row = q.order_by(AutoTradeSettings.id).first()
+    if row is not None:
+        return row
+    _ensure_mode_settings_row(mode)
+    row = q.order_by(AutoTradeSettings.id).first()
+    if row is None and create_default:
+        row = AutoTradeSettings(
+            account_mode=mode,
+            is_enabled=False,
+            max_invest_amount=1000000,
+            stop_loss_rate=5,
+            take_profit_rate=10,
+        )
+        session.add(row)
+        session.commit()
+    return row
+
+
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     try:
@@ -1562,6 +1618,28 @@ def init_db() -> None:
     except Exception as e:
         # 마이그레이션 실패는 치명적이지 않게 무시
         print(f"Migration warning: {e}")
+
+    _migrate_auto_trade_settings_account_mode()
+
+
+def _migrate_auto_trade_settings_account_mode() -> None:
+    """auto_trade_settings를 실전/모의 모드별 행으로 분리 (SQLite·PostgreSQL 공통)."""
+    try:
+        cols = {c["name"] for c in inspect(engine).get_columns("auto_trade_settings")}
+        if "account_mode" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE auto_trade_settings ADD COLUMN account_mode VARCHAR(10)"))
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_auto_trade_settings_account_mode "
+                    "ON auto_trade_settings (account_mode)"
+                ))
+        except Exception as e:
+            print(f"Migration warning (auto_trade_settings account_mode index): {e}")
+        _ensure_mode_settings_row(get_account_mode())
+    except Exception as e:
+        print(f"Migration warning (auto_trade_settings.account_mode): {e}")
 
 
 # 모듈 import 시점에 테이블 보장

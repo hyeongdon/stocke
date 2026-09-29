@@ -11,7 +11,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from core.models import AutoTradeSettings, get_db
+from core.models import AutoTradeSettings, get_auto_trade_settings_row, get_db
 from managers.auto_trade_scanner import auto_trade_scanner
 from managers.buy_order_executor import buy_order_executor
 from utils.auto_trade_activity_log import log_activity
@@ -97,7 +97,7 @@ class MarketOpenScheduler:
         settings = None
         for db in get_db():
             session: Session = db
-            settings = session.query(AutoTradeSettings).first()
+            settings = get_auto_trade_settings_row(session)
             break
         if not settings:
             return
@@ -173,7 +173,7 @@ class MarketOpenScheduler:
         changed = False
         for db in get_db():
             session: Session = db
-            row = session.query(AutoTradeSettings).first()
+            row = get_auto_trade_settings_row(session)
             if not row:
                 break
             if not row.is_enabled:

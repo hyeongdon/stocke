@@ -167,12 +167,12 @@ class ConditionRealtimeAlerter:
         if not self._is_ma1592_condition(condition_name):
             return
         try:
-            from core.models import AutoTradeSettings, get_db
+            from core.models import get_auto_trade_settings_row, get_db
             from utils.ma1592 import params_from_settings, upsert_from_condition_async
 
             settings = None
             for db in get_db():
-                settings = db.query(AutoTradeSettings).first()
+                settings = get_auto_trade_settings_row(db)
                 break
             p = params_from_settings(settings)
 

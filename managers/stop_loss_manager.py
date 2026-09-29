@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy.orm import Session
 
 from api.kiwoom_api import KiwoomAPI, _parse_kiwoom_int
-from core.models import Position, PositionBuyFill, PendingBuySignal, SellOrder, AutoTradeSettings, get_db
+from core.models import Position, PositionBuyFill, PendingBuySignal, SellOrder, AutoTradeSettings, get_auto_trade_settings_row, get_db
 from core.config import Config, get_account_mode
 from utils.debug_tracer import debug_tracer
 from utils.auto_trade_activity_log import log_activity
@@ -366,7 +366,7 @@ class StopLossManager:
         try:
             for db in get_db():
                 session: Session = db
-                settings = session.query(AutoTradeSettings).first()
+                settings = get_auto_trade_settings_row(session)
                 if settings:
                     self.auto_trade_settings = settings
                     logger.debug(f"🛡️ [STOP_LOSS] 자동매매 설정 로드: 활성화={settings.is_enabled}, 손절={settings.stop_loss_rate}%, 익절={settings.take_profit_rate}%")
@@ -435,9 +435,9 @@ class StopLossManager:
     @staticmethod
     def propagate_exit_settings_to_holdings(session: Session) -> int:
         """설정 저장 시 보유 포지션의 손절/익절 % 스냅샷을 전역 설정과 동기화."""
-        from core.models import AutoTradeSettings, Position
+        from core.models import Position
 
-        settings = session.query(AutoTradeSettings).first()
+        settings = get_auto_trade_settings_row(session)
         if not settings:
             return 0
         updated = 0

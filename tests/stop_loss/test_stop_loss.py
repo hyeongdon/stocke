@@ -26,7 +26,7 @@ from typing import Any
 
 from core.config import Config
 from managers.stop_loss_manager import StopLossManager
-from core.models import get_db, Position, AutoTradeSettings
+from core.models import get_db, Position, get_auto_trade_settings_row
 
 
 def _pp(obj: Any) -> str:
@@ -49,7 +49,7 @@ async def run(args: argparse.Namespace) -> int:
     print("\n[1] 자동매매 설정 확인")
     try:
         db = next(get_db())
-        settings = db.query(AutoTradeSettings).first()
+        settings = get_auto_trade_settings_row(db)
         
         if settings:
             print("✅ 자동매매 설정 존재")

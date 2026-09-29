@@ -13,6 +13,7 @@ from core.models import (
     AutoTradeSettings,
     Position,
     SellOrder,
+    get_auto_trade_settings_row,
 )
 from managers.stop_loss_manager import stop_loss_manager
 from core.config import Config, get_account_mode
@@ -189,7 +190,7 @@ class BuyOrderExecutor:
         try:
             for db in get_db():
                 session: Session = db
-                settings = session.query(AutoTradeSettings).first()
+                settings = get_auto_trade_settings_row(session)
                 if settings:
                     self.auto_trade_settings = settings
                     logger.debug(f"💰 [BUY_EXECUTOR] 자동매매 설정 로드: 활성화={settings.is_enabled}, 최대투자={settings.max_invest_amount:,}원, 손절={settings.stop_loss_rate}%, 익절={settings.take_profit_rate}%")

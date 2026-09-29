@@ -7,7 +7,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.config import Config
-from core.models import AutoTradeSettings, get_db, init_db
+from core.models import get_auto_trade_settings_row, get_db, init_db
 from utils.auto_trade_engine import check_daily_limits, effective_min_change_rate, has_buy_conditions, in_trade_hours
 
 
@@ -40,7 +40,7 @@ async def main():
     # 2) DB 설정
     settings = None
     for db in get_db():
-        settings = db.query(AutoTradeSettings).first()
+        settings = get_auto_trade_settings_row(db)
         break
 
     if not settings:
