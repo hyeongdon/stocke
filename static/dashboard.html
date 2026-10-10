@@ -88,6 +88,7 @@
                   <button type="button" class="cand-tab" data-cand="fractal">스캘핑</button>
                   <button type="button" class="cand-tab" data-cand="jongga">종가배팅</button>
                   <button type="button" class="cand-tab" data-cand="ma1592">1592매매</button>
+                  <button type="button" class="cand-tab" data-cand="rwm">RWM 밥그릇</button>
                 </nav>
               </div>
             </div>
@@ -165,6 +166,21 @@
                 <div class="empty"><span class="ico">📐</span>조회 버튼을 누르면 15/92 장부 종목만 불러옵니다.</div>
               </div>
             </div>
+
+            <div class="cand-pane" data-cand-pane="rwm">
+              <div class="cand-pane-bar">
+                <div class="hint">장후(15:40) 일봉 판정 → 익일 3분봉 눌림 대기 · M 대기 · 보유 · 수동 종목 <span id="rwmCount"></span></div>
+                <div class="cand-pane-actions">
+                  <input type="text" id="rwmManualCode" placeholder="종목코드 6자리" maxlength="7" style="width:110px;">
+                  <button class="btn sm" id="rwmManualAdd">수동 추가</button>
+                  <button class="btn sm" id="rwmBatchRun" title="확정 일봉 기준으로 장후 배치를 지금 실행">배치 실행</button>
+                  <button class="btn primary sm" id="rwmRefresh">조회</button>
+                </div>
+              </div>
+              <div class="card-body scroll auto-screener-body" id="rwmBody">
+                <div class="empty"><span class="ico">🥣</span>조회 버튼을 누르면 RWM 밥그릇 감시·보유·수동 종목을 불러옵니다.</div>
+              </div>
+            </div>
           </div><!-- /.cand-tabs-card -->
 
         </div><!-- /.auto-row-2 (수급+후보) -->
@@ -218,6 +234,7 @@
                   <button type="button" class="activity-filter-tab" data-filter="fractal">프랙탈</button>
                   <button type="button" class="activity-filter-tab" data-filter="jongga">종가배팅</button>
                   <button type="button" class="activity-filter-tab" data-filter="ma1592">15/92</button>
+                  <button type="button" class="activity-filter-tab" data-filter="rwm_bowl">RWM</button>
                   <button type="button" class="activity-filter-tab" data-filter="system">시스템</button>
                 </div>
               </div>

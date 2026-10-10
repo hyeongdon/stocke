@@ -102,8 +102,8 @@ KNOWN_BATCHES: List[Dict[str, Any]] = [
         "task_name": "Stocke-FundamentalBatch",
         "process_needles": ["fundamental_mart_batch", "run_fundamental_batch.bat"],
         "log_file": os.path.join(LOG_DIR, "fundamental_mart_batch.log"),
-        "default_schedule": "매일 18:00",
-        "description": "네이버 기본적분석 데이터 → DB 마트",
+        "default_schedule": "비활성 (네이버 시총 페이지 개편)",
+        "description": "네이버 기본적분석 데이터 → DB 마트 — sise_market_sum 페이지가 stock.naver.com 으로 바뀌어 수집 0건, 스케줄 비활성",
     },
     {
         "id": "log_cleanup",

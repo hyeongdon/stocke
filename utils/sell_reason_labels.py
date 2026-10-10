@@ -29,6 +29,8 @@ SELL_REASON_KO = {
     "STOP_3M_BEARISH_BELOW_MA15": "3분 음봉 MA15 이탈",
     "MAX_HOLD": "보유만기",
     "EOD": "장종료 청산",
+    "EXIT_MA20": "20일선 이탈",
+    "STOP_HARD": "하드 손절",
 }
 
 # 표시/기록 축약 별칭 (TP1_GAP → T1_GAP 등)

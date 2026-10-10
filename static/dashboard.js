@@ -963,6 +963,14 @@ function linkedSessionWindowDetail(settings) {
       end: _v(s, 'ma1592_trade_end_time') || '15:15',
     });
   }
+  if (s.use_rwm_bowl) {
+    parts.push({
+      key: 'rwm_bowl',
+      label: 'RWM',
+      start: _v(s, 'rwm_pb_start') || '09:06',
+      end: _v(s, 'rwm_pb_end') || '14:30',
+    });
+  }
   if (!parts.length) {
     parts.push({ key: 'none', label: '전략없음', start: '09:00', end: '15:30' });
   }
@@ -1002,6 +1010,9 @@ function readSessionOptsFromForm() {
     use_ma1592: !!$('set_use_ma1592')?.checked,
     ma1592_trade_start_time: $('set_ma1592_trade_start_time')?.value || '09:10',
     ma1592_trade_end_time: $('set_ma1592_trade_end_time')?.value || '15:15',
+    use_rwm_bowl: !!$('set_use_rwm_bowl')?.checked,
+    rwm_pb_start: $('set_rwm_pb_start')?.value || '09:06',
+    rwm_pb_end: $('set_rwm_pb_end')?.value || '14:30',
     use_legacy: $('set_use_legacy') ? !!$('set_use_legacy').checked : true,
     use_sangtta: $('set_use_sangtta') ? !!$('set_use_sangtta').checked : true,
     jongga_pig_split: !!$('set_jongga_pig_split')?.checked,
@@ -1059,6 +1070,7 @@ function bindTradeTimePreview() {
     'set_jongga_leg2_start_time', 'set_jongga_leg3_start_time', 'set_jongga_leg3_end_time',
     'set_fractal_trade_start_time', 'set_fractal_trade_end_time',
     'set_ma1592_trade_start_time', 'set_ma1592_trade_end_time',
+    'set_rwm_pb_start', 'set_rwm_pb_end',
     'set_liquidate_time',
   ];
   ids.forEach((id) => {
@@ -1073,6 +1085,8 @@ function bindTradeTimePreview() {
   if (fr) fr.addEventListener('change', refreshEngineSessionDisplay);
   const m15 = $('set_use_ma1592');
   if (m15) m15.addEventListener('change', refreshEngineSessionDisplay);
+  const rwm = $('set_use_rwm_bowl');
+  if (rwm) rwm.addEventListener('change', refreshEngineSessionDisplay);
   const leg = $('set_use_legacy');
   if (leg) leg.addEventListener('change', refreshEngineSessionDisplay);
   const sang = $('set_use_sangtta');
@@ -1521,6 +1535,7 @@ const STRATEGY_LABEL = {
   jongga: '종가배팅',
   fractal: '프랙탈',
   ma1592: '15/92홀드',
+  rwm_bowl: 'RWM밥그릇',
 };
 
 function posStrategyChipHtml(p) {
@@ -2120,6 +2135,7 @@ const STRATEGY_PROFILE_LABELS = {
   jongga: '종가배팅',
   fractal: '프랙탈 스캘핑',
   ma1592: '15/92홀드',
+  rwm_bowl: 'RWM 밥그릇',
   oversold_breakout: '수급 돌파',
   sangtta_breakout: '상따',
   yeokmaegongpa: '역매공파',
@@ -2453,7 +2469,7 @@ function drawPerfChart(curve, stats) {
 }
 
 /* ===== 실시간 활동 로그 ===== */
-const SCAN_STRATEGY_ORDER = ['legacy', 'sangtta', 'breakout', 'fractal', 'jongga', 'ma1592'];
+const SCAN_STRATEGY_ORDER = ['legacy', 'sangtta', 'breakout', 'fractal', 'jongga', 'ma1592', 'rwm_bowl'];
 
 const ACTIVITY_STRATEGY_FILTERS = [
   { key: 'all', label: '전체' },
@@ -2463,10 +2479,12 @@ const ACTIVITY_STRATEGY_FILTERS = [
   { key: 'fractal', label: '프랙탈' },
   { key: 'jongga', label: '종가배팅' },
   { key: 'ma1592', label: '15/92' },
+  { key: 'rwm_bowl', label: 'RWM' },
   { key: 'system', label: '시스템' },
 ];
 
 const ACTIVITY_MSG_STRATEGY_PATTERNS = [
+  { key: 'rwm_bowl', re: /RWM/ },
   { key: 'ma1592', re: /\[MA1592\]|15\/90\s*홀드|\[15\/90\s*홀드\]|장부\s*편입/i },
   { key: 'sangtta', re: /\[상따\]/ },
   { key: 'breakout', re: /\[돌파\]|수급\s*돌파/ },
@@ -3288,6 +3306,159 @@ async function loadMa1592() {
   }
 }
 
+/* ===== RWM 밥그릇 ===== */
+const RWM_SOURCE_LABEL = { condition: '조건식', manual: '수동', both: '조건식+수동', holding: '보유' };
+const RWM_WATCH_STATUS = {
+  WATCH: '눌림 대기', SIGNALED: '매수 신호', SIGNAL_OFF: '반등(자동매매 OFF)', EXPIRED: '감시 종료', FAILED: '신호 실패',
+};
+const RWM_REASON_KO = {
+  NO_MA_SETUP: '20/60 자리 아님', MA60_DOWN: '60선 하락 중', MA_SETUP_STALE: '20/60 자리 신선도 경과',
+};
+
+async function rwmPost(url, body) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {}),
+  });
+  let d = {};
+  try { d = await res.json(); } catch (_) { d = {}; }
+  if (!res.ok) throw new Error(d.detail || `${res.status} ${url}`);
+  return d;
+}
+
+function rwmPct(v, digits = 1) {
+  if (v == null || v === '' || Number.isNaN(Number(v))) return '-';
+  const n = Number(v);
+  return `${n > 0 ? '+' : ''}${n.toFixed(digits)}%`;
+}
+
+function rwmSection(title, inner) {
+  return `<div class="box-title" style="margin:12px 0 6px;">${esc(title)}</div>${inner}`;
+}
+
+async function loadRwm() {
+  if (!$('rwmBody')) return;
+  $('rwmBody').innerHTML = '<div class="skeleton">RWM 밥그릇 조회 중...</div>';
+  if ($('rwmCount')) $('rwmCount').textContent = '';
+  try {
+    const d = await fetchJSON('/rwm/candidates', { timeoutMs: 30000 });
+    const lb = d.last_batch || {};
+    const watch = d.watch || [];
+    const near = d.near || [];
+    const manual = d.manual || [];
+    const holds = d.holdings || [];
+    if ($('rwmCount')) {
+      const off = d.enabled ? '' : ' · 전략 OFF';
+      const batch = lb.signal_date ? ` · 마지막 판정 ${lb.signal_date} (${lb.trigger || ''})` : ' · 판정 이력 없음';
+      $('rwmCount').textContent =
+        `감시 ${watch.filter((w) => w.status === 'WATCH').length} · 보유 ${holds.length} · 수동 ${manual.length}/${d.max_manual_codes || 50}${batch}${off}`;
+    }
+    let h = '';
+    if (lb.signal_date) {
+      const reasons = Object.entries(lb.reasons || {})
+        .sort((a, b) => b[1] - a[1])
+        .map(([k, v]) => `${esc(k)} ${v}`)
+        .join(' · ');
+      const errs = (lb.condition_errors || []).length
+        ? ` · <span class="down">조건식 실패 ${esc((lb.condition_errors || []).join(', '))}</span>`
+        : '';
+      h += `<div class="hint" style="margin-bottom:6px;">신호일 ${esc(lb.signal_date)} → 감시일 ${esc(lb.valid_date || '-')} · 대상 ${lb.universe || 0}`
+        + ` (조건식 ${lb.condition || 0} · 수동 ${lb.manual || 0} · 보유 ${lb.holding || 0}) · 일봉 부족 ${lb.insufficient_bars || 0}${errs}`
+        + `<br>${reasons}</div>`;
+    }
+
+    const watchRows = watch.map((w) => `<tr>
+      <td><b>${esc(w.name || w.code)}</b><div class="hint">${esc(w.code)} · ${esc(RWM_SOURCE_LABEL[w.universe_source] || w.universe_source || '')}</div></td>
+      <td>${esc(RWM_WATCH_STATUS[w.status] || w.status)}${w.reason && w.status !== 'WATCH' ? `<div class="hint">${esc(w.reason_ko || w.reason)}</div>` : ''}</td>
+      <td class="num">${esc(w.valid_date || '')}<div class="hint">신호 ${esc(w.signal_date || '')}</div></td>
+      <td>${esc(w.m_type === 'M1_GC' ? 'M1 GC' : 'M2 임박')}<div class="hint">이격 ${rwmPct(w.gap_pct)} · 60선 ${rwmPct(w.ma60_slope_pct)}</div></td>
+      <td class="num">${num(w.signal_close)}<div class="hint">20선 ${num(w.ma20_d)}</div></td>
+      <td class="num">${num(w.entry_cap)}<div class="hint">손절 ${num(w.hard_price)}</div></td>
+      <td class="num">${w.ema20_3m ? num(w.ema20_3m) : '-'}<div class="hint">고가 ${w.day_high ? num(w.day_high) : '-'}${w.rise_ok ? ' ✓상승' : ''}</div></td>
+      <td class="num">${w.entry_price ? num(w.entry_price) : '-'}<div class="hint">${esc((w.pb_confirm_time || '').slice(11, 16))}</div></td>
+    </tr>`).join('');
+    h += rwmSection('감시 (익일 3분봉 EMA20 눌림 대기)', watch.length
+      ? `<table class="tbl"><thead><tr><th>종목</th><th>상태</th><th class="num">감시일</th><th>M</th>`
+        + `<th class="num">신호 종가</th><th class="num">상한</th><th class="num">3분 EMA20</th><th class="num">진입</th></tr></thead><tbody>${watchRows}</tbody></table>`
+      : emptyRow('감시 종목 없음 — 신호는 하루 0~2건, 0건인 날이 대부분입니다', '🥣'));
+
+    const holdRows = holds.map((p) => `<tr>
+      <td><b>${esc(p.stock_name || p.stock_code)}</b><div class="hint">${esc(p.stock_code)}</div></td>
+      <td class="num">${num(p.buy_price)}<div class="hint">${num(p.buy_quantity)}주 · ${esc(p.buy_date || '')}</div></td>
+      <td class="num">${num(p.current_price)}<div class="hint ${signClass(p.profit_loss_rate)}">${rwmPct(p.profit_loss_rate, 2)}</div></td>
+      <td class="num">${p.hard_price ? num(p.hard_price) : '-'}</td>
+      <td>${p.pending_exit ? `<span class="down">${esc(p.pending_exit_ko || p.pending_exit)}</span><div class="hint">${esc(p.pending_exec_from || '')} 시가 매도</div>` : '보유'}</td>
+    </tr>`).join('');
+    h += rwmSection('보유', holds.length
+      ? `<table class="tbl"><thead><tr><th>종목</th><th class="num">매수가</th><th class="num">현재가</th><th class="num">하드 손절</th><th>청산</th></tr></thead><tbody>${holdRows}</tbody></table>`
+      : emptyRow('RWM 보유 종목 없음', '📭'));
+
+    const nearRows = near.map((n) => `<tr>
+      <td><b>${esc(n.name || n.code)}</b><div class="hint">${esc(n.code)} · ${esc(RWM_SOURCE_LABEL[n.source] || n.source || '')}</div></td>
+      <td>${esc(RWM_REASON_KO[n.reason] || n.reason)}</td>
+      <td class="num">${rwmPct(n.gap_pct)}</td>
+      <td class="num">${rwmPct(n.ma60_slope_pct)}</td>
+      <td class="num">${num(n.signal_close)}</td>
+    </tr>`).join('');
+    h += rwmSection('M 대기 (R·W 통과, 20/60 자리만 미달)', near.length
+      ? `<table class="tbl"><thead><tr><th>종목</th><th>막힌 이유</th><th class="num">20/60 이격</th><th class="num">60선 5일</th><th class="num">종가</th></tr></thead><tbody>${nearRows}</tbody></table>`
+      : emptyRow('M 대기 종목 없음', '📭'));
+
+    const manualRows = manual.map((m) => `<tr>
+      <td><b>${esc(m.name || m.code)}</b><div class="hint">${esc(m.code)}</div></td>
+      <td>${m.reason ? `${m.ok ? '<span class="up">감시 등록</span>' : esc(m.reason_ko || m.reason)}<div class="hint">${esc(m.judged_date || '')} · ${num(m.bars)}봉</div>` : '<span class="hint">다음 장후 배치부터 판정</span>'}</td>
+      <td class="hint" style="white-space:normal;">${esc(m.line || '')}</td>
+      <td><button class="btn sm" data-rwm-remove="${esc(m.code)}">삭제</button></td>
+    </tr>`).join('');
+    h += rwmSection(`수동 종목 (${manual.length}/${d.max_manual_codes || 50})`, manual.length
+      ? `<table class="tbl"><thead><tr><th>종목</th><th>판정</th><th>단계별 현황</th><th></th></tr></thead><tbody>${manualRows}</tbody></table>`
+      : emptyRow('수동 종목 없음 — 위 입력칸에 종목코드를 넣고 [수동 추가]', '✍️'));
+
+    $('rwmBody').innerHTML = h;
+    $('rwmBody').querySelectorAll('[data-rwm-remove]').forEach((btn) => {
+      btn.onclick = () => rwmManualUpdate('remove', btn.dataset.rwmRemove);
+    });
+  } catch (e) {
+    const msg = String(e && e.message || '');
+    $('rwmBody').innerHTML = emptyRow(
+      msg.includes('404') ? 'API 없음 — 서버를 재시작해 주세요' : `조회 실패${msg ? ` (${msg})` : ''}`,
+      '⚠️',
+    );
+  }
+}
+
+async function rwmManualUpdate(action, code) {
+  const c = String(code || '').trim();
+  if (!c) { toast('종목코드를 입력하세요', true); return; }
+  if (action === 'remove' && !window.confirm(`${c} 를 RWM 수동 종목에서 삭제할까요?`)) return;
+  try {
+    const d = await rwmPost('/rwm/manual', { action, code: c });
+    toast(d.message || '저장됨');
+    if (action === 'add' && $('rwmManualCode')) $('rwmManualCode').value = '';
+    const ta = $('set_rwm_manual_codes');
+    if (ta && Array.isArray(d.codes)) ta.value = d.codes.join(', ');
+    loadRwm();
+  } catch (e) {
+    toast(String(e && e.message || e), true);
+  }
+}
+
+async function rwmRunBatch() {
+  if (!window.confirm('RWM 장후 배치를 지금 실행할까요? (확정 일봉 기준 · 장중이면 전 거래일 기준, 감시 등록 시 텔레그램 발송)')) return;
+  const btn = $('rwmBatchRun');
+  if (btn) btn.disabled = true;
+  try {
+    const d = await rwmPost('/rwm/batch/run', {});
+    toast(d.message || '배치 완료');
+    loadRwm();
+  } catch (e) {
+    toast(String(e && e.message || e), true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 /* ===== 종가배팅 후보 ===== */
 async function pickJongga(code, name) {
   if (!code) return;
@@ -3852,6 +4023,7 @@ function renderSettingsForm(s) {
         ${fCheck('market_risk_block_jongga', s, '나쁠 때 종가배팅에 한도 적용')}
         ${fCheck('market_risk_block_fractal', { ...s, market_risk_block_fractal: s.market_risk_block_fractal !== false }, '나쁠 때 프랙탈에 한도 적용')}
         ${fCheck('market_risk_block_ma1592', { ...s, market_risk_block_ma1592: s.market_risk_block_ma1592 !== false }, '나쁠 때 15/92에 한도 적용')}
+        ${fCheck('market_risk_block_rwm_bowl', { ...s, market_risk_block_rwm_bowl: s.market_risk_block_rwm_bowl !== false }, '나쁠 때 RWM 밥그릇에 한도 적용')}
       </div>
       <div class="box-title" style="margin-top:14px;">급등장 시 매수 제한</div>
       <div class="desc">코스피·코스닥이 <b>+3% 이상</b>인 급등장은 다음날 낙폭이 큰 경우가 많습니다. 체크한 전략은 금일 신규매수 N회까지(0=전면차단). <b>시장별 매칭</b>이면 해당 지수 급등 시 같은 시장 종목만 한도 적용. 보유 청산·추가매수는 그대로입니다.</div>
@@ -3877,6 +4049,7 @@ function renderSettingsForm(s) {
         ${fCheck('market_surge_block_jongga', { ...s, market_surge_block_jongga: s.market_surge_block_jongga !== false }, '급등 때 종가배팅에 한도 적용')}
         ${fCheck('market_surge_block_fractal', { ...s, market_surge_block_fractal: s.market_surge_block_fractal !== false }, '급등 때 프랙탈에 한도 적용')}
         ${fCheck('market_surge_block_ma1592', { ...s, market_surge_block_ma1592: s.market_surge_block_ma1592 !== false }, '급등 때 15/92에 한도 적용')}
+        ${fCheck('market_surge_block_rwm_bowl', { ...s, market_surge_block_rwm_bowl: s.market_surge_block_rwm_bowl !== false }, '급등 때 RWM 밥그릇에 한도 적용')}
       </div>
       <div class="box-title" style="margin-top:12px;">장마감 청산 · 오버나잇 슬롯</div>
       ${fCheck('liquidate_before_close', s, '장 마감 시 오버나잇 슬롯으로 정리')}
@@ -4206,6 +4379,58 @@ function renderSettingsForm(s) {
       </div>
       ${fCheck('ma1592_flatten_eod', s, '장종료 전량청산 (flatten_eod)')}
       <div class="exit-note">${esc(ma1592Start)}~${esc(ma1592End)} · 슬롯 ${esc(ma1592Slots)} · 1차=가격선행 · 분할 15/35/50 · 전고익절 없음 · 시세전=급락+DC · 시세후=고점트레일→급락+92선 · 하드이탈=수량만</div>
+    </div>
+  </div>`;
+
+  // ===== RWM 밥그릇 (스윙) =====
+  const rwmStart = _v(s, 'rwm_pb_start') || '09:06';
+  const rwmEnd = _v(s, 'rwm_pb_end') || '14:30';
+  const rwmSlots = _v(s, 'rwm_max_slots') !== '' ? _v(s, 'rwm_max_slots') : '5';
+  const rwmManual = String(_v(s, 'rwm_manual_codes') || '').split(',').filter(Boolean).join(', ');
+  h += `<div class="form-section strategy-card strategy-rwm">
+    <h4>RWM 밥그릇 (스윙)</h4>
+    <div class="desc"><b>R</b>=주봉 RSI 과매도 → 5거래일 내 일봉 RSI 과매도, <b>W</b>=Williams %R −80 상향 돌파, <b>M</b>=20/60 골든크로스 또는 GC 임박(이격 ≤ 2%·종가 &gt; 60선) + 60선 평평/상승. 장 마감 후(15:40) 확정 일봉으로 판정 → <b>다음 날 3분봉 EMA20 눌림 반등</b>에서 매수 → <b>종가 20일선 이탈 시 다음 날 시가 전량</b>. 오버나잇 슬롯 정리 대상 아님. 기본 OFF.</div>
+    <div class="box-soft">
+      ${fCheck('use_rwm_bowl', s, 'RWM 밥그릇 전략 사용')}
+      <div class="form-grid" style="margin-top:12px;">
+        ${field('조건식 이름', `<input type="text" id="set_rwm_condition_names" value="${esc(_v(s, 'rwm_condition_names') || 'RWM밥그릇')}" placeholder="RWM밥그릇">`, '다른 전략 조건식과 합치지 않음')}
+        ${field('동시 보유 종목', `<input type="number" id="set_rwm_max_slots" value="${esc(rwmSlots)}" step="1" min="1" max="10">`)}
+        ${field('하루 신규 상한', fNum('rwm_max_new_per_day', { ...s, rwm_max_new_per_day: _v(s, 'rwm_max_new_per_day') || 3 }, '3'))}
+        ${field('1회 리스크(%)', fNum('rwm_risk_per_trade_pct', { ...s, rwm_risk_per_trade_pct: _v(s, 'rwm_risk_per_trade_pct') || 1 }, '1'), '추정자산 × % ÷ (진입가 − 하드 손절가, 최소 3%)')}
+        ${field('종목당 최대(%)', fNum('rwm_max_position_pct', { ...s, rwm_max_position_pct: _v(s, 'rwm_max_position_pct') || 20 }, '20'))}
+        ${field('매수금액 상한(원)', fNum('rwm_max_invest_amount', s, '0'), '0=미적용')}
+      </div>
+      <div class="form-grid" style="margin-top:8px;">
+        <div class="field" style="grid-column:1/-1;"><label>수동 추가 종목 (최대 50)</label>
+          <textarea id="set_rwm_manual_codes" rows="2" placeholder="005930, 000660">${esc(rwmManual)}</textarea>
+          <span class="fhint">조건식과 별개로 판정 대상에 넣을 종목코드 · 쉼표/줄바꿈 · 조건 통과는 똑같이 필요 · 후보 탭 [RWM 밥그릇]에서도 추가/삭제</span></div>
+      </div>
+      <div class="box-title" style="margin-top:14px;">신호 (일봉)</div>
+      <div class="form-grid">
+        ${field('주봉 RSI ≤', fNum('rwm_rsi_os_weekly', { ...s, rwm_rsi_os_weekly: _v(s, 'rwm_rsi_os_weekly') || 30 }, '30'))}
+        ${field('일봉 RSI ≤', fNum('rwm_rsi_os_daily', { ...s, rwm_rsi_os_daily: _v(s, 'rwm_rsi_os_daily') || 30 }, '30'))}
+        ${field('주봉→일봉 거리(거래일)', fNum('rwm_rsi_pair_days', { ...s, rwm_rsi_pair_days: _v(s, 'rwm_rsi_pair_days') || 5 }, '5'))}
+        ${field('그릇 기간(거래일)', fNum('rwm_bowl_lookback', { ...s, rwm_bowl_lookback: _v(s, 'rwm_bowl_lookback') || 60 }, '60'))}
+        ${field('GC 신선도(거래일)', fNum('rwm_gc_fresh_days', { ...s, rwm_gc_fresh_days: _v(s, 'rwm_gc_fresh_days') || 3 }, '3'))}
+        ${field('GC 임박 이격(%)', fNum('rwm_near_gap_pct', { ...s, rwm_near_gap_pct: _v(s, 'rwm_near_gap_pct') || 2 }, '2'))}
+        ${field('60선 5일 기울기 ≥ (%)', fNum('rwm_ma60_slope_min_pct', { ...s, rwm_ma60_slope_min_pct: _v(s, 'rwm_ma60_slope_min_pct') !== '' ? _v(s, 'rwm_ma60_slope_min_pct') : -0.2 }, '-0.2'))}
+        ${field('M 신선도(거래일)', fNum('rwm_m_fresh_days', { ...s, rwm_m_fresh_days: _v(s, 'rwm_m_fresh_days') || 5 }, '5'))}
+      </div>
+      <div class="box-title" style="margin-top:14px;">매수 (다음 날 3분봉 눌림) · 매도</div>
+      <div class="form-grid">
+        ${field('눌림 감시 시작', `<input type="time" id="set_rwm_pb_start" value="${esc(rwmStart)}">`)}
+        ${field('눌림 감시 종료', `<input type="time" id="set_rwm_pb_end" value="${esc(rwmEnd)}">`)}
+        ${field('매수 상한(신호 종가 +%)', fNum('rwm_max_entry_above_pct', { ...s, rwm_max_entry_above_pct: _v(s, 'rwm_max_entry_above_pct') || 5 }, '5'))}
+        ${field('하드 손절(MA20 −%)', fNum('rwm_intraday_hard_buf_pct', { ...s, rwm_intraday_hard_buf_pct: _v(s, 'rwm_intraday_hard_buf_pct') || 3 }, '3'), '장중 현재가 ≤ 전일 MA20 × (1 − %) → 즉시 전량')}
+        ${field('최대 보유(거래일)', fNum('rwm_max_hold_days', { ...s, rwm_max_hold_days: _v(s, 'rwm_max_hold_days') || 60 }, '60'))}
+      </div>
+      ${fCheck('rwm_manual_daily_report', { ...s, rwm_manual_daily_report: s.rwm_manual_daily_report !== false }, '수동 종목 판정 현황 장후 텔레그램')}
+      <div class="form-grid" style="margin-top:8px;">
+        <div class="field" style="grid-column:1/-1;"><label>고급 파라미터 (JSON, 선택)</label>
+          <textarea id="set_rwm_params" rows="2" placeholder='{"chase_day_pct": 7, "pb_max_depth_pct": 5}'>${esc(_v(s, 'rwm_params') || '')}</textarea>
+          <span class="fhint">utils/rwm_bowl.py DEFAULT_PARAMS 키만 반영 · 위 입력칸 값이 우선</span></div>
+      </div>
+      <div class="exit-note">신호 15:40 · 매수 ${esc(rwmStart)}~${esc(rwmEnd)} 3분봉 EMA20 눌림 반등 · 슬롯 ${esc(rwmSlots)} · 매도 = 종가 20일선 이탈 → 다음 날 시가 · 장중 하드 손절 · 오버나잇 유지</div>
     </div>
   </div>`;
 
@@ -4959,6 +5184,14 @@ document.addEventListener('DOMContentLoaded', () => {
   if ($('fractalRefresh')) $('fractalRefresh').onclick = loadFractal;
   if ($('jonggaRefresh')) $('jonggaRefresh').onclick = () => loadJongga(true);
   if ($('ma1592Refresh')) $('ma1592Refresh').onclick = loadMa1592;
+  if ($('rwmRefresh')) $('rwmRefresh').onclick = loadRwm;
+  if ($('rwmBatchRun')) $('rwmBatchRun').onclick = rwmRunBatch;
+  if ($('rwmManualAdd')) $('rwmManualAdd').onclick = () => rwmManualUpdate('add', $('rwmManualCode')?.value);
+  if ($('rwmManualCode')) {
+    $('rwmManualCode').addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') rwmManualUpdate('add', $('rwmManualCode').value);
+    });
+  }
   document.querySelectorAll('[data-refresh]').forEach(btn => { btn.onclick = () => { $('lastUpdated').textContent = new Date().toLocaleTimeString('ko-KR'); (refreshMap[btn.dataset.refresh] || (() => {}))(); }; });
   setupAutoRefresh();
   setupInvestorFlowToggle();

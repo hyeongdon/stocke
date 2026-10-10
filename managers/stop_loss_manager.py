@@ -1463,7 +1463,7 @@ class StopLossManager:
         is_ymgp = (strategy_key or "").strip().lower() == "ymgp"
         is_jongga = (strategy_key or "").strip().lower() == "jongga"
         is_fractal = (strategy_key or "").strip().lower() == "fractal"
-        if is_fractal:
+        if is_fractal or (strategy_key or "").strip().lower() == "rwm_bowl":
             return []
         if is_breakout:
             sl = self._num(getattr(settings, "breakout_stop_loss_pct", None))
@@ -1907,6 +1907,12 @@ class StopLossManager:
                 await self._monitor_ma1592_exit(
                     position, current_price, peak, buy_price,
                     profit_loss, profit_loss_rate, s,
+                )
+                return
+
+            if getattr(position, "strategy_key", None) == "rwm_bowl":
+                await self._monitor_rwm_exit(
+                    position, int(current_price), peak, profit_loss, profit_loss_rate,
                 )
                 return
 
@@ -3512,6 +3518,55 @@ class StopLossManager:
             position, current_price, mapped, detail, quantity=sell_n,
         )
 
+    async def _monitor_rwm_exit(
+        self,
+        position: Position,
+        current_price: int,
+        peak: int,
+        profit_loss,
+        profit_loss_rate,
+    ) -> None:
+        """RWM 밥그릇 청산: 장중 STOP_HARD(stop_loss_price) · 장후 판정된 EXIT_MA20/MAX_HOLD 는 정규장에 전량.
+
+        글로벌 %손절·트레일링·익절 미사용. 판정은 managers/rwm_bowl_scheduler 장후 배치가 저장.
+        """
+        from utils.rwm_bowl import REASON_KO, check_hard_stop, get_state_store
+        from utils.sell_reason_labels import classify_exit_reason
+
+        await self._update_position_tracking(position.id, peak, None)
+        if not is_krx_session():
+            return
+
+        sell_reason = None
+        detail = ""
+        hard_px = int(getattr(position, "stop_loss_price", None) or 0)
+        pending = get_state_store().pending_exit(int(position.id))
+        if check_hard_stop(current_price, hard_px):
+            sell_reason = "STOP_HARD"
+            detail = f"RWM 하드 손절: 현재 {current_price:,} ≤ {hard_px:,} (MA20×(1−버퍼))"
+        elif pending and str(pending.get("exec_from") or "") <= kst_today().isoformat():
+            sell_reason = str(pending.get("reason") or "EXIT_MA20")
+            ma20 = pending.get("ma20")
+            close = pending.get("close")
+            detail = (
+                f"RWM {REASON_KO.get(sell_reason, sell_reason)}: "
+                f"{pending.get('judged_date')} 종가 {close} / MA20 {ma20} → 시가 전량"
+            )
+        if not sell_reason:
+            return
+
+        classified = classify_exit_reason(
+            sell_reason, profit_loss=profit_loss, profit_loss_rate=profit_loss_rate,
+        )
+        if classified != sell_reason:
+            detail = f"{sell_reason}→{classified} | {detail}"
+            sell_reason = classified
+        if await self._has_any_pending_sell_order(position.id):
+            await self._prepare_sell(position.id, sell_reason)
+        if await self._has_pending_sell_order(position.id, for_reason=sell_reason):
+            return
+        await self._execute_sell_order(position, current_price, sell_reason, detail)
+
     async def _persist_ma1592_impulse(self, position_id: int, stock_code: str = "") -> None:
         """impulse_seen 스티키 → Position.trailing_armed + 장부."""
         try:
@@ -3914,6 +3969,14 @@ class StopLossManager:
                     if tp_px and buy_price:
                         position.take_profit_rate = round(
                             abs(tp_px - buy_price) / buy_price * 100.0, 4
+                        )
+                if strategy_key == "rwm_bowl":
+                    stop_px = int(signal_meta.get("stop_price") or 0) or None
+                    position.stop_loss_price = stop_px
+                    position.take_profit_price = None
+                    if stop_px and buy_price:
+                        position.stop_loss_rate = round(
+                            abs(buy_price - stop_px) / buy_price * 100.0, 4
                         )
                 if str(signal_meta.get("strategy") or "").strip().lower() == "ma1592":
                     stop_px = int(signal_meta.get("stop_price") or signal_meta.get("suggested_stop") or 0) or None

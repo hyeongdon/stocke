@@ -134,6 +134,14 @@ def _strategy_windows(settings) -> list:
                 _parse_hm(getattr(settings, "ma1592_trade_end_time", None), (15, 15)),
             )
         )
+    if bool(getattr(settings, "use_rwm_bowl", False)):
+        windows.append(
+            (
+                "RWM밥그릇",
+                _parse_hm(getattr(settings, "rwm_pb_start", None), (9, 6)),
+                _parse_hm(getattr(settings, "rwm_pb_end", None), (14, 30)),
+            )
+        )
     return windows
 
 

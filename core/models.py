@@ -365,6 +365,33 @@ class AutoTradeSettings(Base):
     ma1592_scale_hold_bars = Column(Integer, nullable=False, default=2)
     market_risk_block_ma1592 = Column(Boolean, nullable=False, default=True)
 
+    # ===== RWM 밥그릇 (일봉 신호 → 익일 3분봉 눌림 · 20일선 매도) =====
+    use_rwm_bowl = Column(Boolean, nullable=False, default=False)
+    rwm_condition_names = Column(Text, nullable=True)  # HTS 조건식명, 기본 RWM밥그릇
+    rwm_manual_codes = Column(Text, nullable=True)  # RWM 전용 수동 추가 종목 (공용 watchlist_codes 와 분리)
+    rwm_max_slots = Column(Integer, nullable=False, default=5)
+    rwm_max_new_per_day = Column(Integer, nullable=False, default=3)
+    rwm_risk_per_trade_pct = Column(Float, nullable=False, default=1.0)
+    rwm_max_position_pct = Column(Float, nullable=False, default=20.0)
+    rwm_max_invest_amount = Column(Integer, nullable=False, default=0)
+    rwm_rsi_os_weekly = Column(Float, nullable=False, default=30.0)
+    rwm_rsi_os_daily = Column(Float, nullable=False, default=30.0)
+    rwm_rsi_pair_days = Column(Integer, nullable=False, default=5)
+    rwm_bowl_lookback = Column(Integer, nullable=False, default=60)
+    rwm_gc_fresh_days = Column(Integer, nullable=False, default=3)
+    rwm_near_gap_pct = Column(Float, nullable=False, default=2.0)
+    rwm_ma60_slope_min_pct = Column(Float, nullable=False, default=-0.2)
+    rwm_m_fresh_days = Column(Integer, nullable=False, default=5)
+    rwm_pb_start = Column(String(5), nullable=False, default="09:06")
+    rwm_pb_end = Column(String(5), nullable=False, default="14:30")
+    rwm_max_entry_above_pct = Column(Float, nullable=False, default=5.0)
+    rwm_intraday_hard_buf_pct = Column(Float, nullable=False, default=3.0)
+    rwm_max_hold_days = Column(Integer, nullable=False, default=60)
+    rwm_manual_daily_report = Column(Boolean, nullable=False, default=True)
+    rwm_params = Column(Text, nullable=True)  # 고급 파라미터 JSON (utils/rwm_bowl.DEFAULT_PARAMS 키)
+    market_risk_block_rwm_bowl = Column(Boolean, nullable=False, default=True)
+    market_surge_block_rwm_bowl = Column(Boolean, nullable=False, default=True)
+
     # ===== 상따 청산/소방 규정 =====
     limit_break_soft_pct = Column(Float, nullable=True, default=2.0)   # 상한가 이탈 soft(%)
     limit_break_hard_pct = Column(Float, nullable=True, default=3.0)   # 상한가 이탈 hard(%)
@@ -1397,6 +1424,31 @@ def init_db() -> None:
                 ('ma1592_scale_gap_pct', 'FLOAT DEFAULT 1.0'),
                 ('ma1592_scale_hold_bars', 'INTEGER DEFAULT 2'),
                 ('market_risk_block_ma1592', 'BOOLEAN DEFAULT 1'),
+                ('use_rwm_bowl', 'BOOLEAN DEFAULT 0'),
+                ('rwm_condition_names', 'TEXT'),
+                ('rwm_manual_codes', 'TEXT'),
+                ('rwm_max_slots', 'INTEGER DEFAULT 5'),
+                ('rwm_max_new_per_day', 'INTEGER DEFAULT 3'),
+                ('rwm_risk_per_trade_pct', 'FLOAT DEFAULT 1.0'),
+                ('rwm_max_position_pct', 'FLOAT DEFAULT 20.0'),
+                ('rwm_max_invest_amount', 'INTEGER DEFAULT 0'),
+                ('rwm_rsi_os_weekly', 'FLOAT DEFAULT 30.0'),
+                ('rwm_rsi_os_daily', 'FLOAT DEFAULT 30.0'),
+                ('rwm_rsi_pair_days', 'INTEGER DEFAULT 5'),
+                ('rwm_bowl_lookback', 'INTEGER DEFAULT 60'),
+                ('rwm_gc_fresh_days', 'INTEGER DEFAULT 3'),
+                ('rwm_near_gap_pct', 'FLOAT DEFAULT 2.0'),
+                ('rwm_ma60_slope_min_pct', 'FLOAT DEFAULT -0.2'),
+                ('rwm_m_fresh_days', 'INTEGER DEFAULT 5'),
+                ('rwm_pb_start', 'VARCHAR(5) DEFAULT "09:06"'),
+                ('rwm_pb_end', 'VARCHAR(5) DEFAULT "14:30"'),
+                ('rwm_max_entry_above_pct', 'FLOAT DEFAULT 5.0'),
+                ('rwm_intraday_hard_buf_pct', 'FLOAT DEFAULT 3.0'),
+                ('rwm_max_hold_days', 'INTEGER DEFAULT 60'),
+                ('rwm_manual_daily_report', 'BOOLEAN DEFAULT 1'),
+                ('rwm_params', 'TEXT'),
+                ('market_risk_block_rwm_bowl', 'BOOLEAN DEFAULT 1'),
+                ('market_surge_block_rwm_bowl', 'BOOLEAN DEFAULT 1'),
             ]
             if ats_columns:
                 for col_name, col_def in ats_new_columns:
@@ -1610,6 +1662,26 @@ def init_db() -> None:
                         "name": "15/92 홀드",
                         "type": "MA1592",
                         "params": _json.dumps(_MA1592_DEFAULTS, ensure_ascii=False),
+                    })
+                    conn.commit()
+            except Exception:
+                pass
+
+            # RWM 밥그릇 시드 (기본 OFF) — 테이블에 없을 때만
+            try:
+                rwm_exists = conn.execute(text(
+                    "SELECT COUNT(*) FROM trading_strategies WHERE strategy_type = 'RWM_BOWL'"
+                )).scalar()
+                if not rwm_exists:
+                    import json as _json
+                    from utils.rwm_bowl import DEFAULT_PARAMS as _RWM_DEFAULTS
+                    conn.execute(text("""
+                        INSERT INTO trading_strategies (strategy_name, strategy_type, is_enabled, parameters, updated_at)
+                        VALUES (:name, :type, 0, :params, datetime('now'))
+                    """), {
+                        "name": "RWM 밥그릇",
+                        "type": "RWM_BOWL",
+                        "params": _json.dumps(_RWM_DEFAULTS, ensure_ascii=False),
                     })
                     conn.commit()
             except Exception:

@@ -15,6 +15,7 @@ _STRATEGY_LABEL = {
     "breakout": "돌파",
     "jongga": "종가배팅",
     "fractal": "프랙탈 스캘핑",
+    "rwm_bowl": "RWM밥그릇",
 }
 
 
@@ -30,6 +31,8 @@ def normalize_strategy_key(strategy: Optional[str]) -> str:
         return "fractal"
     if key in ("ma1592", "ma1592_hold", "ma1590", "ma1590_hold"):
         return "ma1592"
+    if key == "rwm_bowl":
+        return "rwm_bowl"
     return "legacy"
 
 
@@ -483,6 +486,8 @@ def strategy_limited_when_bad(settings: Any, strategy: Optional[str]) -> bool:
         return _as_bool(settings, "market_risk_block_fractal", True)
     if key == "ma1592":
         return _as_bool(settings, "market_risk_block_ma1592", True)
+    if key == "rwm_bowl":
+        return _as_bool(settings, "market_risk_block_rwm_bowl", True)
     return _as_bool(settings, "market_risk_block_legacy", True)
 
 
@@ -495,6 +500,7 @@ def strategy_limited_when_surge(settings: Any, strategy: Optional[str]) -> bool:
         "jongga": "market_surge_block_jongga",
         "fractal": "market_surge_block_fractal",
         "ma1592": "market_surge_block_ma1592",
+        "rwm_bowl": "market_surge_block_rwm_bowl",
     }.get(key, "market_surge_block_legacy")
     return _as_bool(settings, attr, True)
 

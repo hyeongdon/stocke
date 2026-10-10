@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import tempfile
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -24,6 +25,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_KEEP_DAYS = 7
 UNTIMESTAMPED_TAIL_BYTES = 8 * 1024 * 1024
 UNTIMESTAMPED_TRIM_AFTER = 32 * 1024 * 1024
+LOCK_RETRIES = 3
+LOCK_RETRY_DELAY_SEC = 10.0
 
 LIVE_LOG_NAMES = {
     "app.log",
@@ -281,10 +284,13 @@ def cleanup_logs(
     dry_run: bool = False,
     now: Optional[datetime] = None,
     skip: Optional[Sequence[Path]] = None,
+    lock_retries: int = LOCK_RETRIES,
+    lock_retry_delay_sec: float = LOCK_RETRY_DELAY_SEC,
 ) -> CleanupSummary:
     cutoff = cutoff_kst(keep_days, now=now)
     skip_res = {p.resolve() for p in (skip or [])}
     summary = CleanupSummary(keep_days=max(1, int(keep_days)), cutoff=cutoff)
+    locked: List[Path] = []
     for path in iter_log_files(root):
         if path.resolve() in skip_res:
             continue
@@ -292,11 +298,41 @@ def cleanup_logs(
             summary.results.append(
                 cleanup_log_file(path, cutoff=cutoff, dry_run=dry_run)
             )
+        except PermissionError:
+            locked.append(path)
         except Exception as e:
             logger.warning("로그 정리 실패 %s: %s", path, e)
             summary.results.append(
                 FileCleanupResult(str(path), "error", 0, 0, str(e))
             )
+
+    # 같은 시각에 도는 배치(.bat 의 >> 리다이렉트 등)가 잠깐 잡고 있는 파일은 나중에 재시도
+    for attempt in range(max(0, int(lock_retries)) + 1):
+        if not locked:
+            break
+        if attempt > 0 and lock_retry_delay_sec > 0:
+            time.sleep(lock_retry_delay_sec)
+        still_locked: List[Path] = []
+        last_attempt = attempt >= lock_retries
+        for path in locked:
+            try:
+                summary.results.append(
+                    cleanup_log_file(path, cutoff=cutoff, dry_run=dry_run)
+                )
+            except PermissionError as e:
+                if last_attempt:
+                    logger.warning("로그 정리 실패(파일 잠김) %s: %s", path, e)
+                    summary.results.append(
+                        FileCleanupResult(str(path), "error", 0, 0, str(e))
+                    )
+                else:
+                    still_locked.append(path)
+            except Exception as e:
+                logger.warning("로그 정리 실패 %s: %s", path, e)
+                summary.results.append(
+                    FileCleanupResult(str(path), "error", 0, 0, str(e))
+                )
+        locked = still_locked
     return summary
 
 

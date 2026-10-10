@@ -533,6 +533,7 @@ class BuyOrderExecutor:
                 "jongga": "종가배팅",
                 "fractal": "프랙탈",
                 "ma1592": "15/92홀드",
+                "rwm_bowl": "RWM밥그릇",
             }.get(strategy_key, strategy_key)
             if not is_add_buy:
                 from utils.market_risk_gate import check_market_risk_buy_allowed
@@ -594,7 +595,7 @@ class BuyOrderExecutor:
                 return
             from utils.auto_trade_engine import _normalize_strategy_key
             slot_strategy = _normalize_strategy_key(strategy_key)
-            if slot_strategy in ("sangtta", "breakout", "jongga", "fractal", "ma1592") and not is_add_buy:
+            if slot_strategy in ("sangtta", "breakout", "jongga", "fractal", "ma1592", "rwm_bowl") and not is_add_buy:
                 from utils.auto_trade_engine import (
                     is_strategy_slot_available,
                     _count_strategy_slots,
@@ -603,6 +604,7 @@ class BuyOrderExecutor:
                     effective_jongga_max_slots,
                     effective_fractal_max_slots,
                     effective_ma1592_max_slots,
+                    effective_rwm_max_slots,
                 )
                 for db in get_db():
                     if not is_strategy_slot_available(
@@ -615,6 +617,7 @@ class BuyOrderExecutor:
                             "jongga": effective_jongga_max_slots,
                             "fractal": effective_fractal_max_slots,
                             "ma1592": effective_ma1592_max_slots,
+                            "rwm_bowl": effective_rwm_max_slots,
                         }[slot_strategy](self.auto_trade_settings)
                         msg = f"{label} 슬롯 포화 ({used}/{lim})"
                         log_activity("BUY", f"{msg} - {signal.stock_name}", "warn", stock_code=signal.stock_code)
@@ -623,7 +626,8 @@ class BuyOrderExecutor:
                     break
                 # MA1592: 스캐너 L3 통과 신호 신뢰 — 주문 직전 게이트 재평가 생략
                 # (터치 반등 봉·장부 상태 재평가 시 매수가 막히는 문제 방지)
-                if strategy != "ma1592":
+                # RWM 밥그릇: 3분봉 눌림 확인봉에서 신호 생성 — 게이트 팩 없음
+                if strategy not in ("ma1592", "rwm_bowl"):
                     pack = {
                         "sangtta": "sangtta_breakout",
                         "breakout": "oversold_breakout",
@@ -915,6 +919,45 @@ class BuyOrderExecutor:
                         )
                         qty = int(sizing.get("qty") or 0)
                         planned = qty * entry_px if qty > 0 else 0
+                elif not is_add_buy and strategy == "rwm_bowl":
+                    from utils.rwm_bowl import params_from_settings as rwm_params, size_position as rwm_size
+                    current_price = await self._get_current_price(signal.stock_code)
+                    entry_px = int(current_price or meta.get("current_price") or 0)
+                    if entry_px <= 0:
+                        return {
+                            "valid": False,
+                            "reason": "현재가 조회 실패(RWM 수량)",
+                            "retryable": True,
+                        }
+                    cap_px = int(meta.get("entry_cap") or 0)
+                    if cap_px > 0 and entry_px > cap_px:
+                        return {
+                            "valid": False,
+                            "reason": f"RWM 매수 상한 초과 ({entry_px:,} > {cap_px:,}) ENTRY_ABOVE_CAP",
+                        }
+                    stop_px = int(meta.get("stop_price") or 0)
+                    if stop_px > 0 and entry_px <= stop_px:
+                        return {
+                            "valid": False,
+                            "reason": f"RWM 하드 손절가({stop_px:,}원) 이하 — 매수 취소",
+                        }
+                    raw_acct = account_info.get("raw") or {}
+                    try:
+                        equity = int(float(str(raw_acct.get("prsm_dpst_aset_amt") or 0).replace(",", "")))
+                    except (TypeError, ValueError):
+                        equity = 0
+                    if equity <= 0:
+                        equity = deposit
+                    p = rwm_params(self.auto_trade_settings)
+                    sizing = rwm_size(
+                        equity, entry_px, stop_px, p,
+                        max_invest_amount=int(
+                            getattr(self.auto_trade_settings, "rwm_max_invest_amount", None) or 0
+                        ),
+                    )
+                    qty = int(sizing.get("qty") or 0)
+                    meta["suggested_qty"] = qty
+                    planned = qty * entry_px if qty > 0 else 0
                 elif is_add_buy and strategy == "ma1592":
                     suggested = int(meta.get("suggested_qty") or 0)
                     current_price = await self._get_current_price(signal.stock_code)
@@ -1073,13 +1116,14 @@ class BuyOrderExecutor:
                     # 프랙탈·MA1592은 자체 게이트만 사용 — 레거시 최소등락률(예: 3.5%) 미적용
                     is_fractal = strategy == "fractal"
                     is_ma1592 = strategy == "ma1592"
-                    skip_legacy_momentum = is_fractal or is_ma1592
+                    is_rwm = strategy == "rwm_bowl"
+                    skip_legacy_momentum = is_fractal or is_ma1592 or is_rwm
                     need_min_change = (
                         (not skip_legacy_momentum) and effective_min_change_rate(cfg) is not None
                     )
                     need_price_cap = bool(cfg.buy_below_price)
                     need_price = need_price_cap or need_min_change
-                    need_gate = bool(cfg.use_entry_gate) and not is_ma1592
+                    need_gate = bool(cfg.use_entry_gate) and not (is_ma1592 or is_rwm)
                     if need_price or need_gate:
                         current_price = await self._get_current_price(signal.stock_code)
                         if not current_price:
@@ -1620,6 +1664,26 @@ class BuyOrderExecutor:
                 qty_hint = int(suggested_qty or 0)
                 if qty_hint > 0 and current_price:
                     amount = qty_hint * int(current_price)
+            if strategy_key == "rwm_bowl" and not is_add_buy:
+                from utils.rwm_bowl import params_from_settings as rwm_params, size_position as rwm_size
+                raw_acct = account_info.get("raw") or {}
+                try:
+                    equity = int(float(str(raw_acct.get("prsm_dpst_aset_amt") or 0).replace(",", "")))
+                except (TypeError, ValueError):
+                    equity = 0
+                if equity <= 0:
+                    equity = deposit
+                sizing = rwm_size(
+                    equity,
+                    int(current_price or 0),
+                    int(stop_price or 0),
+                    rwm_params(self.auto_trade_settings),
+                    max_invest_amount=int(
+                        getattr(self.auto_trade_settings, "rwm_max_invest_amount", None) or 0
+                    ),
+                )
+                qty_hint = int(sizing.get("qty") or 0)
+                amount = qty_hint * int(current_price) if qty_hint > 0 and current_price else 0
             investable = account_info.get("investable_cash", 0)
             capped = cap_buy_amount_by_cash(amount, investable)
             if capped < amount:
@@ -1961,6 +2025,9 @@ class BuyOrderExecutor:
                 note = f"역매공파 {entry_leg}차"
             elif strategy == "ma1592":
                 note = f"15/92홀드 {entry_leg}차"
+            elif strategy == "rwm_bowl":
+                m_type = str(meta.get("m_type") or "")
+                note = f"RWM밥그릇 {'M1' if m_type == 'M1_GC' else 'M2'} · 3분봉 눌림"
             elif is_add:
                 trig = settings.add_buy_trigger if settings else None
                 if change_rate is not None and trig is not None:

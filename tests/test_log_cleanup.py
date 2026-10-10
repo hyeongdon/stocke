@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
+from unittest import mock
 
 from utils.datetime_kst import KST
 from utils.log_cleanup import (
@@ -81,6 +82,56 @@ class LogCleanupTests(unittest.TestCase):
             summary = cleanup_logs(root, keep_days=7, now=now, dry_run=True)
             self.assertEqual(p.read_text(encoding="utf-8"), original)
             self.assertTrue(any(r.action in ("trim", "delete") for r in summary.results))
+
+    def test_locked_file_retried_after_other_files(self):
+        now = datetime(2026, 9, 17, 19, 0, tzinfo=KST)
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            logs = root / "logs"
+            logs.mkdir()
+            old = (now - timedelta(days=10)).strftime("%Y-%m-%d %H:%M:%S")
+            new = (now - timedelta(days=2)).strftime("%Y-%m-%d %H:%M:%S")
+            for name in ("a.log", "scheduler_run.log"):
+                (logs / name).write_text(f"{old} old\n{new} new\n", encoding="utf-8")
+
+            import utils.log_cleanup as lc
+
+            real = lc.cleanup_log_file
+            calls = {"n": 0}
+
+            def flaky(path, **kw):
+                if path.name == "scheduler_run.log" and calls["n"] == 0:
+                    calls["n"] += 1
+                    raise PermissionError(13, "Permission denied")
+                return real(path, **kw)
+
+            with mock.patch.object(lc, "cleanup_log_file", side_effect=flaky):
+                summary = cleanup_logs(root, keep_days=7, now=now, lock_retry_delay_sec=0)
+            self.assertFalse(any(r.action == "error" for r in summary.results))
+            self.assertEqual(
+                (logs / "scheduler_run.log").read_text(encoding="utf-8"), f"{new} new\n",
+            )
+            self.assertEqual(summary.trimmed, 2)
+
+    def test_locked_file_reports_error_after_retries(self):
+        now = datetime(2026, 9, 17, 19, 0, tzinfo=KST)
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            logs = root / "logs"
+            logs.mkdir()
+            (logs / "scheduler_run.log").write_text("2026-09-01 00:00:00 x\n", encoding="utf-8")
+
+            import utils.log_cleanup as lc
+
+            with mock.patch.object(
+                lc, "cleanup_log_file", side_effect=PermissionError(13, "Permission denied"),
+            ) as m:
+                summary = cleanup_logs(
+                    root, keep_days=7, now=now, lock_retries=2, lock_retry_delay_sec=0,
+                )
+            self.assertEqual(m.call_count, 4)
+            errors = [r for r in summary.results if r.action == "error"]
+            self.assertEqual(len(errors), 1)
 
     def test_format_bytes(self):
         self.assertEqual(format_bytes(500), "500B")

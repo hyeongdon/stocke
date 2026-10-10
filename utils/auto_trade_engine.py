@@ -769,6 +769,17 @@ def effective_ma1592_max_slots(settings: Optional[AutoTradeSettings]) -> int:
     return slots if slots > 0 else DEFAULT_MA1592_MAX_SLOTS
 
 
+DEFAULT_RWM_MAX_SLOTS = 5
+
+
+def effective_rwm_max_slots(settings: Optional[AutoTradeSettings]) -> int:
+    try:
+        slots = int(getattr(settings, "rwm_max_slots", 0) or 0)
+    except (TypeError, ValueError):
+        slots = 0
+    return slots if slots > 0 else DEFAULT_RWM_MAX_SLOTS
+
+
 def effective_min_change_rate(settings: AutoTradeSettings) -> Optional[float]:
     if settings.min_change_rate_buy is not None:
         return float(settings.min_change_rate_buy)
@@ -797,6 +808,7 @@ def has_buy_conditions(settings: AutoTradeSettings) -> bool:
             and getattr(settings, "fractal_condition_names", None)
         )
         or bool(getattr(settings, "use_ma1592", False))
+        or bool(getattr(settings, "use_rwm_bowl", False))
     )
 
 
@@ -890,6 +902,12 @@ def new_buy_block_reason(
             f"~{getattr(settings, 'ma1592_trade_end_time', None) or '15:15'}"
         )
         parts.append(f"15/92 {m15}")
+    if getattr(settings, "use_rwm_bowl", False):
+        rwm = (
+            f"{getattr(settings, 'rwm_pb_start', None) or '09:06'}"
+            f"~{getattr(settings, 'rwm_pb_end', None) or '14:30'}"
+        )
+        parts.append(f"RWM밥그릇 {rwm}")
     if not parts:
         parts.append("활성 전략 없음")
     engine = linked_trading_session_window_str(settings, now)
@@ -3280,6 +3298,12 @@ def is_strategy_slot_available(
             return True
         count = _count_strategy_slots(session, strategy_key)
         return count < limit if for_new_signal else count <= limit
+    if strategy_key == "rwm_bowl":
+        limit = effective_rwm_max_slots(settings)
+        if limit <= 0:
+            return True
+        count = _count_strategy_slots(session, strategy_key)
+        return count < limit if for_new_signal else count <= limit
     return True
 
 
@@ -3387,6 +3411,21 @@ def allows_strategy_new_buy(
                 return False, f"MA1592 시간대 외 ({start}~{end})"
         except Exception:
             return False, "MA1592 시간 판정 오류"
+        return True, None
+    if strategy_key == "rwm_bowl":
+        if not getattr(settings, "use_rwm_bowl", False):
+            return False, "RWM 밥그릇 전략 OFF"
+        try:
+            start = getattr(settings, "rwm_pb_start", None) or "09:06"
+            end = getattr(settings, "rwm_pb_end", None) or "14:30"
+            sh, sm = map(int, str(start).split(":"))
+            eh, em = map(int, str(end).split(":"))
+            # 마지막 확인봉 직후 생성된 신호가 실행기에 도달할 여유 5분
+            now_min = now.hour * 60 + now.minute
+            if now_min < sh * 60 + sm or now_min > eh * 60 + em + 5:
+                return False, f"RWM 밥그릇 시간대 외 ({start}~{end})"
+        except Exception:
+            return False, "RWM 밥그릇 시간 판정 오류"
         return True, None
     # 레거시(또는 미지정) — 전역 레거시 시간창만
     if strategy_key in (None, "", "legacy") and not getattr(settings, "use_legacy", True):

@@ -7,6 +7,8 @@ from typing import List, Optional, Sequence, Set, Tuple
 
 DEFAULT_OVERNIGHT_KEEP_SLOTS = 3
 DEFAULT_OVERNIGHT_MAX_PER_STRATEGY = 1
+# 스윙 전략 — 자체 일봉 청산 규칙만 따르므로 장마감 슬롯 정리 대상이 아님 (슬롯 미차감)
+SWING_KEEP_STRATEGIES = frozenset({"rwm_bowl"})
 
 
 def normalize_strategy_key(key: Optional[str]) -> str:
@@ -88,7 +90,7 @@ def select_overnight_keep(
     keep_slots: int = DEFAULT_OVERNIGHT_KEEP_SLOTS,
     max_per_strategy: int = DEFAULT_OVERNIGHT_MAX_PER_STRATEGY,
 ) -> Tuple[Set[int], List[OvernightCandidate], List[OvernightCandidate]]:
-    """당일 종가배팅은 항상 유지. 나머지는 전략당 최대 N개, 슬롯 한도까지.
+    """당일 종가배팅·스윙 전략(RWM 밥그릇)은 항상 유지. 나머지는 전략당 최대 N개, 슬롯 한도까지.
     force_liquidate(프랙탈 당일청산·종가배팅 익일 플러스/이틀 초과)는 유지 대상에서 제외.
 
     Returns:
@@ -102,7 +104,8 @@ def select_overnight_keep(
     liquidate: List[OvernightCandidate] = []
 
     for row in rows:
-        if row.is_today_jongga and not row.force_liquidate:
+        swing = normalize_strategy_key(row.strategy_key) in SWING_KEEP_STRATEGIES
+        if (row.is_today_jongga or swing) and not row.force_liquidate:
             keep_ids.add(row.position_id)
             kept.append(row)
 

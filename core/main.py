@@ -66,6 +66,7 @@ from managers.scalping_strategy import scalping_manager
 from managers.cleanup_scheduler import cleanup_scheduler
 from managers.investor_flow_scheduler import investor_flow_scheduler
 from managers.ma1592_universe_scheduler import ma1592_universe_scheduler
+from managers.rwm_bowl_scheduler import rwm_bowl_scheduler
 from managers.market_open_scheduler import market_open_scheduler, should_auto_start_now
 from utils.debug_tracer import debug_tracer, enable_debug_mode, disable_debug_mode, is_debug_enabled
 from utils.auto_trade_engine import (
@@ -378,6 +379,12 @@ async def lifespan(app: FastAPI):
         logger.info("📈 [STARTUP] MA1592 장부 정리 스케줄러 시작")
     except Exception as e:
         logger.error(f"📈 [STARTUP] MA1592 장부 정리 스케줄러 시작 실패: {e}")
+
+    try:
+        asyncio.create_task(rwm_bowl_scheduler.start_scheduler())
+        logger.info("🥣 [STARTUP] RWM 밥그릇 스케줄러 시작")
+    except Exception as e:
+        logger.error(f"🥣 [STARTUP] RWM 밥그릇 스케줄러 시작 실패: {e}")
     
     yield
     
@@ -414,6 +421,11 @@ async def lifespan(app: FastAPI):
         logger.info("📈 [SHUTDOWN] MA1592 장부 정리 스케줄러 종료")
     except Exception as e:
         logger.error(f"📈 [SHUTDOWN] MA1592 장부 정리 스케줄러 종료 실패: {e}")
+
+    try:
+        await rwm_bowl_scheduler.stop_scheduler()
+    except Exception as e:
+        logger.error(f"🥣 [SHUTDOWN] RWM 밥그릇 스케줄러 종료 실패: {e}")
     
     await condition_monitor.stop_all_monitoring()
     # WebSocket 우아한 종료
@@ -672,6 +684,31 @@ class TradingSettingsRequest(BaseModel):
     ma1592_scale_hold_bars: Optional[int] = None
     market_risk_block_ma1592: Optional[bool] = None
     market_surge_block_ma1592: Optional[bool] = None
+    use_rwm_bowl: Optional[bool] = None
+    rwm_condition_names: Optional[str] = None
+    rwm_manual_codes: Optional[str] = None
+    rwm_max_slots: Optional[int] = None
+    rwm_max_new_per_day: Optional[int] = None
+    rwm_risk_per_trade_pct: Optional[float] = None
+    rwm_max_position_pct: Optional[float] = None
+    rwm_max_invest_amount: Optional[int] = None
+    rwm_rsi_os_weekly: Optional[float] = None
+    rwm_rsi_os_daily: Optional[float] = None
+    rwm_rsi_pair_days: Optional[int] = None
+    rwm_bowl_lookback: Optional[int] = None
+    rwm_gc_fresh_days: Optional[int] = None
+    rwm_near_gap_pct: Optional[float] = None
+    rwm_ma60_slope_min_pct: Optional[float] = None
+    rwm_m_fresh_days: Optional[int] = None
+    rwm_pb_start: Optional[str] = None
+    rwm_pb_end: Optional[str] = None
+    rwm_max_entry_above_pct: Optional[float] = None
+    rwm_intraday_hard_buf_pct: Optional[float] = None
+    rwm_max_hold_days: Optional[int] = None
+    rwm_manual_daily_report: Optional[bool] = None
+    rwm_params: Optional[str] = None
+    market_risk_block_rwm_bowl: Optional[bool] = None
+    market_surge_block_rwm_bowl: Optional[bool] = None
     include_leverage: Optional[bool] = None
     include_inverse: Optional[bool] = None
     include_double_inverse: Optional[bool] = None
@@ -831,6 +868,14 @@ AUTO_TRADE_FIELDS = [
     "ma1592_price_lead_near_pct", "ma1592_price_lead_far_pct", "ma1592_ledger_purge_tf",
     "ma1592_leg1_pct", "ma1592_leg2_pct", "ma1592_leg3_pct",
     "ma1592_scale_gap_pct", "ma1592_scale_hold_bars",
+    "use_rwm_bowl", "rwm_condition_names", "rwm_manual_codes",
+    "rwm_max_slots", "rwm_max_new_per_day", "rwm_risk_per_trade_pct",
+    "rwm_max_position_pct", "rwm_max_invest_amount",
+    "rwm_rsi_os_weekly", "rwm_rsi_os_daily", "rwm_rsi_pair_days", "rwm_bowl_lookback",
+    "rwm_gc_fresh_days", "rwm_near_gap_pct", "rwm_ma60_slope_min_pct", "rwm_m_fresh_days",
+    "rwm_pb_start", "rwm_pb_end", "rwm_max_entry_above_pct",
+    "rwm_intraday_hard_buf_pct", "rwm_max_hold_days", "rwm_manual_daily_report",
+    "rwm_params", "market_risk_block_rwm_bowl", "market_surge_block_rwm_bowl",
 ]
 
 
@@ -1778,6 +1823,7 @@ async def save_trading_settings(req: TradingSettingsRequest):
                 "breakout_condition_names", "breakout_verify_condition_names",
                 "fractal_condition_names", "fractal_verify_condition_names",
                 "ma1592_condition_names",
+                "rwm_condition_names", "rwm_manual_codes", "rwm_params",
             }
             bool_fields = {"is_enabled", "liquidate_before_close", "use_entry_gate",
                            "require_above_open", "require_above_vwap",
@@ -1799,7 +1845,9 @@ async def save_trading_settings(req: TradingSettingsRequest):
                            "crash_sync_block_enabled",
                            "fractal_liquidate_before_close", "fractal_invalidation_100ema",
                            "ma1592_require_ma_slope_up", "ma1592_require_bullish_candle",
-                           "ma1592_flatten_eod"}
+                           "ma1592_flatten_eod",
+                           "use_rwm_bowl", "rwm_manual_daily_report",
+                           "market_risk_block_rwm_bowl", "market_surge_block_rwm_bowl"}
             for f in AUTO_TRADE_FIELDS:
                 if not hasattr(req, f):
                     continue
@@ -1815,6 +1863,24 @@ async def save_trading_settings(req: TradingSettingsRequest):
                     "legacy_rsi_min", "legacy_rsi_max",
                 ) and f in fields_set:
                     setattr(settings, f, None)
+            if "rwm_manual_codes" in fields_set:
+                from utils.rwm_bowl import DEFAULT_PARAMS as _RWM_P, parse_code_list
+                _codes = parse_code_list(settings.rwm_manual_codes)
+                _cap = int(_RWM_P.get("max_manual_codes") or 50)
+                if len(_codes) > _cap:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"RWM 수동 종목은 최대 {_cap}개입니다 (입력 {len(_codes)}개)",
+                    )
+                settings.rwm_manual_codes = ",".join(_codes) or None
+            if "rwm_params" in fields_set and settings.rwm_params:
+                import json as _json_mod
+                try:
+                    _adv = _json_mod.loads(settings.rwm_params)
+                    if not isinstance(_adv, dict):
+                        raise ValueError("object required")
+                except ValueError:
+                    raise HTTPException(status_code=400, detail="RWM 고급 파라미터는 JSON 객체여야 합니다")
             if settings.breakout_level_mode not in (
                 "prev_high", "n_day_high", "prev_bar_high", "n_bar_high",
             ):
@@ -1949,6 +2015,8 @@ async def save_trading_settings(req: TradingSettingsRequest):
             else "자동매매 설정이 저장되었습니다."
         )
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"자동매매 설정 저장 오류: {e}")
         raise HTTPException(status_code=500, detail="자동매매 설정 저장 실패")
@@ -5913,6 +5981,168 @@ async def get_fractal_candidates(limit: int = 20):
 async def get_ma1590_candidates_alias():
     """Deprecated alias — use /ma1592/candidates."""
     return await get_ma1592_candidates()
+
+
+class RwmManualRequest(BaseModel):
+    action: str  # add | remove
+    code: str
+
+
+def _rwm_holdings_payload() -> List[Dict[str, Any]]:
+    from utils.position_peak_since_buy import buy_time_utc_naive_to_kst
+    from utils.rwm_bowl import REASON_KO, get_state_store
+
+    store = get_state_store()
+    out: List[Dict[str, Any]] = []
+    mode = get_account_mode()
+    for db in get_db():
+        rows = (
+            db.query(Position)
+            .filter(Position.status == "HOLDING", Position.strategy_key == "rwm_bowl")
+            .all()
+        )
+        for pos in rows:
+            if getattr(pos, "account_mode", None) not in (None, mode):
+                continue
+            bt = buy_time_utc_naive_to_kst(pos.buy_time)
+            pending = store.pending_exit(int(pos.id)) or {}
+            out.append({
+                "position_id": pos.id,
+                "stock_code": pos.stock_code,
+                "stock_name": pos.stock_name,
+                "buy_price": pos.buy_price,
+                "buy_quantity": pos.buy_quantity,
+                "buy_date": bt.date().isoformat() if bt else None,
+                "current_price": pos.current_price,
+                "profit_loss_rate": pos.current_profit_loss_rate,
+                "hard_price": pos.stop_loss_price,
+                "pending_exit": pending.get("reason"),
+                "pending_exit_ko": REASON_KO.get(pending.get("reason") or "", ""),
+                "pending_exec_from": pending.get("exec_from"),
+            })
+        break
+    return out
+
+
+@app.get("/rwm/candidates")
+async def get_rwm_candidates():
+    """RWM 밥그릇 — 감시(눌림 대기)·M 대기·보유·수동 종목 현황 (장후 배치 결과)."""
+    try:
+        from utils.rwm_bowl import REASON_KO, get_state_store, params_from_settings, parse_code_list
+
+        settings = None
+        for db in get_db():
+            settings = get_auto_trade_settings_row(db)
+            break
+        p = params_from_settings(settings)
+        store = get_state_store()
+        store.load()
+        watch = sorted(
+            store.watch_rows().values(),
+            key=lambda w: (str(w.get("valid_date") or ""), str(w.get("code") or "")),
+            reverse=True,
+        )
+        watch_out = []
+        for w in watch:
+            sig = w.get("sig") or {}
+            watch_out.append({
+                **{k: v for k, v in w.items() if k != "sig"},
+                "m_type": sig.get("m_type"),
+                "gap_pct": sig.get("gap_pct"),
+                "ma60_slope_pct": sig.get("ma60_slope_pct"),
+                "r_week_rsi": sig.get("r_week_rsi"),
+                "rsi_d_at_r": sig.get("rsi_d_at_r"),
+                "w_date": sig.get("w_date"),
+                "reason_ko": REASON_KO.get(str(w.get("reason") or ""), w.get("reason")),
+            })
+        report = store.data.get("manual_report") or {}
+        report_by_code = {r.get("code"): r for r in report.get("rows") or []}
+        names = store.data.get("names") or {}
+        manual = []
+        for code in parse_code_list(getattr(settings, "rwm_manual_codes", None)):
+            r = report_by_code.get(code) or {}
+            manual.append({
+                "code": code,
+                "name": r.get("name") or names.get(code) or "",
+                "reason": r.get("reason"),
+                "reason_ko": r.get("reason_ko"),
+                "line": r.get("line"),
+                "ok": r.get("ok"),
+                "bars": r.get("bars"),
+                "judged_date": report.get("date") if r else None,
+            })
+        return {
+            "enabled": bool(getattr(settings, "use_rwm_bowl", False)) if settings else False,
+            "auto_trade_on": bool(getattr(settings, "is_enabled", False)) if settings else False,
+            "condition_names": p.get("rwm_condition_names"),
+            "pb_window": f"{p['pb_start']}~{p['pb_end']}",
+            "max_manual_codes": int(p["max_manual_codes"]),
+            "last_batch": store.data.get("last_batch") or {},
+            "watch": watch_out,
+            "near": store.data.get("near") or [],
+            "manual": manual,
+            "holdings": _rwm_holdings_payload(),
+        }
+    except Exception as e:
+        logger.error(f"RWM 후보 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail="RWM 후보 조회 실패")
+
+
+@app.post("/rwm/manual")
+async def update_rwm_manual(req: RwmManualRequest):
+    """RWM 전용 수동 종목 추가/삭제 (rwm_manual_codes). 판정은 다음 장후 배치부터."""
+    from managers.rwm_bowl_scheduler import rwm_bowl_scheduler
+    from utils.rwm_bowl import DEFAULT_PARAMS as RWM_P, normalize_code, parse_code_list
+
+    action = (req.action or "").strip().lower()
+    code = normalize_code(req.code)
+    if action not in ("add", "remove"):
+        raise HTTPException(status_code=400, detail="action 은 add 또는 remove")
+    if not code:
+        raise HTTPException(status_code=400, detail="종목코드 형식 오류 (6자리)")
+    name = ""
+    if action == "add":
+        name = await rwm_bowl_scheduler.resolve_name(code)
+        if not name:
+            raise HTTPException(status_code=400, detail=f"{code}: 종목명 조회 실패 — 코드를 확인하세요")
+        if not KiwoomAPI._is_screener_stock(name, KiwoomAPI.classify_product_type(name)):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{name}({code}) 은 제외 종목입니다 (ETF·ETN·스팩·우선주·정리매매 등)",
+            )
+    for db in get_db():
+        settings = get_auto_trade_settings_row(db)
+        if not settings:
+            raise HTTPException(status_code=400, detail="자동매매 설정 없음")
+        codes = parse_code_list(getattr(settings, "rwm_manual_codes", None))
+        cap = int(RWM_P.get("max_manual_codes") or 50)
+        if action == "add":
+            if code in codes:
+                return {"codes": codes, "message": f"{name}({code}) 이미 등록됨"}
+            if len(codes) >= cap:
+                raise HTTPException(status_code=400, detail=f"RWM 수동 종목은 최대 {cap}개입니다")
+            codes.append(code)
+            msg = f"{name}({code}) 추가 — 다음 장후 배치(15:40)부터 판정"
+        else:
+            codes = [c for c in codes if c != code]
+            msg = f"{code} 삭제"
+        settings.rwm_manual_codes = ",".join(codes) or None
+        settings.updated_at = datetime.utcnow()
+        db.commit()
+        log_activity("SYSTEM", f"RWM 수동 종목 {msg}", "info", stock_code=code)
+        return {"codes": codes, "message": msg}
+    raise HTTPException(status_code=500, detail="DB 없음")
+
+
+@app.post("/rwm/batch/run")
+async def run_rwm_batch():
+    """RWM 장후 배치 수동 실행 (확정 일봉 기준 — 장중이면 전 거래일 기준)."""
+    from managers.rwm_bowl_scheduler import rwm_bowl_scheduler
+
+    result = await rwm_bowl_scheduler.run_batch(trigger="manual")
+    if not result.get("ok"):
+        raise HTTPException(status_code=409, detail=result.get("message") or "배치 실패")
+    return result
 
 
 @app.get("/ma1592/candidates")

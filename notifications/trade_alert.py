@@ -33,6 +33,7 @@ STRATEGY_LABEL_KO = {
     "jongga_closing": "종가배팅",
     "fractal": "프랙탈",
     "ma1592": "15/92홀드",
+    "rwm_bowl": "RWM밥그릇",
 }
 
 
