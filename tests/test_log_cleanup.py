@@ -69,6 +69,18 @@ class LogCleanupTests(unittest.TestCase):
             cleanup_logs(root, keep_days=7, now=now)
             self.assertFalse(stale.exists())
 
+    def test_deletes_old_rotated_log_in_root(self):
+        now = datetime(2026, 10, 13, 23, 0, tzinfo=KST)
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            old = (now - timedelta(days=26)).strftime("%Y-%m-%d %H:%M:%S")
+            rotated = root / "stock_pipeline.log.1"
+            rotated.write_text(f"{old} rotated old\n", encoding="utf-8")
+            (root / "stock_pipeline.db").write_text("db", encoding="utf-8")
+            cleanup_logs(root, keep_days=7, now=now)
+            self.assertFalse(rotated.exists())
+            self.assertTrue((root / "stock_pipeline.db").exists())
+
     def test_dry_run_does_not_rewrite(self):
         now = datetime(2026, 9, 17, 19, 0, tzinfo=KST)
         with tempfile.TemporaryDirectory() as td:

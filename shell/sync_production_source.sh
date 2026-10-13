@@ -6,7 +6,8 @@ PROJECT_DIR="${PROJECT_DIR:-/home/ubuntu/project/stocke}"
 BRANCH="${DEPLOY_BRANCH:-main}"
 LOG_DIR="$PROJECT_DIR/logs"
 LOG_FILE="$LOG_DIR/source_sync.log"
-LOCK_FILE="$PROJECT_DIR/.source_sync.lock"
+# 프로젝트 루트에 두면 git status 에 미추적 파일로 잡혀 동기화가 매번 중단된다
+LOCK_FILE="$LOG_DIR/.source_sync.lock"
 PYTHON="$PROJECT_DIR/venv/bin/python"
 NOTIFY="$PROJECT_DIR/scripts/notify_deployment_sync.py"
 
@@ -39,8 +40,10 @@ cd "$PROJECT_DIR" || {
 
 log "=== production source sync started (branch=$BRANCH) ==="
 
-if [ -n "$(git status --porcelain)" ]; then
-    message="중단: 서버에 커밋되지 않은 로컬 변경이 있어 덮어쓰지 않음"
+# 미추적 파일(.env, *.db, 로그 등)은 fast-forward 를 막지 않으므로 추적 파일 변경만 검사
+dirty=$(git status --porcelain --untracked-files=no)
+if [ -n "$dirty" ]; then
+    message="중단: 서버에 커밋되지 않은 로컬 변경이 있어 덮어쓰지 않음 ($(echo "$dirty" | head -5 | tr '\n' ' '))"
     log "ERROR: $message"
     notify failure "$message"
     exit 1

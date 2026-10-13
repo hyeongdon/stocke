@@ -28,8 +28,10 @@ stock_pipeline.db
 
 # 로그 파일 (서버/로컬 환경마다 내용이 다르므로 전체 제외)
 *.log
+*.log.[0-9]*
 stock_pipeline.log
 logs/
+.source_sync.lock
 scripts/_*.py
 
 # IDE 설정

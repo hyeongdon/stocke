@@ -25,45 +25,28 @@ SERVER_PID=$(ps aux | grep "uvicorn core.main:app" | grep -v grep | awk '{print 
 
 if [ -z "$SERVER_PID" ]; then
     log "경고: 서버 프로세스가 실행되지 않음 - 자동 복구 시작"
-    cd "$PROJECT_DIR"
-    ./restart_server.sh
+    "$PROJECT_DIR/shell/restart_server.sh"
     exit 0
 fi
 
 log "서버 프로세스 확인됨 (PID: $SERVER_PID)"
 
-# 2. 서버 응답 확인
-if curl -f http://localhost:8001/docs > /dev/null 2>&1; then
+# 2. 서버 응답 확인 (/health 는 로그인·키움 호출 없이 응답. 다른 API 는 로그인 필요라 401)
+if curl -sf -m 20 http://localhost:8001/health > /dev/null 2>&1; then
     log "서버 응답 정상"
 else
     log "경고: 서버 응답 실패 - 자동 복구 시작"
-    cd "$PROJECT_DIR"
-    ./restart_server.sh
+    "$PROJECT_DIR/shell/restart_server.sh"
     exit 0
 fi
 
-# 3. API 엔드포인트 확인
-API_ENDPOINTS=(
-    "/watchlist/sync/status"
-    "/strategy/status"
-    "/monitoring/status"
-)
-
-for endpoint in "${API_ENDPOINTS[@]}"; do
-    if curl -f "http://localhost:8001$endpoint" > /dev/null 2>&1; then
-        log "API 엔드포인트 확인됨: $endpoint"
-    else
-        log "경고: API 엔드포인트 응답 실패: $endpoint"
-    fi
-done
-
-# 4. 메모리 사용량 확인
+# 3. 메모리 사용량 확인
 MEMORY_USAGE=$(ps -p "$SERVER_PID" -o %mem --no-headers | tr -d ' ')
 if (( $(echo "$MEMORY_USAGE > 80" | bc -l) )); then
     log "경고: 메모리 사용량 높음 ($MEMORY_USAGE%) - 재시작 권장"
 fi
 
-# 5. 디스크 사용량 확인
+# 4. 디스크 사용량 확인
 DISK_USAGE=$(df / | tail -1 | awk '{print $5}' | sed 's/%//')
 if [ "$DISK_USAGE" -gt 80 ]; then
     log "경고: 디스크 사용량 높음 ($DISK_USAGE%)"

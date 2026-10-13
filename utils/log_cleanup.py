@@ -104,8 +104,9 @@ def iter_log_files(root: Path) -> List[Path]:
     found: List[Path] = []
     logs_dir = root / "logs"
 
-    for path in root.glob("*.log"):
-        if path.is_file():
+    for path in root.iterdir():
+        lower = path.name.lower()
+        if path.is_file() and (lower.endswith(".log") or ".log." in lower):
             found.append(path)
 
     if logs_dir.is_dir():

@@ -10,7 +10,7 @@ CRON_LOG="$PROJECT_DIR/logs/cron.log"
 
 # 로그 디렉토리 생성
 mkdir -p "$PROJECT_DIR/logs"
-chmod +x "$PROJECT_DIR/shell/sync_production_source.sh"
+chmod +x "$PROJECT_DIR"/shell/*.sh
 
 echo "=== Cron Job 설정 시작 ==="
 
@@ -24,7 +24,7 @@ cat > /tmp/new_crontab << EOF
 0 2 * * * cd $PROJECT_DIR && ./shell/sync_production_source.sh >> $CRON_LOG 2>&1
 
 # 매 30분마다 서버 상태 확인
-*/30 * * * * cd $PROJECT_DIR && ./health_check.sh >> $CRON_LOG 2>&1
+*/30 * * * * cd $PROJECT_DIR && ./shell/health_check.sh >> $CRON_LOG 2>&1
 
 # 매일 오전 1시에 만료된 관심종목 정리
 0 1 * * * curl -X POST http://localhost:8001/watchlist/sync/cleanup >> $CRON_LOG 2>&1
@@ -34,7 +34,8 @@ cat > /tmp/new_crontab << EOF
 0 14 * * * cd $PROJECT_DIR && ./venv/bin/python scripts/log_cleanup_batch.py >> $CRON_LOG 2>&1
 
 # 매월 1일 오전 4시에 데이터베이스 백업
-0 4 1 * * cd $PROJECT_DIR && cp stock_pipeline.db "backup/stock_pipeline_$(date +%Y%m%d).db" >> $CRON_LOG 2>&1
+# (\$ 로 설치 시점이 아닌 실행 시점에 날짜 계산, crontab 에서 % 는 \% 로 이스케이프)
+0 4 1 * * cd $PROJECT_DIR && cp stock_pipeline.db "backup/stock_pipeline_\$(date +\\%Y\\%m\\%d).db" >> $CRON_LOG 2>&1
 EOF
 
 # 백업 디렉토리 생성
