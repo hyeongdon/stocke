@@ -29,6 +29,7 @@ DEFAULT_PARAMS: Dict[str, Any] = {
     "rwm_condition_names": DEFAULT_CONDITION_NAME,
     "rwm_manual_codes": "",
     "max_manual_codes": 50,
+    "max_pool_codes": 200,
     "include_global_watchlist": False,
     "manual_daily_report": True,
     "manual_report_changes_only": False,
@@ -51,7 +52,7 @@ DEFAULT_PARAMS: Dict[str, Any] = {
     "rsi_os_daily": 30.0,
     "rsi_pair_days": 5,
 
-    "w_period": 14,
+    "w_period": 93,
     "w_os": -80.0,
     "w_min_bottom_bars": 2,
 
@@ -409,6 +410,47 @@ def prev_trading_day(d: date, is_trading_day: Callable[[date], bool] = default_i
     return pd
 
 
+def trading_days_back(d: date, n: int, is_trading_day: Callable[[date], bool] = default_is_trading_day) -> date:
+    for _ in range(max(0, int(n))):
+        d = prev_trading_day(d, is_trading_day)
+    return d
+
+
+def update_r_pool(
+    pool: Dict[str, Dict[str, Any]],
+    found: Dict[str, str],
+    today: date,
+    *,
+    keep_from: date,
+    max_codes: int,
+) -> List[str]:
+    """바닥 후보 풀 갱신 — 조건식(주봉 과매도) 편입 종목 누적, last_seen < keep_from 만료, 초과분은 오래된 순 삭제.
+
+    조건식에 걸리는 날은 20선이 60선 아래라 M 이 나올 수 없으므로, 이후 GC 까지 판정 대상으로 유지한다.
+    반환: 삭제된 코드.
+    """
+    iso = today.isoformat()
+    for code, name in found.items():
+        row = pool.get(code)
+        if row is None:
+            pool[code] = {"name": name, "first_seen": iso, "last_seen": iso}
+        else:
+            row["last_seen"] = iso
+            if name:
+                row["name"] = name
+    keep = keep_from.isoformat()
+    removed = [c for c, r in pool.items() if str(r.get("last_seen") or "") < keep]
+    for c in removed:
+        pool.pop(c, None)
+    over = len(pool) - max(0, int(max_codes))
+    if over > 0:
+        drop = sorted(pool, key=lambda c: (str(pool[c].get("last_seen") or ""), c))[:over]
+        for c in drop:
+            pool.pop(c, None)
+        removed += drop
+    return removed
+
+
 @dataclass
 class WeekBar:
     key: Tuple[int, int]
@@ -501,6 +543,27 @@ def ma60_slope_pct(ind: Indicators, t: int, days: int) -> Optional[float]:
     return (a / b - 1.0) * 100.0
 
 
+def trading_value_ratio(ind: Indicators, t: int, short: int, long: int) -> Optional[float]:
+    """최근 short 일 평균 거래대금 ÷ 최근 long 일 평균 (t 포함). 바닥 이후 거래 회복 정도."""
+    if t + 1 < long:
+        return None
+    tv = [ind.close[i] * ind.volume[i] for i in range(t - long + 1, t + 1)]
+    base = sum(tv) / len(tv)
+    if base <= 0:
+        return None
+    return round((sum(tv[-short:]) / short) / base, 3)
+
+
+TV_RATIO_TIERS = (1.0, 1.5, 2.0)
+
+
+def tv_ratio_tier(ratio: Optional[float]) -> int:
+    """거래대금 증가율 등급: <1.0 → 0, 1.0~1.5 → 1, 1.5~2.0 → 2, ≥2.0 → 3."""
+    if ratio is None:
+        return 0
+    return sum(1 for th in TV_RATIO_TIERS if float(ratio) >= th)
+
+
 def _ma20_up(ind: Indicators, i: int) -> bool:
     return i >= 1 and _ok(ind.ma20[i], ind.ma20[i - 1]) and ind.ma20[i] > ind.ma20[i - 1]
 
@@ -573,16 +636,16 @@ def find_daily_pair(
     return best
 
 
-def find_williams_turn(
+def williams_turns(
     wr: Sequence[Optional[float]],
     since: int,
     ws: int,
     t: int,
     w_os: float,
     min_bottom: int,
-) -> Tuple[Optional[int], int]:
-    """since(r_date) 이후 %R 이 w_os 아래 min_bottom 봉 이상 머문 뒤 상향 돌파한 가장 최근 날."""
-    w_idx, w_bottom = None, 0
+) -> List[Tuple[int, int]]:
+    """since(r_date) 이후 %R 이 w_os 아래 min_bottom 봉 이상 머문 뒤 상향 돌파한 날 전부 (idx, 체류 봉 수)."""
+    out: List[Tuple[int, int]] = []
     for i in range(max(since, ws, 1), t + 1):
         prev, cur = wr[i - 1], wr[i]
         if prev is None or cur is None or not (prev <= w_os < cur):
@@ -593,8 +656,21 @@ def find_williams_turn(
             cnt += 1
             j -= 1
         if cnt >= max(1, min_bottom):
-            w_idx, w_bottom = i, cnt
-    return w_idx, w_bottom
+            out.append((i, cnt))
+    return out
+
+
+def find_williams_turn(
+    wr: Sequence[Optional[float]],
+    since: int,
+    ws: int,
+    t: int,
+    w_os: float,
+    min_bottom: int,
+) -> Tuple[Optional[int], int]:
+    """williams_turns 중 가장 최근 날."""
+    turns = williams_turns(wr, since, ws, t, w_os, min_bottom)
+    return turns[-1] if turns else (None, 0)
 
 
 def evaluate_signal(
@@ -643,6 +719,7 @@ def evaluate_signal(
     liq_ok = tv20 >= float(p["min_trading_value_20d"]) and close_t >= float(p["min_price"])
     ck["liquidity"] = liq_ok
     res["trading_value_20d"] = int(tv20)
+    res["tv_ratio_5_60"] = trading_value_ratio(ind, t, 5, 60)
 
     # M 트리거
     st = ma_state_at(ind, t, p)
@@ -702,15 +779,15 @@ def evaluate_signal(
         res["r_date"] = ""
         res["r_week"] = _fmt_d(os_weeks[0].last_date) if os_weeks else ""
 
-    # W — r_date 이후 %R −80 상향 돌파 (바닥 체류 ≥ N봉)
-    w_idx, w_bottom = None, 0
+    # W — r_date 이후 %R −80 상향 돌파 (바닥 체류 ≥ N봉). 횟수는 우선순위에 사용
+    turns: List[Tuple[int, int]] = []
     if r_idx is not None:
-        w_idx, w_bottom = find_williams_turn(
-            ind.wr, r_idx, ws, t, float(p["w_os"]), int(p["w_min_bottom_bars"]),
-        )
+        turns = williams_turns(ind.wr, r_idx, ws, t, float(p["w_os"]), int(p["w_min_bottom_bars"]))
+    w_idx, w_bottom = turns[-1] if turns else (None, 0)
     ck["w"] = w_idx is not None
     res["w_date"] = _fmt_d(ind.dates[w_idx]) if w_idx is not None else ""
     res["w_bottom_bars"] = w_bottom
+    res["w_count"] = len(turns)
     if w_idx is not None:
         res["w_from"] = round(ind.wr[w_idx - 1], 1)
         res["w_to"] = round(ind.wr[w_idx], 1)
@@ -754,16 +831,18 @@ def evaluate_signal(
     return res
 
 
-def signal_priority_key(sig: Dict[str, Any]) -> Tuple[int, float, float]:
-    """M1 > M2, 주봉 RSI 최저 낮은 순, MA20 이격 작은 순."""
+def signal_priority_key(sig: Dict[str, Any]) -> Tuple[int, int, int, float, float]:
+    """M1 > M2, W 신호 많은 순, 거래대금 증가율(5일/60일) 등급 높은 순, 주봉 RSI 최저 낮은 순, MA20 이격 작은 순."""
     m_rank = 0 if sig.get("m_type") == "M1_GC" else 1
+    w_count = int(sig.get("w_count") or 0)
+    tv_tier = tv_ratio_tier(sig.get("tv_ratio_5_60"))
     rsi_w = sig.get("r_week_rsi")
     if rsi_w is None:
         rsi_w = sig.get("rsi_w_min")
     rsi_w = float(rsi_w) if rsi_w is not None else 100.0
     above = sig.get("above_ma20_pct")
     above = abs(float(above)) if above is not None else 100.0
-    return (m_rank, rsi_w, above)
+    return (m_rank, -w_count, -tv_tier, rsi_w, above)
 
 
 def entry_cap(signal_close: float, p: Dict[str, Any]) -> int:
@@ -1017,7 +1096,7 @@ def manual_status_line(code: str, name: str, sig: Dict[str, Any], p: Dict[str, A
     rw = "✓" if ck.get("r_weekly") else f"✗ (최저 {sig.get('rsi_w_min')})"
     rd = "✓" if ck.get("r_daily") else "✗"
     parts.append(f"R 주봉 {rw} 일봉 {rd}")
-    parts.append(f"W {'✓' if ck.get('w') else '✗'}")
+    parts.append(f"W ✓{sig.get('w_count') or 1}회" if ck.get("w") else "W ✗")
     m = ck.get("m_type")
     if m:
         parts.append(f"{'M1' if m == 'M1_GC' else 'M2'} ✓")
@@ -1028,6 +1107,9 @@ def manual_status_line(code: str, name: str, sig: Dict[str, Any], p: Dict[str, A
     slope = sig.get("ma60_slope_pct")
     if slope is not None:
         parts.append(f"60선 {slope:+.1f}% {'✓' if ck.get('ma60_ok') else '✗'}")
+    tv_ratio = sig.get("tv_ratio_5_60")
+    if isinstance(tv_ratio, (int, float)):
+        parts.append(f"거래대금 5/60일 ×{tv_ratio:.2f}")
     tail = "→ 감시 등록" if sig.get("ok") else f"→ {REASON_KO.get(reason, reason)} ({reason})"
     return f"{code} {name}  " + " · ".join(parts) + f"  {tail}"
 
@@ -1054,6 +1136,7 @@ class RwmStateStore:
             "near": [],
             "condition_cache": {},
             "warned": {},
+            "r_pool": {},
         }
 
     def load(self) -> None:
@@ -1105,6 +1188,10 @@ class RwmStateStore:
         rows = self.watch_rows()
         for c in [c for c, w in rows.items() if str(w.get("valid_date") or "") < iso]:
             rows.pop(c, None)
+
+    # 바닥 후보 풀 (code → name, first_seen, last_seen, 마지막 판정)
+    def r_pool(self) -> Dict[str, Dict[str, Any]]:
+        return self.data.setdefault("r_pool", {})
 
     # exits
     def exits(self) -> Dict[str, Dict[str, Any]]:

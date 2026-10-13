@@ -15,7 +15,7 @@
   border-radius: 8px;
   border: 1px solid rgba(255,255,255,0.08);
 }
-.ind-grain-btn {
+.ind-grain-btn, .ind-range-btn {
   appearance: none;
   border: 0;
   background: transparent;
@@ -25,7 +25,7 @@
   border-radius: 6px;
   cursor: pointer;
 }
-.ind-grain-btn.active {
+.ind-grain-btn.active, .ind-range-btn.active {
   background: rgba(56, 189, 248, 0.18);
   color: #e2e8f0;
 }
@@ -64,6 +64,37 @@
 .ind-pos { color: #4ade80; }
 .ind-neg { color: #f87171; }
 .ind-empty { padding: 24px; opacity: 0.7; }
+.ind-fund-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.ind-fund-tile {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(0,0,0,0.2);
+  border: 1px solid rgba(255,255,255,0.08);
+}
+.ind-fund-tile .lbl { font-size: 12px; color: #94a3b8; }
+.ind-fund-tile .val {
+  margin-top: 4px;
+  font-size: 20px;
+  font-weight: 700;
+  color: #e2e8f0;
+  font-variant-numeric: tabular-nums;
+}
+.ind-fund-tile .chg { margin-top: 2px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.ind-fund-charts {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 16px;
+}
+.ind-stale { color: #fbbf24; }
+@media (max-width: 960px) {
+  .ind-fund-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ind-fund-charts { grid-template-columns: 1fr; }
+}
 .card-head {
   display: flex;
   justify-content: space-between;

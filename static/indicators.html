@@ -7,7 +7,7 @@
   <title>지표 · 수출입</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/dashboard.css?v=95">
-  <link rel="stylesheet" href="/static/indicators.css?v=2">
+  <link rel="stylesheet" href="/static/indicators.css?v=3">
   <script src="/static/theme-sync.js?v=1"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
@@ -16,7 +16,7 @@
     <div class="topbar-inner">
       <div class="brand">
         <h1>지표</h1>
-        <span class="sub">매크로 · 수출입 (품목무역 기준)</span>
+        <span class="sub">증시자금 · 수출입 (품목무역 기준)</span>
       </div>
       <nav class="tabs">
         <a href="/dashboard" class="tab">대시보드</a>
@@ -32,6 +32,27 @@
   </header>
 
   <div class="wrap">
+    <section class="card compact-card">
+      <div class="card-head">
+        <div>
+          <h3>증시자금</h3>
+          <div class="hint">금융투자협회 FreeSIS · 전 영업일 기준 · 단위: <b>조원</b> (반대매매 비중은 %). <span id="fundsUpdated"></span></div>
+        </div>
+        <div class="ind-grain-switch" role="tablist" aria-label="조회 기간">
+          <button type="button" class="ind-range-btn" data-range="60">3개월</button>
+          <button type="button" class="ind-range-btn active" data-range="125">6개월</button>
+          <button type="button" class="ind-range-btn" data-range="250">1년</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="ind-fund-tiles" id="fundTiles">불러오는 중...</div>
+        <div class="ind-fund-charts">
+          <div class="ind-chart-wrap"><canvas id="fundChart" height="220"></canvas></div>
+          <div class="ind-chart-wrap"><canvas id="forcedChart" height="220"></canvas></div>
+        </div>
+      </div>
+    </section>
+
     <section class="card compact-card">
       <div class="card-head">
         <div>
@@ -58,5 +79,6 @@
   </div>
 
   <script src="/static/indicators.js?v=2"></script>
+  <script src="/static/indicators_funds.js?v=1"></script>
 </body>
 </html>

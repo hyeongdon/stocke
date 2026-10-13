@@ -3307,7 +3307,7 @@ async function loadMa1592() {
 }
 
 /* ===== RWM 밥그릇 ===== */
-const RWM_SOURCE_LABEL = { condition: '조건식', manual: '수동', both: '조건식+수동', holding: '보유' };
+const RWM_SOURCE_LABEL = { condition: '조건식', pool: '바닥 풀', manual: '수동', both: '조건식+수동', holding: '보유' };
 const RWM_WATCH_STATUS = {
   WATCH: '눌림 대기', SIGNALED: '매수 신호', SIGNAL_OFF: '반등(자동매매 OFF)', EXPIRED: '감시 종료', FAILED: '신호 실패',
 };
@@ -3333,6 +3333,11 @@ function rwmPct(v, digits = 1) {
   return `${n > 0 ? '+' : ''}${n.toFixed(digits)}%`;
 }
 
+function rwmTvRatio(v) {
+  if (v == null || v === '' || Number.isNaN(Number(v))) return '-';
+  return `×${Number(v).toFixed(2)}`;
+}
+
 function rwmSection(title, inner) {
   return `<div class="box-title" style="margin:12px 0 6px;">${esc(title)}</div>${inner}`;
 }
@@ -3348,11 +3353,12 @@ async function loadRwm() {
     const near = d.near || [];
     const manual = d.manual || [];
     const holds = d.holdings || [];
+    const pool = d.pool || [];
     if ($('rwmCount')) {
       const off = d.enabled ? '' : ' · 전략 OFF';
       const batch = lb.signal_date ? ` · 마지막 판정 ${lb.signal_date} (${lb.trigger || ''})` : ' · 판정 이력 없음';
       $('rwmCount').textContent =
-        `감시 ${watch.filter((w) => w.status === 'WATCH').length} · 보유 ${holds.length} · 수동 ${manual.length}/${d.max_manual_codes || 50}${batch}${off}`;
+        `감시 ${watch.filter((w) => w.status === 'WATCH').length} · 보유 ${holds.length} · 바닥 풀 ${pool.length} · 수동 ${manual.length}/${d.max_manual_codes || 50}${batch}${off}`;
     }
     let h = '';
     if (lb.signal_date) {
@@ -3364,7 +3370,7 @@ async function loadRwm() {
         ? ` · <span class="down">조건식 실패 ${esc((lb.condition_errors || []).join(', '))}</span>`
         : '';
       h += `<div class="hint" style="margin-bottom:6px;">신호일 ${esc(lb.signal_date)} → 감시일 ${esc(lb.valid_date || '-')} · 대상 ${lb.universe || 0}`
-        + ` (조건식 ${lb.condition || 0} · 수동 ${lb.manual || 0} · 보유 ${lb.holding || 0}) · 일봉 부족 ${lb.insufficient_bars || 0}${errs}`
+        + ` (조건식 ${lb.condition || 0} · 바닥 풀 ${lb.pool || 0} · 수동 ${lb.manual || 0} · 보유 ${lb.holding || 0}) · 일봉 부족 ${lb.insufficient_bars || 0}${errs}`
         + `<br>${reasons}</div>`;
     }
 
@@ -3372,7 +3378,7 @@ async function loadRwm() {
       <td><b>${esc(w.name || w.code)}</b><div class="hint">${esc(w.code)} · ${esc(RWM_SOURCE_LABEL[w.universe_source] || w.universe_source || '')}</div></td>
       <td>${esc(RWM_WATCH_STATUS[w.status] || w.status)}${w.reason && w.status !== 'WATCH' ? `<div class="hint">${esc(w.reason_ko || w.reason)}</div>` : ''}</td>
       <td class="num">${esc(w.valid_date || '')}<div class="hint">신호 ${esc(w.signal_date || '')}</div></td>
-      <td>${esc(w.m_type === 'M1_GC' ? 'M1 GC' : 'M2 임박')}<div class="hint">이격 ${rwmPct(w.gap_pct)} · 60선 ${rwmPct(w.ma60_slope_pct)}</div></td>
+      <td>${esc(w.m_type === 'M1_GC' ? 'M1 GC' : 'M2 임박')} · W ${num(w.w_count || 1)}회<div class="hint">이격 ${rwmPct(w.gap_pct)} · 60선 ${rwmPct(w.ma60_slope_pct)} · 거래대금 ${rwmTvRatio(w.tv_ratio_5_60)}</div></td>
       <td class="num">${num(w.signal_close)}<div class="hint">20선 ${num(w.ma20_d)}</div></td>
       <td class="num">${num(w.entry_cap)}<div class="hint">손절 ${num(w.hard_price)}</div></td>
       <td class="num">${w.ema20_3m ? num(w.ema20_3m) : '-'}<div class="hint">고가 ${w.day_high ? num(w.day_high) : '-'}${w.rise_ok ? ' ✓상승' : ''}</div></td>
@@ -3404,6 +3410,20 @@ async function loadRwm() {
     h += rwmSection('M 대기 (R·W 통과, 20/60 자리만 미달)', near.length
       ? `<table class="tbl"><thead><tr><th>종목</th><th>막힌 이유</th><th class="num">20/60 이격</th><th class="num">60선 5일</th><th class="num">종가</th></tr></thead><tbody>${nearRows}</tbody></table>`
       : emptyRow('M 대기 종목 없음', '📭'));
+
+    const rwmMark = (v) => (v ? '✓' : '✗');
+    const poolRows = pool.map((r) => `<tr>
+      <td><b>${esc(r.name || r.code)}</b><div class="hint">${esc(r.code)}</div></td>
+      <td class="num">${esc(r.first_seen || '')}<div class="hint">최근 ${esc(r.last_seen || '')}</div></td>
+      <td>${r.reason ? esc(r.reason_ko || r.reason) : '<span class="hint">다음 장후 배치부터 판정</span>'}`
+      + `${r.judged_date ? `<div class="hint">R ${rwmMark(r.r_weekly && r.r_daily)} · W ${r.w ? `✓${num(r.w_count || 1)}회` : '✗'} · M ${rwmMark(r.m_type)}</div>` : ''}</td>
+      <td class="num">${rwmPct(r.gap_pct)}</td>
+      <td class="num">${r.rsi_w_min != null ? esc(Number(r.rsi_w_min).toFixed(1)) : '-'}</td>
+      <td class="num">${rwmTvRatio(r.tv_ratio_5_60)}</td>
+    </tr>`).join('');
+    h += rwmSection(`바닥 후보 풀 (조건식 편입 후 ${d.bowl_lookback || 60}거래일 동안 20/60 GC 판정)`, pool.length
+      ? `<table class="tbl"><thead><tr><th>종목</th><th class="num">첫 편입</th><th>판정</th><th class="num">20/60 이격</th><th class="num">주봉 RSI 최저</th><th class="num">거래대금 5/60일</th></tr></thead><tbody>${poolRows}</tbody></table>`
+      : emptyRow('바닥 후보 풀 없음 — 조건식에 편입된 종목이 다음 장후 배치부터 쌓입니다', '🥣'));
 
     const manualRows = manual.map((m) => `<tr>
       <td><b>${esc(m.name || m.code)}</b><div class="hint">${esc(m.code)}</div></td>

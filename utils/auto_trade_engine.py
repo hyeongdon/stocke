@@ -706,6 +706,22 @@ def effective_breakout_max_slots(settings: Optional[AutoTradeSettings]) -> int:
     return slots if slots > 0 else DEFAULT_BREAKOUT_MAX_SLOTS
 
 
+def jongga_total_buy_amount(
+    settings: Optional[AutoTradeSettings],
+    deposit: Optional[int] = None,
+) -> int:
+    """종가배팅 1종목 전체 예산(분할 전)."""
+    if not settings:
+        return DEFAULT_JONGGA_BUY_AMOUNT
+    return resolve_buy_amount_won(
+        settings,
+        amount_won=getattr(settings, "jongga_buy_amount", None),
+        deposit_pct=getattr(settings, "jongga_buy_deposit_pct", None),
+        deposit=deposit,
+        default_won=DEFAULT_JONGGA_BUY_AMOUNT,
+    )
+
+
 def effective_jongga_buy_amount(
     settings: Optional[AutoTradeSettings],
     deposit: Optional[int] = None,
@@ -714,13 +730,7 @@ def effective_jongga_buy_amount(
 ) -> int:
     if not settings:
         return DEFAULT_JONGGA_BUY_AMOUNT
-    total = resolve_buy_amount_won(
-        settings,
-        amount_won=getattr(settings, "jongga_buy_amount", None),
-        deposit_pct=getattr(settings, "jongga_buy_deposit_pct", None),
-        deposit=deposit,
-        default_won=DEFAULT_JONGGA_BUY_AMOUNT,
-    )
+    total = jongga_total_buy_amount(settings, deposit=deposit)
     try:
         from utils.jongga_engine import leg_fraction
 

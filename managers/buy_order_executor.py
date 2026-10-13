@@ -699,6 +699,7 @@ class BuyOrderExecutor:
             # 3. 매수 수량 계산
             debug_tracer.log_checkpoint("3단계: 매수 수량 계산 시작", "BUY_EXECUTOR")
             is_add_buy = bool(meta.get("is_add_buy"))
+            qty_detail: Dict = {}
             quantity, buy_amount = await self._calculate_buy_quantity(
                 signal.stock_code,
                 current_price,
@@ -713,6 +714,7 @@ class BuyOrderExecutor:
                 ),
                 stop_price=int(meta.get("stop_price") or 0) or None,
                 suggested_qty=int(meta.get("suggested_qty") or 0) or None,
+                detail=qty_detail,
             )
             debug_tracer.log_checkpoint(f"3단계 결과: 수량={quantity}주, 총액={current_price*quantity:,}원", "BUY_EXECUTOR")
             
@@ -727,11 +729,21 @@ class BuyOrderExecutor:
                         await self._defer_transient_failure(signal.id, reason)
                         return
                 elif current_price and current_price > 0:
-                    # amount // price == 0 → 주가가 예산을 초과 (고가주)
-                    reason = (
-                        f"고가주라 1주도 매수 불가 "
-                        f"({kind} 예산 {buy_amount:,}원 < 1주 {current_price:,}원)"
-                    )
+                    sizing_price = int(qty_detail.get("sizing_price") or current_price)
+                    one_share = f"1주 {sizing_price:,}원"
+                    if sizing_price > current_price:
+                        one_share += f"(현재가 {current_price:,}원+시장가 여유)"
+                    leg = int(qty_detail.get("jongga_leg") or 0)
+                    if qty_detail.get("jongga_split") and leg > 0:
+                        total = int(qty_detail.get("jongga_total") or 0)
+                        reason = (
+                            f"{leg}차 분할 예산 부족 "
+                            f"({leg}차 예산 {buy_amount:,}원 · 전체 예산 {total:,}원 < {one_share})"
+                            if leg == 1 else
+                            f"{leg}차 분할 예산 부족 ({leg}차 예산 {buy_amount:,}원 < {one_share})"
+                        )
+                    else:
+                        reason = f"{kind} 예산 부족 (예산 {buy_amount:,}원 < {one_share})"
                 else:
                     reason = f"현재가 없음 — {kind} 수량 산출 불가"
                 logger.warning(f"💰 [BUY_EXECUTOR] {signal.stock_name}: {reason}")
@@ -1566,8 +1578,11 @@ class BuyOrderExecutor:
         entry_leg: int = 1,
         stop_price: Optional[int] = None,
         suggested_qty: Optional[int] = None,
+        detail: Optional[Dict] = None,
     ) -> tuple[int, int]:
         """매수 수량 계산 (FIXED / PYRAMIDING, 추가매수 포함).
+
+        detail이 주어지면 실패 사유 문구용 정보(sizing_price, 종가배팅 분할 예산)를 채운다.
 
         Returns:
             (quantity, effective_buy_amount)
@@ -1585,22 +1600,30 @@ class BuyOrderExecutor:
             amount = compute_buy_amount(
                 self.auto_trade_settings, change_rate, is_add_buy, deposit=deposit,
             )
+            jongga_leg = 0
+            jongga_total = 0
+            jongga_split = False
             try:
                 from utils.auto_trade_engine import (
                     effective_sangtta_buy_amount,
                     effective_breakout_buy_amount,
                     effective_jongga_buy_amount,
+                    jongga_total_buy_amount,
                 )
+                from utils.jongga_engine import pig_split_enabled
                 if strategy_key == "sangtta" and not is_add_buy:
                     amount = effective_sangtta_buy_amount(self.auto_trade_settings, deposit=deposit)
                 elif strategy_key == "breakout" and not is_add_buy:
                     amount = effective_breakout_buy_amount(self.auto_trade_settings, deposit=deposit)
                 elif strategy_key == "jongga":
+                    jongga_leg = entry_leg if entry_leg else (2 if is_add_buy else 1)
                     amount = effective_jongga_buy_amount(
                         self.auto_trade_settings,
                         deposit=deposit,
-                        entry_leg=entry_leg if entry_leg else (2 if is_add_buy else 1),
+                        entry_leg=jongga_leg,
                     )
+                    jongga_total = jongga_total_buy_amount(self.auto_trade_settings, deposit=deposit)
+                    jongga_split = pig_split_enabled(self.auto_trade_settings)
             except Exception:
                 pass
             if strategy_key == "fractal" and not is_add_buy:
@@ -1695,6 +1718,30 @@ class BuyOrderExecutor:
             amount = capped
             sizing_price = self._buy_sizing_price(current_price, self.auto_trade_settings)
             quantity = compute_quantity(amount, sizing_price)
+
+            # 종가배팅 분할 1차 금액이 1주 미만이어도 전체 예산(현금 캡 적용) 안이면 1주 매수
+            jongga_total_capped = cap_buy_amount_by_cash(jongga_total, investable) if jongga_total else 0
+            if (
+                quantity < 1
+                and jongga_split
+                and jongga_leg == 1
+                and sizing_price > 0
+                and jongga_total_capped >= sizing_price
+            ):
+                logger.info(
+                    f"💰 [BUY_EXECUTOR] 종가배팅 1차 분할 예산 {amount:,}원 < 1주 {sizing_price:,}원 "
+                    f"— 전체 예산 {jongga_total_capped:,}원 내 1주 매수"
+                )
+                quantity = 1
+                amount = sizing_price
+
+            if detail is not None:
+                detail.update(
+                    sizing_price=sizing_price,
+                    jongga_split=jongga_split,
+                    jongga_leg=jongga_leg,
+                    jongga_total=jongga_total_capped,
+                )
 
             logger.info(
                 f"💰 [BUY_EXECUTOR] 매수 수량: {quantity}주 "

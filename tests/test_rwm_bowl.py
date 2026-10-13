@@ -27,6 +27,11 @@ from utils.rwm_bowl import (
     signal_priority_key,
     size_position,
     drop_unconfirmed_daily,
+    trading_days_back,
+    update_r_pool,
+    williams_turns,
+    trading_value_ratio,
+    tv_ratio_tier,
 )
 
 
@@ -187,6 +192,37 @@ class SignalTests(unittest.TestCase):
         ordered = sorted(sigs, key=signal_priority_key)
         self.assertEqual([s["r_week_rsi"] for s in ordered], [25, 29, 20])
 
+    def test_priority_more_w_signals_first(self):
+        sigs = [
+            {"m_type": "M1_GC", "r_week_rsi": 20, "above_ma20_pct": 1, "w_count": 1},
+            {"m_type": "M1_GC", "r_week_rsi": 29, "above_ma20_pct": 5, "w_count": 3},
+            {"m_type": "M2_NEAR", "r_week_rsi": 10, "above_ma20_pct": 1, "w_count": 5},
+        ]
+        ordered = sorted(sigs, key=signal_priority_key)
+        self.assertEqual([s["w_count"] for s in ordered], [3, 1, 5])
+
+    def test_priority_tv_ratio_after_w_count(self):
+        sigs = [
+            {"m_type": "M1_GC", "r_week_rsi": 20, "w_count": 1, "tv_ratio_5_60": 0.8},
+            {"m_type": "M1_GC", "r_week_rsi": 29, "w_count": 1, "tv_ratio_5_60": 2.3},
+            {"m_type": "M1_GC", "r_week_rsi": 25, "w_count": 2, "tv_ratio_5_60": 0.5},
+            {"m_type": "M1_GC", "r_week_rsi": 10, "w_count": 1, "tv_ratio_5_60": 1.2},
+        ]
+        ordered = sorted(sigs, key=signal_priority_key)
+        self.assertEqual([s["r_week_rsi"] for s in ordered], [25, 29, 10, 20])
+
+    def test_tv_ratio_tier(self):
+        self.assertEqual([tv_ratio_tier(v) for v in (None, 0.9, 1.0, 1.49, 1.5, 2.0, 5.0)], [0, 0, 1, 1, 2, 3, 3])
+
+    def test_trading_value_ratio(self):
+        bars = [{"date": d, "open": 1000, "high": 1000, "low": 1000, "close": 1000, "volume": 100}
+                for d in _bdays(300)]
+        for b in bars[-5:]:
+            b["volume"] = 300
+        ind = compute_indicators(bars, merge_params(), last_week_closed=True)
+        self.assertAlmostEqual(trading_value_ratio(ind, len(bars) - 1, 5, 60), 300 / ((55 * 100 + 5 * 300) / 60), places=3)
+        self.assertIsNone(trading_value_ratio(ind, 30, 5, 60))
+
     def test_manual_status_line(self):
         g = _gc_idx(self.bars, self.p)
         r = evaluate_signal(self.bars[: g + 1], self.p, last_week_closed=True)
@@ -228,6 +264,15 @@ class PairAndWilliamsTests(unittest.TestCase):
         wr[20], wr[21], wr[22] = -85.0, -90.0, -60.0
         idx, _ = find_williams_turn(wr, 30, 10, 59, -80.0, 2)
         self.assertIsNone(idx)
+
+    def test_williams_turns_counts_all_after_r_date(self):
+        wr = [-50.0] * 60
+        wr[20], wr[21], wr[22] = -85.0, -90.0, -60.0
+        wr[35], wr[36], wr[37] = -85.0, -90.0, -60.0
+        wr[45], wr[46] = -85.0, -60.0
+        wr[50], wr[51], wr[52], wr[53] = -81.0, -82.0, -83.0, -79.0
+        turns = williams_turns(wr, 30, 10, 59, -80.0, 2)
+        self.assertEqual(turns, [(37, 2), (53, 3)])
 
     def test_williams_turn_needs_bottom_bars(self):
         wr = [-50.0] * 60
@@ -433,6 +478,46 @@ class MiscTests(unittest.TestCase):
             self.assertEqual(st2.pending_exit(7)["reason"], "EXIT_MA20")
             st2.prune_watch(date(2025, 4, 24))
             self.assertEqual(st2.watch_rows(), {})
+
+
+class RPoolTests(unittest.TestCase):
+    def test_add_and_refresh_keeps_first_seen(self):
+        pool = {}
+        update_r_pool(pool, {"005930": "삼성전자"}, date(2025, 4, 1), keep_from=date(2025, 1, 1), max_codes=10)
+        update_r_pool(pool, {"005930": "삼성전자"}, date(2025, 4, 8), keep_from=date(2025, 1, 1), max_codes=10)
+        self.assertEqual(pool["005930"]["first_seen"], "2025-04-01")
+        self.assertEqual(pool["005930"]["last_seen"], "2025-04-08")
+
+    def test_kept_after_leaving_condition_until_expiry(self):
+        pool = {}
+        update_r_pool(pool, {"000660": "SK하이닉스"}, date(2025, 4, 1), keep_from=date(2025, 1, 1), max_codes=10)
+        removed = update_r_pool(pool, {}, date(2025, 5, 1), keep_from=date(2025, 3, 1), max_codes=10)
+        self.assertEqual(removed, [])
+        self.assertIn("000660", pool)
+        removed = update_r_pool(pool, {}, date(2025, 7, 1), keep_from=date(2025, 4, 2), max_codes=10)
+        self.assertEqual(removed, ["000660"])
+        self.assertEqual(pool, {})
+
+    def test_cap_drops_oldest_last_seen(self):
+        pool = {}
+        update_r_pool(pool, {"000001": "a"}, date(2025, 4, 1), keep_from=date(2025, 1, 1), max_codes=2)
+        update_r_pool(pool, {"000002": "b"}, date(2025, 4, 2), keep_from=date(2025, 1, 1), max_codes=2)
+        removed = update_r_pool(pool, {"000003": "c"}, date(2025, 4, 3), keep_from=date(2025, 1, 1), max_codes=2)
+        self.assertEqual(removed, ["000001"])
+        self.assertEqual(sorted(pool), ["000002", "000003"])
+
+    def test_trading_days_back_skips_weekend(self):
+        weekday = lambda d: d.weekday() < 5
+        self.assertEqual(trading_days_back(date(2025, 4, 14), 1, weekday), date(2025, 4, 11))
+        self.assertEqual(trading_days_back(date(2025, 4, 14), 5, weekday), date(2025, 4, 7))
+
+    def test_state_store_pool_roundtrip(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "s.json"
+            st = RwmStateStore(path)
+            update_r_pool(st.r_pool(), {"005930": "삼성전자"}, date(2025, 4, 1), keep_from=date(2025, 1, 1), max_codes=10)
+            st.save()
+            self.assertIn("005930", RwmStateStore(path).r_pool())
 
 
 class IntegrationKeyTests(unittest.TestCase):

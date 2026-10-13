@@ -2728,6 +2728,19 @@ async def indicators_trade_monthly(
         raise HTTPException(status_code=500, detail="수출입 월간 조회 실패")
 
 
+@app.get("/indicators/market-funds")
+async def indicators_market_funds(force: bool = False):
+    """투자자예탁금·신용융자 일별 추이 (금융투자협회, 백만원, 전 영업일 기준)."""
+    try:
+        from utils.market_funds import fetch_market_funds
+
+        payload = await asyncio.to_thread(fetch_market_funds, force)
+        return {"success": True, **payload}
+    except Exception as e:
+        logger.error(f"indicators market-funds 오류: {e}")
+        raise HTTPException(status_code=502, detail="증시자금 조회 실패")
+
+
 @app.get("/theme-map/keywords/{keyword}/stocks")
 async def list_stocks_by_keyword(keyword: str, limit: int = 200):
     """스파이크: 키워드 → 종목."""
@@ -6026,7 +6039,7 @@ def _rwm_holdings_payload() -> List[Dict[str, Any]]:
 
 @app.get("/rwm/candidates")
 async def get_rwm_candidates():
-    """RWM 밥그릇 — 감시(눌림 대기)·M 대기·보유·수동 종목 현황 (장후 배치 결과)."""
+    """RWM 밥그릇 — 감시(눌림 대기)·M 대기·바닥 후보 풀·보유·수동 종목 현황 (장후 배치 결과)."""
     try:
         from utils.rwm_bowl import REASON_KO, get_state_store, params_from_settings, parse_code_list
 
@@ -6053,6 +6066,8 @@ async def get_rwm_candidates():
                 "r_week_rsi": sig.get("r_week_rsi"),
                 "rsi_d_at_r": sig.get("rsi_d_at_r"),
                 "w_date": sig.get("w_date"),
+                "w_count": sig.get("w_count"),
+                "tv_ratio_5_60": sig.get("tv_ratio_5_60"),
                 "reason_ko": REASON_KO.get(str(w.get("reason") or ""), w.get("reason")),
             })
         report = store.data.get("manual_report") or {}
@@ -6071,16 +6086,31 @@ async def get_rwm_candidates():
                 "bars": r.get("bars"),
                 "judged_date": report.get("date") if r else None,
             })
+        pool = sorted(
+            (
+                {
+                    "code": code,
+                    **{k: v for k, v in row.items() if k != "checks"},
+                    **(row.get("checks") or {}),
+                    "reason_ko": REASON_KO.get(str(row.get("reason") or ""), row.get("reason")),
+                }
+                for code, row in (store.data.get("r_pool") or {}).items()
+            ),
+            key=lambda r: (str(r.get("first_seen") or ""), r["code"]),
+            reverse=True,
+        )
         return {
             "enabled": bool(getattr(settings, "use_rwm_bowl", False)) if settings else False,
             "auto_trade_on": bool(getattr(settings, "is_enabled", False)) if settings else False,
             "condition_names": p.get("rwm_condition_names"),
             "pb_window": f"{p['pb_start']}~{p['pb_end']}",
             "max_manual_codes": int(p["max_manual_codes"]),
+            "bowl_lookback": int(p["bowl_lookback"]),
             "last_batch": store.data.get("last_batch") or {},
             "watch": watch_out,
             "near": store.data.get("near") or [],
             "manual": manual,
+            "pool": pool,
             "holdings": _rwm_holdings_payload(),
         }
     except Exception as e:

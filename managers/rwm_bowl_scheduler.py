@@ -1,7 +1,7 @@
 """RWM 밥그릇 스케줄러 (PRD_RWM_BOWL v0.3.2).
 
 - 15:20 조건식 사전 조회 (장 마감 후 조건검색 실패 대비 캐시)
-- 15:40 장후 배치: 조건식 ∪ 수동 ∪ 보유 → 확정 일봉 판정 → 익일 감시 목록 · 보유 청산 판정 · 텔레그램
+- 15:40 장후 배치: 조건식 ∪ 바닥 후보 풀 ∪ 수동 ∪ 보유 → 확정 일봉 판정 → 익일 감시 목록 · 보유 청산 판정 · 텔레그램
 - 08:40~13:30 캐치업: 전 거래일 배치를 놓쳤으면 그 날 확정 일봉으로 1회 실행
 - 장중 3분봉 감시: 감시 종목 EMA20 눌림 반등 확정 봉에서 BUY 신호 생성
 - 15:00 보유 종목 종가 MA20 1% 이내 접근 경고
@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 _LOOP_SEC = 10
 _PREFETCH_HM = (15, 20)
+_PREFETCH_RETRY_SEC = 60.0
 _BATCH_HM = (15, 40)
 _CATCHUP_FROM_HM = (8, 40)
 _CATCHUP_TO_HM = (13, 30)
@@ -157,7 +158,13 @@ class RwmBowlScheduler:
         store = get_state_store()
         cache = store.data.get("condition_cache") or {}
         if cache.get("date") == today.isoformat():
-            return
+            if cache.get("items") or not cache.get("errors"):
+                return
+            try:
+                if (now_kst() - datetime.fromisoformat(str(cache.get("at")))).total_seconds() < _PREFETCH_RETRY_SEC:
+                    return
+            except (TypeError, ValueError):
+                pass
         names = parse_condition_names(getattr(settings, "rwm_condition_names", None) or DEFAULT_CONDITION_NAME)
         items, errors = await fetch_condition_target_items(kiwoom_api, names)
         store.data["condition_cache"] = {
@@ -175,9 +182,15 @@ class RwmBowlScheduler:
     async def _collect_universe(
         self, settings, p: Dict[str, Any], today: date, held_codes: Dict[str, str],
     ) -> Tuple[Dict[str, Dict[str, Any]], List[str]]:
-        """code → {name, source(condition|manual|both|holding)}. 조건식은 유동성 프록시 순 상위 N."""
+        """code → {name, source(condition|pool|manual|both|holding)}. 조건식은 유동성 프록시 순 상위 N."""
         from api.kiwoom_api import KiwoomAPI, kiwoom_api
-        from utils.rwm_bowl import DEFAULT_CONDITION_NAME, get_state_store, parse_code_list
+        from utils.rwm_bowl import (
+            DEFAULT_CONDITION_NAME,
+            get_state_store,
+            parse_code_list,
+            trading_days_back,
+            update_r_pool,
+        )
         from utils.screener_targets import fetch_condition_target_items, parse_condition_names
 
         store = get_state_store()
@@ -209,9 +222,23 @@ class RwmBowlScheduler:
         cond.sort(key=lambda r: -r["liq"])
         cond = cond[: int(p["max_l0_candidates"])]
 
+        pool = store.r_pool()
+        removed = update_r_pool(
+            pool,
+            {r["code"]: r["name"] for r in cond},
+            today,
+            keep_from=trading_days_back(today, int(p["bowl_lookback"]) - 1),
+            max_codes=int(p["max_pool_codes"]),
+        )
+        if removed:
+            logger.info(f"🥣 [RWM] 바닥 후보 풀 만료 {len(removed)}종목")
+
         out: Dict[str, Dict[str, Any]] = {}
         for r in cond:
             out[r["code"]] = {"name": r["name"], "source": "condition"}
+        for code, row in pool.items():
+            if code not in out:
+                out[code] = {"name": row.get("name") or names_cache.get(code) or "", "source": "pool"}
         manual = parse_code_list(getattr(settings, "rwm_manual_codes", None))[: int(p["max_manual_codes"])]
         if p.get("include_global_watchlist"):
             manual += [c for c in parse_code_list(getattr(settings, "watchlist_codes", None)) if c not in manual]
@@ -245,16 +272,33 @@ class RwmBowlScheduler:
         if cache.get(code):
             return cache[code]
         name = ""
+        # ka10006(스냅샷) 응답에는 stk_nm 이 없어 ka10001(주식기본정보)로 조회
         try:
-            snap = await kiwoom_api.get_stock_snapshot(code)
-            if snap.get("success"):
-                name = str((snap.get("snapshot") or {}).get("stock_name") or "").strip()
+            resp = await kiwoom_api._request_stockinfo_tr("ka10001", {"stk_cd": code})
+            if resp.get("success"):
+                name = str((resp.get("data") or {}).get("stk_nm") or "").strip()
         except Exception:
             name = ""
+        if not name:
+            name = self._name_from_fundamental(code)
         if name:
             cache[code] = name
             store.save()
         return name
+
+    @staticmethod
+    def _name_from_fundamental(code: str) -> str:
+        from core.models import FundamentalSnapshot, get_db
+
+        for db in get_db():
+            row = (
+                db.query(FundamentalSnapshot.stock_name)
+                .filter(FundamentalSnapshot.stock_code == code)
+                .order_by(FundamentalSnapshot.as_of_date.desc())
+                .first()
+            )
+            return str(row[0]).strip() if row and row[0] else ""
+        return ""
 
     # ───────────────────────── DB 조회 ─────────────────────────
 
@@ -512,6 +556,20 @@ class RwmBowlScheduler:
                 })
         store.data["near"] = near
 
+        for code, row in store.r_pool().items():
+            sig = results.get(code)
+            if not sig:
+                continue
+            row.update(
+                judged_date=signal_day.isoformat(),
+                reason=sig.get("reason"),
+                checks={k: (sig.get("checks") or {}).get(k) for k in ("r_weekly", "r_daily", "w", "m_type")},
+                gap_pct=sig.get("gap_pct"),
+                rsi_w_min=sig.get("rsi_w_min"),
+                w_count=sig.get("w_count") or 0,
+                tv_ratio_5_60=sig.get("tv_ratio_5_60"),
+            )
+
         # ── 수동 종목 현황 ──
         prev_report = {r.get("code"): r for r in (store.data.get("manual_report") or {}).get("rows", [])}
         manual_rows: List[Dict[str, Any]] = []
@@ -548,6 +606,7 @@ class RwmBowlScheduler:
             "trigger": trigger,
             "universe": len(universe),
             "condition": sum(1 for m in universe.values() if m["source"] in ("condition", "both")),
+            "pool": sum(1 for m in universe.values() if m["source"] == "pool"),
             "manual": sum(1 for m in universe.values() if m["source"] in ("manual", "both")),
             "holding": len(holding),
             "condition_errors": cond_errors,
@@ -575,13 +634,16 @@ class RwmBowlScheduler:
             off = s.get("r_pair_offset")
             off_s = f"{off:+d}일" if isinstance(off, int) else "-"
             qty_s = f"예상 수량 {row['qty_est']:,}주" if row["qty_est"] else "수량은 체결 시 산출"
+            tv_ratio = s.get("tv_ratio_5_60")
+            tv_s = f"×{tv_ratio:.2f}" if isinstance(tv_ratio, (int, float)) else "-"
             msg = (
                 f"<b>[RWM 밥그릇 · 내일 눌림 대기]</b> {html.escape(row['name'])} ({code}) — {m_ko}\n"
                 f"20선 {_fmt_won(s.get('ma20'))} / 60선 {_fmt_won(s.get('ma60'))} "
                 f"(이격 {s.get('gap_pct')}%{gap_prev_s}) · 60선 5일 {slope_s} · 종가 {_fmt_won(s.get('signal_close'))}\n"
                 f"R 바닥: 주봉 RSI {s.get('r_week_rsi')} ({_md(s.get('r_week'))} 주) → "
                 f"일봉 RSI {s.get('rsi_d_at_r')} ({_md(s.get('r_date'))}, 주봉 기준 {off_s})\n"
-                f"W 반전: %R {s.get('w_from')} → {s.get('w_to')} ({_md(s.get('w_date'))}, 바닥 체류 {s.get('w_bottom_bars')}일)\n"
+                f"W 반전: %R {s.get('w_from')} → {s.get('w_to')} ({_md(s.get('w_date'))}, 바닥 체류 {s.get('w_bottom_bars')}일 · R 이후 신호 {s.get('w_count') or 1}회)\n"
+                f"거래대금: 5일 평균 / 60일 평균 {tv_s} · 20일 평균 {_fmt_won(s.get('trading_value_20d'))}원\n"
                 f"매수: {_md(row['valid_date'])} {pb_s}~{pb_e} 3분봉 EMA20 눌림 반등 시 · 상한 {_fmt_won(row['entry_cap'])} "
                 f"(+{p['max_entry_above_pct']}%) · 시가/장중 {_fmt_won(row['ma20_d'])} 아래면 취소\n"
                 f"{qty_s} · 매도 종가 20선 이탈 전량 · 장중 하드 손절 {_fmt_won(row['hard_price'])}"
@@ -704,6 +766,8 @@ class RwmBowlScheduler:
             "rsi_d_min": s.get("rsi_d_min"),
             "w_date": s.get("w_date"),
             "w_bottom_bars": s.get("w_bottom_bars"),
+            "w_count": s.get("w_count"),
+            "tv_ratio_5_60": s.get("tv_ratio_5_60"),
             "bowl_date": s.get("bowl_date"),
             "bowl_low": s.get("bowl_low"),
             **pb_fields,

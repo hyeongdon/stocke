@@ -25,16 +25,16 @@ class Config:
     KIWOOM_APP_KEY = os.getenv("KIWOOM_APP_KEY", "")
     KIWOOM_APP_SECRET = os.getenv("KIWOOM_APP_SECRET", "")
     
-    # 모의투자용 키 (신청일: 2026-01-13, 만료일: 2026-03-29)
-    KIWOOM_MOCK_APP_KEY = os.getenv("KIWOOM_MOCK_APP_KEY", "Y-5kFGhoiKXPt5aQ-qnDoprjkuR4xh0biY9-hPkGBPI")
-    KIWOOM_MOCK_APP_SECRET = os.getenv("KIWOOM_MOCK_APP_SECRET", "mUstvGMXN0HDp_qVWNeeqZydX2lMkVpaeQSB0Fy9HlQ")
+    # 모의투자용 키 (신청일: 2026-10-13)
+    KIWOOM_MOCK_APP_KEY = os.getenv("KIWOOM_MOCK_APP_KEY", "iJOkLOq0cQG0duY33vUGVq0YN3yw3nJa2Z4BUp74XV0")
+    KIWOOM_MOCK_APP_SECRET = os.getenv("KIWOOM_MOCK_APP_SECRET", "Xr7Hh272DEabYVmp3Pj8QTIHXxakfi8QffYRWhYbpxA")
     
     KIWOOM_BASE_URL = os.getenv("KIWOOM_BASE_URL", "https://openapi.kiwoom.com/v1")
     # WebSocket URL (실전/모의 분리)
     KIWOOM_WS_URL = os.getenv("KIWOOM_WS_URL", "wss://api.kiwoom.com:10000")  # 실전 기본값(호환)
     KIWOOM_MOCK_WS_URL = os.getenv("KIWOOM_MOCK_WS_URL", "wss://mockapi.kiwoom.com:10000")  # 모의투자 기본값
     KIWOOM_ACCOUNT_NUMBER = os.getenv("KIWOOM_ACCOUNT_NUMBER", "")  # 추가
-    KIWOOM_MOCK_ACCOUNT_NUMBER = os.getenv("KIWOOM_MOCK_ACCOUNT_NUMBER", "81109058")  # 모의투자 계좌
+    KIWOOM_MOCK_ACCOUNT_NUMBER = os.getenv("KIWOOM_MOCK_ACCOUNT_NUMBER", "81364487")  # 모의투자 계좌
     KIWOOM_USE_MOCK_ACCOUNT = os.getenv("KIWOOM_USE_MOCK_ACCOUNT", "true").lower() == "true"  # 모의투자 사용 여부
     # 일부 주문 API에서 계좌 비밀번호(4자리 등)를 요구할 수 있어 옵션으로 지원
     KIWOOM_ACCOUNT_PASSWORD = os.getenv("KIWOOM_ACCOUNT_PASSWORD", "")
