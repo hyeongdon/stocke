@@ -1,19 +1,19 @@
-# PRD - RWM_BOWL (RWM 밥그릇 매매 · 주봉+일봉 RSI 과매도 → Williams %R 반전 → 20/60 골든크로스 자리 → 익일 3분봉 눌림 매수 · 20일선 매도)
+# PRD - RWM_BOWL (RWM 밥그릇 매매 · 주봉+일봉 RSI 과매도 → Williams %R 반전 → MACD 골든크로스 (20/60 이평 필터) → 익일 3분봉 눌림 매수 · 20일선 매도)
 
 | 항목 | 내용 |
 |------|------|
 | 문서 ID | PRD-STRATEGY-RWM-BOWL |
-| 버전 | 0.3.2 |
+| 버전 | 0.4.0 |
 | 상태 | Draft (검토용 — §15 미결 항목 확정 전 개발 착수 금지) |
 | 작성일 | 2026-10-08 |
 | 대상 | `stocke` (HTS 조건식 `RWM밥그릇` 편입 종목 → 장 마감 후 일봉 판정 → 익일 장중 실시간 3분봉 눌림 감시 → `BuyOrderExecutor` → `StopLossManager`) |
 | 원본 | 사용자 요구 (2026-10-08) ① "매수는 RSI 과매도 + Williams 매수신호, RSI 과매도는 주봉·일봉 둘 다 본다, 매도는 20일선 기준" ② "매수 자리는 20일선이 60일선을 돌파하는 자리(GC), 또는 돌파는 안 했지만 이격이 가까워졌고 주가는 위로 올라와 있는 경우" ③ 의사결정 응답 (§13) + 참고 영상 [YouTube 4-WSO2vPoOY](https://www.youtube.com/watch?v=4-WSO2vPoOY) (영상과 다른 규칙 없음 확인) |
 | 관련 | [`PRD_SWING_PULLBACK.md`](./PRD_SWING_PULLBACK.md) (일봉 배치·이평 매도 패턴), [`PRD_MA1592.md`](./PRD_MA1592.md) (분봉 이평 터치 반등 `is_scale_pullback_bar`, `suggested_qty` 경로), [`BACKTEST_PLAN.md`](./BACKTEST_PLAN.md), [`SIGNAL_LIFECYCLE_GUIDE.md`](./SIGNAL_LIFECYCLE_GUIDE.md) |
 
-**R**SI 과매도(주봉이 먼저, 일봉이 뒤따라)로 그릇 바닥을 찍고, **W**illiams %R로 바닥에서 고개를 든 종목이, **M**A20이 MA60을 뚫거나 바짝 붙고 주가가 그 위에 올라선 날을 신호로 잡는다. 다음 날 3분봉에서 눌림이 오면 산다. 20일선이 깨지면 판다.
+**R**SI 과매도(주봉이 먼저, 일봉이 뒤따라)로 그릇 바닥을 찍고, **W**illiams %R로 바닥에서 고개를 든 종목이, 20일선이 60일선 위(또는 바짝 붙은) 상태에서 **M**ACD 가 시그널선을 상향 돌파한 날을 신호로 잡는다. 다음 날 3분봉에서 눌림이 오면 산다. 20일선이 깨지면 판다.
 
-이름 해석: **R** = RSI, **W** = Williams %R, **M** = Moving Average (매수는 20·60일선 관계, 매도는 20일선).
-**밥그릇** = 20일선이 60일선 아래로 내려가 바닥을 만들고, 다시 둥글게 올라와 60일선에 닿는 모양. RSI·Williams는 그릇 바닥이 진짜 바닥이었는지 확인하고, 20/60 교차는 그릇 입구(매수 자리)를 알려 준다.
+이름 해석: **R** = RSI, **W** = Williams %R, **M** = MACD (v0.4.0, 사용자 확정). 20·60일선은 이평 필터(매수), 20일선은 매도 기준.
+**밥그릇** = 20일선이 60일선 아래로 내려가 바닥을 만들고, 다시 둥글게 올라와 60일선에 닿는 모양. RSI·Williams는 그릇 바닥이 진짜 바닥이었는지 확인하고, 20/60 이평은 그릇 입구에 올라왔는지, MACD 골든크로스는 그 위에서 다시 힘이 붙는 날(매수 자리)을 알려 준다.
 
 기존 전략과 다른 점: 햄버거·MA1592·스캘핑은 분봉 돌파·모멘텀이다. 스윙 눌림은 급등을 지켜낸 종목의 피보나치 눌림을 공포 점수로 산다(바닥 매수). 본 전략은 **바닥을 확인만 하고, 바닥에서 올라와 중기 추세가 돌아서는 자리에서 산다**(추세 전환 매수). 종목 선정은 일봉·주봉, 매수 타이밍만 3분봉이다.
 
@@ -40,7 +40,7 @@
 |---|---|---|---|
 | ① 그릇 바닥 | 주봉 RSI 과매도 + 5거래일 이내 일봉 RSI 과매도 | 최근 60거래일 안에 확정 주봉 RSI(14) ≤ 30 인 주가 있고, 그 주 마지막 거래일 기준 ±5거래일 안에 일봉 RSI(14) ≤ 30 | **R** — 큰 바닥(주봉)이면서 단기 투매(일봉)까지 나왔나 |
 | ② 오른쪽 벽 | Williams %R 반전 | ①의 일봉 과매도 이후 %R(14)이 −80 아래 2봉 이상 머문 뒤 −80 상향 돌파 | **W** — 바닥에서 돌아섰나 |
-| ③ 그릇 입구 | 20/60 골든크로스 자리 | M1 또는 M2 성립 + 60선 평평/상승 (§3.3) | **M** — 신호일 (트리거) |
+| ③ 그릇 입구 | MACD 골든크로스 + 20/60 이평 필터 | 일봉 MACD(12/26/9) 가 시그널선 상향 돌파 3거래일 이내 + 20선 > 60선 또는 GC 임박(M2) + 60선 평평/상승 (§3.3) | **M** — 신호일 (트리거) |
 | ④ 진입 | 익일 3분봉 눌림 | 3분봉 20이평 터치 후 반등 양봉 확정 (§3.5) | 매수 타이밍 |
 
 ①②는 **이력 조건**(그릇 안에서 있었으면 됨), ③이 **신호 트리거**(장 마감 후 확정), ④가 **체결 타이밍**(다음 날 장중)이다.
@@ -75,11 +75,17 @@ r_date             : 조건을 만족하는 d* 중 가장 이른 날 (W 순서 �
 
 **주봉·일봉 모두 30 은 엄격한 조건이다.** 대형주는 주봉 RSI 30 이 몇 년에 한 번이다. 신호가 연간 몇 건 수준일 수 있으며, 백테스트로 신호 수를 먼저 확인한다 (§10, §15 Q12).
 
-### 0.4 M 조건 두 가지
+### 0.4 M = MACD 골든크로스 + 20/60 이평 필터 (v0.4.0)
+
+**M (트리거)**: 일봉 MACD 선(EMA12 − EMA26)이 시그널선(MACD 의 EMA9)을 상향 돌파한 날이 최근 `macd_fresh_days`(3) 거래일 안에 있고, 오늘도 MACD > 시그널. 신호 시점은 이것만으로 정한다.
+
+**이평 필터 (상태, 교차 시점 무관)**: 아래 `m_type` 중 하나 + 60선 기울기.
+
+> MACD(12/26 EMA)는 20/60 SMA 보다 빠르다. 바닥에서 매끄럽게 회복하면 MACD 골든크로스가 20/60 GC 보다 2~4주 먼저 나오므로 그때는 이평 필터에 걸려 신호가 없다. 실제 신호는 **20/60 이 돌아선 뒤 한 번 쉬었다가 MACD 가 다시 골든크로스하는 날**에 난다 (사용자 확정: 20/60 은 상태만 본다).
 
 | 코드 | 이름 | 조건 | 의미 |
 |---|---|---|---|
-| **M1** | 골든크로스 (GC) | 최근 3거래일 안에 MA20 이 MA60 을 상향 돌파, 현재 MA20 > MA60, 종가 > MA20 | 중기 추세 전환 확정 |
+| **M1** | 20선 > 60선 | 현재 MA20 > MA60, 종가 > MA20, MA20 상승 (GC 경과일 무관) | 중기 추세 전환 확정 |
 | **M2** | GC 임박 | MA20 < MA60 이지만 이격 `(MA60 − MA20)/MA60 ≤ 2%`, 5일 전보다 이격 축소, MA20 상승 중, **종가 > MA60** | 주가가 먼저 60선 위로 올라섬. 20선은 따라오는 중 |
 | 공통 | 60선 기울기 | `MA60[t] / MA60[t−5] − 1 ≥ −0.2%` (평평하거나 상승) | 60선이 아직 내려가는 중이면 약한 GC — 사지 않음 (사용자 결정) |
 
@@ -107,7 +113,7 @@ L0 후보 = HTS 조건식 rwm_condition_names (기본 "RWM밥그릇": 20/60 근�
        ▼
 지표: MA20·MA60 · 일봉 RSI14 · 주봉 RSI14(일봉 리샘플, 확정 주봉) · Williams %R14
        ▼
-M 트리거 (M1 / M2 + 60선 기울기) → R 이력 (주봉 → 5거래일 내 일봉) → W 이력 → 게이트
+이평 필터 (M1 / M2 + 60선 기울기) → M 트리거 (MACD GC 3거래일) → R 이력 (주봉 → 5거래일 내 일봉) → W 이력 → 게이트
        │   통과 → 감시 목록(watch) 등록 (유효: D+1 장중), 텔레그램 "내일 눌림 대기" 발송
        ▼
 [D+1일 장중 09:06~14:30 — 3분봉 눌림 감시]
@@ -121,6 +127,7 @@ BUY PULLBACK_3M → BuyOrderExecutor (suggested_qty / suggested_stop)
        ▼
 [매일 장 마감 후]  EXIT_MA20 (종가 < MA20) / MAX_HOLD → 익일 시가 전량
 [장중]            STOP_HARD (현재가 ≤ 전일 MA20 × 0.97) → 즉시 전량
+[15:10 · 급등 후]  EXIT_MA10 (매수 후 +15% 양봉 이후, 현재가 < MA10) → 당일 장중 전량
 ```
 
 기존 전략과 분리: `strategy_type=RWM_BOWL`(DB 표시값), `strategy_key=rwm_bowl`(코드 분기, 소문자), 표시명 `RWM 밥그릇`, 시드 `is_enabled=false`.
@@ -180,7 +187,8 @@ BUY PULLBACK_3M → BuyOrderExecutor (suggested_qty / suggested_stop)
 | 실행 TF | 신호 `1D` (주봉은 일봉 리샘플), 진입 `3M` | 확정 |
 | 바닥 확인 (R) | 60거래일 안 확정 주봉 RSI ≤ 30 + 그 주 기준 ±5거래일 안 일봉 RSI ≤ 30 | **확정** |
 | 반전 확인 (W) | 일봉 과매도 이후 %R(14) −80 상향 돌파 (바닥 체류 ≥ 2봉), 그릇 안 이력 | 확정 |
-| 트리거 (M) | M1 = 3거래일 내 GC + 종가 > MA20 / M2 = 이격 ≤ 2% + 축소 + MA20 상승 + 종가 > MA60 | **확정** |
+| 트리거 (M) | 일봉 MACD(12/26/9) 시그널선 상향 돌파 3거래일 이내 + 오늘 MACD > 시그널 | **확정** (v0.4.0) |
+| 이평 필터 | M1 = MA20 > MA60 + 종가 > MA20 + MA20 상승 / M2 = 이격 ≤ 2% + 축소 + MA20 상승 + 종가 > MA60. GC 경과일 무관 | **확정** |
 | 60선 기울기 | 5일 변화율 ≥ −0.2% (평평하거나 상승) | **확정** |
 | 추격 방지 | 신호일 종가 ≤ MA20 × 1.08, 신호일 상승률 < 7% | 기본 |
 | 진입 | **신호 다음 날 3분봉 EMA20 눌림 반등**, 감시는 다음 날만, 눌림 없으면 안 삼. 가격 상한 신호 종가 +5%, 14:30 까지 | **확정** (수치는 기본값) |
@@ -257,16 +265,15 @@ bowl_low     = min(low[window])          # 참고 표시용
 bowl_date    = argmin(MA20[window])      # 그릇 바닥 = 20선 최저점. 사이클 키
 ```
 
-### 3.3 M 트리거 판정 (확정 일봉 t)
+### 3.3 M 트리거 · 이평 필터 판정 (확정 일봉 t)
 
 ```text
 # 공통
 ma20_up      = MA20[t] > MA20[t−1]
 ma60_ok      = ma60_slope_pct[t] ≥ ma60_slope_min_pct(−0.2)        # 평평하거나 상승
 
-# M1 — 골든크로스
-gc_day       = 최근 gc_fresh_days(3) 안의 i 중 MA20[i−1] ≤ MA60[i−1] AND MA20[i] > MA60[i]
-m1           = gc_day 존재 AND MA20[t] > MA60[t] AND close[t] > MA20[t] AND ma20_up
+# 이평 필터 M1 — 20선 > 60선 (GC 경과일 무관)
+m1           = MA20[t] > MA60[t] AND close[t] > MA20[t] AND ma20_up
 
 # M2 — GC 임박, 주가 위
 m2           = MA20[t] < MA60[t]
@@ -276,15 +283,18 @@ m2           = MA20[t] < MA60[t]
                AND close[t] > MA60[t]
                AND close[t] > MA20[t]
 
-m_type       = M1_GC if m1 else (M2_NEAR if m2 else None)
-신호 조건     = m_type AND ma60_ok
+m_type       = M1_GC if m1 else (M2_NEAR if m2 else None)      # 이평 필터
 
-# 신선도 — M 상태가 처음 성립한 날부터 m_fresh_days(5) 안에서만 신호
-m_first_date = 이번 사이클(bowl_date)에서 m1 or m2 가 처음 참이 된 날
-fresh        = (t − m_first_date) < m_fresh_days
+# M 트리거 — 일봉 MACD 골든크로스
+MACD[i]      = EMA(close, macd_fast 12)[i] − EMA(close, macd_slow 26)[i]
+SIG[i]       = EMA(MACD, macd_signal 9)[i]
+macd_gc_day  = 최근 macd_fresh_days(3) 안의 i 중 MACD[i−1] ≤ SIG[i−1] AND MACD[i] > SIG[i]
+macd_ok      = macd_gc_day 존재 AND MACD[t] > SIG[t]
+
+신호 조건     = m_type AND ma60_ok AND macd_ok
 ```
 
-M 상태가 처음 성립한 날 R·W 가 맞으면 그날 신호. 첫날 W 이력이 없었으나 며칠 뒤 %R 반전이 나오면 `m_fresh_days` 안에서는 그날 신호. 신호가 났는데 다음 날 눌림이 안 와서 못 샀으면, `m_fresh_days` 안에서 M 상태가 유지되는 동안 매일 다시 신호(감시 재등록)를 낸다.
+MACD 골든크로스 당일부터 `macd_fresh_days` 안에서 MACD > 시그널이 유지되면 매일 신호(감시 재등록)를 낸다. 다음 날 눌림이 안 와서 못 샀으면 다음 장후에 다시 판정한다. 그 사이 MACD 가 시그널 아래로 내려가면 신호 종료.
 
 ### 3.4 신호일 추격 방지
 
@@ -362,7 +372,7 @@ M 상태가 처음 성립한 날 R·W 가 맞으면 그날 신호. 첫날 W 이�
 | **D** | `[일] 0봉전 주가 이평 이격도(20) 100% 이상 108% 이하` | 종가 > MA20, 추격 방지 | §3.4 |
 | **E** | (선택) `[주] RSI(14) 30 이하` — **12봉 이내** 발생 | 주봉 과매도 1차 (HTS 가 "N봉 이내" 지원 시) | §3.2 R (주봉 → 5거래일 내 일봉 짝) |
 | **G** | 관리·정리매매·거래정지·투자위험·ETF·ETN·스팩·우선주 제외 | 제외 | `_is_screener_stock` 재확인 |
-| **J** | `[일] 거래대금 20봉 평균 30억 이상` (없으면 `[일] 0봉전 거래대금 30억 이상`) · `주가 1,000원 이상` | 유동성 | `min_trading_value_20d` 재확인 |
+| **J** | `[일] 거래대금 10봉 평균 30억 이상` (없으면 `[일] 0봉전 거래대금 30억 이상`) · `주가 1,000원 이상` | 유동성 | 서버에서 최근 `liquidity_days`(10)거래일 평균 거래대금 ≥ `min_trading_value`(30억) 재확인 |
 
 ```text
 논리식: (A or B) and C and D and G and J [and E]
@@ -434,7 +444,7 @@ M 상태가 처음 성립한 날 R·W 가 맞으면 그날 신호. 첫날 W 이�
 | H6 | 60선 하락 중인 약한 GC | `ma60_slope_pct ≥ −0.2%` (사용자 결정) |
 | H7 | 횡보장 20/60 반복 교차 → 잦은 신호 | 사이클 키 `bowl_date` 당 BUY 1회 |
 | H8 | M2 로 샀는데 20선이 60선 못 뚫고 꺾임 | 20선 종가 이탈 매도가 처리 (P1 `M2_FAIL`) |
-| H9 | GC 이후 한참 지난 자리 추격 | `gc_fresh_days`·`m_fresh_days` + `max_above_ma20_pct` |
+| H9 | GC 이후 한참 지난 자리 추격 | MACD 골든크로스 `macd_fresh_days` + `max_above_ma20_pct` + 그릇 기간(`bowl_lookback`) 안 R·W 이력 + `CYCLE_DONE` |
 | H10 | 익일 갭 상승 후 눌림 없이 급등 → 추격 | 3분봉 눌림 없으면 `NO_PULLBACK`, 반등가 > cap 이면 `ENTRY_ABOVE_CAP` |
 | H11 | 익일 시가·장중이 일봉 20선 아래 → 이미 깨짐 | `OPEN_BELOW_MA20` / `BELOW_DAILY_MA20` 당일 취소 |
 | H12 | 3분봉 "눌림"이 실제로는 하락 시작 | 상승 흐름 선행 + 고점 대비 5% 이내 + 반등 양봉 확정(종가 > 직전 고가) 후에만 매수 |
@@ -460,18 +470,24 @@ M 상태가 처음 성립한 날 R·W 가 맞으면 그날 신호. 첫날 W 이�
   "entry_tf": "3M",
   "min_bars": 300,
   "max_l0_candidates": 200,
-  "min_trading_value_20d": 3000000000,
+  "min_trading_value": 3000000000,
+  "liquidity_days": 10,
   "min_price": 1000,
   "rwm_condition_names": "RWM밥그릇",
   "rwm_manual_codes": "",
   "max_manual_codes": 50,
   "include_global_watchlist": false,
+  "surge_day_pct": 15.0,
+  "surge_exit_ma": 10,
+  "surge_exit_hm": "15:10",
+  "intraday_preview": true,
+  "preview_interval_min": 30,
+  "preview_alert": true,
   "manual_daily_report": true,
   "manual_report_changes_only": false,
 
   "ma_fast": 20,
   "ma_slow": 60,
-  "gc_fresh_days": 3,
   "near_gap_pct": 2.0,
   "near_shrink_days": 5,
   "m2_require_close_above_ma60": true,
@@ -479,7 +495,11 @@ M 상태가 처음 성립한 날 R·W 가 맞으면 그날 신호. 첫날 W 이�
   "require_ma60_not_down": true,
   "ma60_slope_days": 5,
   "ma60_slope_min_pct": -0.2,
-  "m_fresh_days": 5,
+
+  "macd_fast": 12,
+  "macd_slow": 26,
+  "macd_signal": 9,
+  "macd_fresh_days": 3,
 
   "bowl_lookback": 60,
   "rsi_period": 14,
@@ -531,12 +551,12 @@ M 상태가 처음 성립한 날 R·W 가 맞으면 그날 신호. 첫날 W 이�
 | `max_manual_codes` | 50 | N | 수동 추가 상한 |
 | `include_global_watchlist` | false | N | 공용 `watchlist_codes` 도 대상에 포함할지 |
 | `manual_daily_report` / `manual_report_changes_only` | true / false | Y | 수동 종목 장후 판정 현황 텔레그램 / 변화 있는 종목만 |
-| `gc_fresh_days` | 3 | Y | GC 후 며칠까지 M1 으로 인정 |
+| `macd_fresh_days` | 3 | Y | M: MACD 골든크로스 후 며칠까지 신호 인정 (설정 폼 "MACD GC 신선도", DB 컬럼 `rwm_gc_fresh_days` 재사용) |
+| `macd_fast` / `macd_slow` / `macd_signal` | 12 / 26 / 9 | N | 일봉 MACD 기간 |
 | `near_gap_pct` | 2.0 | Y | M2 이격 한도 |
 | `near_shrink_days` | 5 | Y | 이격이 N일 전보다 줄었는지 비교 |
 | `require_ma60_not_down` | true | Y | 60선 평평/상승일 때만 |
 | `ma60_slope_min_pct` | −0.2 | Y | 60선 5일 변화율 하한 (이 이상이면 "평평") |
-| `m_fresh_days` | 5 | Y | M 상태 첫 성립 후 신호 허용 기간 |
 | `bowl_lookback` | 60 | Y | R·W 이력을 찾는 그릇 기간(거래일) |
 | `rsi_os_weekly` / `rsi_os_daily` | 30 / 30 | Y | 과매도 기준 |
 | `rsi_pair_days` | 5 | Y | 주봉 과매도 주 마지막 거래일 기준 일봉 과매도 허용 거리(거래일) |
@@ -577,9 +597,9 @@ HOLD  → DONE (STOP_HARD / EXIT_MA20 / MAX_HOLD)
 | 게이트 | 조건 | 실패 reason |
 |--------|------|-------------|
 | G0 데이터 | 일봉 ≥ `min_bars` | `INSUFFICIENT_BARS` |
-| G1 M 트리거 | M1 또는 M2 | `NO_MA_SETUP` |
+| G1 이평 필터 | M1(20선 > 60선) 또는 M2(GC 임박) | `NO_MA_SETUP` |
 | G2 60선 기울기 | `ma60_slope_pct ≥ ma60_slope_min_pct` | `MA60_DOWN` |
-| G3 신선도 | M 첫 성립 후 `m_fresh_days` 이내, M1 은 GC 후 `gc_fresh_days` 이내 | `MA_SETUP_STALE` |
+| G3 M 트리거 | 일봉 MACD 골든크로스 `macd_fresh_days`(3) 이내 + MACD > 시그널 | `NO_MACD_GC` |
 | G4 R 주봉 | 그릇 안 확정 주봉 RSI ≤ 30 | `NO_WEEKLY_OVERSOLD` |
 | G5 R 일봉 | 주봉 과매도 주 기준 ±5거래일 안 일봉 RSI ≤ 30 | `NO_DAILY_OVERSOLD_PAIR` |
 | G6 W 이력 | 일봉 과매도 이후 %R −80 상향 돌파 | `NO_W_SIGNAL` |
@@ -604,10 +624,10 @@ HOLD  → DONE (STOP_HARD / EXIT_MA20 / MAX_HOLD)
 
 ```text
 rwm_signal(ind, t, p):                            # D일 장후
-  m_type = ma_trigger(ind, t, p)                  # M1_GC | M2_NEAR | None
+  m_type = ma_filter(ind, t, p)                   # M1_GC | M2_NEAR | None (상태)
   if m_type is None: skip NO_MA_SETUP
   if p.require_ma60_not_down and ind.ma60_slope_pct[t] < p.ma60_slope_min_pct: skip MA60_DOWN
-  if not fresh(ind, t, p): skip MA_SETUP_STALE
+  if not macd_gc_within(ind, t, p.macd_fresh_days): skip NO_MACD_GC
 
   os_weeks = weekly_oversold(ind, t, p)
   if not os_weeks: skip NO_WEEKLY_OVERSOLD
@@ -657,6 +677,9 @@ STOP_HARD : 장중 현재가 ≤ round(MA20[전일] × (1 − intraday_hard_buf_
             → 즉시 전량 (갭 하락·장중 급락 방어. 20선을 따라 매일 올라감)
             매수 당일은 신호일 MA20 기준
 MAX_HOLD  : 진입일 이후 max_hold_days(60) 거래일 → 전량 (0 = 끔)
+EXIT_MA10 : 매수일 이후 전일 대비 +surge_day_pct(15)% 이상 양봉이 한 번이라도 나오면 청산선 20선 → 10선 (유지)
+            surge_exit_hm(15:10) 현재가 < MA10(현재가 포함) → 당일 장중 전량 (장 마감 20분 전)
+            15:10 에 놓치고 종가 < MA10 → 익일 시가 전량 (v0.4.2, 사용자 확정)
 ```
 
 | 규칙 | 의미 |
@@ -670,8 +693,9 @@ MAX_HOLD  : 진입일 이후 max_hold_days(60) 거래일 → 전량 (0 = 끔)
 | 우선 | reason | 수량 |
 |---|---|---|
 | 1 | `STOP_HARD` | 전량 (장중) |
-| 2 | `EXIT_MA20` | 전량 |
-| 3 | `MAX_HOLD` | 전량 |
+| 2 | `EXIT_MA10` | 전량 (급등 후, 15:10 장중) |
+| 3 | `EXIT_MA20` | 전량 |
+| 4 | `MAX_HOLD` | 전량 |
 
 ### 사이징 (사용자 확정: 1% / 5종목 / 20%)
 
@@ -724,7 +748,7 @@ SELL: `reason` = `STOP_HARD` \| `EXIT_MA20` \| `MAX_HOLD`
 
 ## 8. 이벤트 / reason_code
 
-신호: `INSUFFICIENT_BARS`, `NO_MA_SETUP`, `MA60_DOWN`, `MA_SETUP_STALE`, `NO_WEEKLY_OVERSOLD`, `NO_DAILY_OVERSOLD_PAIR`, `NO_W_SIGNAL`, `NO_BOWL`, `TOO_FAR_ABOVE_MA20`, `CHASE_DAY`, `CYCLE_DONE`, `ALREADY_IN_POSITION`, `SLOT_FULL`, `DAILY_NEW_LIMIT`, `WATCH_ADDED`
+신호: `INSUFFICIENT_BARS`, `NO_MA_SETUP`, `MA60_DOWN`, `NO_MACD_GC`, `NO_WEEKLY_OVERSOLD`, `NO_DAILY_OVERSOLD_PAIR`, `NO_W_SIGNAL`, `NO_BOWL`, `TOO_FAR_ABOVE_MA20`, `CHASE_DAY`, `CYCLE_DONE`, `ALREADY_IN_POSITION`, `SLOT_FULL`, `DAILY_NEW_LIMIT`, `WATCH_ADDED`
 
 진입: `OPEN_BELOW_MA20`, `BELOW_DAILY_MA20`, `NO_PULLBACK`, `ENTRY_ABOVE_CAP`, `PULLBACK_3M`
 
@@ -743,6 +767,7 @@ SELL: `reason` = `STOP_HARD` \| `EXIT_MA20` \| `MAX_HOLD`
   - D+1: 매수 체결 / 감시 종료 사유
   - 보유 중 종가가 MA20 1% 이내 접근 시 15:00 경고
   - 청산 체결
+  - 장중 신호 예상 (v0.4.1): 09:30~15:00 `preview_interval_min`(30)분마다 바닥 후보 풀·수동 종목(보유·감시 중 제외)을 진행 중 일봉(현재가 = 종가 가정)으로 `evaluate_signal` 재판정. 새로 통과한 종목만 하루 1회 알림 (`preview_alert`). **표시·알림 전용** — 감시 등록·주문은 15:40 확정 일봉 판정만. 대시보드 "장중 신호 예상" 섹션 + 바닥 풀 "장중" 열. 상태 키 `preview` (당일만 노출)
 
 **텔레그램 감시 등록 예:**
 
@@ -829,7 +854,9 @@ W 반전: %R −88 → −71 (09/03, 바닥 체류 3일)
 - [ ] 60선 5일 −0.5% → `MA60_DOWN`
 - [ ] M2 조건 중 종가 < MA60 (MA20 위) → `NO_MA_SETUP`
 - [ ] 이격 2.5%, 또는 이격 1.8% 이나 5일 전보다 커짐 → `NO_MA_SETUP`
-- [ ] GC 4거래일 경과 → `MA_SETUP_STALE`
+- [ ] MACD 골든크로스 3거래일 이내 → 감시 등록, 4거래일째 → `NO_MACD_GC`
+- [ ] 20/60 GC 후 매끄럽게 계속 상승 (MACD 재교차 없음) → `NO_MACD_GC`
+- [ ] 20/60 GC 10거래일 뒤 3일 쉼 → MACD 재골든크로스 → 감시 등록 (GC 경과일 무관)
 - [ ] 일봉 RSI 26 이 있으나 주봉 RSI 최저 32 → `NO_WEEKLY_OVERSOLD`
 - [ ] 주봉 RSI 28 (E), 일봉 RSI ≤ 30 이 E + 8거래일에만 → `NO_DAILY_OVERSOLD_PAIR`
 - [ ] 주봉 RSI 28 (E), 일봉 RSI ≤ 30 이 E + 4거래일 → 통과
@@ -874,6 +901,7 @@ W 반전: %R −88 → −71 (09/03, 바닥 체류 3일)
 | D3 | **확정** | 매수 자리 = 20선이 60선 돌파(GC, 3거래일 이내), 또는 GC 전 이격 ≤ 2% + 이격 축소 + 종가 > 60선 |
 | D4 | **확정** | 매도 = 20일선 종가 1일 이탈 → 익일 시가 전량. 무장 단계 없음 |
 | D5 | **확정** | R·W 는 그릇 안 이력 조건(60거래일), M 이 신호 트리거 |
+| D5-1 | **확정** (v0.4.0) | M = 일봉 MACD(12/26/9) 시그널선 상향 돌파 3거래일 이내. 20/60 은 이평 필터로 유지하되 상태만 봄(GC 경과일·M 첫 성립 신선도 폐지). 장중 3분봉 MACD 조건은 두지 않음 |
 | D6 | **확정** | M2 "주가가 위로" = 종가 > MA60 |
 | D7 | **확정** | 60선이 평평하거나 오를 때만 (5일 변화율 ≥ −0.2%) |
 | D8 | **확정** | 진입 = 신호 다음 날 3분봉 눌림. 눌림 없으면 안 삼 |
@@ -909,6 +937,9 @@ W 반전: %R −88 → −71 (09/03, 바닥 체류 3일)
 | 0.3.0 | 2026-10-08 | 사용자 의사결정 반영. **RSI 를 주봉 1차(≤ 30) + 주봉 기준 5거래일 이내 일봉(≤ 30) 짝 조건으로 변경**(either/both 등급 삭제). **60선 평평/상승 필터 필수**(5일 −0.2% 이상). **진입을 익일 시가 → 익일 3분봉 EMA20 눌림 반등으로 변경**, 갭 가드를 가격 상한(+5%)·일봉 20선 하한으로 대체. 3분봉 기준선 EMA20·감시 다음 날만·추격 금지 확정. 그릇 60거래일·GC 3거래일·20선 종가 1일 이탈·자금 1%/5종목/20% 확정. 백테스트에 3분봉 진입 일봉 근사 모델 추가 |
 | 0.3.1 | 2026-10-08 | **대상 종목을 HTS 조건식(`RWM밥그릇`)으로 확정**(사용자 결정). `technical_snapshots` 프리필터 삭제 — DB 확인 결과 최신 2026-07-06·171종목뿐. 조건식 초안(§3.6)·조회 시점·운영 눈금 추가. 장중 3분봉을 `ka10080` 폴링 → `realtime_candle_manager` 실시간 구독으로 변경 (EMA20 시드만 `ka10080`) |
 | 0.3.2 | 2026-10-08 | **수동 추가 종목**(사용자 요구, §3.6.1). RWM 전용 `rwm_manual_codes` (공용 `watchlist_codes` 미사용), 설정 폼·대시보드 추가/삭제, 판정 동일·스티키·trim 면제, 수동 종목 장후 판정 현황 리포트. (P1) 텔레그램 `/rwm add·del·list` |
+| 0.4.0 | 2026-10-13 | **M = MACD 로 재정의**(사용자 확정, D5-1). 신호 트리거 = 일봉 MACD 골든크로스 `macd_fresh_days`(3) 이내, 실패 `NO_MACD_GC`. 20/60 GC·임박은 상태 필터로 유지(`gc_fresh_days`·`m_fresh_days`·`MA_SETUP_STALE` 폐지). 설정 폼 "GC 신선도" → "MACD GC 신선도"(컬럼 `rwm_gc_fresh_days` 재사용), "M 신선도" 삭제. 대시보드 배지 R·W·M(MACD)·MA. **유동성 = 최근 10거래일 평균 거래대금 30억 이상**(사용자 결정, 20일 → 10일, `min_trading_value`·`liquidity_days`) |
+| 0.4.2 | 2026-10-13 | **급등 후 10일선 익절**(사용자 결정): 매수일 이후 전일 대비 +`surge_day_pct`(15)% 이상 양봉이 한 번이라도 나오면 청산선을 20일선 → `surge_exit_ma`(10)일선으로 전환(이후 유지). `surge_exit_hm`(15:10)에 현재가 < 10일선이면 **당일 장중 전량** (`EXIT_MA10`, 장 마감 20분 전). 15:10 에 놓치고 종가가 10일선 아래면 15:40 판정 → 다음 날 시가. 급등 없는 종목은 20일선 종가 이탈 · 하드 손절(MA20 −3%) 그대로. 15:00 접근 경고도 청산선 기준 |
+| 0.4.1 | 2026-10-13 | **장중 신호 예상**(사용자 요청, 30분 간격): 바닥 후보 풀·수동 종목을 장중 현재가로 재판정해 대시보드 표시 + 신규 예상 텔레그램 알림. 매매 영향 없음 (`intraday_preview`·`preview_interval_min`·`preview_alert`) |
 
 ---
 

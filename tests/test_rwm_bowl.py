@@ -17,6 +17,7 @@ from utils.rwm_bowl import (
     hard_stop_price,
     is_week_closed,
     ma_state_at,
+    macd_gc_idx,
     manual_status_line,
     merge_params,
     normalize_daily_bars,
@@ -44,8 +45,12 @@ def _bdays(n, start=date(2024, 1, 1)):
     return out
 
 
-def _bowl_bars(base=40, dip=4, dipr=-0.02, ur=0.006, dec=25, dr=-0.012, rec=80, flat=250):
-    """평탄 → 하락(주봉·일봉 과매도) → 바닥 횡보 → 2차 투매 → 회복 (이중 바닥 밥그릇)."""
+def _bowl_bars(base=40, dip=4, dipr=-0.02, ur=0.006, dec=25, dr=-0.012, rec=80, flat=250,
+               pause_after=None, pause=3, pause_r=-0.01):
+    """평탄 → 하락(주봉·일봉 과매도) → 바닥 횡보 → 2차 투매 → 회복 (이중 바닥 밥그릇).
+
+    pause_after: 회복 N일 뒤 pause 일 쉼 → 재상승 (20/60 GC 뒤 MACD 재골든크로스).
+    """
     px = [10000.0]
     for i in range(flat - 1):
         px.append(px[-1] * (1.001 if i % 2 == 0 else 0.999))
@@ -55,7 +60,10 @@ def _bowl_bars(base=40, dip=4, dipr=-0.02, ur=0.006, dec=25, dr=-0.012, rec=80, 
         px.append(px[-1] * (1.005 if i % 2 == 0 else 0.995))
     for _ in range(dip):
         px.append(px[-1] * (1 + dipr))
-    for _ in range(rec):
+    for k in range(rec):
+        if pause_after is not None and k == pause_after:
+            for _ in range(pause):
+                px.append(px[-1] * (1 + pause_r))
         px.append(px[-1] * (1 + ur))
     bars, prev = [], px[0]
     for d, c in zip(_bdays(len(px)), px):
@@ -83,17 +91,32 @@ def _gc_idx(bars, p):
     )
 
 
+def _macd_gc_idx(bars, p, after):
+    """after 이후 첫 일봉 MACD 골든크로스."""
+    return _first_idx(
+        bars, p,
+        lambda ind, j: ind.macd[j - 1] <= ind.macd_sig[j - 1] and ind.macd[j] > ind.macd_sig[j],
+        start=after + 1,
+    )
+
+
 class SignalTests(unittest.TestCase):
     def setUp(self):
         self.p = merge_params()
-        self.bars = _bowl_bars()
+        self.bars = _bowl_bars(pause_after=26)
+        self.s = _macd_gc_idx(self.bars, self.p, _gc_idx(self.bars, self.p))
 
-    def test_m1_gc_watch(self):
-        g = _gc_idx(self.bars, self.p)
-        r = evaluate_signal(self.bars[: g + 1], self.p, last_week_closed=True)
+    def _at(self, i, p=None, bars=None):
+        return evaluate_signal((bars or self.bars)[: i + 1], p or self.p, last_week_closed=True)
+
+    def test_macd_gc_watch(self):
+        r = self._at(self.s)
         self.assertTrue(r["ok"], r)
         self.assertEqual(r["reason"], "WATCH_ADDED")
+        self.assertEqual(r["macd_gc_date"], r["signal_date"])
+        self.assertGreater(r["macd"], r["macd_signal"])
         self.assertEqual(r["m_type"], "M1_GC")
+        self.assertLess(r["gc_date"], r["signal_date"])
         self.assertGreaterEqual(r["ma60_slope_pct"], -0.2)
         self.assertTrue(r["r_date"] and r["w_date"] and r["bowl_date"])
         self.assertLessEqual(r["r_week_rsi"], 30)
@@ -101,10 +124,22 @@ class SignalTests(unittest.TestCase):
         self.assertGreaterEqual(r["w_bottom_bars"], 2)
         self.assertGreater(r["w_date"], r["r_date"])
 
-    def test_gc_four_days_old_is_stale(self):
-        g = _gc_idx(self.bars, self.p)
-        r = evaluate_signal(self.bars[: g + 4], self.p, last_week_closed=True)
-        self.assertEqual(r["reason"], "MA_SETUP_STALE")
+    def test_macd_gc_fresh_three_days(self):
+        for k in range(3):
+            self.assertTrue(self._at(self.s + k)["ok"], k)
+        self.assertEqual(self._at(self.s + 3)["reason"], "NO_MACD_GC")
+
+    def test_ma_gc_age_not_required(self):
+        self.assertGreater(self.s - _gc_idx(self.bars, self.p), 3)
+        self.assertTrue(self._at(self.s)["ok"])
+
+    def test_smooth_recovery_no_macd_recross(self):
+        bars = _bowl_bars()
+        g = _gc_idx(bars, self.p)
+        r = evaluate_signal(bars[: g + 1], self.p, last_week_closed=True)
+        self.assertEqual(r["reason"], "NO_MACD_GC")
+        self.assertEqual(r["m_type"], "M1_GC")
+        self.assertTrue(r["checks"]["w"])
 
     def test_m2_near_watch_or_reason_is_structured(self):
         p = self.p
@@ -128,7 +163,7 @@ class SignalTests(unittest.TestCase):
         bars[-1]["close"] = new_close
         bars[-1]["low"] = min(bars[-1]["low"], new_close)
         r = evaluate_signal(bars, p, last_week_closed=True)
-        self.assertIn(r["reason"], ("NO_MA_SETUP", "MA_SETUP_STALE"))
+        self.assertEqual(r["reason"], "NO_MA_SETUP")
         self.assertNotEqual(r["m_type"], "M2_NEAR")
 
     def test_ma60_down_blocks(self):
@@ -139,23 +174,20 @@ class SignalTests(unittest.TestCase):
         self.assertLess(r["ma60_slope_pct"], -0.2)
 
     def test_no_weekly_oversold(self):
-        g = _gc_idx(self.bars, self.p)
-        p = merge_params({"rsi_os_weekly": 1.0})
-        r = evaluate_signal(self.bars[: g + 1], p, last_week_closed=True)
+        r = self._at(self.s, p=merge_params({"rsi_os_weekly": 1.0}))
         self.assertEqual(r["reason"], "NO_WEEKLY_OVERSOLD")
 
     def test_too_far_above_ma20(self):
-        g = _gc_idx(self.bars, self.p)
-        bars = [dict(b) for b in self.bars[: g + 1]]
+        s = self.s
+        bars = [dict(b) for b in self.bars[: s + 1]]
         ind = compute_indicators(bars, self.p, last_week_closed=True)
-        bars[-1]["close"] = ind.ma20[g] * 1.10
+        bars[-1]["close"] = ind.ma20[s] * 1.10
         bars[-1]["high"] = bars[-1]["close"]
         r = evaluate_signal(bars, self.p, last_week_closed=True)
         self.assertEqual(r["reason"], "TOO_FAR_ABOVE_MA20")
 
     def test_chase_day(self):
-        g = _gc_idx(self.bars, self.p)
-        bars = [dict(b) for b in self.bars[: g + 1]]
+        bars = [dict(b) for b in self.bars[: self.s + 1]]
         bars[-1]["close"] = bars[-2]["close"] * 1.08
         bars[-1]["high"] = bars[-1]["close"]
         p = merge_params({"max_above_ma20_pct": 30})
@@ -163,8 +195,7 @@ class SignalTests(unittest.TestCase):
         self.assertEqual(r["reason"], "CHASE_DAY")
 
     def test_cycle_done(self):
-        g = _gc_idx(self.bars, self.p)
-        r = evaluate_signal(self.bars[: g + 1], self.p, last_week_closed=True, cycle_bought=lambda d: True)
+        r = evaluate_signal(self.bars[: self.s + 1], self.p, last_week_closed=True, cycle_bought=lambda d: True)
         self.assertEqual(r["reason"], "CYCLE_DONE")
 
     def test_insufficient_bars(self):
@@ -172,16 +203,31 @@ class SignalTests(unittest.TestCase):
         self.assertEqual(r["reason"], "INSUFFICIENT_BARS")
 
     def test_low_liquidity(self):
-        g = _gc_idx(self.bars, self.p)
-        bars = [dict(b, volume=10) for b in self.bars[: g + 1]]
+        bars = [dict(b, volume=10) for b in self.bars[: self.s + 1]]
         r = evaluate_signal(bars, self.p, last_week_closed=True)
         self.assertEqual(r["reason"], "LOW_LIQUIDITY")
 
+    def test_liquidity_uses_recent_10_days(self):
+        s = self.s
+        bars = [dict(b, volume=10) for b in self.bars[: s + 1]]
+        for b in bars[-10:]:
+            b["volume"] = 1_000_000
+        r = evaluate_signal(bars, self.p, last_week_closed=True)
+        self.assertTrue(r["checks"]["liquidity"], r["trading_value_avg"])
+        bars[-10]["volume"] = 10
+        r = evaluate_signal(bars, merge_params({"min_trading_value": r["trading_value_avg"]}), last_week_closed=True)
+        self.assertEqual(r["reason"], "LOW_LIQUIDITY")
+
     def test_deterministic(self):
-        g = _gc_idx(self.bars, self.p)
-        a = evaluate_signal(self.bars[: g + 1], self.p, last_week_closed=True)
-        b = evaluate_signal(self.bars[: g + 1], self.p, last_week_closed=True)
-        self.assertEqual(a, b)
+        self.assertEqual(self._at(self.s), self._at(self.s))
+
+    def test_macd_gc_idx(self):
+        macd = [0.0, -1.0, -0.5, 0.2, 0.4, 0.5, 0.3]
+        sig = [0.0, 0.0, 0.0, 0.0, 0.1, 0.2, 0.35]
+        self.assertEqual(macd_gc_idx(macd, sig, 3, 3), 3)
+        self.assertEqual(macd_gc_idx(macd, sig, 5, 3), 3)
+        self.assertIsNone(macd_gc_idx(macd, sig, 5, 2))
+        self.assertIsNone(macd_gc_idx(macd, sig, 6, 5))
 
     def test_priority(self):
         sigs = [
@@ -224,10 +270,9 @@ class SignalTests(unittest.TestCase):
         self.assertIsNone(trading_value_ratio(ind, 30, 5, 60))
 
     def test_manual_status_line(self):
-        g = _gc_idx(self.bars, self.p)
-        r = evaluate_signal(self.bars[: g + 1], self.p, last_week_closed=True)
-        line = manual_status_line("005930", "삼성전자", r, self.p)
+        line = manual_status_line("005930", "삼성전자", self._at(self.s), self.p)
         self.assertIn("감시 등록", line)
+        self.assertIn("M(MACD) ✓", line)
 
 
 class PairAndWilliamsTests(unittest.TestCase):
@@ -424,6 +469,34 @@ class ExitAndSizingTests(unittest.TestCase):
         r = evaluate_daily_exit(bars, self.p, entry_date=bars[-5]["date"])
         self.assertIsNone(r["reason"])
         self.assertEqual(r["hard_price"], hard_stop_price(r["ma20"], self.p))
+
+    def _surge_bars(self, surge_close):
+        closes = [100] * 31 + [101, surge_close] + [120 + 3 * i for i in range(8)] + [120]
+        bars = self._bars(closes)
+        bars[32]["open"] = 101
+        return bars
+
+    def test_surge_switches_to_ma10(self):
+        bars = self._surge_bars(117)
+        r = evaluate_daily_exit(bars, self.p, entry_date=bars[30]["date"])
+        self.assertEqual(r["surge_date"], bars[32]["date"].isoformat())
+        self.assertEqual(r["exit_ma_n"], 10)
+        self.assertGreater(r["close"], r["ma20"])
+        self.assertEqual(r["reason"], "EXIT_MA10")
+
+    def test_no_surge_keeps_ma20(self):
+        bars = self._surge_bars(115)
+        r = evaluate_daily_exit(bars, self.p, entry_date=bars[30]["date"])
+        self.assertIsNone(r["surge_date"])
+        self.assertEqual(r["exit_ma_n"], 20)
+        self.assertIsNone(r["reason"])
+
+    def test_surge_needs_bullish_candle_after_entry(self):
+        bars = self._surge_bars(117)
+        bars[32]["open"] = 118
+        self.assertIsNone(evaluate_daily_exit(bars, self.p, entry_date=bars[30]["date"])["reason"])
+        bars = self._surge_bars(117)
+        self.assertIsNone(evaluate_daily_exit(bars, self.p, entry_date=bars[33]["date"])["reason"])
 
     def test_max_hold(self):
         bars = self._bars([100 + i for i in range(100)])

@@ -30,6 +30,7 @@ SELL_REASON_KO = {
     "MAX_HOLD": "보유만기",
     "EOD": "장종료 청산",
     "EXIT_MA20": "20일선 이탈",
+    "EXIT_MA10": "급등 후 10일선 이탈",
     "STOP_HARD": "하드 손절",
 }
 

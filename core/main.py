@@ -6019,6 +6019,7 @@ def _rwm_holdings_payload() -> List[Dict[str, Any]]:
                 continue
             bt = buy_time_utc_naive_to_kst(pos.buy_time)
             pending = store.pending_exit(int(pos.id)) or {}
+            hmode = (store.data.get("hold_mode") or {}).get(str(pos.id)) or {}
             out.append({
                 "position_id": pos.id,
                 "stock_code": pos.stock_code,
@@ -6032,9 +6033,23 @@ def _rwm_holdings_payload() -> List[Dict[str, Any]]:
                 "pending_exit": pending.get("reason"),
                 "pending_exit_ko": REASON_KO.get(pending.get("reason") or "", ""),
                 "pending_exec_from": pending.get("exec_from"),
+                "pending_intraday": bool(pending.get("intraday")),
+                "surge_date": hmode.get("surge_date"),
+                "exit_ma_n": hmode.get("exit_ma_n"),
+                "exit_ma": hmode.get("exit_ma"),
             })
         break
     return out
+
+
+def _rwm_today_preview(store) -> Dict[str, Any]:
+    """오늘 장중 신호 예상 (날짜 지난 결과는 숨김)."""
+    from utils.datetime_kst import now_kst
+
+    pv = store.data.get("preview") or {}
+    if pv.get("date") != now_kst().date().isoformat():
+        return {}
+    return {k: pv.get(k) for k in ("date", "slot", "at", "rows")}
 
 
 @app.get("/rwm/candidates")
@@ -6061,6 +6076,7 @@ async def get_rwm_candidates():
             watch_out.append({
                 **{k: v for k, v in w.items() if k != "sig"},
                 "m_type": sig.get("m_type"),
+                "macd_gc_date": sig.get("macd_gc_date"),
                 "gap_pct": sig.get("gap_pct"),
                 "ma60_slope_pct": sig.get("ma60_slope_pct"),
                 "r_week_rsi": sig.get("r_week_rsi"),
@@ -6084,6 +6100,9 @@ async def get_rwm_candidates():
                 "line": r.get("line"),
                 "ok": r.get("ok"),
                 "bars": r.get("bars"),
+                "checks": r.get("checks") or {},
+                "gap_pct": r.get("gap_pct"),
+                "rsi_w_min": r.get("rsi_w_min"),
                 "judged_date": report.get("date") if r else None,
             })
         pool = sorted(
@@ -6106,6 +6125,17 @@ async def get_rwm_candidates():
             "pb_window": f"{p['pb_start']}~{p['pb_end']}",
             "max_manual_codes": int(p["max_manual_codes"]),
             "bowl_lookback": int(p["bowl_lookback"]),
+            "max_new_per_day": int(p["max_new_per_day"]),
+            "rsi_os_weekly": p["rsi_os_weekly"],
+            "rsi_os_daily": p["rsi_os_daily"],
+            "w_os": p["w_os"],
+            "macd_fresh_days": int(p["macd_fresh_days"]),
+            "liquidity_days": int(p["liquidity_days"]),
+            "min_trading_value": int(p["min_trading_value"]),
+            "preview": _rwm_today_preview(store),
+            "surge_day_pct": p["surge_day_pct"],
+            "surge_exit_hm": p["surge_exit_hm"],
+            "reason_labels": REASON_KO,
             "last_batch": store.data.get("last_batch") or {},
             "watch": watch_out,
             "near": store.data.get("near") or [],

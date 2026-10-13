@@ -3311,9 +3311,12 @@ const RWM_SOURCE_LABEL = { condition: '조건식', pool: '바닥 풀', manual: '
 const RWM_WATCH_STATUS = {
   WATCH: '눌림 대기', SIGNALED: '매수 신호', SIGNAL_OFF: '반등(자동매매 OFF)', EXPIRED: '감시 종료', FAILED: '신호 실패',
 };
-const RWM_REASON_KO = {
-  NO_MA_SETUP: '20/60 자리 아님', MA60_DOWN: '60선 하락 중', MA_SETUP_STALE: '20/60 자리 신선도 경과',
+const RWM_NEAR_REASON = {
+  NO_MA_SETUP: '20일선이 60일선 아래 (교차 임박도 아님)',
+  MA60_DOWN: '60일선이 아직 하락 중',
+  NO_MACD_GC: 'MACD 골든크로스 대기 (최근 신호 없음)',
 };
+const RWM_M_TYPE = { M1_GC: '20선>60선', M2_NEAR: '20/60 교차 임박' };
 
 async function rwmPost(url, body) {
   const res = await fetch(url, {
@@ -3338,8 +3341,86 @@ function rwmTvRatio(v) {
   return `×${Number(v).toFixed(2)}`;
 }
 
-function rwmSection(title, inner) {
-  return `<div class="box-title" style="margin:12px 0 6px;">${esc(title)}</div>${inner}`;
+const RWM_STATUS_CLS = { WATCH: 'wait', SIGNALED: 'ok', SIGNAL_OFF: 'end', EXPIRED: 'end', FAILED: 'fail' };
+const RWM_MA_FAIL = ['NO_MA_SETUP', 'MA60_DOWN', 'MA_SETUP_STALE'];
+
+function rwmGcGap(v) {
+  if (v == null || v === '' || Number.isNaN(Number(v))) return '-';
+  const n = Number(v);
+  return n > 0 ? `GC까지 ${n.toFixed(1)}%` : `20선 위 ${Math.abs(n).toFixed(1)}%`;
+}
+
+function rwmMaOk(ck, reason) {
+  return !!ck.m_type && ck.ma60_ok !== false && !RWM_MA_FAIL.includes(reason);
+}
+
+function rwmBadges(ck, reason) {
+  if (!reason) return '<span class="hint">다음 장후 판정부터</span>';
+  const c = ck || {};
+  const b = (k, ok, tip) => `<span class="rwm-b ${ok ? 'ok' : 'no'}" title="${esc(tip)} ${ok ? '통과' : '미달'}">${k}</span>`;
+  return b('R', c.r_weekly && c.r_daily, 'R 바닥 (주봉·일봉 RSI)')
+    + b('W', !!c.w, 'W 반전 (Williams %R)')
+    + b('M', !!c.macd_gc, 'M 반전 (MACD 골든크로스)')
+    + b('MA', rwmMaOk(c, reason), '이평 필터 (20선>60선 또는 교차 임박 · 60선 하락 아님)');
+}
+
+function rwmPassCount(ck, reason) {
+  const c = ck || {};
+  return (c.r_weekly && c.r_daily ? 1 : 0) + (c.w ? 1 : 0) + (c.macd_gc ? 1 : 0) + (rwmMaOk(c, reason) ? 1 : 0);
+}
+
+function rwmSec({ cls, title, count, desc, emptyDesc, body, open = true }) {
+  const has = count > 0;
+  const text = has ? desc : (emptyDesc || desc);
+  const head = `<span class="rwm-sec-title">${esc(title)}</span>`
+    + `<span class="rwm-cnt${has ? ' has' : ''}">${count}</span>`
+    + `<span class="rwm-sec-desc" title="${esc(text)}">${esc(text)}</span>`;
+  if (!has) return `<div class="rwm-sec ${cls} empty-sec"><div class="rwm-sec-head">${head}</div></div>`;
+  return `<details class="rwm-sec ${cls}"${open ? ' open' : ''}><summary class="rwm-sec-head">${head}</summary>${body}</details>`;
+}
+
+function rwmKpi(cls, value, label, caption) {
+  return `<div class="rwm-kpi ${cls}${Number(value) ? '' : ' zero'}"><div class="v">${esc(value)}</div>`
+    + `<div class="l">${esc(label)}</div><div class="c">${esc(caption)}</div></div>`;
+}
+
+function rwmFunnel(d, lb, labels) {
+  if (!lb.signal_date) {
+    return '<div class="rwm-funnel-box"><div class="hint">판정 이력 없음 — [배치 실행] 또는 15:40 장후 배치 이후 표시됩니다</div></div>';
+  }
+  const st = lb.stages || null;
+  const total = st ? Number(st.universe) || 0 : 0;
+  const defs = [
+    ['universe', '판정 대상', '조건식·풀·수동', '조건식·바닥 풀·수동 종목 (보유 제외)'],
+    ['liquidity', '유동성', '거래대금·주가', `최근 ${d.liquidity_days ?? 10}거래일 평균 거래대금 ${Math.round((d.min_trading_value ?? 3e9) / 1e8)}억 이상 · 주가 1,000원 이상`],
+    ['r', 'R 바닥', '주봉+일봉 RSI', `주봉 RSI ≤ ${d.rsi_os_weekly ?? 30} 이고 그 주 전후 일봉 RSI ≤ ${d.rsi_os_daily ?? 30}`],
+    ['w', 'W 반전', '%R 반등', `R 바닥 이후 Williams %R 이 ${d.w_os ?? -80} 을 위로 돌파`],
+    ['m', 'M 반전', 'MACD 골든크로스', `일봉 MACD 가 시그널선을 상향 돌파(${d.macd_fresh_days ?? 3}거래일 이내) + 이평 필터(20선>60선 또는 교차 임박 · 60선 하락 아님)`],
+    ['watch', '매수 감시', '내일 눌림 매수', '그릇·추격·슬롯 조건까지 통과 → 다음 거래일 3분봉 눌림 반등 시 매수'],
+  ];
+  const stages = defs.map(([k, t, c, tip], i) => {
+    const n = st ? Number(st[k]) || 0 : null;
+    const pct = st && total ? Math.round((n / total) * 100) : 0;
+    const cls = ['rwm-stage', i === defs.length - 1 ? 'final' : '', n ? 'hit' : 'zero'].filter(Boolean).join(' ');
+    return `${i ? '<div class="rwm-arrow">›</div>' : ''}<div class="${cls}" title="${esc(tip)}">`
+      + `<div class="n">${n == null ? '–' : n}</div><div class="t">${esc(t)}</div><div class="c">${esc(c)}</div>`
+      + `<div class="bar" style="width:${pct}%"></div></div>`;
+  }).join('');
+  const chips = Object.entries(lb.reasons || {})
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, v]) => `<span class="rwm-chip${k === 'WATCH_ADDED' ? ' ok' : ''}">${esc(labels[k] || k)} ${v}</span>`)
+    .join('');
+  const errs = (lb.condition_errors || []).length
+    ? ` · <span class="down">조건식 실패 ${esc(lb.condition_errors.join(', '))}</span>`
+    : '';
+  return `<div class="rwm-funnel-box">`
+    + `<div class="rwm-funnel-head"><span>마지막 판정 <b>${esc(lb.signal_date)}</b> 일봉 → <b>${esc(lb.valid_date || '-')}</b> 장중 감시`
+    + ` <span class="hint">(${esc(lb.trigger || '')})</span></span>`
+    + `<span class="hint">조건식 ${lb.condition || 0} · 바닥 풀 ${lb.pool || 0} · 수동 ${lb.manual || 0} · 일봉 부족 ${lb.insufficient_bars || 0}${errs}</span></div>`
+    + `<div class="rwm-funnel">${stages}</div>`
+    + (st ? '' : '<div class="hint" style="margin-top:6px;">단계별 통과 수는 다음 배치부터 표시됩니다</div>')
+    + (chips ? `<div class="rwm-chips"><span class="hint">종목별 결과</span>${chips}</div>` : '')
+    + `</div>`;
 }
 
 async function loadRwm() {
@@ -3354,86 +3435,132 @@ async function loadRwm() {
     const manual = d.manual || [];
     const holds = d.holdings || [];
     const pool = d.pool || [];
+    const labels = d.reason_labels || {};
+    const activeWatch = watch.filter((w) => w.status === 'WATCH');
+    const doneWatch = watch.filter((w) => w.status !== 'WATCH');
+    const pbWindow = d.pb_window || '09:06~14:30';
+    const pv = d.preview || {};
+    const pvRows = pv.rows || {};
+    const pvOk = Object.entries(pvRows).filter(([, r]) => r.ok).map(([code, r]) => ({ code, ...r }));
     if ($('rwmCount')) {
-      const off = d.enabled ? '' : ' · 전략 OFF';
-      const batch = lb.signal_date ? ` · 마지막 판정 ${lb.signal_date} (${lb.trigger || ''})` : ' · 판정 이력 없음';
-      $('rwmCount').textContent =
-        `감시 ${watch.filter((w) => w.status === 'WATCH').length} · 보유 ${holds.length} · 바닥 풀 ${pool.length} · 수동 ${manual.length}/${d.max_manual_codes || 50}${batch}${off}`;
+      const batch = lb.signal_date ? `마지막 판정 ${lb.signal_date} (${lb.trigger || ''})` : '판정 이력 없음';
+      $('rwmCount').textContent = `· ${batch}${d.enabled ? '' : ' · 전략 OFF'}`;
     }
-    let h = '';
-    if (lb.signal_date) {
-      const reasons = Object.entries(lb.reasons || {})
-        .sort((a, b) => b[1] - a[1])
-        .map(([k, v]) => `${esc(k)} ${v}`)
-        .join(' · ');
-      const errs = (lb.condition_errors || []).length
-        ? ` · <span class="down">조건식 실패 ${esc((lb.condition_errors || []).join(', '))}</span>`
-        : '';
-      h += `<div class="hint" style="margin-bottom:6px;">신호일 ${esc(lb.signal_date)} → 감시일 ${esc(lb.valid_date || '-')} · 대상 ${lb.universe || 0}`
-        + ` (조건식 ${lb.condition || 0} · 바닥 풀 ${lb.pool || 0} · 수동 ${lb.manual || 0} · 보유 ${lb.holding || 0}) · 일봉 부족 ${lb.insufficient_bars || 0}${errs}`
-        + `<br>${reasons}</div>`;
-    }
+    const nameCell = (name, code, src) => `<td><b>${esc(name || code)}</b><div class="hint">${esc(code)}${src ? ` · ${esc(RWM_SOURCE_LABEL[src] || src)}` : ''}</div></td>`;
+    const resultPill = (ok, text) => `<span class="rwm-st ${ok ? 'ok' : 'end'}">${esc(text)}</span>`;
 
-    const watchRows = watch.map((w) => `<tr>
-      <td><b>${esc(w.name || w.code)}</b><div class="hint">${esc(w.code)} · ${esc(RWM_SOURCE_LABEL[w.universe_source] || w.universe_source || '')}</div></td>
-      <td>${esc(RWM_WATCH_STATUS[w.status] || w.status)}${w.reason && w.status !== 'WATCH' ? `<div class="hint">${esc(w.reason_ko || w.reason)}</div>` : ''}</td>
-      <td class="num">${esc(w.valid_date || '')}<div class="hint">신호 ${esc(w.signal_date || '')}</div></td>
-      <td>${esc(w.m_type === 'M1_GC' ? 'M1 GC' : 'M2 임박')} · W ${num(w.w_count || 1)}회<div class="hint">이격 ${rwmPct(w.gap_pct)} · 60선 ${rwmPct(w.ma60_slope_pct)} · 거래대금 ${rwmTvRatio(w.tv_ratio_5_60)}</div></td>
+    let h = `<div class="rwm-kpis">`
+      + rwmKpi('watch', activeWatch.length, '매수 감시', `${pbWindow} 눌림 반등 시 매수`)
+      + rwmKpi('near', near.length, '대기 후보', 'M 조건만 남음 · 매수 안 함')
+      + rwmKpi('hold', holds.length, '보유', '종가 20선 이탈 시 매도')
+      + rwmKpi('pool', pool.length, '바닥 풀', `조건식 편입 후 ${d.bowl_lookback || 60}거래일`)
+      + rwmKpi('manual', manual.length, '수동', `최대 ${d.max_manual_codes || 50}종목`)
+      + `</div>`;
+    h += rwmFunnel(d, lb, labels);
+
+    const watchRow = (w) => `<tr>
+      ${nameCell(w.name, w.code, w.universe_source)}
+      <td><span class="rwm-st ${RWM_STATUS_CLS[w.status] || 'end'}">${esc(RWM_WATCH_STATUS[w.status] || w.status)}</span>${w.reason && w.status !== 'WATCH' ? `<div class="hint">${esc(w.reason_ko || w.reason)}</div>` : ''}</td>
+      <td class="num">${esc(w.valid_date || '')}<div class="hint">판정 ${esc(w.signal_date || '')}</div></td>
+      <td><span class="rwm-chip ok">MACD GC ${esc((w.macd_gc_date || '').slice(5))}</span> <span class="rwm-chip muted">${esc(RWM_M_TYPE[w.m_type] || w.m_type || '-')}</span> <span class="rwm-chip muted">W ${num(w.w_count || 1)}회</span><div class="hint">${rwmGcGap(w.gap_pct)} · 60선 ${rwmPct(w.ma60_slope_pct)} · 거래대금 ${rwmTvRatio(w.tv_ratio_5_60)}</div></td>
       <td class="num">${num(w.signal_close)}<div class="hint">20선 ${num(w.ma20_d)}</div></td>
-      <td class="num">${num(w.entry_cap)}<div class="hint">손절 ${num(w.hard_price)}</div></td>
+      <td class="num">${num(w.entry_cap)}<div class="hint down">손절 ${num(w.hard_price)}</div></td>
       <td class="num">${w.ema20_3m ? num(w.ema20_3m) : '-'}<div class="hint">고가 ${w.day_high ? num(w.day_high) : '-'}${w.rise_ok ? ' ✓상승' : ''}</div></td>
-      <td class="num">${w.entry_price ? num(w.entry_price) : '-'}<div class="hint">${esc((w.pb_confirm_time || '').slice(11, 16))}</div></td>
-    </tr>`).join('');
-    h += rwmSection('감시 (익일 3분봉 EMA20 눌림 대기)', watch.length
-      ? `<table class="tbl"><thead><tr><th>종목</th><th>상태</th><th class="num">감시일</th><th>M</th>`
-        + `<th class="num">신호 종가</th><th class="num">상한</th><th class="num">3분 EMA20</th><th class="num">진입</th></tr></thead><tbody>${watchRows}</tbody></table>`
-      : emptyRow('감시 종목 없음 — 신호는 하루 0~2건, 0건인 날이 대부분입니다', '🥣'));
+      <td class="num">${w.entry_price ? `<b class="up">${num(w.entry_price)}</b>` : '-'}<div class="hint">${esc((w.pb_confirm_time || '').slice(11, 16))}</div></td>
+    </tr>`;
+    const watchTable = (rows) => `<table class="tbl"><thead><tr><th>종목</th><th>상태</th><th class="num">감시일</th><th>진입 근거</th>`
+      + `<th class="num">판정 종가</th><th class="num">매수 상한</th><th class="num">3분 EMA20</th><th class="num">진입</th></tr></thead><tbody>${rows.map(watchRow).join('')}</tbody></table>`;
+    h += rwmSec({
+      cls: 'watch', title: '매수 감시', count: activeWatch.length, body: watchTable(activeWatch),
+      desc: `R·W·M 모두 통과 · ${pbWindow} 3분봉 EMA20 눌림 후 반등하면 매수, 20일선 아래로 빠지면 매수 없이 종료`,
+      emptyDesc: `오늘은 없음 — R·W·M 을 모두 통과하는 종목은 하루 0~${d.max_new_per_day || 3}건, 0건인 날이 대부분`,
+    });
+    const pvAt = pv.slot ? `${pv.slot} 기준` : '장중 09:30~15:00 30분마다';
+    h += rwmSec({
+      cls: 'preview', title: '장중 신호 예상', count: pvOk.length,
+      desc: `${pvAt} · 바닥 풀·수동 종목을 현재가 = 종가로 가정해 재판정 · 이대로 마감하면 15:40 판정에서 매수 감시 예상 (확정 아님, 주문 없음)`,
+      emptyDesc: `${pvAt} · 현재가 기준으로 R·W·M·이평을 모두 통과하는 풀 종목 없음`,
+      body: `<table class="tbl"><thead><tr><th>종목</th><th class="num">현재가</th><th>단계</th><th>근거</th><th class="num">20/60 거리</th></tr></thead><tbody>`
+        + pvOk.map((r) => `<tr>
+          ${nameCell(r.name, r.code)}
+          <td class="num">${num(r.price)}<div class="hint ${signClass(r.day_return_pct)}">${rwmPct(r.day_return_pct)}</div></td>
+          <td>${rwmBadges(r.checks, r.reason)}</td>
+          <td><span class="rwm-chip ok">MACD GC ${esc((r.macd_gc_date || '').slice(5))}</span> <span class="rwm-chip muted">${esc(RWM_M_TYPE[r.m_type] || r.m_type || '-')}</span></td>
+          <td class="num">${rwmGcGap(r.gap_pct)}</td>
+        </tr>`).join('') + '</tbody></table>',
+    });
+    h += rwmSec({
+      cls: 'near', title: '대기 후보', count: near.length,
+      desc: 'R 바닥·W 반전 확인, M(MACD 골든크로스)·이평 필터만 남음 · 매수 안 함 · 맞춰지면 다음 판정에서 매수 감시로 승격',
+      emptyDesc: 'R 바닥·W 반전을 통과하고 M·이평만 남은 종목 없음',
+      body: `<table class="tbl"><thead><tr><th>종목</th><th>단계</th><th>남은 조건</th><th class="num">MACD−시그널</th><th class="num">20/60 거리</th><th class="num">60선 5일</th><th class="num">판정 종가</th></tr></thead><tbody>`
+        + near.map((n) => {
+          const md = n.macd != null && n.macd_signal != null ? Number(n.macd) - Number(n.macd_signal) : null;
+          return `<tr>
+          ${nameCell(n.name, n.code, n.source)}
+          <td>${rwmBadges({ ...(n.checks || {}), r_weekly: 1, r_daily: 1, w: 1 }, n.reason)}</td>
+          <td style="white-space:normal;">${esc(RWM_NEAR_REASON[n.reason] || labels[n.reason] || n.reason)}</td>
+          <td class="num ${md == null ? '' : signClass(md)}">${md == null ? '-' : esc(md.toFixed(1))}</td>
+          <td class="num">${rwmGcGap(n.gap_pct)}</td>
+          <td class="num ${signClass(n.ma60_slope_pct)}">${rwmPct(n.ma60_slope_pct)}</td>
+          <td class="num">${num(n.signal_close)}</td>
+        </tr>`;
+        }).join('') + '</tbody></table>',
+    });
+    h += rwmSec({
+      cls: 'hold', title: '보유', count: holds.length,
+      desc: `종가 20일선 이탈 → 다음 날 시가 전량 · +${d.surge_day_pct || 15}% 급등 양봉 뒤엔 10일선 기준(${d.surge_exit_hm || '15:10'} 이탈 시 당일 전량) · 하드 손절가 이탈 시 즉시`,
+      emptyDesc: 'RWM 보유 종목 없음',
+      body: `<table class="tbl"><thead><tr><th>종목</th><th class="num">매수가</th><th class="num">현재가</th><th class="num">하드 손절</th><th>청산</th></tr></thead><tbody>`
+        + holds.map((p) => `<tr>
+          ${nameCell(p.stock_name, p.stock_code)}
+          <td class="num">${num(p.buy_price)}<div class="hint">${num(p.buy_quantity)}주 · ${esc(p.buy_date || '')}</div></td>
+          <td class="num">${num(p.current_price)}<div class="hint ${signClass(p.profit_loss_rate)}">${rwmPct(p.profit_loss_rate, 2)}</div></td>
+          <td class="num down">${p.hard_price ? num(p.hard_price) : '-'}</td>
+          <td>${p.pending_exit ? `<span class="rwm-st fail">${esc(p.pending_exit_ko || p.pending_exit)}</span><div class="hint">${esc(p.pending_exec_from || '')} ${p.pending_intraday ? '장중' : '시가'} 매도</div>` : '<span class="rwm-st ok">보유</span>'}${p.surge_date ? `<div class="hint up">급등 ${esc(p.surge_date.slice(5))} · ${num(p.exit_ma_n || 10)}일선 ${num(p.exit_ma)} 기준</div>` : ''}</td>
+        </tr>`).join('') + '</tbody></table>',
+    });
+    if (doneWatch.length) {
+      h += rwmSec({
+        cls: 'done', title: '감시 결과', count: doneWatch.length, open: false, body: watchTable(doneWatch),
+        desc: '감시가 끝난 종목 — 매수 신호가 났거나 조건 미달로 종료',
+      });
+    }
 
-    const holdRows = holds.map((p) => `<tr>
-      <td><b>${esc(p.stock_name || p.stock_code)}</b><div class="hint">${esc(p.stock_code)}</div></td>
-      <td class="num">${num(p.buy_price)}<div class="hint">${num(p.buy_quantity)}주 · ${esc(p.buy_date || '')}</div></td>
-      <td class="num">${num(p.current_price)}<div class="hint ${signClass(p.profit_loss_rate)}">${rwmPct(p.profit_loss_rate, 2)}</div></td>
-      <td class="num">${p.hard_price ? num(p.hard_price) : '-'}</td>
-      <td>${p.pending_exit ? `<span class="down">${esc(p.pending_exit_ko || p.pending_exit)}</span><div class="hint">${esc(p.pending_exec_from || '')} 시가 매도</div>` : '보유'}</td>
-    </tr>`).join('');
-    h += rwmSection('보유', holds.length
-      ? `<table class="tbl"><thead><tr><th>종목</th><th class="num">매수가</th><th class="num">현재가</th><th class="num">하드 손절</th><th>청산</th></tr></thead><tbody>${holdRows}</tbody></table>`
-      : emptyRow('RWM 보유 종목 없음', '📭'));
-
-    const nearRows = near.map((n) => `<tr>
-      <td><b>${esc(n.name || n.code)}</b><div class="hint">${esc(n.code)} · ${esc(RWM_SOURCE_LABEL[n.source] || n.source || '')}</div></td>
-      <td>${esc(RWM_REASON_KO[n.reason] || n.reason)}</td>
-      <td class="num">${rwmPct(n.gap_pct)}</td>
-      <td class="num">${rwmPct(n.ma60_slope_pct)}</td>
-      <td class="num">${num(n.signal_close)}</td>
-    </tr>`).join('');
-    h += rwmSection('M 대기 (R·W 통과, 20/60 자리만 미달)', near.length
-      ? `<table class="tbl"><thead><tr><th>종목</th><th>막힌 이유</th><th class="num">20/60 이격</th><th class="num">60선 5일</th><th class="num">종가</th></tr></thead><tbody>${nearRows}</tbody></table>`
-      : emptyRow('M 대기 종목 없음', '📭'));
-
-    const rwmMark = (v) => (v ? '✓' : '✗');
-    const poolRows = pool.map((r) => `<tr>
-      <td><b>${esc(r.name || r.code)}</b><div class="hint">${esc(r.code)}</div></td>
-      <td class="num">${esc(r.first_seen || '')}<div class="hint">최근 ${esc(r.last_seen || '')}</div></td>
-      <td>${r.reason ? esc(r.reason_ko || r.reason) : '<span class="hint">다음 장후 배치부터 판정</span>'}`
-      + `${r.judged_date ? `<div class="hint">R ${rwmMark(r.r_weekly && r.r_daily)} · W ${r.w ? `✓${num(r.w_count || 1)}회` : '✗'} · M ${rwmMark(r.m_type)}</div>` : ''}</td>
-      <td class="num">${rwmPct(r.gap_pct)}</td>
-      <td class="num">${r.rsi_w_min != null ? esc(Number(r.rsi_w_min).toFixed(1)) : '-'}</td>
-      <td class="num">${rwmTvRatio(r.tv_ratio_5_60)}</td>
-    </tr>`).join('');
-    h += rwmSection(`바닥 후보 풀 (조건식 편입 후 ${d.bowl_lookback || 60}거래일 동안 20/60 GC 판정)`, pool.length
-      ? `<table class="tbl"><thead><tr><th>종목</th><th class="num">첫 편입</th><th>판정</th><th class="num">20/60 이격</th><th class="num">주봉 RSI 최저</th><th class="num">거래대금 5/60일</th></tr></thead><tbody>${poolRows}</tbody></table>`
-      : emptyRow('바닥 후보 풀 없음 — 조건식에 편입된 종목이 다음 장후 배치부터 쌓입니다', '🥣'));
-
-    const manualRows = manual.map((m) => `<tr>
-      <td><b>${esc(m.name || m.code)}</b><div class="hint">${esc(m.code)}</div></td>
-      <td>${m.reason ? `${m.ok ? '<span class="up">감시 등록</span>' : esc(m.reason_ko || m.reason)}<div class="hint">${esc(m.judged_date || '')} · ${num(m.bars)}봉</div>` : '<span class="hint">다음 장후 배치부터 판정</span>'}</td>
-      <td class="hint" style="white-space:normal;">${esc(m.line || '')}</td>
-      <td><button class="btn sm" data-rwm-remove="${esc(m.code)}">삭제</button></td>
-    </tr>`).join('');
-    h += rwmSection(`수동 종목 (${manual.length}/${d.max_manual_codes || 50})`, manual.length
-      ? `<table class="tbl"><thead><tr><th>종목</th><th>판정</th><th>단계별 현황</th><th></th></tr></thead><tbody>${manualRows}</tbody></table>`
-      : emptyRow('수동 종목 없음 — 위 입력칸에 종목코드를 넣고 [수동 추가]', '✍️'));
+    const poolSorted = [...pool].sort((a, b) => rwmPassCount(b, b.reason) - rwmPassCount(a, a.reason));
+    h += rwmSec({
+      cls: 'pool', title: '바닥 후보 풀', count: pool.length, open: pool.length <= 15,
+      desc: `조건식에 한 번 잡힌 종목을 ${d.bowl_lookback || 60}거래일 동안 매일 다시 판정 · 통과 단계 많은 순`,
+      emptyDesc: '없음 — 조건식에 잡힌 종목이 장후 배치마다 쌓입니다',
+      body: `<table class="tbl"><thead><tr><th>종목</th><th>단계</th><th>결과</th><th>장중 ${esc(pv.slot || '')}</th><th class="num">20/60 거리</th><th class="num">주봉 RSI 최저</th><th class="num">거래대금 5/60일</th><th class="num">첫 편입</th></tr></thead><tbody>`
+        + poolSorted.map((r) => {
+          const pr = pvRows[r.code];
+          return `<tr>
+          ${nameCell(r.name, r.code)}
+          <td>${rwmBadges(r, r.judged_date ? r.reason : '')}</td>
+          <td>${r.reason ? resultPill(r.reason === 'WATCH_ADDED', r.reason_ko || r.reason) : '-'}</td>
+          <td>${pr ? `${resultPill(pr.ok, pr.ok ? '신호 예상' : (pr.reason_ko || pr.reason))}<div class="hint ${signClass(pr.day_return_pct)}">${num(pr.price)} ${rwmPct(pr.day_return_pct)}</div>` : '-'}</td>
+          <td class="num">${rwmGcGap(r.gap_pct)}</td>
+          <td class="num">${r.rsi_w_min != null ? esc(Number(r.rsi_w_min).toFixed(1)) : '-'}</td>
+          <td class="num">${rwmTvRatio(r.tv_ratio_5_60)}</td>
+          <td class="num">${esc(r.first_seen || '')}<div class="hint">최근 ${esc(r.last_seen || '')}</div></td>
+        </tr>`;
+        }).join('') + '</tbody></table>',
+    });
+    h += rwmSec({
+      cls: 'manual', title: '수동 종목', count: manual.length,
+      desc: `조건식과 별개로 직접 넣은 종목 (${manual.length}/${d.max_manual_codes || 50}) · 판정 기준은 동일`,
+      emptyDesc: '없음 — 설정 > RWM 밥그릇 > 수동 추가 종목에서 추가',
+      body: `<table class="tbl"><thead><tr><th>종목</th><th>단계</th><th>결과</th><th class="num">20/60 거리</th><th class="num">주봉 RSI 최저</th><th></th></tr></thead><tbody>`
+        + manual.map((m) => `<tr title="${esc(m.line || '')}">
+          ${nameCell(m.name, m.code)}
+          <td>${rwmBadges(m.checks, m.reason)}</td>
+          <td>${m.reason ? `${resultPill(m.ok, m.ok ? '감시 등록' : (m.reason_ko || m.reason))}<div class="hint">${esc(m.judged_date || '')} 판정</div>` : '-'}</td>
+          <td class="num">${rwmGcGap(m.gap_pct)}</td>
+          <td class="num">${m.rsi_w_min != null ? esc(Number(m.rsi_w_min).toFixed(1)) : '-'}</td>
+          <td><button class="btn sm" data-rwm-remove="${esc(m.code)}">삭제</button></td>
+        </tr>`).join('') + '</tbody></table>',
+    });
 
     $('rwmBody').innerHTML = h;
     $('rwmBody').querySelectorAll('[data-rwm-remove]').forEach((btn) => {
@@ -3455,7 +3582,6 @@ async function rwmManualUpdate(action, code) {
   try {
     const d = await rwmPost('/rwm/manual', { action, code: c });
     toast(d.message || '저장됨');
-    if (action === 'add' && $('rwmManualCode')) $('rwmManualCode').value = '';
     const ta = $('set_rwm_manual_codes');
     if (ta && Array.isArray(d.codes)) ta.value = d.codes.join(', ');
     loadRwm();
@@ -4409,7 +4535,7 @@ function renderSettingsForm(s) {
   const rwmManual = String(_v(s, 'rwm_manual_codes') || '').split(',').filter(Boolean).join(', ');
   h += `<div class="form-section strategy-card strategy-rwm">
     <h4>RWM 밥그릇 (스윙)</h4>
-    <div class="desc"><b>R</b>=주봉 RSI 과매도 → 5거래일 내 일봉 RSI 과매도, <b>W</b>=Williams %R −80 상향 돌파, <b>M</b>=20/60 골든크로스 또는 GC 임박(이격 ≤ 2%·종가 &gt; 60선) + 60선 평평/상승. 장 마감 후(15:40) 확정 일봉으로 판정 → <b>다음 날 3분봉 EMA20 눌림 반등</b>에서 매수 → <b>종가 20일선 이탈 시 다음 날 시가 전량</b>. 오버나잇 슬롯 정리 대상 아님. 기본 OFF.</div>
+    <div class="desc"><b>R</b>=주봉 RSI 과매도 → 5거래일 내 일봉 RSI 과매도, <b>W</b>=Williams %R −80 상향 돌파, <b>M</b>=일봉 MACD 골든크로스(시그널선 상향 돌파, 3거래일 이내). 이평 필터=20선 &gt; 60선 또는 GC 임박(이격 ≤ 2%·종가 &gt; 60선) + 60선 평평/상승. 장 마감 후(15:40) 확정 일봉으로 판정 → <b>다음 날 3분봉 EMA20 눌림 반등</b>에서 매수 → <b>종가 20일선 이탈 시 다음 날 시가 전량</b>. 오버나잇 슬롯 정리 대상 아님. 기본 OFF.</div>
     <div class="box-soft">
       ${fCheck('use_rwm_bowl', s, 'RWM 밥그릇 전략 사용')}
       <div class="form-grid" style="margin-top:12px;">
@@ -4423,7 +4549,7 @@ function renderSettingsForm(s) {
       <div class="form-grid" style="margin-top:8px;">
         <div class="field" style="grid-column:1/-1;"><label>수동 추가 종목 (최대 50)</label>
           <textarea id="set_rwm_manual_codes" rows="2" placeholder="005930, 000660">${esc(rwmManual)}</textarea>
-          <span class="fhint">조건식과 별개로 판정 대상에 넣을 종목코드 · 쉼표/줄바꿈 · 조건 통과는 똑같이 필요 · 후보 탭 [RWM 밥그릇]에서도 추가/삭제</span></div>
+          <span class="fhint">조건식과 별개로 판정 대상에 넣을 종목코드 · 쉼표/줄바꿈 · 조건 통과는 똑같이 필요 · 후보 탭 [RWM 밥그릇]에서도 삭제 가능</span></div>
       </div>
       <div class="box-title" style="margin-top:14px;">신호 (일봉)</div>
       <div class="form-grid">
@@ -4431,11 +4557,9 @@ function renderSettingsForm(s) {
         ${field('일봉 RSI ≤', fNum('rwm_rsi_os_daily', { ...s, rwm_rsi_os_daily: _v(s, 'rwm_rsi_os_daily') || 30 }, '30'))}
         ${field('주봉→일봉 거리(거래일)', fNum('rwm_rsi_pair_days', { ...s, rwm_rsi_pair_days: _v(s, 'rwm_rsi_pair_days') || 5 }, '5'))}
         ${field('그릇 기간(거래일)', fNum('rwm_bowl_lookback', { ...s, rwm_bowl_lookback: _v(s, 'rwm_bowl_lookback') || 60 }, '60'))}
-        ${field('GC 신선도(거래일)', fNum('rwm_gc_fresh_days', { ...s, rwm_gc_fresh_days: _v(s, 'rwm_gc_fresh_days') || 3 }, '3'))}
+        ${field('MACD GC 신선도(거래일)', fNum('rwm_gc_fresh_days', { ...s, rwm_gc_fresh_days: _v(s, 'rwm_gc_fresh_days') || 3 }, '3'), 'M = 일봉 MACD 가 시그널선 상향 돌파 후 N거래일 이내')}
         ${field('GC 임박 이격(%)', fNum('rwm_near_gap_pct', { ...s, rwm_near_gap_pct: _v(s, 'rwm_near_gap_pct') || 2 }, '2'))}
-        ${field('60선 5일 기울기 ≥ (%)', fNum('rwm_ma60_slope_min_pct', { ...s, rwm_ma60_slope_min_pct: _v(s, 'rwm_ma60_slope_min_pct') !== '' ? _v(s, 'rwm_ma60_slope_min_pct') : -0.2 }, '-0.2'))}
-        ${field('M 신선도(거래일)', fNum('rwm_m_fresh_days', { ...s, rwm_m_fresh_days: _v(s, 'rwm_m_fresh_days') || 5 }, '5'))}
-      </div>
+        ${field('60선 5일 기울기 ≥ (%)', fNum('rwm_ma60_slope_min_pct', { ...s, rwm_ma60_slope_min_pct: _v(s, 'rwm_ma60_slope_min_pct') !== '' ? _v(s, 'rwm_ma60_slope_min_pct') : -0.2 }, '-0.2'))}      </div>
       <div class="box-title" style="margin-top:14px;">매수 (다음 날 3분봉 눌림) · 매도</div>
       <div class="form-grid">
         ${field('눌림 감시 시작', `<input type="time" id="set_rwm_pb_start" value="${esc(rwmStart)}">`)}
@@ -5206,12 +5330,6 @@ document.addEventListener('DOMContentLoaded', () => {
   if ($('ma1592Refresh')) $('ma1592Refresh').onclick = loadMa1592;
   if ($('rwmRefresh')) $('rwmRefresh').onclick = loadRwm;
   if ($('rwmBatchRun')) $('rwmBatchRun').onclick = rwmRunBatch;
-  if ($('rwmManualAdd')) $('rwmManualAdd').onclick = () => rwmManualUpdate('add', $('rwmManualCode')?.value);
-  if ($('rwmManualCode')) {
-    $('rwmManualCode').addEventListener('keydown', (ev) => {
-      if (ev.key === 'Enter') rwmManualUpdate('add', $('rwmManualCode').value);
-    });
-  }
   document.querySelectorAll('[data-refresh]').forEach(btn => { btn.onclick = () => { $('lastUpdated').textContent = new Date().toLocaleTimeString('ko-KR'); (refreshMap[btn.dataset.refresh] || (() => {}))(); }; });
   setupAutoRefresh();
   setupInvestorFlowToggle();
@@ -5220,4 +5338,5 @@ document.addEventListener('DOMContentLoaded', () => {
   bindAutoTradeToggle();
   bindPositionSellButtons();
   refreshAll();
+  if (document.querySelector('.cand-tab.active')?.dataset.cand === 'rwm') loadRwm();
 });

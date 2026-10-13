@@ -6,7 +6,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <title>stock.daily</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/dashboard.css?v=115">
+  <link rel="stylesheet" href="/static/dashboard.css?v=119">
   <script src="/static/theme-sync.js?v=1"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
@@ -82,18 +82,18 @@
               <div class="cand-tabs-title">
                 <h3>후보</h3>
                 <nav class="cand-tabs" aria-label="후보 종류">
-                  <button type="button" class="cand-tab active" data-cand="screener">스크리너</button>
+                  <button type="button" class="cand-tab active" data-cand="rwm">RWM 밥그릇</button>
+                  <button type="button" class="cand-tab" data-cand="screener">스크리너</button>
                   <button type="button" class="cand-tab" data-cand="sangtta">상따</button>
                   <button type="button" class="cand-tab" data-cand="breakout">수급 돌파</button>
                   <button type="button" class="cand-tab" data-cand="fractal">스캘핑</button>
                   <button type="button" class="cand-tab" data-cand="jongga">종가배팅</button>
                   <button type="button" class="cand-tab" data-cand="ma1592">1592매매</button>
-                  <button type="button" class="cand-tab" data-cand="rwm">RWM 밥그릇</button>
                 </nav>
               </div>
             </div>
 
-            <div class="cand-pane active" data-cand-pane="screener">
+            <div class="cand-pane" data-cand-pane="screener">
               <div class="cand-pane-bar">
                 <div class="hint">거래대금순(등락 3.3%~&lt;12%) · 개별주만 · ETF·ETN·파생·등락미달·과열 제외 <span id="screenerCount"></span></div>
                 <div class="cand-pane-actions">
@@ -167,12 +167,10 @@
               </div>
             </div>
 
-            <div class="cand-pane" data-cand-pane="rwm">
+            <div class="cand-pane active" data-cand-pane="rwm">
               <div class="cand-pane-bar">
-                <div class="hint">장후(15:40) 일봉 판정 → 익일 3분봉 눌림 대기 · M 대기 · 보유 · 수동 종목 <span id="rwmCount"></span></div>
+                <div class="hint">RWM 밥그릇 · 장후(15:40) 일봉 판정(R·W·M=MACD 골든크로스) → 다음 거래일 3분봉 눌림 매수 <span id="rwmCount"></span></div>
                 <div class="cand-pane-actions">
-                  <input type="text" id="rwmManualCode" placeholder="종목코드 6자리" maxlength="7" style="width:110px;">
-                  <button class="btn sm" id="rwmManualAdd">수동 추가</button>
                   <button class="btn sm" id="rwmBatchRun" title="확정 일봉 기준으로 장후 배치를 지금 실행">배치 실행</button>
                   <button class="btn primary sm" id="rwmRefresh">조회</button>
                 </div>
@@ -398,6 +396,6 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/static/dashboard.js?v=170"></script>
+  <script src="/static/dashboard.js?v=178"></script>
 </body>
 </html>

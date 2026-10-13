@@ -3546,11 +3546,13 @@ class StopLossManager:
             detail = f"RWM 하드 손절: 현재 {current_price:,} ≤ {hard_px:,} (MA20×(1−버퍼))"
         elif pending and str(pending.get("exec_from") or "") <= kst_today().isoformat():
             sell_reason = str(pending.get("reason") or "EXIT_MA20")
-            ma20 = pending.get("ma20")
+            ma_n = pending.get("ma_n") or 20
+            ma = pending.get("ma") or pending.get("ma20")
             close = pending.get("close")
+            when = "장중 현재가" if pending.get("intraday") else "종가"
             detail = (
                 f"RWM {REASON_KO.get(sell_reason, sell_reason)}: "
-                f"{pending.get('judged_date')} 종가 {close} / MA20 {ma20} → 시가 전량"
+                f"{pending.get('judged_date')} {when} {close} / MA{ma_n} {ma} → 전량"
             )
         if not sell_reason:
             return

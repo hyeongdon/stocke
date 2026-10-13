@@ -1,10 +1,12 @@
-"""RWM 밥그릇 스케줄러 (PRD_RWM_BOWL v0.3.2).
+"""RWM 밥그릇 스케줄러 (PRD_RWM_BOWL v0.4.0).
 
 - 15:20 조건식 사전 조회 (장 마감 후 조건검색 실패 대비 캐시)
 - 15:40 장후 배치: 조건식 ∪ 바닥 후보 풀 ∪ 수동 ∪ 보유 → 확정 일봉 판정 → 익일 감시 목록 · 보유 청산 판정 · 텔레그램
 - 08:40~13:30 캐치업: 전 거래일 배치를 놓쳤으면 그 날 확정 일봉으로 1회 실행
 - 장중 3분봉 감시: 감시 종목 EMA20 눌림 반등 확정 봉에서 BUY 신호 생성
-- 15:00 보유 종목 종가 MA20 1% 이내 접근 경고
+- 09:30~15:00 30분마다 장중 신호 예상: 바닥 후보 풀·수동 종목을 현재가 기준으로 재판정 (표시·알림만, 매매 없음)
+- 15:00 보유 종목 청산선(MA20, 급등 후 MA10) 1% 이내 접근 경고
+- 15:10 급등(+15% 양봉) 이후 보유 종목이 현재가 기준 10일선 아래면 당일 장중 전량 익절
 """
 from __future__ import annotations
 
@@ -20,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 _LOOP_SEC = 10
 _PREFETCH_HM = (15, 20)
+_PREVIEW_FROM_HM = (9, 30)
 _PREFETCH_RETRY_SEC = 60.0
 _BATCH_HM = (15, 40)
 _CATCHUP_FROM_HM = (8, 40)
@@ -35,6 +38,14 @@ _BAR_MIN = 3
 
 def _hm(now: datetime) -> Tuple[int, int]:
     return (now.hour, now.minute)
+
+
+def _parse_hm(s: Any, default: Tuple[int, int] = (15, 10)) -> Tuple[int, int]:
+    try:
+        h, m = str(s).split(":")
+        return (int(h), int(m))
+    except (TypeError, ValueError):
+        return default
 
 
 def _load_settings():
@@ -85,6 +96,9 @@ class RwmBowlScheduler:
         self._batch_lock = asyncio.Lock()
         self._fail_until = 0.0
         self._minute_next_fetch: Dict[str, float] = {}
+        self._preview_task: Optional[asyncio.Task] = None
+        self._preview_slot = ""
+        self._surge_checked: Dict[int, str] = {}
 
     # ───────────────────────── lifecycle ─────────────────────────
 
@@ -97,6 +111,8 @@ class RwmBowlScheduler:
 
     async def stop_scheduler(self) -> None:
         self.is_running = False
+        if self._preview_task and not self._preview_task.done():
+            self._preview_task.cancel()
         if self._task:
             self._task.cancel()
             try:
@@ -121,7 +137,7 @@ class RwmBowlScheduler:
 
     async def _tick(self) -> None:
         from utils.market_hours import is_krx_trading_day
-        from utils.rwm_bowl import get_state_store, prev_trading_day
+        from utils.rwm_bowl import get_state_store, params_from_settings, prev_trading_day
 
         now = now_kst()
         if not is_krx_trading_day(now):
@@ -141,12 +157,128 @@ class RwmBowlScheduler:
             await self._prefetch_condition(settings, today)
         if _NEAR_WARN_HM <= _hm(now) < (15, 30):
             await self._warn_near_ma20(settings, today)
+        if _parse_hm(params_from_settings(settings).get("surge_exit_hm")) <= _hm(now) < _PREFETCH_HM:
+            await self._check_surge_exits(settings, today)
         if _CATCHUP_FROM_HM <= _hm(now) <= _CATCHUP_TO_HM:
             expected = prev_trading_day(today).isoformat()
             if last_sig < expected:
                 await self.run_batch(trigger="catchup")
         if (9, 0) <= _hm(now) < (15, 30):
             await self._watch_pullbacks(settings, now)
+        if _PREVIEW_FROM_HM <= _hm(now) < _PREFETCH_HM:
+            self._maybe_start_preview(settings, now)
+
+    # ───────────────────────── 장중 신호 예상 (바닥 후보 풀 미리보기) ─────────────────────────
+
+    def _maybe_start_preview(self, settings, now: datetime) -> None:
+        """preview_interval_min 마다 1회. 별도 태스크로 돌려 3분봉 눌림 감시를 막지 않는다."""
+        from utils.rwm_bowl import params_from_settings
+
+        p = params_from_settings(settings)
+        if not p.get("intraday_preview", True):
+            return
+        if self._preview_task and not self._preview_task.done():
+            return
+        step = max(5, int(p["preview_interval_min"]))
+        mins = now.hour * 60 + now.minute
+        slot_m = mins - (mins - 9 * 60) % step
+        slot = f"{now.date().isoformat()} {slot_m // 60:02d}:{slot_m % 60:02d}"
+        if slot == self._preview_slot:
+            return
+        self._preview_slot = slot
+        self._preview_task = asyncio.create_task(self._run_preview(settings, slot[-5:]))
+
+    async def _run_preview(self, settings, slot_hm: str) -> None:
+        """바닥 후보 풀 + 수동 종목을 오늘 진행 중 일봉(현재가 = 종가 가정)으로 재판정. 매매에는 쓰지 않음."""
+        from api.kiwoom_api import kiwoom_api
+        from utils.rwm_bowl import (
+            M_TYPE_KO,
+            REASON_KO,
+            evaluate_signal,
+            get_state_store,
+            is_week_closed,
+            normalize_daily_bars,
+            params_from_settings,
+            parse_code_list,
+        )
+
+        try:
+            now = now_kst()
+            today = now.date()
+            store = get_state_store()
+            p = params_from_settings(settings)
+            _, buys, all_held = self._rwm_positions()
+            watching = set(store.active_watch(today).keys())
+            names = store.data.get("names") or {}
+            codes: Dict[str, str] = {
+                code: row.get("name") or names.get(code) or "" for code, row in store.r_pool().items()
+            }
+            for code in parse_code_list(getattr(settings, "rwm_manual_codes", None))[: int(p["max_manual_codes"])]:
+                codes.setdefault(code, names.get(code) or "")
+            week_closed = is_week_closed(today)
+
+            rows: Dict[str, Dict[str, Any]] = {}
+            for code, name in codes.items():
+                if code in all_held or code in watching:
+                    continue
+                raw = await kiwoom_api.get_stock_chart_data(
+                    code, "1D", max_bars=_DAILY_MAX_BARS, allow_off_hours=True, cache_ttl_sec=60,
+                )
+                bars = normalize_daily_bars(raw or [])
+                if not bars or bars[-1]["date"] != today:
+                    continue
+                dates = buys.get(code) or []
+                sig = evaluate_signal(
+                    bars, p, last_week_closed=week_closed,
+                    cycle_bought=lambda bowl_d, ds=dates: any(d >= bowl_d for d in ds),
+                )
+                ck = sig.get("checks") or {}
+                rows[code] = {
+                    "name": name,
+                    "ok": bool(sig.get("ok")),
+                    "reason": sig.get("reason"),
+                    "reason_ko": REASON_KO.get(str(sig.get("reason") or ""), sig.get("reason")),
+                    "checks": {k: ck.get(k) for k in ("r_weekly", "r_daily", "w", "m_type", "ma60_ok", "macd_gc")},
+                    "price": sig.get("signal_close"),
+                    "day_return_pct": sig.get("day_return_pct"),
+                    "macd": sig.get("macd"),
+                    "macd_signal": sig.get("macd_signal"),
+                    "macd_gc_date": sig.get("macd_gc_date"),
+                    "m_type": sig.get("m_type"),
+                    "gap_pct": sig.get("gap_pct"),
+                }
+
+            prev = store.data.get("preview") or {}
+            alerted = set(prev.get("alerted") or []) if prev.get("date") == today.isoformat() else set()
+            new_ok = [c for c, r in rows.items() if r["ok"] and c not in alerted]
+            store.data["preview"] = {
+                "date": today.isoformat(),
+                "slot": slot_hm,
+                "at": now.isoformat(timespec="seconds"),
+                "rows": rows,
+                "alerted": sorted(alerted | set(new_ok)),
+            }
+            store.save()
+            n_ok = sum(1 for r in rows.values() if r["ok"])
+            logger.info(f"🥣 [RWM] 장중 신호 예상 {slot_hm} — 판정 {len(rows)} · 예상 {n_ok} · 신규 {len(new_ok)}")
+
+            if new_ok and p.get("preview_alert", True):
+                lines = []
+                for c in new_ok:
+                    r = rows[c]
+                    ret = r.get("day_return_pct")
+                    ret_s = f" ({ret:+.1f}%)" if isinstance(ret, (int, float)) else ""
+                    lines.append(
+                        f"{html.escape(r['name'] or c)} ({c}) 현재가 {_fmt_won(r.get('price'))}{ret_s} · "
+                        f"MACD GC {_md(r.get('macd_gc_date'))} · {M_TYPE_KO.get(r.get('m_type') or '', '-')}"
+                    )
+                await _send_telegram(
+                    f"<b>[RWM 밥그릇 · 장중 신호 예상 {slot_hm}]</b>\n"
+                    + "\n".join(lines)
+                    + "\n현재가로 마감하면 15:40 판정에서 매수 감시 등록 예상 (확정 아님 · 주문 없음)"
+                )
+        except Exception as e:
+            logger.warning(f"🥣 [RWM] 장중 신호 예상 오류: {e}")
 
     # ───────────────────────── 유니버스 ─────────────────────────
 
@@ -436,6 +568,8 @@ class RwmBowlScheduler:
         holding_ids = {h["id"] for h in holding}
         for pid in [k for k in list(store.exits().keys()) if int(k) not in holding_ids]:
             store.exits().pop(pid, None)
+        hold_mode: Dict[str, Dict[str, Any]] = {}
+        store.data["hold_mode"] = hold_mode
         bars_cache: Dict[str, List[Dict[str, Any]]] = {}
         for h in holding:
             bars = await self._daily_bars(h["code"], now)
@@ -446,7 +580,10 @@ class RwmBowlScheduler:
             ex = evaluate_daily_exit(bars, p, entry_date=h["entry_date"])
             if ex.get("hard_price"):
                 self._set_stop_price(h["id"], int(ex["hard_price"]))
+            hold_mode[str(h["id"])] = {k: ex.get(k) for k in ("surge_date", "exit_ma_n", "exit_ma")}
             if ex.get("reason") and not store.pending_exit(h["id"]):
+                ma_n = ex["exit_ma_n"] if ex["reason"] == "EXIT_MA10" else int(p["exit_ma"])
+                ma_v = ex.get("exit_ma") if ex["reason"] == "EXIT_MA10" else ex.get("ma20")
                 row = {
                     "reason": ex["reason"],
                     "code": h["code"],
@@ -454,13 +591,15 @@ class RwmBowlScheduler:
                     "judged_date": signal_day.isoformat(),
                     "exec_from": valid_date.isoformat(),
                     "ma20": ex.get("ma20"),
+                    "ma_n": ma_n,
+                    "ma": ma_v,
                     "close": ex.get("close"),
                     "hold_days": ex.get("hold_days"),
                 }
                 store.set_exit(h["id"], row)
                 exit_msgs.append(
                     f"{html.escape(h['name'])} ({h['code']}) — {REASON_KO.get(ex['reason'], ex['reason'])}: "
-                    f"종가 {_fmt_won(ex.get('close'))} / MA20 {_fmt_won(ex.get('ma20'))} → {_md(valid_date.isoformat())} 시가 전량"
+                    f"종가 {_fmt_won(ex.get('close'))} / MA{ma_n} {_fmt_won(ma_v)} → {_md(valid_date.isoformat())} 시가 전량"
                 )
                 _log(f"RWM 청산 예약 {h['name']}: {ex['reason']}", "warn", stock_code=h["code"])
 
@@ -538,20 +677,23 @@ class RwmBowlScheduler:
             watch_added.append((code, row))
         store.save()
 
-        # ── M 대기 목록 (R·W 통과, M 만 미달) ──
+        # ── M 대기 목록 (R·W 통과, M(MACD)·20/60 이평만 미달) ──
         near: List[Dict[str, Any]] = []
         for code, sig in results.items():
             ck = sig.get("checks") or {}
             if sig.get("ok") or not (ck.get("r_weekly") and ck.get("r_daily") and ck.get("w")):
                 continue
-            if sig.get("reason") in ("NO_MA_SETUP", "MA60_DOWN", "MA_SETUP_STALE"):
+            if sig.get("reason") in ("NO_MA_SETUP", "MA60_DOWN", "NO_MACD_GC"):
                 near.append({
                     "code": code,
                     "name": universe[code]["name"],
                     "source": universe[code]["source"],
                     "reason": sig.get("reason"),
+                    "checks": {k: ck.get(k) for k in ("m_type", "ma60_ok", "macd_gc")},
                     "gap_pct": sig.get("gap_pct"),
                     "ma60_slope_pct": sig.get("ma60_slope_pct"),
+                    "macd": sig.get("macd"),
+                    "macd_signal": sig.get("macd_signal"),
                     "signal_close": sig.get("signal_close"),
                 })
         store.data["near"] = near
@@ -563,7 +705,10 @@ class RwmBowlScheduler:
             row.update(
                 judged_date=signal_day.isoformat(),
                 reason=sig.get("reason"),
-                checks={k: (sig.get("checks") or {}).get(k) for k in ("r_weekly", "r_daily", "w", "m_type")},
+                checks={
+                    k: (sig.get("checks") or {}).get(k)
+                    for k in ("r_weekly", "r_daily", "w", "m_type", "ma60_ok", "macd_gc")
+                },
                 gap_pct=sig.get("gap_pct"),
                 rsi_w_min=sig.get("rsi_w_min"),
                 w_count=sig.get("w_count") or 0,
@@ -599,6 +744,20 @@ class RwmBowlScheduler:
         for sig in results.values():
             r = str(sig.get("reason") or "")
             reason_counts[r] = reason_counts.get(r, 0) + 1
+        stages = {"universe": len(results), "liquidity": 0, "r": 0, "w": 0, "m": 0, "watch": len(watch_added)}
+        for sig in results.values():
+            ck = sig.get("checks") or {}
+            if not ck.get("liquidity"):
+                continue
+            stages["liquidity"] += 1
+            if not (ck.get("r_weekly") and ck.get("r_daily")):
+                continue
+            stages["r"] += 1
+            if not ck.get("w"):
+                continue
+            stages["w"] += 1
+            if ck.get("m_type") and ck.get("ma60_ok") and ck.get("macd_gc"):
+                stages["m"] += 1
         store.data["last_batch"] = {
             "signal_date": signal_day.isoformat(),
             "valid_date": valid_date.isoformat(),
@@ -612,6 +771,7 @@ class RwmBowlScheduler:
             "condition_errors": cond_errors,
             "insufficient_bars": insufficient,
             "reasons": reason_counts,
+            "stages": stages,
             "watch_added": [c for c, _ in watch_added],
             "exits": len(exit_msgs),
             "rejected": [
@@ -637,13 +797,14 @@ class RwmBowlScheduler:
             tv_ratio = s.get("tv_ratio_5_60")
             tv_s = f"×{tv_ratio:.2f}" if isinstance(tv_ratio, (int, float)) else "-"
             msg = (
-                f"<b>[RWM 밥그릇 · 내일 눌림 대기]</b> {html.escape(row['name'])} ({code}) — {m_ko}\n"
-                f"20선 {_fmt_won(s.get('ma20'))} / 60선 {_fmt_won(s.get('ma60'))} "
+                f"<b>[RWM 밥그릇 · 내일 눌림 대기]</b> {html.escape(row['name'])} ({code}) — MACD 골든크로스\n"
+                f"M MACD: {_md(s.get('macd_gc_date'))} 시그널 상향 돌파 · MACD {s.get('macd')} / 시그널 {s.get('macd_signal')}\n"
+                f"이평: {m_ko} · 20선 {_fmt_won(s.get('ma20'))} / 60선 {_fmt_won(s.get('ma60'))} "
                 f"(이격 {s.get('gap_pct')}%{gap_prev_s}) · 60선 5일 {slope_s} · 종가 {_fmt_won(s.get('signal_close'))}\n"
                 f"R 바닥: 주봉 RSI {s.get('r_week_rsi')} ({_md(s.get('r_week'))} 주) → "
                 f"일봉 RSI {s.get('rsi_d_at_r')} ({_md(s.get('r_date'))}, 주봉 기준 {off_s})\n"
                 f"W 반전: %R {s.get('w_from')} → {s.get('w_to')} ({_md(s.get('w_date'))}, 바닥 체류 {s.get('w_bottom_bars')}일 · R 이후 신호 {s.get('w_count') or 1}회)\n"
-                f"거래대금: 5일 평균 / 60일 평균 {tv_s} · 20일 평균 {_fmt_won(s.get('trading_value_20d'))}원\n"
+                f"거래대금: 5일 평균 / 60일 평균 {tv_s} · {p['liquidity_days']}일 평균 {_fmt_won(s.get('trading_value_avg'))}원\n"
                 f"매수: {_md(row['valid_date'])} {pb_s}~{pb_e} 3분봉 EMA20 눌림 반등 시 · 상한 {_fmt_won(row['entry_cap'])} "
                 f"(+{p['max_entry_above_pct']}%) · 시가/장중 {_fmt_won(row['ma20_d'])} 아래면 취소\n"
                 f"{qty_s} · 매도 종가 20선 이탈 전량 · 장중 하드 손절 {_fmt_won(row['hard_price'])}"
@@ -816,12 +977,73 @@ class RwmBowlScheduler:
         _log(f"RWM 감시 종료 {name}({code}): {ko}", "info", stock_code=code)
         await _send_telegram(f"[RWM 밥그릇 · 감시 종료] {html.escape(name)} ({code}) — {ko} ({reason}), 매수 안 함")
 
-    # ───────────────────────── 15:00 20선 접근 경고 ─────────────────────────
+    # ───────────────────────── 15:10 급등 종목 10일선 이탈 장중 익절 ─────────────────────────
+
+    async def _check_surge_exits(self, settings, today: date) -> None:
+        """급등 양봉 뒤 보유 종목: 현재가를 종가로 보고 10일선 아래면 당일 장중 전량 익절 예약.
+
+        여기서 놓치면 15:40 확정 종가 판정에서 EXIT_MA10 → 다음 날 시가 매도.
+        """
+        from api.kiwoom_api import kiwoom_api
+        from utils.rwm_bowl import (
+            REASON_KO,
+            evaluate_daily_exit,
+            get_state_store,
+            normalize_daily_bars,
+            params_from_settings,
+        )
+
+        p = params_from_settings(settings)
+        store = get_state_store()
+        holding, _, _ = self._rwm_positions()
+        iso = today.isoformat()
+        msgs: List[str] = []
+        for h in holding:
+            if self._surge_checked.get(h["id"]) == iso or store.pending_exit(h["id"]):
+                continue
+            raw = await kiwoom_api.get_stock_chart_data(
+                h["code"], "1D", max_bars=_DAILY_MAX_BARS, allow_off_hours=True, cache_ttl_sec=30,
+            )
+            bars = normalize_daily_bars(raw or [])
+            if not bars or bars[-1]["date"] != today:
+                continue
+            self._surge_checked[h["id"]] = iso
+            ex = evaluate_daily_exit(bars, p, entry_date=h["entry_date"])
+            if ex.get("reason") != "EXIT_MA10":
+                continue
+            store.set_exit(h["id"], {
+                "reason": "EXIT_MA10",
+                "code": h["code"],
+                "name": h["name"],
+                "judged_date": iso,
+                "exec_from": iso,
+                "intraday": True,
+                "ma20": ex.get("ma20"),
+                "ma_n": ex.get("exit_ma_n"),
+                "ma": ex.get("exit_ma"),
+                "close": ex.get("close"),
+                "surge_date": ex.get("surge_date"),
+                "hold_days": ex.get("hold_days"),
+            })
+            ko = REASON_KO["EXIT_MA10"]
+            _log(f"RWM {ko} {h['name']}: 현재 {ex.get('close')} < MA{ex.get('exit_ma_n')} {ex.get('exit_ma')}", "warn", stock_code=h["code"])
+            msgs.append(
+                f"{html.escape(h['name'])} ({h['code']}) 급등 {_md(ex.get('surge_date'))} → "
+                f"현재 {_fmt_won(ex.get('close'))} / MA{ex.get('exit_ma_n')} {_fmt_won(ex.get('exit_ma'))}"
+            )
+        if msgs:
+            store.save()
+            await _send_telegram(
+                f"<b>[RWM 밥그릇 · {p.get('surge_exit_hm')} 10일선 이탈 익절]</b> 장 마감 전 전량 매도\n" + "\n".join(msgs)
+            )
+
+    # ───────────────────────── 15:00 청산선(20선 · 급등 시 10선) 접근 경고 ─────────────────────────
 
     async def _warn_near_ma20(self, settings, today: date) -> None:
-        from utils.rwm_bowl import get_state_store, normalize_daily_bars, sma_series
+        from utils.rwm_bowl import evaluate_daily_exit, get_state_store, normalize_daily_bars, params_from_settings
         from api.kiwoom_api import kiwoom_api
 
+        p = params_from_settings(settings)
         store = get_state_store()
         warned: Dict[str, str] = store.data.setdefault("warned", {})
         holding, _, _ = self._rwm_positions()
@@ -832,21 +1054,22 @@ class RwmBowlScheduler:
             if warned.get(key) == iso:
                 continue
             warned[key] = iso
-            raw = await kiwoom_api.get_stock_chart_data(h["code"], "1D", max_bars=40, cache_ttl_sec=60)
+            raw = await kiwoom_api.get_stock_chart_data(h["code"], "1D", max_bars=_DAILY_MAX_BARS, cache_ttl_sec=60)
             bars = normalize_daily_bars(raw or [])
             if len(bars) < 20 or bars[-1]["date"] != today:
                 continue
-            closes = [b["close"] for b in bars]
-            ma = sma_series(closes, 20)[-1]
-            px = closes[-1]
+            ex = evaluate_daily_exit(bars, p, entry_date=h["entry_date"])
+            ma, n = ex.get("exit_ma"), ex.get("exit_ma_n")
+            px = bars[-1]["close"]
             if ma and px <= ma * (1.0 + _NEAR_WARN_PCT / 100.0):
+                when = f"{p.get('surge_exit_hm')} 장중 매도" if ex.get("surge_date") else "종가 이탈 시 내일 시가 매도"
                 msgs.append(
-                    f"{html.escape(h['name'])} ({h['code']}) 현재 {_fmt_won(px)} / MA20 {_fmt_won(ma)} "
-                    f"({(px / ma - 1) * 100:+.2f}%)"
+                    f"{html.escape(h['name'])} ({h['code']}) 현재 {_fmt_won(px)} / MA{n} {_fmt_won(ma)} "
+                    f"({(px / ma - 1) * 100:+.2f}%) · {when}"
                 )
         store.save()
         if msgs:
-            await _send_telegram("<b>[RWM 밥그릇 · 20선 접근 경고 15:00]</b> 종가 이탈 시 내일 시가 매도\n" + "\n".join(msgs))
+            await _send_telegram("<b>[RWM 밥그릇 · 청산선 접근 경고 15:00]</b>\n" + "\n".join(msgs))
 
 
 rwm_bowl_scheduler = RwmBowlScheduler()

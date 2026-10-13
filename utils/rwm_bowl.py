@@ -1,7 +1,8 @@
-"""RWM 밥그릇 매매 (PRD_RWM_BOWL v0.3.2) — 순수 계산기 + 상태 저장소.
+"""RWM 밥그릇 매매 (PRD_RWM_BOWL v0.4.0) — 순수 계산기 + 상태 저장소.
 
 R = 주봉 RSI 과매도(1차) + 5거래일 이내 일봉 RSI 과매도, W = Williams %R −80 상향 돌파,
-M = 20/60 골든크로스(M1) 또는 GC 임박 + 종가 > 60선(M2).
+M = 일봉 MACD(12/26/9) 골든크로스 3거래일 이내.
+이평 필터(m_type) = 20/60 골든크로스(M1_GC) 또는 GC 임박 + 종가 > 60선(M2_NEAR), 60선 하락 아님.
 신호는 장 마감 후 확정 일봉, 진입은 익일 3분봉 EMA20 눌림 반등, 청산은 20일선 종가 이탈.
 """
 from __future__ import annotations
@@ -24,19 +25,22 @@ DEFAULT_PARAMS: Dict[str, Any] = {
     "entry_tf": "3M",
     "min_bars": 300,
     "max_l0_candidates": 200,
-    "min_trading_value_20d": 3_000_000_000,
+    "min_trading_value": 3_000_000_000,
+    "liquidity_days": 10,
     "min_price": 1000,
     "rwm_condition_names": DEFAULT_CONDITION_NAME,
     "rwm_manual_codes": "",
     "max_manual_codes": 50,
     "max_pool_codes": 200,
     "include_global_watchlist": False,
+    "intraday_preview": True,
+    "preview_interval_min": 30,
+    "preview_alert": True,
     "manual_daily_report": True,
     "manual_report_changes_only": False,
 
     "ma_fast": 20,
     "ma_slow": 60,
-    "gc_fresh_days": 3,
     "near_gap_pct": 2.0,
     "near_shrink_days": 5,
     "m2_require_close_above_ma60": True,
@@ -44,7 +48,11 @@ DEFAULT_PARAMS: Dict[str, Any] = {
     "require_ma60_not_down": True,
     "ma60_slope_days": 5,
     "ma60_slope_min_pct": -0.2,
-    "m_fresh_days": 5,
+
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "macd_fresh_days": 3,
 
     "bowl_lookback": 60,
     "rsi_period": 14,
@@ -78,6 +86,9 @@ DEFAULT_PARAMS: Dict[str, Any] = {
     "intraday_hard_buf_pct": 3.0,
     "exit_fill": "next_open",
     "max_hold_days": 60,
+    "surge_day_pct": 15.0,
+    "surge_exit_ma": 10,
+    "surge_exit_hm": "15:10",
 
     "flatten_eod": False,
     "exempt_market_risk_gate": False,
@@ -101,10 +112,9 @@ SETTINGS_ALIASES: Dict[str, str] = {
     "rwm_rsi_os_daily": "rsi_os_daily",
     "rwm_rsi_pair_days": "rsi_pair_days",
     "rwm_bowl_lookback": "bowl_lookback",
-    "rwm_gc_fresh_days": "gc_fresh_days",
+    "rwm_gc_fresh_days": "macd_fresh_days",
     "rwm_near_gap_pct": "near_gap_pct",
     "rwm_ma60_slope_min_pct": "ma60_slope_min_pct",
-    "rwm_m_fresh_days": "m_fresh_days",
     "rwm_pb_start": "pb_start",
     "rwm_pb_end": "pb_end",
     "rwm_max_entry_above_pct": "max_entry_above_pct",
@@ -114,7 +124,7 @@ SETTINGS_ALIASES: Dict[str, str] = {
 }
 
 SIGNAL_REASONS = (
-    "INSUFFICIENT_BARS", "LOW_LIQUIDITY", "NO_MA_SETUP", "MA60_DOWN", "MA_SETUP_STALE",
+    "INSUFFICIENT_BARS", "LOW_LIQUIDITY", "NO_MA_SETUP", "MA60_DOWN", "NO_MACD_GC",
     "NO_WEEKLY_OVERSOLD", "NO_DAILY_OVERSOLD_PAIR", "NO_W_SIGNAL", "NO_BOWL",
     "TOO_FAR_ABOVE_MA20", "CHASE_DAY", "CYCLE_DONE", "ALREADY_IN_POSITION",
     "SLOT_FULL", "DAILY_NEW_LIMIT", "WATCH_ADDED",
@@ -122,14 +132,15 @@ SIGNAL_REASONS = (
 ENTRY_REASONS = (
     "OPEN_BELOW_MA20", "BELOW_DAILY_MA20", "NO_PULLBACK", "ENTRY_ABOVE_CAP", "PULLBACK_3M",
 )
-EXIT_REASONS = ("STOP_HARD", "EXIT_MA20", "MAX_HOLD")
+EXIT_REASONS = ("STOP_HARD", "EXIT_MA10", "EXIT_MA20", "MAX_HOLD")
 
 REASON_KO: Dict[str, str] = {
     "INSUFFICIENT_BARS": "일봉 부족",
     "LOW_LIQUIDITY": "유동성 부족",
     "NO_MA_SETUP": "20/60 자리 아님",
     "MA60_DOWN": "60선 하락 중",
-    "MA_SETUP_STALE": "20/60 자리 신선도 경과",
+    "MA_SETUP_STALE": "20/60 자리 신선도 경과 (구 판정)",
+    "NO_MACD_GC": "최근 MACD 골든크로스 없음",
     "NO_WEEKLY_OVERSOLD": "주봉 RSI 과매도 없음",
     "NO_DAILY_OVERSOLD_PAIR": "주봉 기준 5거래일 내 일봉 과매도 없음",
     "NO_W_SIGNAL": "Williams %R 반전 없음",
@@ -148,10 +159,11 @@ REASON_KO: Dict[str, str] = {
     "PULLBACK_3M": "3분봉 눌림 반등",
     "STOP_HARD": "하드 손절",
     "EXIT_MA20": "20일선 종가 이탈",
+    "EXIT_MA10": "급등 후 10일선 이탈 익절",
     "MAX_HOLD": "보유 만기",
 }
 
-M_TYPE_KO = {"M1_GC": "M1 골든크로스", "M2_NEAR": "M2 GC 임박"}
+M_TYPE_KO = {"M1_GC": "20/60 골든크로스", "M2_NEAR": "20/60 GC 임박"}
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _STATE_PATH = _PROJECT_ROOT / "logs" / "_rwm_bowl_state.json"
@@ -301,6 +313,30 @@ def ema_series(values: Sequence[float], period: int = 20) -> List[Optional[float
         e = alpha * float(values[i]) + (1.0 - alpha) * e
         out[i] = e
     return out
+
+
+def macd_series(
+    values: Sequence[float], fast: int = 12, slow: int = 26, signal: int = 9,
+) -> Tuple[List[Optional[float]], List[Optional[float]]]:
+    """(MACD 선 = EMA(fast) − EMA(slow), 시그널 = MACD 선의 EMA(signal))."""
+    ef = ema_series(values, fast)
+    es = ema_series(values, slow)
+    line = [f - s if f is not None and s is not None else None for f, s in zip(ef, es)]
+    sig = ema_series([v or 0.0 for v in line], signal) if line else []
+    return line, sig
+
+
+def macd_gc_idx(
+    macd: Sequence[Optional[float]], sig: Sequence[Optional[float]], t: int, fresh_days: int,
+) -> Optional[int]:
+    """t 에서 MACD > 시그널이고, t 포함 최근 fresh_days 거래일 안에 MACD 가 시그널을 상향 돌파한 가장 최근 날."""
+    if t < 1 or t >= len(macd) or not _ok(macd[t], sig[t]) or macd[t] <= sig[t]:
+        return None
+    for j in range(t, max(1, t - max(1, int(fresh_days)) + 1) - 1, -1):
+        a0, s0, a1, s1 = macd[j - 1], sig[j - 1], macd[j], sig[j]
+        if _ok(a0, s0, a1, s1) and a0 <= s0 and a1 > s1:
+            return j
+    return None
 
 
 # ───────────────────────── 일봉 · 주봉 ─────────────────────────
@@ -493,6 +529,8 @@ class Indicators:
     rsi_d: List[Optional[float]]
     wr: List[Optional[float]]
     weeks: List[WeekBar] = field(default_factory=list)
+    macd: List[Optional[float]] = field(default_factory=list)
+    macd_sig: List[Optional[float]] = field(default_factory=list)
 
     @property
     def n(self) -> int:
@@ -514,6 +552,7 @@ def compute_indicators(
     rsi_w = wilder_rsi_series([w.close for w in weeks], int(p["rsi_period"]))
     for w, r in zip(weeks, rsi_w):
         w.rsi = r
+    macd, macd_sig = macd_series(closes, int(p["macd_fast"]), int(p["macd_slow"]), int(p["macd_signal"]))
     return Indicators(
         dates=[b["date"] for b in bars],
         open=[float(b["open"]) for b in bars],
@@ -527,6 +566,8 @@ def compute_indicators(
         rsi_d=wilder_rsi_series(closes, int(p["rsi_period"])),
         wr=williams_r_series(highs, lows, closes, int(p["w_period"])),
         weeks=weeks,
+        macd=macd,
+        macd_sig=macd_sig,
     )
 
 
@@ -576,23 +617,21 @@ def _is_gc(ind: Indicators, j: int) -> bool:
 
 
 def ma_state_at(ind: Indicators, i: int, p: Dict[str, Any]) -> Dict[str, Any]:
-    """i 일의 M 상태: m_type(M1_GC/M2_NEAR/None), m1_stale(GC 신선도만 경과), gc_idx."""
-    out: Dict[str, Any] = {"m_type": None, "m1_stale": False, "gc_idx": None}
+    """i 일의 20/60 이평 상태 (교차 시점 무관): m_type = M1_GC(20선 > 60선) / M2_NEAR(교차 임박) / None.
+
+    gc_idx 는 bowl_lookback 안 가장 최근 20/60 골든크로스 (표시용).
+    """
+    out: Dict[str, Any] = {"m_type": None, "gc_idx": None}
     if i < 1 or not _ok(ind.ma20[i], ind.ma60[i]):
         return out
     ma20, ma60, close = ind.ma20[i], ind.ma60[i], ind.close[i]
     up_ok = _ma20_up(ind, i) or not p.get("require_ma20_up", True)
 
     if ma20 > ma60 and close > ma20 and up_ok:
-        fresh_n = max(1, int(p["gc_fresh_days"]))
-        for j in range(i, max(0, i - fresh_n + 1) - 1, -1):
+        out["m_type"] = "M1_GC"
+        for j in range(i, max(0, i - int(p["bowl_lookback"])) - 1, -1):
             if _is_gc(ind, j):
-                out.update(m_type="M1_GC", gc_idx=j)
-                return out
-        lookback = max(fresh_n, int(p["bowl_lookback"]))
-        for j in range(i - fresh_n, max(0, i - lookback) - 1, -1):
-            if _is_gc(ind, j):
-                out.update(m1_stale=True, gc_idx=j)
+                out["gc_idx"] = j
                 break
         return out
 
@@ -714,18 +753,18 @@ def evaluate_signal(
     )
 
     # 유동성 (조건식 J 재확인)
-    tv = [ind.close[i] * ind.volume[i] for i in range(max(0, t - 19), t + 1)]
-    tv20 = sum(tv) / len(tv) if tv else 0.0
-    liq_ok = tv20 >= float(p["min_trading_value_20d"]) and close_t >= float(p["min_price"])
+    liq_n = max(1, int(p["liquidity_days"]))
+    tv = [ind.close[i] * ind.volume[i] for i in range(max(0, t - liq_n + 1), t + 1)]
+    tv_avg = sum(tv) / len(tv) if tv else 0.0
+    liq_ok = tv_avg >= float(p["min_trading_value"]) and close_t >= float(p["min_price"])
     ck["liquidity"] = liq_ok
-    res["trading_value_20d"] = int(tv20)
+    res["trading_value_avg"] = int(tv_avg)
     res["tv_ratio_5_60"] = trading_value_ratio(ind, t, 5, 60)
 
-    # M 트리거
+    # 이평 필터 (20/60 상태)
     st = ma_state_at(ind, t, p)
     m_type = st["m_type"]
     ck["m_type"] = m_type
-    ck["m1_stale"] = bool(st["m1_stale"])
     res["m_type"] = m_type
     res["gc_date"] = _fmt_d(ind.dates[st["gc_idx"]]) if st["gc_idx"] is not None else ""
     slope_ok = (slope is not None and slope >= float(p["ma60_slope_min_pct"])) or not p.get(
@@ -744,15 +783,12 @@ def evaluate_signal(
     res["bowl_date"] = _fmt_d(ind.dates[bowl_idx])
     res["bowl_low"] = int(round(min(ind.low[ws: t + 1])))
 
-    # 신선도: 이번 사이클(bowl_date 이후) M 첫 성립일
-    m_first = None
-    for j in range(bowl_idx, t + 1):
-        if ma_state_at(ind, j, p)["m_type"]:
-            m_first = j
-            break
-    fresh = m_type is not None and m_first is not None and (t - m_first) < int(p["m_fresh_days"])
-    ck["fresh"] = fresh
-    res["m_first_date"] = _fmt_d(ind.dates[m_first]) if m_first is not None else ""
+    # M 트리거 — 일봉 MACD 가 시그널선을 상향 돌파 (최근 macd_fresh_days 거래일, 오늘도 MACD > 시그널)
+    macd_gc = macd_gc_idx(ind.macd, ind.macd_sig, t, int(p["macd_fresh_days"]))
+    ck["macd_gc"] = macd_gc is not None
+    res["macd_gc_date"] = _fmt_d(ind.dates[macd_gc]) if macd_gc is not None else ""
+    res["macd"] = round(ind.macd[t], 2) if ind.macd[t] is not None else None
+    res["macd_signal"] = round(ind.macd_sig[t], 2) if ind.macd_sig[t] is not None else None
 
     # R — 주봉 1차
     th_w = float(p["rsi_os_weekly"])
@@ -805,12 +841,12 @@ def evaluate_signal(
     res["checks"] = ck
     if not liq_ok:
         res["reason"] = "LOW_LIQUIDITY"
-    elif m_type is None and not st["m1_stale"]:
+    elif m_type is None:
         res["reason"] = "NO_MA_SETUP"
     elif not slope_ok:
         res["reason"] = "MA60_DOWN"
-    elif m_type is None or not fresh:
-        res["reason"] = "MA_SETUP_STALE"
+    elif macd_gc is None:
+        res["reason"] = "NO_MACD_GC"
     elif not os_weeks:
         res["reason"] = "NO_WEEKLY_OVERSOLD"
     elif best is None:
@@ -832,7 +868,7 @@ def evaluate_signal(
 
 
 def signal_priority_key(sig: Dict[str, Any]) -> Tuple[int, int, int, float, float]:
-    """M1 > M2, W 신호 많은 순, 거래대금 증가율(5일/60일) 등급 높은 순, 주봉 RSI 최저 낮은 순, MA20 이격 작은 순."""
+    """20/60 GC(M1) > 임박(M2), W 신호 많은 순, 거래대금 증가율(5일/60일) 등급 높은 순, 주봉 RSI 최저 낮은 순, MA20 이격 작은 순."""
     m_rank = 0 if sig.get("m_type") == "M1_GC" else 1
     w_count = int(sig.get("w_count") or 0)
     tv_tier = tv_ratio_tier(sig.get("tv_ratio_5_60"))
@@ -1037,14 +1073,35 @@ def evaluate_pullback(
 
 # ───────────────────────── 청산 ─────────────────────────
 
+def surge_day(bars: Sequence[Dict[str, Any]], entry_date: Optional[date], p: Dict[str, Any]) -> Optional[date]:
+    """매수일 이후(당일 포함) 첫 급등 양봉일: 전일 종가 대비 +surge_day_pct% 이상 · 종가 > 시가."""
+    pct = float(p.get("surge_day_pct") or 0.0)
+    if pct <= 0 or entry_date is None:
+        return None
+    for i in range(1, len(bars)):
+        b = bars[i]
+        if b["date"] < entry_date:
+            continue
+        prev = float(bars[i - 1]["close"])
+        if prev > 0 and float(b["close"]) > float(b["open"]) and float(b["close"]) >= prev * (1.0 + pct / 100.0):
+            return b["date"]
+    return None
+
+
 def evaluate_daily_exit(
     bars: Sequence[Dict[str, Any]],
     p: Dict[str, Any],
     *,
     entry_date: Optional[date],
 ) -> Dict[str, Any]:
-    """확정 일봉 기준 청산 판정 (장후). EXIT_MA20 > MAX_HOLD. hard_price = 오늘 MA20 × (1 − 3%)."""
-    out: Dict[str, Any] = {"reason": None, "hard_price": None, "ma20": None, "close": None, "hold_days": 0}
+    """일봉 기준 청산 판정. EXIT_MA10(급등 후) > EXIT_MA20 > MAX_HOLD. hard_price = 오늘 MA20 × (1 − 3%).
+
+    급등 양봉(surge_day) 이후로는 surge_exit_ma(10)일선 종가 이탈도 청산. 진행 중 봉을 넣으면 장중 판정.
+    """
+    out: Dict[str, Any] = {
+        "reason": None, "hard_price": None, "ma20": None, "close": None, "hold_days": 0,
+        "surge_date": None, "exit_ma_n": int(p["exit_ma"]), "exit_ma": None,
+    }
     if not bars:
         return out
     closes = [float(b["close"]) for b in bars]
@@ -1053,25 +1110,41 @@ def evaluate_daily_exit(
     if ma[t] is None:
         return out
     out["ma20"] = round(ma[t], 2)
+    out["exit_ma"] = out["ma20"]
     out["close"] = int(round(closes[t]))
     out["hard_price"] = hard_stop_price(ma[t], p)
     if entry_date is not None:
         out["hold_days"] = sum(1 for b in bars if b["date"] > entry_date)
+    s_day = surge_day(bars, entry_date, p)
+    ma_s: List[Optional[float]] = []
+    if s_day is not None:
+        out["surge_date"] = _fmt_d(s_day)
+        ma_s = sma_series(closes, int(p["surge_exit_ma"]))
+        if ma_s[t] is not None:
+            out["exit_ma_n"] = int(p["surge_exit_ma"])
+            out["exit_ma"] = round(ma_s[t], 2)
     # 매수 당일 종가는 판정 대상 아님 (매수 다음 날부터)
     if entry_date is not None and bars[t]["date"] <= entry_date:
         return out
 
     need = max(1, int(p["ma_exit_close_days"]))
     buf = float(p.get("ma_exit_buffer_pct") or 0.0) / 100.0
-    below = 0
-    for i in range(t, -1, -1):
-        if entry_date is not None and bars[i]["date"] <= entry_date:
-            break
-        if ma[i] is not None and closes[i] < ma[i] * (1.0 - buf):
-            below += 1
-        else:
-            break
-    if below >= need:
+
+    def _below_days(series: List[Optional[float]], since: Optional[date]) -> int:
+        n = 0
+        for i in range(t, -1, -1):
+            if since is not None and bars[i]["date"] <= since:
+                break
+            if series[i] is not None and closes[i] < series[i] * (1.0 - buf):
+                n += 1
+            else:
+                break
+        return n
+
+    if s_day is not None and _below_days(ma_s, s_day) >= need:
+        out["reason"] = "EXIT_MA10"
+        return out
+    if _below_days(ma, entry_date) >= need:
         out["reason"] = "EXIT_MA20"
         return out
     max_hold = int(p.get("max_hold_days") or 0)
@@ -1086,6 +1159,10 @@ def check_hard_stop(current_price: float, hard_price: Optional[float]) -> bool:
 
 # ───────────────────────── 리포트 문자열 ─────────────────────────
 
+def _md_short(iso: Optional[str]) -> str:
+    return f" {iso[5:7]}/{iso[8:10]}" if iso and len(iso) >= 10 else ""
+
+
 def manual_status_line(code: str, name: str, sig: Dict[str, Any], p: Dict[str, Any]) -> str:
     """수동 종목 단계별 현황 한 줄."""
     reason = sig.get("reason") or ""
@@ -1097,13 +1174,14 @@ def manual_status_line(code: str, name: str, sig: Dict[str, Any], p: Dict[str, A
     rd = "✓" if ck.get("r_daily") else "✗"
     parts.append(f"R 주봉 {rw} 일봉 {rd}")
     parts.append(f"W ✓{sig.get('w_count') or 1}회" if ck.get("w") else "W ✗")
+    parts.append(f"M(MACD) ✓{_md_short(sig.get('macd_gc_date'))}" if ck.get("macd_gc") else "M(MACD) ✗")
     m = ck.get("m_type")
     if m:
-        parts.append(f"{'M1' if m == 'M1_GC' else 'M2'} ✓")
+        parts.append(f"20/60 {'GC' if m == 'M1_GC' else '임박'} ✓")
     else:
         gap = sig.get("gap_pct")
         gap_s = f" 이격 {gap:.1f}%" if isinstance(gap, (int, float)) else ""
-        parts.append(f"M ✗{gap_s}")
+        parts.append(f"20/60 ✗{gap_s}")
     slope = sig.get("ma60_slope_pct")
     if slope is not None:
         parts.append(f"60선 {slope:+.1f}% {'✓' if ck.get('ma60_ok') else '✗'}")
