@@ -3530,8 +3530,8 @@ async function loadRwm() {
     const poolSorted = [...pool].sort((a, b) => rwmPassCount(b, b.reason) - rwmPassCount(a, a.reason));
     h += rwmSec({
       cls: 'pool', title: '바닥 후보 풀', count: pool.length, open: pool.length <= 15,
-      desc: `조건식에 한 번 잡힌 종목을 ${d.bowl_lookback || 60}거래일 동안 매일 다시 판정 · 통과 단계 많은 순`,
-      emptyDesc: '없음 — 조건식에 잡힌 종목이 장후 배치마다 쌓입니다',
+      desc: `장중 30분마다 조건식에 잡힌 종목을 편입 · ${d.bowl_lookback || 60}거래일 동안 매일 다시 판정 · 통과 단계 많은 순`,
+      emptyDesc: '없음 — 장중 30분마다·장후 배치마다 조건식에 잡힌 종목이 쌓입니다',
       body: `<table class="tbl"><thead><tr><th>종목</th><th>단계</th><th>결과</th><th>장중 ${esc(pv.slot || '')}</th><th class="num">20/60 거리</th><th class="num">주봉 RSI 최저</th><th class="num">거래대금 5/60일</th><th class="num">첫 편입</th></tr></thead><tbody>`
         + poolSorted.map((r) => {
           const pr = pvRows[r.code];

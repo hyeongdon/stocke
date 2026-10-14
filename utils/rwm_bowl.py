@@ -34,6 +34,7 @@ DEFAULT_PARAMS: Dict[str, Any] = {
     "max_pool_codes": 200,
     "include_global_watchlist": False,
     "intraday_preview": True,
+    "intraday_condition_scan": True,
     "preview_interval_min": 30,
     "preview_alert": True,
     "manual_daily_report": True,

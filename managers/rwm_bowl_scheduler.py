@@ -4,7 +4,8 @@
 - 15:40 장후 배치: 조건식 ∪ 바닥 후보 풀 ∪ 수동 ∪ 보유 → 확정 일봉 판정 → 익일 감시 목록 · 보유 청산 판정 · 텔레그램
 - 08:40~13:30 캐치업: 전 거래일 배치를 놓쳤으면 그 날 확정 일봉으로 1회 실행
 - 장중 3분봉 감시: 감시 종목 EMA20 눌림 반등 확정 봉에서 BUY 신호 생성
-- 09:30~15:00 30분마다 장중 신호 예상: 바닥 후보 풀·수동 종목을 현재가 기준으로 재판정 (표시·알림만, 매매 없음)
+- 09:30~15:00 30분마다 조건식 조회 → 바닥 후보 풀 편입 · 오늘 결과 누적 (장후 배치는 실시간 ∪ 누적)
+- 같은 주기로 장중 신호 예상: 바닥 후보 풀·수동 종목을 현재가 기준으로 재판정 (표시·알림만, 매매 없음)
 - 15:00 보유 종목 청산선(MA20, 급등 후 MA10) 1% 이내 접근 경고
 - 15:10 급등(+15% 양봉) 이후 보유 종목이 현재가 기준 10일선 아래면 당일 장중 전량 익절
 """
@@ -175,7 +176,7 @@ class RwmBowlScheduler:
         from utils.rwm_bowl import params_from_settings
 
         p = params_from_settings(settings)
-        if not p.get("intraday_preview", True):
+        if not (p.get("intraday_preview", True) or p.get("intraday_condition_scan", True)):
             return
         if self._preview_task and not self._preview_task.done():
             return
@@ -202,11 +203,18 @@ class RwmBowlScheduler:
             parse_code_list,
         )
 
+        now = now_kst()
+        today = now.date()
+        p = params_from_settings(settings)
+        if p.get("intraday_condition_scan", True):
+            try:
+                await self._scan_condition_to_pool(settings, p, today)
+            except Exception as e:
+                logger.warning(f"🥣 [RWM] 장중 조건식 스캔 오류: {e}")
+        if not p.get("intraday_preview", True):
+            return
         try:
-            now = now_kst()
-            today = now.date()
             store = get_state_store()
-            p = params_from_settings(settings)
             _, buys, all_held = self._rwm_positions()
             watching = set(store.active_watch(today).keys())
             names = store.data.get("names") or {}
@@ -289,27 +297,70 @@ class RwmBowlScheduler:
 
         store = get_state_store()
         cache = store.data.get("condition_cache") or {}
-        if cache.get("date") == today.isoformat():
-            if cache.get("items") or not cache.get("errors"):
+        if cache.get("date") == today.isoformat() and cache.get("final_at"):
+            if not cache.get("errors"):
                 return
             try:
-                if (now_kst() - datetime.fromisoformat(str(cache.get("at")))).total_seconds() < _PREFETCH_RETRY_SEC:
+                if (now_kst() - datetime.fromisoformat(str(cache.get("final_at")))).total_seconds() < _PREFETCH_RETRY_SEC:
                     return
             except (TypeError, ValueError):
                 pass
         names = parse_condition_names(getattr(settings, "rwm_condition_names", None) or DEFAULT_CONDITION_NAME)
         items, errors = await fetch_condition_target_items(kiwoom_api, names)
-        store.data["condition_cache"] = {
-            "date": today.isoformat(),
-            "at": now_kst().isoformat(timespec="seconds"),
-            "items": [
-                {k: it.get(k) for k in ("stock_code", "stock_name", "current_price", "volume", "product_type")}
-                for it in items
-            ],
-            "errors": errors,
-        }
+        n_total = self._merge_condition_cache(store, today, items, errors)
+        store.data["condition_cache"]["final_at"] = now_kst().isoformat(timespec="seconds")
         store.save()
-        logger.info(f"🥣 [RWM] 15:20 조건식 사전 조회 {len(items)}종목 (실패 {errors or '-'})")
+        logger.info(f"🥣 [RWM] 15:20 조건식 사전 조회 {len(items)}종목 · 오늘 누적 {n_total} (실패 {errors or '-'})")
+
+    @staticmethod
+    def _merge_condition_cache(store, today: date, items: List[Dict[str, Any]], errors: List[str]) -> int:
+        """오늘 조건식 결과 누적 (장중 30분 스캔 · 15:20 · 장후 조회 합집합). 반환: 누적 종목 수."""
+        iso = today.isoformat()
+        cache = store.data.get("condition_cache") or {}
+        if cache.get("date") != iso:
+            cache = {"date": iso, "items": []}
+        by_code = {str(it.get("stock_code") or ""): it for it in cache.get("items") or []}
+        for it in items:
+            code = str(it.get("stock_code") or "")
+            if code:
+                by_code[code] = {k: it.get(k) for k in ("stock_code", "stock_name", "current_price", "volume", "product_type")}
+        cache["items"] = list(by_code.values())
+        cache["at"] = now_kst().isoformat(timespec="seconds")
+        cache["errors"] = errors
+        cache["runs"] = int(cache.get("runs") or 0) + 1
+        store.data["condition_cache"] = cache
+        return len(by_code)
+
+    async def _scan_condition_to_pool(self, settings, p: Dict[str, Any], today: date) -> List[str]:
+        """장중 조건식 조회 → 오늘 누적 캐시 + 바닥 후보 풀 편입. 반환: 새로 편입된 코드."""
+        from api.kiwoom_api import KiwoomAPI, kiwoom_api
+        from utils.rwm_bowl import DEFAULT_CONDITION_NAME, get_state_store, trading_days_back, update_r_pool
+        from utils.screener_targets import fetch_condition_target_items, parse_condition_names
+
+        store = get_state_store()
+        names = parse_condition_names(getattr(settings, "rwm_condition_names", None) or DEFAULT_CONDITION_NAME)
+        items, errors = await fetch_condition_target_items(kiwoom_api, names)
+        self._merge_condition_cache(store, today, items, errors)
+        found: Dict[str, str] = {}
+        names_cache: Dict[str, str] = store.data.setdefault("names", {})
+        for it in items:
+            code = KiwoomAPI.normalize_stock_code(str(it.get("stock_code") or ""))
+            nm = str(it.get("stock_name") or "")
+            if code and KiwoomAPI._is_screener_stock(nm, it.get("product_type")):
+                found[code] = nm
+                if nm:
+                    names_cache[code] = nm
+        pool = store.r_pool()
+        before = set(pool)
+        update_r_pool(
+            pool, found, today,
+            keep_from=trading_days_back(today, int(p["bowl_lookback"]) - 1),
+            max_codes=int(p["max_pool_codes"]),
+        )
+        store.save()
+        added = [c for c in pool if c not in before]
+        logger.info(f"🥣 [RWM] 장중 조건식 {len(found)}종목 · 풀 신규 {len(added)} (실패 {errors or '-'})")
+        return added
 
     async def _collect_universe(
         self, settings, p: Dict[str, Any], today: date, held_codes: Dict[str, str],
@@ -335,11 +386,12 @@ class RwmBowlScheduler:
         except Exception as e:
             errors = list(names)
             logger.warning(f"🥣 [RWM] 조건식 조회 실패: {e}")
-        if not items:
-            cache = store.data.get("condition_cache") or {}
-            if cache.get("date") == today.isoformat() and cache.get("items"):
-                items = list(cache["items"])
-                logger.info(f"🥣 [RWM] 장후 조건식 결과 없음 → 15:20 캐시 {len(items)}종목 사용")
+        cache = store.data.get("condition_cache") or {}
+        if cache.get("date") == today.isoformat() and cache.get("items"):
+            live = {str(it.get("stock_code") or "") for it in items}
+            extra = [it for it in cache["items"] if str(it.get("stock_code") or "") not in live]
+            items = list(items) + extra
+            logger.info(f"🥣 [RWM] 조건식 실시간 {len(live)} + 오늘 장중 누적 {len(extra)} = {len(items)}종목")
 
         cond: List[Dict[str, Any]] = []
         for it in items:

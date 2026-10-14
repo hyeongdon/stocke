@@ -481,6 +481,7 @@ MACD 골든크로스 당일부터 `macd_fresh_days` 안에서 MACD > 시그널�
   "surge_exit_ma": 10,
   "surge_exit_hm": "15:10",
   "intraday_preview": true,
+  "intraday_condition_scan": true,
   "preview_interval_min": 30,
   "preview_alert": true,
   "manual_daily_report": true,
@@ -938,6 +939,7 @@ W 반전: %R −88 → −71 (09/03, 바닥 체류 3일)
 | 0.3.1 | 2026-10-08 | **대상 종목을 HTS 조건식(`RWM밥그릇`)으로 확정**(사용자 결정). `technical_snapshots` 프리필터 삭제 — DB 확인 결과 최신 2026-07-06·171종목뿐. 조건식 초안(§3.6)·조회 시점·운영 눈금 추가. 장중 3분봉을 `ka10080` 폴링 → `realtime_candle_manager` 실시간 구독으로 변경 (EMA20 시드만 `ka10080`) |
 | 0.3.2 | 2026-10-08 | **수동 추가 종목**(사용자 요구, §3.6.1). RWM 전용 `rwm_manual_codes` (공용 `watchlist_codes` 미사용), 설정 폼·대시보드 추가/삭제, 판정 동일·스티키·trim 면제, 수동 종목 장후 판정 현황 리포트. (P1) 텔레그램 `/rwm add·del·list` |
 | 0.4.0 | 2026-10-13 | **M = MACD 로 재정의**(사용자 확정, D5-1). 신호 트리거 = 일봉 MACD 골든크로스 `macd_fresh_days`(3) 이내, 실패 `NO_MACD_GC`. 20/60 GC·임박은 상태 필터로 유지(`gc_fresh_days`·`m_fresh_days`·`MA_SETUP_STALE` 폐지). 설정 폼 "GC 신선도" → "MACD GC 신선도"(컬럼 `rwm_gc_fresh_days` 재사용), "M 신선도" 삭제. 대시보드 배지 R·W·M(MACD)·MA. **유동성 = 최근 10거래일 평균 거래대금 30억 이상**(사용자 결정, 20일 → 10일, `min_trading_value`·`liquidity_days`) |
+| 0.4.3 | 2026-10-13 | **장중 조건식 스캔**(사용자 요청, 30분): 09:30~15:00 `preview_interval_min` 마다 조건식 조회 → 바닥 후보 풀 즉시 편입 + 오늘 결과 누적(`condition_cache` 합집합). 장후 배치 조건식 = 실시간 조회 ∪ 오늘 누적 (장후 조회가 장중보다 적게 나와 21→2 종목만 판정된 문제 해결). `intraday_condition_scan` |
 | 0.4.2 | 2026-10-13 | **급등 후 10일선 익절**(사용자 결정): 매수일 이후 전일 대비 +`surge_day_pct`(15)% 이상 양봉이 한 번이라도 나오면 청산선을 20일선 → `surge_exit_ma`(10)일선으로 전환(이후 유지). `surge_exit_hm`(15:10)에 현재가 < 10일선이면 **당일 장중 전량** (`EXIT_MA10`, 장 마감 20분 전). 15:10 에 놓치고 종가가 10일선 아래면 15:40 판정 → 다음 날 시가. 급등 없는 종목은 20일선 종가 이탈 · 하드 손절(MA20 −3%) 그대로. 15:00 접근 경고도 청산선 기준 |
 | 0.4.1 | 2026-10-13 | **장중 신호 예상**(사용자 요청, 30분 간격): 바닥 후보 풀·수동 종목을 장중 현재가로 재판정해 대시보드 표시 + 신규 예상 텔레그램 알림. 매매 영향 없음 (`intraday_preview`·`preview_interval_min`·`preview_alert`) |
 
