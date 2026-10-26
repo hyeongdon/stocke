@@ -534,6 +534,7 @@ class BuyOrderExecutor:
                 "fractal": "프랙탈",
                 "ma1592": "15/92홀드",
                 "rwm_bowl": "RWM밥그릇",
+                "rsi_ladder": "분할매수",
             }.get(strategy_key, strategy_key)
             if not is_add_buy:
                 from utils.market_risk_gate import check_market_risk_buy_allowed
@@ -677,7 +678,12 @@ class BuyOrderExecutor:
                         )
                         await self._update_signal_status(signal.id, "FAILED", reason)
                         return
-            elif self.auto_trade_settings and not is_add_buy and self.auto_trade_settings.use_entry_gate:
+            elif (
+                self.auto_trade_settings
+                and not is_add_buy
+                and strategy_key != "rsi_ladder"
+                and self.auto_trade_settings.use_entry_gate
+            ):
                 gate_ok, gate_reason = await check_entry_gate(
                     self.kiwoom_api,
                     self.auto_trade_settings,
@@ -817,7 +823,8 @@ class BuyOrderExecutor:
             # 1c. 최대 동시 보유 (신규 매수만 — 대기 신호 슬롯 포함)
             # 종가배팅은 jongga_max_slots로 별도 관리 — 전역 한도와 분리
             from utils.auto_trade_engine import _normalize_strategy_key
-            skip_global_slot_cap = _normalize_strategy_key(strategy_key) == "jongga"
+            # 분할매수는 사용자가 종목·예산을 직접 지정한 사다리 — 전역 동시보유 한도와 분리
+            skip_global_slot_cap = _normalize_strategy_key(strategy_key) in ("jongga", "rsi_ladder")
             if self.auto_trade_settings and not is_add_buy and not skip_global_slot_cap:
                 limit = max_concurrent_positions_limit(self.auto_trade_settings)
                 if limit > 0:
@@ -970,6 +977,17 @@ class BuyOrderExecutor:
                     qty = int(sizing.get("qty") or 0)
                     meta["suggested_qty"] = qty
                     planned = qty * entry_px if qty > 0 else 0
+                elif strategy == "rsi_ladder":
+                    suggested = int(meta.get("suggested_qty") or 0)
+                    current_price = await self._get_current_price(signal.stock_code)
+                    entry_px = int(current_price or meta.get("current_price") or 0)
+                    if entry_px <= 0:
+                        return {
+                            "valid": False,
+                            "reason": "현재가 조회 실패(분할매수 수량)",
+                            "retryable": True,
+                        }
+                    planned = suggested * entry_px if suggested > 0 else 0
                 elif is_add_buy and strategy == "ma1592":
                     suggested = int(meta.get("suggested_qty") or 0)
                     current_price = await self._get_current_price(signal.stock_code)
@@ -1129,13 +1147,15 @@ class BuyOrderExecutor:
                     is_fractal = strategy == "fractal"
                     is_ma1592 = strategy == "ma1592"
                     is_rwm = strategy == "rwm_bowl"
-                    skip_legacy_momentum = is_fractal or is_ma1592 or is_rwm
+                    # 분할매수: 사용자가 지정한 종목·사다리 — 레거시 등락률·가격상한·진입 게이트 미적용
+                    is_ladder = strategy == "rsi_ladder"
+                    skip_legacy_momentum = is_fractal or is_ma1592 or is_rwm or is_ladder
                     need_min_change = (
                         (not skip_legacy_momentum) and effective_min_change_rate(cfg) is not None
                     )
-                    need_price_cap = bool(cfg.buy_below_price)
+                    need_price_cap = bool(cfg.buy_below_price) and not is_ladder
                     need_price = need_price_cap or need_min_change
-                    need_gate = bool(cfg.use_entry_gate) and not (is_ma1592 or is_rwm)
+                    need_gate = bool(cfg.use_entry_gate) and not (is_ma1592 or is_rwm or is_ladder)
                     if need_price or need_gate:
                         current_price = await self._get_current_price(signal.stock_code)
                         if not current_price:
@@ -1707,6 +1727,15 @@ class BuyOrderExecutor:
                 )
                 qty_hint = int(sizing.get("qty") or 0)
                 amount = qty_hint * int(current_price) if qty_hint > 0 and current_price else 0
+            if strategy_key == "rsi_ladder":
+                # 사다리 단계 수량 그대로 (시장가 여유 버퍼로 줄이지 않음), 현금 한도만 적용
+                investable = int(account_info.get("investable_cash") or 0)
+                px = int(current_price or 0)
+                qty = min(int(suggested_qty or 0), investable // px) if px > 0 else 0
+                if detail is not None:
+                    detail.update(sizing_price=px)
+                logger.info(f"💰 [BUY_EXECUTOR] 분할매수 수량: {qty}주 (요청 {suggested_qty}, 가능 {investable:,}원)")
+                return qty, qty * px
             investable = account_info.get("investable_cash", 0)
             capped = cap_buy_amount_by_cash(amount, investable)
             if capped < amount:
@@ -2075,6 +2104,8 @@ class BuyOrderExecutor:
             elif strategy == "rwm_bowl":
                 m_type = str(meta.get("m_type") or "")
                 note = f"RWM밥그릇 {'M1' if m_type == 'M1_GC' else 'M2'} · 3분봉 눌림"
+            elif strategy == "rsi_ladder":
+                note = "분할매수 수동 추가" if meta.get("ladder_extra") else f"분할매수 {entry_leg}차"
             elif is_add:
                 trig = settings.add_buy_trigger if settings else None
                 if change_rate is not None and trig is not None:

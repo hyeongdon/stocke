@@ -702,6 +702,8 @@ class TechnicalSnapshot(Base):
     ma20_bias = Column(Float, nullable=True)
 
     rsi14 = Column(Float, nullable=True)
+    weekly_rsi14 = Column(Float, nullable=True)  # 마지막 확정 주봉 RSI(14)
+    weekly_rsi14_min26 = Column(Float, nullable=True)  # 최근 26주 주봉 RSI 최저
     atr14 = Column(Float, nullable=True)
     atr14_pct = Column(Float, nullable=True)
 
@@ -1030,6 +1032,17 @@ def get_auto_trade_settings_row(session: Session, create_default: bool = False) 
         session.add(row)
         session.commit()
     return row
+
+
+def ensure_technical_snapshot_columns() -> None:
+    """technical_snapshots 확장 컬럼 (SQLite). 배치 단독 실행 시에도 호출."""
+    TechnicalSnapshot.__table__.create(bind=engine, checkfirst=True)
+    with engine.connect() as conn:
+        ts_cols = {row[1] for row in conn.execute(text("PRAGMA table_info('technical_snapshots')"))}
+        for col_name, col_def in [("weekly_rsi14", "FLOAT"), ("weekly_rsi14_min26", "FLOAT")]:
+            if col_name not in ts_cols:
+                conn.execute(text(f"ALTER TABLE technical_snapshots ADD COLUMN {col_name} {col_def}"))
+                conn.commit()
 
 
 def init_db() -> None:
@@ -1599,6 +1612,8 @@ def init_db() -> None:
                     if col_name not in fs_cols:
                         conn.execute(text(f"ALTER TABLE fundamental_snapshots ADD COLUMN {col_name} {col_def}"))
                         conn.commit()
+
+            ensure_technical_snapshot_columns()
 
             # theme_tags / theme_tag_edges 확장 (연관도 v2)
             result = conn.execute(

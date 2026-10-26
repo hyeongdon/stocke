@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>분할매수 감시</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/dashboard.css?v=64">
+  <link rel="stylesheet" href="/static/ladder.css?v=3">
+  <script src="/static/theme-sync.js?v=1"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <h1>분할매수 감시</h1>
+        <span class="sub">RSI 저점 + 20/60 GC · 15:05 −5% 추가매수 · 최대 10차 · 이평 단계 익절</span>
+      </div>
+      <nav class="tabs">
+        <a href="/dashboard" class="tab">대시보드</a>
+        <a href="/ladder" class="tab active">분할매수</a>
+        <a href="/analysis" class="tab-link">분석 ↗</a>
+        <a href="/verify" class="tab-link">검증 ↗</a>
+        <a href="/exit-replay" class="tab-link">전략 시뮬 ↗</a>
+      </nav>
+      <div class="topbar-actions ladder-top-actions">
+        <span class="ld-mock-badge" id="modeBadge" title="계좌 모드 · 자동매매 상태">계좌 확인 중</span>
+        <span class="ld-judge-clock" id="judgeClock" title="매수·매도 판정은 매일 15:05 현재가 기준">다음 판정 15:05</span>
+        <span class="hint" id="lastJudge"></span>
+        <button type="button" class="btn sm" id="btnRefresh" title="현재가·지표 다시 조회">↻</button>
+        <button type="button" class="btn sm" id="btnJudge" title="지금 현재가로 판정하면 어떤 주문이 나갈지 미리 봅니다 (주문 없음)">판정 미리보기</button>
+        <button type="button" class="btn sm ld-watch-toggle" id="btnWatchToggle">자동감시</button>
+        <button type="button" class="btn sm primary" id="btnNewPlan">+ 새 사다리</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="wrap ladder-wrap">
+    <section class="ld-summary" id="summaryCards"></section>
+
+    <div class="ld-main">
+      <div class="card ld-list-card">
+        <div class="card-head">
+          <h3>사다리 목록</h3>
+          <div class="ld-filter" id="statusFilter">
+            <button type="button" class="btn sm active" data-f="all">전체</button>
+            <button type="button" class="btn sm" data-f="RSI_WAIT">진입 대기</button>
+            <button type="button" class="btn sm" data-f="ACTIVE">감시중</button>
+            <button type="button" class="btn sm" data-f="EXITING">익절 진행</button>
+            <button type="button" class="btn sm" data-f="FULL">10차·수동판단</button>
+            <button type="button" class="btn sm" data-f="PAUSED">일시정지</button>
+          </div>
+        </div>
+        <div class="card-body ld-table-wrap">
+          <table class="ld-table" id="planTable">
+            <thead>
+              <tr>
+                <th>종목</th>
+                <th>상태</th>
+                <th>진행</th>
+                <th class="r">현재가</th>
+                <th class="r">평단</th>
+                <th class="r">수익률 <span class="hint">(최고)</span></th>
+                <th class="r">다음 매수가</th>
+                <th class="r">거리</th>
+                <th>매도 단계</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="ld-legend hint">
+          진행 점: <i class="ld-dot on"></i> 체결 <i class="ld-dot next"></i> 다음 매수 <i class="ld-dot"></i> 대기 ·
+          거리 = 현재가 대비 다음 매수가(15:05 현재가가 이 가격 이하면 매수) · ⚡ 3% 이내
+        </div>
+      </div>
+
+      <div class="card ld-detail-card" id="detailCard">
+        <div class="card-head">
+          <h3 id="detailTitle">종목을 선택하세요</h3>
+          <div class="ld-detail-actions" id="detailActions"></div>
+        </div>
+        <div class="card-body" id="detailBody">
+          <div class="hint">왼쪽 목록에서 종목을 클릭하면 상세가 표시됩니다.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-title">이벤트 로그</div>
+    <div class="card">
+      <div class="card-body scroll ld-log" id="eventLog"></div>
+    </div>
+  </div>
+
+  <div class="ld-modal" id="newPlanModal" hidden>
+    <div class="ld-modal-box card">
+      <div class="card-head">
+        <h3>새 분할매수 사다리</h3>
+        <button type="button" class="btn sm" id="btnCloseModal">✕</button>
+      </div>
+      <div class="card-body ld-modal-body">
+        <form class="ld-form" id="newPlanForm" autocomplete="off">
+          <div class="ld-form-sec">종목 · 금액</div>
+          <label>종목코드
+            <input type="text" name="code" maxlength="6" placeholder="005930" required>
+          </label>
+          <label>종목명 (자동 조회)
+            <input type="text" name="name" placeholder="코드 입력 시 자동">
+          </label>
+          <label>총 투자금 (원) — 차수당 = 투자금 ÷ 최대 차수
+            <input type="number" name="budget" value="10000000" min="10000" step="100000">
+          </label>
+          <label>메모
+            <input type="text" name="memo" maxlength="100" placeholder="선택">
+          </label>
+
+          <div class="ld-form-sec">1차 진입</div>
+          <label>진입 방식
+            <select name="entry">
+              <option value="auto">자동: (주봉 RSI 저점 or 일봉 RSI 저점 N회) + 20/60 GC</option>
+              <option value="manual">수동: 등록 즉시 1차 시장가 매수 (정규장)</option>
+            </select>
+          </label>
+          <div class="ld-form-row">
+            <label>주봉 RSI ≤
+              <input type="number" name="rsiW" value="30" min="5" max="50">
+            </label>
+            <label>일봉 RSI ≤
+              <input type="number" name="rsiD" value="30" min="5" max="50">
+            </label>
+          </div>
+          <div class="ld-form-row">
+            <label>일봉 기간(일)
+              <input type="number" name="lookback" value="120" min="20" max="250">
+            </label>
+            <label>저점 횟수 ≥
+              <input type="number" name="lowCount" value="3" min="1" max="10">
+            </label>
+          </div>
+
+          <div class="ld-form-sec">추가 매수 (매일 15:05 현재가 기준)</div>
+          <div class="ld-form-row">
+            <label>하락 간격 %
+              <input type="number" name="step" value="5" min="1" max="30" step="0.5">
+            </label>
+            <label>자동 최대 차수
+              <input type="number" name="maxSteps" value="10" min="1" max="20">
+            </label>
+          </div>
+
+          <div class="ld-form-sec">매도</div>
+          <label class="ld-check"><input type="checkbox" name="s0" checked> 무장 전, 수익 중 20일선 이탈 시 50% 매도</label>
+          <label>익절 무장 수익률 %
+            <input type="number" name="arm" value="15" min="1" max="100" step="0.5">
+          </label>
+          <div class="hint">무장 후: 10일선 이탈 50% → 15일선 이탈 25% → 20일선 이탈 나머지</div>
+          <div class="ld-form-actions">
+            <button type="submit" class="btn primary">등록</button>
+          </div>
+        </form>
+        <div class="ld-preview">
+          <div class="ld-preview-head">사다리 미리보기</div>
+          <div id="previewSummary" class="hint"></div>
+          <table class="ld-table ld-steps" id="previewTable">
+            <thead><tr><th>차수</th><th class="r">매수가</th><th class="r">1차 대비</th><th class="r">수량</th><th class="r">금액</th><th class="r">누적 평단</th><th class="r">+15% 무장가</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/ladder.js?v=4"></script>
+</body>
+</html>

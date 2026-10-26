@@ -26,9 +26,19 @@ if sys.platform == "win32":
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 from api.kiwoom_api import KiwoomAPI  # noqa: E402
-from core.models import FundamentalSnapshot, get_db  # noqa: E402
+from core.models import FundamentalSnapshot, ensure_technical_snapshot_columns, get_db  # noqa: E402
 from utils.technical_mart_store import upsert_many  # noqa: E402
 from utils.datetime_kst import kst_today, now_kst  # noqa: E402
+from utils.rwm_bowl import (  # noqa: E402
+    drop_unconfirmed_daily,
+    is_week_closed,
+    normalize_daily_bars,
+    resample_weekly,
+    wilder_rsi_series,
+)
+
+WEEKLY_RSI_PERIOD = 14
+WEEKLY_RSI_LOOKBACK_WEEKS = 26
 
 LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
 LOG_FILE = os.path.join(LOG_DIR, "technical_mart_batch.log")
@@ -63,8 +73,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--bars",
         type=int,
-        default=150,
-        help="종목당 조회 일봉 수(기본: 150, 최소 권장 121)",
+        default=400,
+        help="종목당 조회 일봉 수(기본: 400 ≈ 80주, 주봉 RSI 26주 최저 계산용)",
     )
     parser.add_argument(
         "--workers",
@@ -201,6 +211,22 @@ def _calc_mvp_from_bars(bars: Sequence[dict]) -> Optional[Dict]:
     }
 
 
+def _calc_weekly_rsi(raw_bars: Sequence[dict]) -> Dict[str, Optional[float]]:
+    """확정 주봉 RSI(14) — 분할매수(rsi_ladder) 진입 판정과 같은 방식."""
+    daily = drop_unconfirmed_daily(normalize_daily_bars(raw_bars or []), now_kst().replace(tzinfo=None))
+    out: Dict[str, Optional[float]] = {"weekly_rsi14": None, "weekly_rsi14_min26": None}
+    if not daily:
+        return out
+    weeks = resample_weekly(daily, last_week_closed=is_week_closed(daily[-1]["date"]))
+    w_rsi = wilder_rsi_series([w.close for w in weeks], WEEKLY_RSI_PERIOD)
+    if w_rsi and w_rsi[-1] is not None:
+        out["weekly_rsi14"] = round(w_rsi[-1], 2)
+    recent = [v for v in w_rsi[-WEEKLY_RSI_LOOKBACK_WEEKS:] if v is not None]
+    if recent:
+        out["weekly_rsi14_min26"] = round(min(recent), 2)
+    return out
+
+
 def _load_universe(market: str = "all", limit: int = 0) -> Tuple[datetime.date, List[Dict]]:
     """기본적분석 최신일을 기준으로 종목 유니버스 로드."""
     for db in get_db():
@@ -245,6 +271,7 @@ async def _process_one(
             mvp = _calc_mvp_from_bars(chart or [])
             if not mvp:
                 return None
+            mvp.update(_calc_weekly_rsi(chart or []))
             mvp.update(
                 {
                     "stock_code": code,
@@ -267,6 +294,7 @@ async def _run_async(args: argparse.Namespace, logger: logging.Logger) -> int:
         logger.error("유니버스가 비어 있습니다. fundamental_mart_batch를 먼저 실행하세요.")
         return 1
 
+    ensure_technical_snapshot_columns()
     api = KiwoomAPI()
     if not api.authenticate():
         logger.error("키움 API 인증 실패")

@@ -7,7 +7,7 @@
   <title>기본적분석</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/dashboard.css?v=64">
-  <link rel="stylesheet" href="/static/analysis.css?v=7">
+  <link rel="stylesheet" href="/static/analysis.css?v=8">
   <script src="/static/theme-sync.js?v=1"></script>
 </head>
 <body>
@@ -19,6 +19,7 @@
       </div>
       <nav class="tabs">
         <a href="/dashboard" class="tab">대시보드</a>
+        <a href="/ladder" class="tab-link">분할매수 ↗</a>
         <a href="/analysis" class="tab active">분석</a>
         <a href="/theme-map" class="tab-link">테마맵 ↗</a>
         <a href="/verify" class="tab-link">검증 ↗</a>
@@ -78,6 +79,7 @@
         <label>PER ≤<input type="number" id="fltMaxPer" placeholder="예: 15" step="0.1" min="0"></label>
         <label>PBR ≤<input type="number" id="fltMaxPbr" placeholder="예: 2" step="0.1" min="0"></label>
         <label>ROE ≥<input type="number" id="fltMinRoe" placeholder="예: 10" step="0.1"></label>
+        <label title="기술적 마트 배치(주봉 확정 RSI14) 기준">주봉RSI ≤<input type="number" id="fltMaxWeeklyRsi" placeholder="예: 30" step="1" min="0" max="100"></label>
         <button class="btn sm" id="btnApply" type="button">필터 적용</button>
         <button class="btn sm" id="btnReset" type="button">초기화</button>
       </div>
@@ -107,6 +109,6 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/static/analysis.js?v=10"></script>
+  <script src="/static/analysis.js?v=13"></script>
 </body>
 </html>

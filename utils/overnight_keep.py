@@ -8,7 +8,7 @@ from typing import List, Optional, Sequence, Set, Tuple
 DEFAULT_OVERNIGHT_KEEP_SLOTS = 3
 DEFAULT_OVERNIGHT_MAX_PER_STRATEGY = 1
 # 스윙 전략 — 자체 일봉 청산 규칙만 따르므로 장마감 슬롯 정리 대상이 아님 (슬롯 미차감)
-SWING_KEEP_STRATEGIES = frozenset({"rwm_bowl"})
+SWING_KEEP_STRATEGIES = frozenset({"rwm_bowl", "rsi_ladder"})
 
 
 def normalize_strategy_key(key: Optional[str]) -> str:

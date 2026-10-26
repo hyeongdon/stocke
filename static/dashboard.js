@@ -1536,6 +1536,7 @@ const STRATEGY_LABEL = {
   fractal: '프랙탈',
   ma1592: '15/92홀드',
   rwm_bowl: 'RWM밥그릇',
+  rsi_ladder: '분할매수',
 };
 
 function posStrategyChipHtml(p) {
@@ -2136,6 +2137,7 @@ const STRATEGY_PROFILE_LABELS = {
   fractal: '프랙탈 스캘핑',
   ma1592: '15/92홀드',
   rwm_bowl: 'RWM 밥그릇',
+  rsi_ladder: '분할매수',
   oversold_breakout: '수급 돌파',
   sangtta_breakout: '상따',
   yeokmaegongpa: '역매공파',

@@ -1011,6 +1011,9 @@ class KiwoomAPI:
 
         stock_code = self.normalize_stock_code(stock_code)
         normalized = (period or "1D").strip().upper()
+        is_weekly = normalized in {"1W", "W", "WEEK", "WEEKLY"}
+        if is_weekly:
+            normalized = "1W"
         is_daily = normalized in {"1D", "D", "DAY", "DAILY"}
         is_minute_chart = normalized in {
             "5M", "5MIN", "M5", "5MINUTE", "5",
@@ -1022,7 +1025,7 @@ class KiwoomAPI:
         cache_key = (
             f"{stock_code}:AL:{normalized}" if is_minute_chart else f"{stock_code}:{normalized}"
         )
-        ttl = self._daily_chart_cache_ttl if is_daily else self._chart_cache_ttl
+        ttl = self._daily_chart_cache_ttl if (is_daily or is_weekly) else self._chart_cache_ttl
         if cache_ttl_sec is not None:
             try:
                 ttl = max(1.0, float(cache_ttl_sec))
@@ -1036,7 +1039,7 @@ class KiwoomAPI:
                 return data[-max_bars:] if max_bars and data else data
 
         # 분봉도 검증·시뮬용 allow_off_hours 허용
-        if not is_krx_session() and not (allow_off_hours and (is_daily or is_minute_chart)):
+        if not is_krx_session() and not (allow_off_hours and (is_daily or is_weekly or is_minute_chart)):
             if cached:
                 logger.debug(f"장외 시간 — 차트 캐시 사용: {cache_key}")
                 data = cached[0]
@@ -1085,7 +1088,7 @@ class KiwoomAPI:
                     "upd_stkpc_tp": "1",
                 }
             else:
-                api_id = 'ka10081'
+                api_id = 'ka10082' if is_weekly else 'ka10081'
                 today = now_kst()
                 if today.weekday() == 5:
                     base_dt = (today - timedelta(days=1)).strftime('%Y%m%d')
@@ -1129,11 +1132,10 @@ class KiwoomAPI:
                             data = await response.json()
                             if data.get('return_code') == 0:
                                 parsed = self._parse_kiwoom_chart_data(data, stock_code)
-                                if parsed and max_bars and len(parsed) > max_bars:
-                                    parsed = parsed[-max_bars:]
+                                # 캐시는 자르지 않은 전체 봉 — max_bars 가 다른 호출끼리 공유
                                 if parsed:
                                     self._chart_cache[cache_key] = (parsed, time.time())
-                                return parsed
+                                return parsed[-max_bars:] if max_bars and parsed else parsed
                             msg = (data.get('return_msg') or "").lower()
                             if any(k in msg for k in ["rate limit", "too many", "요청 한도", "429", "제한", "초과"]):
                                 api_rate_limiter.handle_api_error(Exception(data.get('return_msg', 'rate limit')))
@@ -3456,8 +3458,20 @@ class KiwoomAPI:
         try:
             # 분봉 데이터 (ka10080)
             minute_chart_list = api_response.get('stk_min_pole_chart_qry', [])
-            # 일봉 데이터 (ka10081)
-            daily_chart_list = api_response.get('stk_dt_pole_chart_qry', [])
+            # 일봉 데이터 (ka10081) · 주봉 데이터 (ka10082, dt = 그 주 기준일) — 행 형식 동일
+            daily_chart_list = (
+                api_response.get('stk_dt_pole_chart_qry')
+                or api_response.get('stk_stk_pole_chart_qry')
+                or []
+            )
+            if not minute_chart_list and not daily_chart_list:
+                daily_chart_list = next(
+                    (
+                        v for k, v in api_response.items()
+                        if str(k).endswith('_pole_chart_qry') and isinstance(v, list) and v
+                    ),
+                    [],
+                )
             
             if minute_chart_list:
                 if verbose:

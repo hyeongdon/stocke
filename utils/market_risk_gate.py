@@ -16,6 +16,7 @@ _STRATEGY_LABEL = {
     "jongga": "종가배팅",
     "fractal": "프랙탈 스캘핑",
     "rwm_bowl": "RWM밥그릇",
+    "rsi_ladder": "분할매수",
 }
 
 
@@ -33,6 +34,8 @@ def normalize_strategy_key(strategy: Optional[str]) -> str:
         return "ma1592"
     if key == "rwm_bowl":
         return "rwm_bowl"
+    if key == "rsi_ladder":
+        return "rsi_ladder"
     return "legacy"
 
 
@@ -488,12 +491,16 @@ def strategy_limited_when_bad(settings: Any, strategy: Optional[str]) -> bool:
         return _as_bool(settings, "market_risk_block_ma1592", True)
     if key == "rwm_bowl":
         return _as_bool(settings, "market_risk_block_rwm_bowl", True)
+    if key == "rsi_ladder":
+        return False
     return _as_bool(settings, "market_risk_block_legacy", True)
 
 
 def strategy_limited_when_surge(settings: Any, strategy: Optional[str]) -> bool:
     """급등장일 때 해당 전략에 횟수 제한을 적용할지. 기본은 전 전략 적용."""
     key = normalize_strategy_key(strategy)
+    if key == "rsi_ladder":
+        return False
     attr = {
         "sangtta": "market_surge_block_sangtta",
         "breakout": "market_surge_block_breakout",

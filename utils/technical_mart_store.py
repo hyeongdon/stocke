@@ -34,6 +34,8 @@ def _row_to_dict(row: TechnicalSnapshot) -> dict:
         "ma5_bias": row.ma5_bias,
         "ma20_bias": row.ma20_bias,
         "rsi14": row.rsi14,
+        "weekly_rsi14": row.weekly_rsi14,
+        "weekly_rsi14_min26": row.weekly_rsi14_min26,
         "atr14": row.atr14,
         "atr14_pct": row.atr14_pct,
         "high_20d": row.high_20d,
@@ -80,6 +82,8 @@ def upsert_snapshot(db: Session, data: dict, as_of_date: date, timeframe: str = 
         "ma5_bias": data.get("ma5_bias"),
         "ma20_bias": data.get("ma20_bias"),
         "rsi14": data.get("rsi14"),
+        "weekly_rsi14": data.get("weekly_rsi14"),
+        "weekly_rsi14_min26": data.get("weekly_rsi14_min26"),
         "atr14": data.get("atr14"),
         "atr14_pct": data.get("atr14_pct"),
         "high_20d": data.get("high_20d"),
@@ -173,6 +177,27 @@ def get_latest_map_by_codes(stock_codes: List[str], timeframe: str = "1D") -> Di
     return out
 
 
+def codes_with_weekly_rsi_at_most(max_weekly_rsi: float, timeframe: str = "1D") -> List[str]:
+    """최신 스냅샷 기준 주봉 RSI ≤ max_weekly_rsi 종목코드."""
+    tf = (timeframe or "1D").upper()
+    for db in get_db():
+        as_of_date = latest_as_of_date(tf)
+        if as_of_date is None:
+            return []
+        rows = (
+            db.query(TechnicalSnapshot.stock_code)
+            .filter(
+                TechnicalSnapshot.as_of_date == as_of_date,
+                TechnicalSnapshot.timeframe == tf,
+                TechnicalSnapshot.weekly_rsi14.isnot(None),
+                TechnicalSnapshot.weekly_rsi14 <= max_weekly_rsi,
+            )
+            .all()
+        )
+        return [r[0] for r in rows]
+    return []
+
+
 def list_latest(
     *,
     market: Optional[str] = None,
@@ -184,6 +209,7 @@ def list_latest(
     sort_desc: bool = True,
     min_rsi: Optional[float] = None,
     max_rsi: Optional[float] = None,
+    max_weekly_rsi: Optional[float] = None,
     min_return_20d: Optional[float] = None,
 ) -> Dict:
     """최신 기술적분석 스냅샷 목록."""
@@ -204,6 +230,11 @@ def list_latest(
             q = q.filter(TechnicalSnapshot.rsi14.isnot(None), TechnicalSnapshot.rsi14 >= min_rsi)
         if max_rsi is not None:
             q = q.filter(TechnicalSnapshot.rsi14.isnot(None), TechnicalSnapshot.rsi14 <= max_rsi)
+        if max_weekly_rsi is not None:
+            q = q.filter(
+                TechnicalSnapshot.weekly_rsi14.isnot(None),
+                TechnicalSnapshot.weekly_rsi14 <= max_weekly_rsi,
+            )
         if min_return_20d is not None:
             q = q.filter(
                 TechnicalSnapshot.return_20d.isnot(None),

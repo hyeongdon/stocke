@@ -67,6 +67,7 @@ from managers.cleanup_scheduler import cleanup_scheduler
 from managers.investor_flow_scheduler import investor_flow_scheduler
 from managers.ma1592_universe_scheduler import ma1592_universe_scheduler
 from managers.rwm_bowl_scheduler import rwm_bowl_scheduler
+from managers.rsi_ladder_scheduler import rsi_ladder_scheduler
 from managers.market_open_scheduler import market_open_scheduler, should_auto_start_now
 from utils.debug_tracer import debug_tracer, enable_debug_mode, disable_debug_mode, is_debug_enabled
 from utils.auto_trade_engine import (
@@ -385,6 +386,11 @@ async def lifespan(app: FastAPI):
         logger.info("🥣 [STARTUP] RWM 밥그릇 스케줄러 시작")
     except Exception as e:
         logger.error(f"🥣 [STARTUP] RWM 밥그릇 스케줄러 시작 실패: {e}")
+
+    try:
+        asyncio.create_task(rsi_ladder_scheduler.start_scheduler())
+    except Exception as e:
+        logger.error(f"🪜 [STARTUP] 분할매수 스케줄러 시작 실패: {e}")
     
     yield
     
@@ -426,6 +432,11 @@ async def lifespan(app: FastAPI):
         await rwm_bowl_scheduler.stop_scheduler()
     except Exception as e:
         logger.error(f"🥣 [SHUTDOWN] RWM 밥그릇 스케줄러 종료 실패: {e}")
+
+    try:
+        await rsi_ladder_scheduler.stop_scheduler()
+    except Exception as e:
+        logger.error(f"🪜 [SHUTDOWN] 분할매수 스케줄러 종료 실패: {e}")
     
     await condition_monitor.stop_all_monitoring()
     # WebSocket 우아한 종료
@@ -487,6 +498,7 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
                     "/exit-replay",
                     "/api-explorer",
                     "/status",
+                    "/ladder",
                 }
             )
         )
@@ -1198,6 +1210,11 @@ async def verify_page(request: Request):
 async def exit_replay_page():
     """단일 종목 청산 규칙 역사 시뮬레이션 페이지"""
     return RedirectResponse(url="/static/exit_replay.html")
+
+@app.get("/ladder")
+async def ladder_page():
+    """RSI 저점 분할매수(-5% 사다리) 감시 페이지"""
+    return RedirectResponse(url="/static/ladder.html")
 
 @app.get("/api-explorer")
 async def api_explorer_page():
@@ -2081,16 +2098,19 @@ async def get_fundamentals(
     max_per: Optional[float] = None,
     max_pbr: Optional[float] = None,
     min_roe: Optional[float] = None,
+    max_weekly_rsi: Optional[float] = None,
 ):
-    """기본적분석 마트 최신 스냅샷 목록 (배치 적재 데이터)."""
+    """기본적분석 마트 최신 스냅샷 목록 (배치 적재 데이터) + 기술적 마트 주봉 RSI."""
     try:
         from utils.fundamental_mart_store import list_latest
+        from utils.technical_mart_store import codes_with_weekly_rsi_at_most, get_latest_map_by_codes
         from datetime import datetime as dt
 
         as_of_date = None
         if as_of:
             as_of_date = dt.strptime(as_of.strip()[:10], "%Y-%m-%d").date()
-        return list_latest(
+        stock_codes = codes_with_weekly_rsi_at_most(max_weekly_rsi) if max_weekly_rsi is not None else None
+        result = list_latest(
             market=market,
             as_of_date=as_of_date,
             limit=min(limit, 2000),
@@ -2100,7 +2120,15 @@ async def get_fundamentals(
             max_per=max_per,
             max_pbr=max_pbr,
             min_roe=min_roe,
+            stock_codes=stock_codes,
         )
+        items = result.get("items") or []
+        tech = get_latest_map_by_codes([it["stock_code"] for it in items])
+        for it in items:
+            t = tech.get(it["stock_code"]) or {}
+            it["weekly_rsi14"] = t.get("weekly_rsi14")
+            it["weekly_rsi14_min26"] = t.get("weekly_rsi14_min26")
+        return result
     except ValueError:
         raise HTTPException(status_code=400, detail="as_of 형식은 YYYY-MM-DD")
     except Exception as e:
@@ -2181,6 +2209,8 @@ def _recent_trading_days(count: int) -> List[str]:
 
 def _normalize_chart_interval(interval: str) -> str:
     raw = (interval or "5M").strip().upper()
+    if raw in {"1W", "W", "WEEK", "WEEKLY"}:
+        return "1W"
     if raw in {"1D", "D", "DAY", "DAILY"}:
         return "1D"
     if raw in {"15M", "M15", "15MIN"}:
@@ -2188,84 +2218,135 @@ def _normalize_chart_interval(interval: str) -> str:
     return "5M"
 
 
-def _sma_series(values: List[float], period: int) -> List[Optional[float]]:
-    """단순이동평균 시리즈 (period 미만 구간은 None)."""
-    out: List[Optional[float]] = []
-    for i in range(len(values)):
-        if i < period - 1:
-            out.append(None)
+def _parse_chart_rows(chart_data: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    """키움 일봉·주봉 dict → 정수 OHLCV 행 (종가 0 제외)."""
+    rows: List[Dict[str, Any]] = []
+    for item in chart_data or []:
+        try:
+            row = {
+                "timestamp": item.get("timestamp"),
+                "open": int(float(item.get("open") or 0)),
+                "high": int(float(item.get("high") or 0)),
+                "low": int(float(item.get("low") or 0)),
+                "close": int(float(item.get("close") or 0)),
+                "volume": int(float(item.get("volume") or 0)),
+            }
+        except (TypeError, ValueError):
             continue
-        window = values[i - period + 1 : i + 1]
-        out.append(sum(window) / period)
-    return out
+        if row["close"] > 0:
+            rows.append(row)
+    return rows
+
+
+def _rwm_chart_settings() -> Dict[str, Any]:
+    """RWM 밥그릇 파라미터 (사용자 설정 반영) — 분석 차트 지표 기준."""
+    from utils.rwm_bowl import params_from_settings
+
+    settings = None
+    try:
+        for db in get_db():
+            settings = get_auto_trade_settings_row(db)
+            break
+    except Exception as e:
+        logger.debug(f"RWM 설정 조회 실패 — 기본값 사용: {e}")
+    return params_from_settings(settings)
+
+
+def _indicator_chart_payload(
+    stock_code: str,
+    interval: str,
+    rows: List[Dict[str, Any]],
+    display_bars: int,
+    unit: str,
+    **extra: Any,
+) -> Dict[str, Any]:
+    """MA·RSI·%R 계산 → 표시 구간 자르기 → 신호·최신값·설정값 응답."""
+    from utils.chart_indicators import (
+        MA_PERIODS,
+        annotate_indicators,
+        chart_params,
+        detect_signals,
+        warmup_warning,
+    )
+
+    cp = chart_params(interval, _rwm_chart_settings())
+    annotate_indicators(rows, cp)
+    start = max(0, len(rows) - display_bars)
+    shown = rows[start:]
+    last = shown[-1] if shown else {}
+    return {
+        "stock_code": stock_code,
+        "interval": interval,
+        "bars": shown,
+        "display_bars": len(shown),
+        "ma_latest": {f"ma{n}": last.get(f"ma{n}") for n in MA_PERIODS},
+        "signals": detect_signals(rows, cp, start=start),
+        "indicator_latest": {"rsi": last.get("rsi"), "wr": last.get("wr")},
+        "params": cp,
+        "warning": warmup_warning(shown, unit),
+        **extra,
+    }
+
+
+def _clamp_display_bars(bars: Any, default: int, lo: int, hi: int) -> int:
+    try:
+        return min(max(int(bars or default), lo), hi)
+    except (TypeError, ValueError):
+        return default
 
 
 @app.get("/fundamentals/{stock_code}/chart")
 async def get_fundamental_chart(
     stock_code: str,
     interval: str = "1D",
-    bars: int = 120,
+    bars: Optional[int] = None,
 ):
-    """분석 화면용 차트 — 기본 일봉 + MA120/MA180."""
+    """분석 화면용 차트 — 일봉(120일) · 주봉(104주) + MA10/20/60/120 · RSI · Williams %R · 신호.
+
+    일봉·주봉 모두 같은 일봉 캐시(전체 봉)를 쓰고, 주봉 과거 구간만 키움 주봉(ka10082)으로 채운다.
+    """
     try:
         norm_interval = _normalize_chart_interval(interval)
 
-        if norm_interval == "1D":
-            try:
-                display_bars = min(max(int(bars or 120), 30), 200)
-            except (TypeError, ValueError):
-                display_bars = 120
-            # MA180 표시를 위해 표시 구간 이전 워밍업 포함
-            fetch_bars = min(display_bars + 200, 400)
-            chart_data = await kiwoom_api.get_stock_chart_data(
-                stock_code,
-                "1D",
-                max_bars=fetch_bars,
-                allow_off_hours=True,
+        if norm_interval in ("1D", "1W"):
+            from utils.chart_indicators import mark_daily_partial, merge_weekly_rows, resample_weekly_ohlcv
+            from utils.datetime_kst import now_kst
+
+            now = now_kst().replace(tzinfo=None)
+            daily_rows = _parse_chart_rows(
+                await kiwoom_api.get_stock_chart_data(stock_code, "1D", allow_off_hours=True)
             )
-            if not chart_data:
-                raise HTTPException(
-                    status_code=404,
-                    detail="일봉 데이터를 찾지 못했습니다 (키움 API 빈 응답)",
+
+            if norm_interval == "1D":
+                if not daily_rows:
+                    raise HTTPException(
+                        status_code=404,
+                        detail="일봉 데이터를 찾지 못했습니다 (키움 API 빈 응답)",
+                    )
+                mark_daily_partial(daily_rows, now)
+                return _indicator_chart_payload(
+                    stock_code, "1D", daily_rows,
+                    _clamp_display_bars(bars, 120, 30, 200), "일",
+                    source_daily_bars=len(daily_rows),
                 )
 
-            parsed_rows: List[Dict[str, Any]] = []
-            for item in chart_data:
-                try:
-                    parsed_rows.append({
-                        "timestamp": item.get("timestamp"),
-                        "open": int(float(item.get("open") or 0)),
-                        "high": int(float(item.get("high") or 0)),
-                        "low": int(float(item.get("low") or 0)),
-                        "close": int(float(item.get("close") or 0)),
-                        "volume": int(float(item.get("volume") or 0)),
-                    })
-                except (TypeError, ValueError):
-                    continue
-            if not parsed_rows:
-                raise HTTPException(status_code=404, detail="차트 데이터를 파싱하지 못했습니다")
-
-            closes = [float(r["close"]) for r in parsed_rows]
-            ma120_all = _sma_series(closes, 120)
-            ma180_all = _sma_series(closes, 180)
-            for i, row in enumerate(parsed_rows):
-                if ma120_all[i] is not None:
-                    row["ma120"] = int(round(ma120_all[i]))
-                if ma180_all[i] is not None:
-                    row["ma180"] = int(round(ma180_all[i]))
-
-            rows = parsed_rows[-display_bars:]
-            last = rows[-1] if rows else {}
-            return {
-                "stock_code": stock_code,
-                "interval": "1D",
-                "bars": rows,
-                "display_bars": len(rows),
-                "ma_latest": {
-                    "ma120": last.get("ma120"),
-                    "ma180": last.get("ma180"),
-                },
-            }
+            api_weeks = _parse_chart_rows(
+                await kiwoom_api.get_stock_chart_data(stock_code, "1W", allow_off_hours=True)
+            )
+            weekly_rows = merge_weekly_rows(
+                api_weeks, resample_weekly_ohlcv(daily_rows, now=now), now=now,
+            )
+            if not weekly_rows:
+                raise HTTPException(
+                    status_code=404,
+                    detail="주봉 데이터를 찾지 못했습니다 (키움 API 빈 응답)",
+                )
+            return _indicator_chart_payload(
+                stock_code, "1W", weekly_rows,
+                _clamp_display_bars(bars, 104, 26, 260), "주",
+                source_daily_bars=len(daily_rows),
+                source_weekly_bars=len(api_weeks),
+            )
 
         # 분석 화면 체감속도를 위해 기본은 최근 1거래일만 조회하고,
         # 데이터가 없을 때만 직전 거래일로 1회 폴백한다.
@@ -6203,6 +6284,135 @@ async def run_rwm_batch():
     if not result.get("ok"):
         raise HTTPException(status_code=409, detail=result.get("message") or "배치 실패")
     return result
+
+
+# ───────────────────────── RSI 저점 분할매수 (-5% 사다리) ─────────────────────────
+
+class LadderPlanRequest(BaseModel):
+    code: str
+    name: Optional[str] = ""
+    budget: int
+    memo: Optional[str] = ""
+    buy_now: bool = False
+    profile: Dict[str, Any] = {}
+
+
+class LadderUpdateRequest(BaseModel):
+    budget: Optional[int] = None
+    memo: Optional[str] = None
+    profile: Optional[Dict[str, Any]] = None
+
+
+class LadderToggleRequest(BaseModel):
+    enabled: bool
+
+
+class LadderSellRequest(BaseModel):
+    mode: str = "half"
+
+
+def _ladder_call(fn, *args, **kwargs):
+    from managers.rsi_ladder_scheduler import LadderError
+
+    try:
+        return fn(*args, **kwargs)
+    except LadderError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+async def _ladder_acall(coro):
+    from managers.rsi_ladder_scheduler import LadderError
+
+    try:
+        return await coro
+    except LadderError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/ladder/state")
+async def ladder_state(force: bool = False, plan_id: Optional[str] = None):
+    """분할매수 전체 상태 (계획 + 지표 스냅샷 + 이벤트)."""
+    rsi_ladder_scheduler.reconcile()
+    return await rsi_ladder_scheduler.state(force=force, plan_id=plan_id)
+
+
+@app.post("/api/ladder/enabled")
+async def ladder_toggle(req: LadderToggleRequest):
+    on = rsi_ladder_scheduler.set_enabled(req.enabled)
+    log_activity("SYSTEM", f"분할매수 자동 감시 {'ON' if on else 'OFF'}", "info")
+    return {"enabled": on}
+
+
+@app.get("/api/ladder/preview")
+async def ladder_preview_api(price: int, budget: int, step_pct: float = 5.0, max_steps: int = 10):
+    from utils.rsi_ladder import ladder_preview
+
+    if price <= 0 or budget <= 0:
+        raise HTTPException(status_code=400, detail="가격·예산을 입력하세요")
+    return {"rows": ladder_preview(price, budget, step_pct, max(1, min(20, max_steps)))}
+
+
+@app.get("/api/ladder/quote/{code}")
+async def ladder_quote(code: str):
+    """새 계획 입력용 — 종목명·현재가·진입 조건 미리보기."""
+    from utils.rwm_bowl import normalize_code
+
+    c = normalize_code(code)
+    if not c:
+        raise HTTPException(status_code=400, detail="종목코드 형식 오류 (6자리)")
+    name = await rsi_ladder_scheduler.resolve_name(c)
+    probe = {"id": "_probe", "code": c, "status": "RSI_WAIT", "profile": {}}
+    market = await rsi_ladder_scheduler._market_view(probe)
+    return {"code": c, "name": name, "price": market.get("price"), "entry": market.get("entry"),
+            "error": market.get("error")}
+
+
+@app.post("/api/ladder/plans")
+async def ladder_create(req: LadderPlanRequest):
+    res = await _ladder_acall(rsi_ladder_scheduler.create_plan(
+        code=req.code, name=(req.name or "").strip(), budget=req.budget, profile=req.profile,
+        memo=req.memo or "", buy_now=req.buy_now,
+    ))
+    log_activity("SYSTEM", f"분할매수 계획 생성 {res['plan']['name']}({res['plan']['code']})", "info",
+                 stock_code=res["plan"]["code"])
+    return res
+
+
+@app.patch("/api/ladder/plans/{plan_id}")
+async def ladder_update(plan_id: str, req: LadderUpdateRequest):
+    return _ladder_call(rsi_ladder_scheduler.update_plan, plan_id,
+                        budget=req.budget, memo=req.memo, profile=req.profile)
+
+
+@app.delete("/api/ladder/plans/{plan_id}")
+async def ladder_delete(plan_id: str):
+    _ladder_call(rsi_ladder_scheduler.delete, plan_id)
+    return {"ok": True}
+
+
+@app.post("/api/ladder/plans/{plan_id}/{action}")
+async def ladder_action(plan_id: str, action: str, req: Optional[LadderSellRequest] = None):
+    if action == "pause":
+        return _ladder_call(rsi_ladder_scheduler.pause, plan_id)
+    if action == "resume":
+        return _ladder_call(rsi_ladder_scheduler.resume, plan_id)
+    if action == "finish":
+        return _ladder_call(rsi_ladder_scheduler.finish, plan_id)
+    if action == "buy":
+        return await _ladder_acall(rsi_ladder_scheduler.manual_buy(plan_id))
+    if action == "sell":
+        return await _ladder_acall(rsi_ladder_scheduler.manual_sell(plan_id, (req.mode if req else "half")))
+    raise HTTPException(status_code=404, detail="알 수 없는 동작")
+
+
+@app.post("/api/ladder/judge")
+async def ladder_judge(dry_run: bool = True):
+    """15:05 판정 수동 실행. dry_run=true(기본)는 결과만 보고 주문·기록 없음."""
+    from utils.market_hours import is_krx_session
+
+    if not dry_run and not is_krx_session():
+        raise HTTPException(status_code=400, detail="실제 판정은 정규장에만 실행할 수 있습니다 (미리보기는 가능)")
+    return await rsi_ladder_scheduler.run_judge(trigger="manual", dry_run=dry_run)
 
 
 @app.get("/ma1592/candidates")

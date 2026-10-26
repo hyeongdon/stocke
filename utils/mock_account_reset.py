@@ -41,6 +41,7 @@ _MOVE_FILES = [
     _PROJECT_ROOT / "logs" / "_ma1592_ledger_activity.jsonl",
 ]
 _RWM_STATE_PATH = _PROJECT_ROOT / "logs" / "_rwm_bowl_state.json"
+_LADDER_STATE_PATH = _PROJECT_ROOT / "logs" / "_rsi_ladder_state.json"
 
 
 def _mask(value: str, head: int = 4) -> str:
@@ -117,6 +118,26 @@ def _cleanup_files(backup_dir: Path, apply: bool) -> List[str]:
             shutil.copy2(_RWM_STATE_PATH, backup_dir / _RWM_STATE_PATH.name)
             rwm["exits"] = {}
             _RWM_STATE_PATH.write_text(json.dumps(rwm, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    try:
+        ladder = json.loads(_LADDER_STATE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        ladder = None
+    plans = (ladder or {}).get("plans") if isinstance(ladder, dict) else None
+    mock_ids = [pid for pid, p in (plans or {}).items() if (p or {}).get("account_mode") == "mock"]
+    if mock_ids:
+        touched.append(f"{_LADDER_STATE_PATH.name}(모의 계획 {len(mock_ids)}건)")
+        if apply:
+            shutil.copy2(_LADDER_STATE_PATH, backup_dir / _LADDER_STATE_PATH.name)
+            for pid in mock_ids:
+                plans.pop(pid, None)
+            _LADDER_STATE_PATH.write_text(json.dumps(ladder, ensure_ascii=False, indent=2), encoding="utf-8")
+            try:
+                from utils.rsi_ladder import reset_ladder_store
+
+                reset_ladder_store()
+            except Exception:
+                pass
     return touched
 
 

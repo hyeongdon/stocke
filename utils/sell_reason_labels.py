@@ -32,6 +32,11 @@ SELL_REASON_KO = {
     "EXIT_MA20": "20일선 이탈",
     "EXIT_MA10": "급등 후 10일선 이탈",
     "STOP_HARD": "하드 손절",
+    "LADDER_S0": "분할매수 MA20 이탈 50%",
+    "LADDER_S1": "분할매수 익절 MA10 이탈",
+    "LADDER_S2": "분할매수 익절 MA15 이탈",
+    "LADDER_S3": "분할매수 익절 MA20 이탈",
+    "LADDER_MANUAL": "분할매수 수동 매도",
 }
 
 # 표시/기록 축약 별칭 (TP1_GAP → T1_GAP 등)

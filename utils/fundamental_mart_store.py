@@ -178,8 +178,9 @@ def list_latest(
     max_per: Optional[float] = None,
     max_pbr: Optional[float] = None,
     min_roe: Optional[float] = None,
+    stock_codes: Optional[List[str]] = None,
 ) -> Dict:
-    """최신 스냅샷 목록 (기준일 미지정 시 DB 최신일)."""
+    """최신 스냅샷 목록 (기준일 미지정 시 DB 최신일). stock_codes 지정 시 해당 종목만."""
     for db in get_db():
         if as_of_date is None:
             as_of_date = latest_as_of_date()
@@ -197,6 +198,8 @@ def list_latest(
             q = q.filter(FundamentalSnapshot.pbr.isnot(None), FundamentalSnapshot.pbr <= max_pbr)
         if min_roe is not None:
             q = q.filter(FundamentalSnapshot.roe.isnot(None), FundamentalSnapshot.roe >= min_roe)
+        if stock_codes is not None:
+            q = q.filter(FundamentalSnapshot.stock_code.in_(stock_codes))
 
         sort_col = getattr(FundamentalSnapshot, sort_by, FundamentalSnapshot.market_cap)
         q = q.order_by(sort_col.desc() if sort_desc else sort_col.asc())

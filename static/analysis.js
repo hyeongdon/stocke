@@ -5,7 +5,13 @@ const $ = (id) => document.getElementById(id);
 const SORT_COLS = [
   'stock_code', 'stock_name', 'market', 'current_price', 'market_cap',
   'per', 'pbr', 'roe', 'eps', 'dividend_per_share',
-  'revenue', 'operating_profit', 'foreign_ratio', 'as_of_date',
+  'revenue', 'operating_profit', 'foreign_ratio', 'weekly_rsi14', 'as_of_date',
+];
+
+const UNSORTABLE_COLS = ['weekly_rsi14'];
+const NUM_COLS = [
+  'current_price', 'market_cap', 'per', 'pbr', 'roe', 'eps', 'dividend_per_share',
+  'revenue', 'operating_profit', 'foreign_ratio', 'weekly_rsi14',
 ];
 
 const COL_LABELS = {
@@ -22,6 +28,7 @@ const COL_LABELS = {
   revenue: '매출',
   operating_profit: '영업이익',
   foreign_ratio: '외국인비율',
+  weekly_rsi14: '주봉RSI',
   as_of_date: '기준일',
 };
 
@@ -101,6 +108,7 @@ function cellValue(col, row) {
     case 'revenue':
     case 'operating_profit': return fmtEok(row[col]);
     case 'foreign_ratio': return fmtPct(row.foreign_ratio);
+    case 'weekly_rsi14': return fmtFloat(row.weekly_rsi14, 1);
     case 'as_of_date': return row.as_of_date || '-';
     default: return esc(row[col] ?? '-');
   }
@@ -119,6 +127,8 @@ function buildQuery() {
   if (maxPer) p.set('max_per', maxPer);
   if (maxPbr) p.set('max_pbr', maxPbr);
   if (minRoe) p.set('min_roe', minRoe);
+  const maxWeeklyRsi = $('fltMaxWeeklyRsi').value.trim();
+  if (maxWeeklyRsi) p.set('max_weekly_rsi', maxWeeklyRsi);
   return p.toString();
 }
 
@@ -189,16 +199,14 @@ function renderTable(items) {
     return;
   }
   const head = SORT_COLS.map((col) => {
-    const cls = ['sortable'];
-    if (['current_price', 'market_cap', 'per', 'pbr', 'roe', 'eps', 'dividend_per_share', 'revenue', 'operating_profit', 'foreign_ratio'].includes(col)) {
-      cls.push('num');
-    }
+    const cls = UNSORTABLE_COLS.includes(col) ? [] : ['sortable'];
+    if (NUM_COLS.includes(col)) cls.push('num');
     return `<th class="${cls.join(' ')}" data-sort="${col}">${COL_LABELS[col]}<span class="sort-mark">${sortMark(col)}</span></th>`;
   }).join('');
   const rows = items.map((row) => {
     const sel = row.stock_code === state.selectedCode ? ' selected' : '';
     const cells = SORT_COLS.map((col) => {
-      const numCls = ['current_price', 'market_cap', 'per', 'pbr', 'roe', 'eps', 'dividend_per_share', 'revenue', 'operating_profit', 'foreign_ratio'].includes(col) ? ' class="num"' : '';
+      const numCls = NUM_COLS.includes(col) ? ' class="num"' : '';
       return `<td${numCls}>${cellValue(col, row)}</td>`;
     }).join('');
     return `<tr class="data-row${sel}" data-code="${esc(row.stock_code)}">${cells}</tr>`;
@@ -268,7 +276,7 @@ function renderDetail(row) {
     $('detailTitle').textContent = '종목 상세';
     $('detailHint').textContent = '행을 클릭하거나 종목코드를 검색하세요';
     $('detailBody').innerHTML = '<div class="empty"><span class="ico">📊</span>목록에서 종목을 선택하면 상세 지표가 표시됩니다.</div>';
-    chartPayload = null;
+    resetChartState();
     return;
   }
   $('detailTitle').textContent = `${row.stock_name || ''} (${row.stock_code})`;
@@ -278,8 +286,7 @@ function renderDetail(row) {
     detailField('시가총액', fmtEok(row.market_cap)),
     detailField('거래량', fmtNum(row.volume)),
     detailField('거래대금', row.trading_value != null ? fmtNum(row.trading_value) + '백만' : '-'),
-    detailField('MA120', '<span id="detailMa120">-</span>'),
-    detailField('MA180', '<span id="detailMa180">-</span>'),
+    indicatorFieldsHtml(),
   ].join('');
   const valBlock = [
     detailField('PER', fmtFloat(row.per, 2)),
@@ -301,108 +308,648 @@ function renderDetail(row) {
     detailField('수집 시각', esc(row.fetched_at || '-')),
   ].join('');
   $('detailBody').innerHTML = `
+    ${chartSectionsHtml()}
     <div class="detail-section">
       <div class="detail-section-title">회사 정보</div>
       ${companyProfilePlaceholderHtml()}
     </div>
     <div class="detail-grid">${priceBlock}</div>
-    <div class="detail-section analysis-chart-section">
-      <div class="detail-section-title">일봉 차트 <span class="hint">최근 120거래일 · MA120/180</span></div>
-      <div class="analysis-chart-wrap" id="analysisChartWrap">
-        <div class="analysis-chart-status" id="analysisChartStatus">차트 불러오는 중…</div>
-        <canvas class="analysis-chart-canvas" id="analysisChartCanvas" aria-label="일봉 차트"></canvas>
-      </div>
-    </div>
     <div class="detail-section"><div class="detail-section-title">밸류에이션</div><div class="detail-grid">${valBlock}</div></div>
     <div class="detail-section"><div class="detail-section-title">재무</div><div class="detail-grid">${finBlock}</div></div>
     <div class="detail-section"><div class="detail-section-title">메타</div><div class="detail-grid">${metaBlock}</div></div>`;
   loadCompanyProfile(row.stock_code);
-  loadAnalysisChart(row.stock_code);
+  loadAnalysisCharts(row.stock_code);
 }
 
-let chartPayload = null;
-let chartResizeTimer = null;
-
+const MA_PERIODS = [10, 20, 60, 120];
 const MA_COLORS = {
-  120: '#f0a030',
-  180: '#a78bfa',
+  10: '#ff4fa3',
+  20: '#ffd400',
+  60: '#2563eb',
+  120: '#9ca3af',
+};
+const MA_WIDTHS = {
+  10: 1.2,
+  20: 2.4,
+  60: 2.4,
+  120: 3.6,
+};
+const MA_VISIBLE_KEY = 'analysis.maVisible';
+const MA_VISIBLE_DEFAULT = [20, 60];
+
+function loadMaVisible() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(MA_VISIBLE_KEY));
+    if (Array.isArray(saved)) return new Set(saved.filter((n) => MA_PERIODS.includes(n)));
+  } catch (e) { /* 저장값 손상 시 기본값 */ }
+  return new Set(MA_VISIBLE_DEFAULT);
+}
+
+const maVisible = loadMaVisible();
+
+function toggleMaVisible(n) {
+  if (maVisible.has(n)) maVisible.delete(n);
+  else maVisible.add(n);
+  try { localStorage.setItem(MA_VISIBLE_KEY, JSON.stringify([...maVisible])); } catch (e) { /* ignore */ }
+  CHART_ORDER.forEach((k) => { if (chartPayloads[k]) renderChart(k); });
+}
+
+const CHART_ORDER = ['1D', '1W'];
+const CHART_SPECS = {
+  '1W': { title: '주봉 차트', hint: '최근 104주 · MA10/20/60/120주', bars: 104, unit: '주' },
+  '1D': { title: '일봉 차트', hint: '최근 120일 · MA10/20/60/120일', bars: 120, unit: '일' },
+};
+const CHART_HEIGHT = 400;
+const PRICE_MARKER_ROOM = 38;
+
+const SIGNAL_META = {
+  RSI_OS: { label: 'RSI 과매도 진입', short: 'RSI과매도', shape: 'circle', color: 'rsi', pane: 'rsi', key: 'rsi', order: 0 },
+  WR_BUY: { label: 'Williams 매수', short: 'W매수', shape: 'triangle', color: 'wr', pane: 'wr', key: 'wr', order: 1 },
 };
 
-function drawMaLine(ctx, bars, key, color, padL, slotW, yOf) {
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  let started = false;
+const chartPayloads = { '1W': null, '1D': null };
+let chartLoadSeq = 0;
+let chartResizeTimer = null;
+
+const chartPriceLines = {};
+
+function resetChartState() {
+  chartLoadSeq += 1;
+  CHART_ORDER.forEach((k) => { chartPayloads[k] = null; chartPriceLines[k] = []; });
+}
+
+function indicatorFieldsHtml() {
+  return [
+    ...MA_PERIODS.map((n) => detailField(`MA${n}`, `<span id="detailMa${n}">-</span>`)),
+    detailField('주봉 RSI', '<span id="detailRsi1W">-</span>'),
+    detailField('주봉 %R', '<span id="detailWr1W">-</span>'),
+    detailField('일봉 RSI', '<span id="detailRsi1D">-</span>'),
+    detailField('일봉 %R', '<span id="detailWr1D">-</span>'),
+  ].join('');
+}
+
+function chartSectionsHtml() {
+  return CHART_ORDER.map((key) => {
+    const spec = CHART_SPECS[key];
+    return `
+    <div class="detail-section analysis-chart-section">
+      <div class="detail-section-title">${spec.title} <span class="hint">${spec.hint}</span></div>
+      <div class="analysis-chart-summary" id="chartSummary${key}"></div>
+      <div class="analysis-chart-wrap" id="chartWrap${key}">
+        <div class="analysis-chart-status" id="chartStatus${key}">차트 불러오는 중…</div>
+        <canvas class="analysis-chart-canvas" id="chartCanvas${key}" aria-label="${spec.title}"></canvas>
+        <div class="analysis-chart-cursor" id="chartCursor${key}"></div>
+        <div class="analysis-chart-tip" id="chartTip${key}"></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function fmtInd(v) {
+  const n = parseNum(v);
+  return n === null ? '-' : n.toFixed(1);
+}
+
+function barDate(ts) {
+  return String(ts || '').slice(0, 10);
+}
+
+function barTimeLabel(ts, interval) {
+  const s = barDate(ts);
+  if (s.length < 10) return s;
+  return interval === '1W' ? `${s.slice(2, 4)}.${s.slice(5, 7)}` : s.slice(5, 10);
+}
+
+function signalDateLabel(d) {
+  const s = barDate(d);
+  return s.length >= 10 ? `${s.slice(2, 4)}.${s.slice(5, 7)}.${s.slice(8, 10)}` : s;
+}
+
+function chartTheme() {
+  const css = getComputedStyle(document.documentElement);
+  const v = (name, fb) => css.getPropertyValue(name).trim() || fb;
+  return {
+    bg: v('--card', '#1a1d24'),
+    grid: v('--border', '#333'),
+    text: v('--muted', '#888'),
+    up: v('--up', '#e8a0a0'),
+    down: v('--down', '#5b9bd5'),
+    osc: v('--osc-line', '#cbd5e1'),
+    priceLine: v('--price-line', '#fbbf24'),
+    sig: { rsi: v('--sig-rsi', '#a78bfa'), wr: v('--sig-wr', '#34d399') },
+  };
+}
+
+function signalsByIdx(payload) {
+  if (payload._sigByIdx) return payload._sigByIdx;
+  const map = new Map();
+  (payload.signals || []).forEach((s) => {
+    if (!SIGNAL_META[s.type]) return;
+    if (!map.has(s.idx)) map.set(s.idx, []);
+    map.get(s.idx).push(s);
+  });
+  map.forEach((list) => list.sort((a, b) => SIGNAL_META[a.type].order - SIGNAL_META[b.type].order));
+  payload._sigByIdx = map;
+  return map;
+}
+
+function valueSegments(bars, key) {
+  const segs = [];
+  let cur = null;
   bars.forEach((b, i) => {
     const v = b[key];
     if (v == null || !Number.isFinite(v)) {
-      started = false;
+      cur = null;
       return;
     }
-    const x = padL + i * slotW + slotW / 2;
-    const y = yOf(v);
-    if (!started) {
-      ctx.moveTo(x, y);
-      started = true;
-    } else {
-      ctx.lineTo(x, y);
+    if (!cur) {
+      cur = [];
+      segs.push(cur);
     }
+    cur.push(i);
   });
-  ctx.stroke();
+  return segs;
+}
+
+function layoutPanes(W, H, n) {
+  const padL = 48;
+  const padR = 8;
+  const padT = 14;
+  const padB = 22;
+  const gap = 10;
+  const avail = H - padT - padB - gap * 2;
+  const priceH = Math.round(avail * 0.55);
+  const rsiH = Math.round(avail * 0.22);
+  const plotW = W - padL - padR;
+  const slotW = plotW / Math.max(n, 1);
+  const price = { top: padT, h: priceH };
+  const rsi = { top: price.top + priceH + gap, h: rsiH };
+  const wr = { top: rsi.top + rsiH + gap, h: avail - priceH - rsiH };
+  return {
+    W, H, padL, padR, padT, padB, plotW, slotW, price, rsi, wr,
+    xOf: (i) => padL + i * slotW + slotW / 2,
+  };
+}
+
+function drawMaLine(ctx, bars, key, color, width, geo, yOf) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.lineJoin = 'round';
+  valueSegments(bars, key).forEach((seg) => {
+    ctx.beginPath();
+    seg.forEach((i, j) => {
+      const x = geo.xOf(i);
+      const y = yOf(bars[i][key]);
+      if (j === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  });
 }
 
 function drawChartLegend(ctx, items, W, padT) {
   let x = W - 8;
+  const hits = [];
   ctx.font = '10px system-ui, sans-serif';
   ctx.textAlign = 'right';
   items.slice().reverse().forEach((item) => {
     const label = item.label;
     const tw = ctx.measureText(label).width;
     x -= tw + 14;
+    ctx.globalAlpha = item.off ? 0.3 : 1;
     ctx.strokeStyle = item.color;
-    ctx.lineWidth = 2;
+    ctx.lineWidth = Math.max(2, item.width || 0);
     ctx.beginPath();
     ctx.moveTo(x, padT + 6);
     ctx.lineTo(x + 12, padT + 6);
     ctx.stroke();
     ctx.fillStyle = item.color;
+    ctx.textAlign = 'left';
     ctx.fillText(label, x + 16, padT + 9);
+    ctx.globalAlpha = 1;
+    hits.push({ id: item.id, x0: x - 3, x1: x + 16 + tw + 3, y0: padT - 3, y1: padT + 14 });
     x -= 8;
   });
-}
-function barDate(ts) {
-  return String(ts || '').slice(0, 10);
+  return hits;
 }
 
-function barTimeLabel(ts, interval) {
-  const s = String(ts || '');
-  if (String(interval || '').toUpperCase() === '1D') {
-    if (s.length >= 10) return s.slice(5, 10);
-    return s;
+function legendHitAt(geo, mx, my) {
+  const hits = (geo && geo.legendHits) || [];
+  return hits.find((h) => mx >= h.x0 && mx <= h.x1 && my >= h.y0 && my <= h.y1) || null;
+}
+
+function drawPricePane(ctx, geo, payload, theme) {
+  const bars = payload.bars;
+  const pane = geo.price;
+  let lo = Infinity;
+  let hi = -Infinity;
+  bars.forEach((b) => {
+    lo = Math.min(lo, b.low, b.open, b.close);
+    hi = Math.max(hi, b.high, b.open, b.close);
+    MA_PERIODS.forEach((n) => {
+      if (!maVisible.has(n)) return;
+      const v = b[`ma${n}`];
+      if (v != null) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+    });
+  });
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo === hi) {
+    lo = Number.isFinite(lo) ? lo : 0;
+    hi = lo + 1;
   }
-  if (s.length >= 16) return s.slice(11, 16);
-  if (s.length >= 5) return s.slice(5, 10);
-  return s;
+  const range = hi - lo;
+  lo -= range * 0.03;
+  hi += range * 0.05;
+  // 아래쪽 픽셀 여백은 저가 아래 신호 마커(최대 2개)와 "잠정" 글자가 들어갈 자리
+  const candleH = pane.h - PRICE_MARKER_ROOM;
+  const yOf = (p) => pane.top + candleH - ((p - lo) / (hi - lo)) * candleH;
+  pane.yOf = yOf;
+  pane.priceOf = (y) => lo + ((pane.top + candleH - y) / candleH) * (hi - lo);
+  pane.candleH = candleH;
+
+  ctx.strokeStyle = theme.grid;
+  ctx.lineWidth = 1;
+  ctx.font = '10px system-ui, sans-serif';
+  ctx.textAlign = 'right';
+  for (let i = 0; i <= 3; i++) {
+    const y = pane.top + (candleH * i) / 3;
+    ctx.beginPath();
+    ctx.moveTo(geo.padL, y);
+    ctx.lineTo(geo.W - geo.padR, y);
+    ctx.stroke();
+    ctx.fillStyle = theme.text;
+    ctx.fillText(Math.round(hi - ((hi - lo) * i) / 3).toLocaleString('ko-KR'), geo.padL - 4, y + 3);
+  }
+
+  const bodyW = Math.max(2, geo.slotW * 0.55);
+  bars.forEach((b, i) => {
+    const x = geo.xOf(i);
+    const color = b.close >= b.open ? theme.up : theme.down;
+    ctx.globalAlpha = b.partial ? 0.6 : 1;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, yOf(b.high));
+    ctx.lineTo(x, yOf(b.low));
+    ctx.stroke();
+    ctx.fillStyle = color;
+    const top = Math.min(yOf(b.open), yOf(b.close));
+    ctx.fillRect(x - bodyW / 2, top, bodyW, Math.max(1, Math.abs(yOf(b.close) - yOf(b.open))));
+  });
+  ctx.globalAlpha = 1;
+
+  MA_PERIODS.slice().reverse().forEach((n) => {
+    if (!maVisible.has(n)) return;
+    drawMaLine(ctx, bars, `ma${n}`, MA_COLORS[n], MA_WIDTHS[n], geo, yOf);
+  });
+  geo.legendHits = drawChartLegend(ctx, MA_PERIODS.map((n) => ({
+    id: n, label: `MA${n}`, color: MA_COLORS[n], width: MA_WIDTHS[n], off: !maVisible.has(n),
+  })), geo.W, pane.top);
 }
 
-function renderAnalysisChart(canvas, payload) {
-  const bars = payload.bars || [];
-  const interval = String(payload.interval || '1D').toUpperCase();
-  const isDaily = interval === '1D';
-  const statusEl = $('analysisChartStatus');
-  const wrap = $('analysisChartWrap');
-  if (!canvas || !bars.length) {
-    if (statusEl) {
-      statusEl.textContent = '차트 데이터가 없습니다';
-      statusEl.classList.add('err');
-      statusEl.style.display = 'block';
+function oscSpecs(payload, theme) {
+  const p = payload.params || {};
+  const rsiOs = parseNum(p.rsi_os) ?? 30;
+  const wrOs = parseNum(p.wr_os) ?? -80;
+  return {
+    rsi: {
+      key: 'rsi', min: 0, max: 100, levels: [70, rsiOs], zone: rsiOs,
+      label: `RSI(${p.rsi_period || 14})`, color: theme.sig.rsi,
+    },
+    wr: {
+      key: 'wr', min: -100, max: 0, levels: [-20, wrOs], zone: wrOs,
+      label: `%R(${p.wr_period || 93})`, color: theme.sig.wr,
+    },
+  };
+}
+
+function drawOscPane(ctx, geo, pane, bars, spec, theme) {
+  const yOf = (v) => pane.top + ((spec.max - v) / (spec.max - spec.min)) * pane.h;
+  pane.yOf = yOf;
+  const left = geo.padL;
+  const right = geo.W - geo.padR;
+  const bottom = pane.top + pane.h;
+  const yZone = yOf(spec.zone);
+  const segs = valueSegments(bars, spec.key);
+
+  ctx.fillStyle = spec.color;
+  ctx.globalAlpha = 0.07;
+  ctx.fillRect(left, yZone, right - left, bottom - yZone);
+  ctx.globalAlpha = 1;
+
+  ctx.strokeStyle = theme.grid;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(left + 0.5, pane.top + 0.5, right - left - 1, pane.h - 1);
+
+  ctx.setLineDash([3, 3]);
+  ctx.font = '9px system-ui, sans-serif';
+  ctx.textAlign = 'right';
+  spec.levels.forEach((lv) => {
+    const y = Math.round(yOf(lv)) + 0.5;
+    ctx.strokeStyle = theme.text;
+    ctx.globalAlpha = 0.5;
+    ctx.beginPath();
+    ctx.moveTo(left, y);
+    ctx.lineTo(right, y);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = theme.text;
+    ctx.fillText(String(lv), left - 4, y + 3);
+  });
+  ctx.setLineDash([]);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(left, yZone, right - left, bottom - yZone);
+  ctx.clip();
+  ctx.fillStyle = spec.color;
+  ctx.globalAlpha = 0.28;
+  segs.forEach((seg) => {
+    ctx.beginPath();
+    ctx.moveTo(geo.xOf(seg[0]), yZone);
+    seg.forEach((i) => ctx.lineTo(geo.xOf(i), yOf(bars[i][spec.key])));
+    ctx.lineTo(geo.xOf(seg[seg.length - 1]), yZone);
+    ctx.closePath();
+    ctx.fill();
+  });
+  ctx.restore();
+
+  ctx.strokeStyle = theme.osc;
+  ctx.lineWidth = 1.3;
+  segs.forEach((seg) => {
+    ctx.beginPath();
+    seg.forEach((i, j) => {
+      const x = geo.xOf(i);
+      const y = yOf(bars[i][spec.key]);
+      if (j === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  });
+
+  const lastSeg = segs[segs.length - 1];
+  const last = lastSeg ? bars[lastSeg[lastSeg.length - 1]][spec.key] : null;
+  const label = `${spec.label} ${fmtInd(last)}`;
+  ctx.font = '10px system-ui, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillStyle = theme.bg;
+  ctx.globalAlpha = 0.85;
+  ctx.fillRect(left + 1, pane.top + 1, ctx.measureText(label).width + 8, 14);
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = theme.text;
+  ctx.fillText(label, left + 4, pane.top + 11);
+}
+
+function drawMarker(ctx, shape, x, y, r, color, hollow, bg) {
+  ctx.beginPath();
+  if (shape === 'circle') {
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+  } else {
+    ctx.moveTo(x, y - r * 1.15);
+    ctx.lineTo(x + r * 1.1, y + r * 0.85);
+    ctx.lineTo(x - r * 1.1, y + r * 0.85);
+    ctx.closePath();
+  }
+  if (hollow) {
+    ctx.fillStyle = bg;
+    ctx.fill();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  } else {
+    ctx.fillStyle = color;
+    ctx.fill();
+  }
+}
+
+function drawSignalMarkers(ctx, geo, payload, theme) {
+  const bars = payload.bars;
+  const r = Math.min(4.5, Math.max(2.5, geo.slotW * 0.4));
+  const step = r * 2 + 3;
+  const priceBottom = geo.price.top + geo.price.h - r - 1;
+  signalsByIdx(payload).forEach((sigs, idx) => {
+    const b = bars[idx];
+    if (!b) return;
+    const x = geo.xOf(idx);
+    let y = geo.price.yOf(b.low) + r + 4;
+    let lastY = y;
+    sigs.forEach((s) => {
+      const meta = SIGNAL_META[s.type];
+      const color = theme.sig[meta.color];
+      lastY = Math.min(y, priceBottom);
+      drawMarker(ctx, meta.shape, x, lastY, r, color, s.partial, theme.bg);
+      y += step;
+      const v = b[meta.key] ?? s.value;
+      if (v != null && Number.isFinite(v)) {
+        drawMarker(ctx, meta.shape, x, geo[meta.pane].yOf(v), r, color, s.partial, theme.bg);
+      }
+    });
+    const partial = sigs.find((s) => s.partial);
+    if (partial) {
+      // 진행 중 봉은 항상 맨 오른쪽 — 글자를 옆에 두면 직전 봉 마커를 가리므로 마커 아래(자리 없으면 고가 위)에 둔다
+      let ty = lastY + r + 10;
+      if (ty > geo.price.top + geo.price.h) ty = Math.max(geo.price.yOf(b.high) - 4, geo.price.top + 22);
+      ctx.font = '9px system-ui, sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillStyle = theme.sig[SIGNAL_META[partial.type].color];
+      ctx.fillText('잠정', x + r + 1, ty);
     }
-    canvas.style.display = 'none';
+  });
+}
+
+function drawPriceLines(ctx, geo, lines, theme) {
+  const pane = geo.price;
+  const left = geo.padL;
+  const right = geo.W - geo.padR;
+  ctx.font = 'bold 10px system-ui, sans-serif';
+  ctx.textAlign = 'right';
+  lines.forEach((price) => {
+    const y = Math.round(pane.yOf(price)) + 0.5;
+    if (y < pane.top || y > pane.top + pane.candleH) return;
+    ctx.strokeStyle = theme.priceLine;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(left, y);
+    ctx.lineTo(right, y);
+    ctx.stroke();
+    const label = Math.round(price).toLocaleString('ko-KR');
+    const tw = ctx.measureText(label).width;
+    ctx.fillStyle = theme.priceLine;
+    ctx.fillRect(right - tw - 8, y - 7, tw + 8, 14);
+    ctx.fillStyle = theme.bg;
+    ctx.fillText(label, right - 4, y + 3.5);
+  });
+}
+
+function drawTimeAxis(ctx, geo, bars, interval, theme) {
+  const n = bars.length;
+  if (!n) return;
+  ctx.fillStyle = theme.text;
+  ctx.font = '9px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  [...new Set([0, Math.floor(n / 2), n - 1])].forEach((i) => {
+    const label = barTimeLabel(bars[i].timestamp, interval);
+    if (label) ctx.fillText(label, geo.xOf(i), geo.H - 6);
+  });
+}
+
+function tooltipHtml(payload, i) {
+  const b = payload.bars[i];
+  const p = payload.params || {};
+  const ma = MA_PERIODS
+    .filter((n) => b[`ma${n}`] != null)
+    .map((n) => `MA${n} ${fmtNum(b[`ma${n}`])}`)
+    .join(' · ');
+  const sigs = (signalsByIdx(payload).get(i) || []).map((s) => {
+    const meta = SIGNAL_META[s.type];
+    const mark = meta.shape === 'circle' ? (s.partial ? '○' : '●') : (s.partial ? '△' : '▲');
+    return `<div class="tt-sig ${meta.color}">${mark} ${meta.label} (${fmtInd(s.value)})${s.partial ? ' · 잠정' : ''}</div>`;
+  }).join('');
+  return `
+    <div class="tt-date">${esc(barDate(b.timestamp))}${b.partial ? ' <span class="tt-partial">진행 중</span>' : ''}</div>
+    <div class="tt-ohlc">
+      <span>시</span><b>${fmtNum(b.open)}</b><span>고</span><b>${fmtNum(b.high)}</b>
+      <span>저</span><b>${fmtNum(b.low)}</b><span>종</span><b>${fmtNum(b.close)}</b>
+    </div>
+    <div class="tt-line">거래량 ${fmtNum(b.volume)}</div>
+    ${ma ? `<div class="tt-line">${ma}</div>` : ''}
+    <div class="tt-line">RSI(${p.rsi_period || 14}) <b>${fmtInd(b.rsi)}</b> · %R(${p.wr_period || 93}) <b>${fmtInd(b.wr)}</b></div>
+    ${sigs}`;
+}
+
+function hideChartTooltip(key) {
+  const tip = $(`chartTip${key}`);
+  const cursor = $(`chartCursor${key}`);
+  if (tip) tip.style.display = 'none';
+  if (cursor) cursor.style.display = 'none';
+}
+
+function bindChartTooltip(key) {
+  const canvas = $(`chartCanvas${key}`);
+  const tip = $(`chartTip${key}`);
+  const cursor = $(`chartCursor${key}`);
+  if (!canvas || !tip || !cursor || canvas.dataset.tipBound) return;
+  canvas.dataset.tipBound = '1';
+  canvas.addEventListener('mousemove', (e) => {
+    const payload = chartPayloads[key];
+    const geo = canvas._geo;
+    if (!payload || !geo) return;
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    if (legendHitAt(geo, mx, my)) {
+      canvas.style.cursor = 'pointer';
+      hideChartTooltip(key);
+      return;
+    }
+    canvas.style.cursor = '';
+    const i = Math.floor((mx - geo.padL) / geo.slotW);
+    if (i < 0 || i >= payload.bars.length || my < geo.padT || my > geo.H - geo.padB) {
+      hideChartTooltip(key);
+      return;
+    }
+    const x = geo.xOf(i);
+    cursor.style.display = 'block';
+    cursor.style.left = `${Math.round(x)}px`;
+    cursor.style.top = `${canvas.offsetTop + geo.padT}px`;
+    cursor.style.height = `${geo.H - geo.padT - geo.padB}px`;
+    tip.innerHTML = tooltipHtml(payload, i);
+    tip.style.display = 'block';
+    const tw = tip.offsetWidth;
+    const th = tip.offsetHeight;
+    const left = x > geo.W / 2 ? x - tw - 12 : x + 12;
+    const top = Math.min(Math.max(my - th / 2, 4), geo.H - th - 4);
+    tip.style.left = `${Math.max(4, left)}px`;
+    tip.style.top = `${canvas.offsetTop + top}px`;
+  });
+  canvas.addEventListener('mouseleave', () => hideChartTooltip(key));
+  canvas.addEventListener('click', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const geo = canvas._geo;
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const hit = legendHitAt(geo, mx, my);
+    if (hit) {
+      toggleMaVisible(hit.id);
+      return;
+    }
+    const pane = geo && geo.price;
+    if (!pane || !pane.priceOf || mx < geo.padL || mx > geo.W - geo.padR
+      || my < pane.top || my > pane.top + pane.candleH) return;
+    const lines = chartPriceLines[key] || (chartPriceLines[key] = []);
+    const near = lines.findIndex((p) => Math.abs(pane.yOf(p) - my) <= 5);
+    if (near >= 0) lines.splice(near, 1);
+    else lines.push(pane.priceOf(my));
+    renderChart(key);
+  });
+}
+
+function renderChartSummary(key, payload) {
+  const el = $(`chartSummary${key}`);
+  if (!el) return;
+  if (!payload) {
+    el.innerHTML = '';
+    el.style.display = 'none';
     return;
   }
+  const spec = CHART_SPECS[key];
+  const bars = payload.bars || [];
+  const parts = [];
+  if (bars.length) {
+    const a = barDate(bars[0].timestamp);
+    const b = barDate(bars[bars.length - 1].timestamp);
+    parts.push(`${a === b ? a : `${a} ~ ${b}`} · ${bars.length}${spec.unit}`);
+  }
+  const latest = {};
+  (payload.signals || []).forEach((s) => {
+    if (SIGNAL_META[s.type] && (!latest[s.type] || s.idx >= latest[s.type].idx)) latest[s.type] = s;
+  });
+  const sigParts = Object.keys(SIGNAL_META)
+    .filter((t) => latest[t])
+    .map((t) => {
+      const s = latest[t];
+      const meta = SIGNAL_META[t];
+      return `<span class="sig ${meta.color}">${meta.short} ${signalDateLabel(s.date)}${s.partial ? ' (잠정)' : ''}</span>`;
+    });
+  parts.push(sigParts.length ? `최근 신호: ${sigParts.join(' · ')}` : '최근 신호 없음');
+  const il = payload.indicator_latest || {};
+  parts.push(`RSI ${fmtInd(il.rsi)} · %R ${fmtInd(il.wr)}`);
+  if (payload.warning) parts.push(`<span class="warn">${esc(payload.warning)}</span>`);
+  el.innerHTML = parts.join(' · ');
+  el.style.display = 'block';
+}
+
+function setChartStatus(key, text, isErr) {
+  const el = $(`chartStatus${key}`);
+  if (!el) return;
+  if (!text) {
+    el.style.display = 'none';
+    el.classList.remove('err');
+    return;
+  }
+  el.textContent = text;
+  el.classList.toggle('err', !!isErr);
+  el.style.display = 'block';
+}
+
+function renderChart(key) {
+  const payload = chartPayloads[key];
+  const canvas = $(`chartCanvas${key}`);
+  const wrap = $(`chartWrap${key}`);
+  if (!canvas) return;
+  hideChartTooltip(key);
+  const bars = (payload && payload.bars) || [];
+  if (!bars.length) {
+    canvas.style.display = 'none';
+    canvas._geo = null;
+    renderChartSummary(key, null);
+    setChartStatus(key, '차트 데이터가 없습니다', true);
+    return;
+  }
+  setChartStatus(key, '');
+  renderChartSummary(key, payload);
 
   const W = Math.max((wrap && wrap.clientWidth) || 360, 280);
-  const H = 240;
+  const H = CHART_HEIGHT;
   const dpr = window.devicePixelRatio || 1;
   canvas.width = Math.round(W * dpr);
   canvas.height = Math.round(H * dpr);
@@ -410,223 +957,96 @@ function renderAnalysisChart(canvas, payload) {
   canvas.style.height = `${H}px`;
   canvas.style.display = 'block';
 
-  if (statusEl) {
-    const parts = [];
-    if (isDaily && bars.length) {
-      const a = barDate(bars[0].timestamp);
-      const b = barDate(bars[bars.length - 1].timestamp);
-      if (a && b) parts.push(a === b ? a : `${a} ~ ${b}`);
-      parts.push(`${bars.length}일`);
-      const ma = payload.ma_latest || {};
-      const maParts = [];
-      if (ma.ma120 != null) maParts.push(`MA120 ${fmtWon(ma.ma120)}`);
-      if (ma.ma180 != null) maParts.push(`MA180 ${fmtWon(ma.ma180)}`);
-      if (maParts.length) parts.push(maParts.join(' · '));
-    } else {
-      const dr = payload.date_range;
-      if (dr && dr.length === 2) {
-        parts.push(dr[0] === dr[1] ? dr[0] : `${dr[0]} ~ ${dr[1]}`);
-      }
-    }
-    if (payload.warning) parts.push(payload.warning);
-    if (parts.length) {
-      statusEl.textContent = parts.join(' · ');
-      statusEl.classList.remove('err');
-      statusEl.classList.add('warn');
-      statusEl.style.display = 'block';
-    } else {
-      statusEl.style.display = 'none';
-      statusEl.classList.remove('warn', 'err');
-    }
-  }
-
-  const padL = 48;
-  const padR = 8;
-  const padT = 14;
-  const padB = 24;
-  const plotW = W - padL - padR;
-  const plotH = H - padT - padB;
-
-  let lo = Infinity;
-  let hi = -Infinity;
-  bars.forEach((b) => {
-    lo = Math.min(lo, b.low, b.open, b.close);
-    hi = Math.max(hi, b.high, b.open, b.close);
-    if (isDaily) {
-      if (b.ma120 != null) { lo = Math.min(lo, b.ma120); hi = Math.max(hi, b.ma120); }
-      if (b.ma180 != null) { lo = Math.min(lo, b.ma180); hi = Math.max(hi, b.ma180); }
-    }
-  });
-
-  if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo === hi) {
-    lo = lo || 0;
-    hi = hi || lo + 1;
-  }
-  const padY = (hi - lo) * 0.05 || 1;
-  lo -= padY;
-  hi += padY;
-
-  const yOf = (p) => padT + plotH - ((p - lo) / (hi - lo)) * plotH;
-  const slotW = plotW / bars.length;
   const ctx = canvas.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-  const bg = getComputedStyle(document.documentElement).getPropertyValue('--card').trim() || '#1a1d24';
-  const grid = getComputedStyle(document.documentElement).getPropertyValue('--border').trim() || '#333';
-  const text = getComputedStyle(document.documentElement).getPropertyValue('--muted').trim() || '#888';
-  const up = getComputedStyle(document.documentElement).getPropertyValue('--up').trim() || '#e8a0a0';
-  const down = getComputedStyle(document.documentElement).getPropertyValue('--down').trim() || '#5b9bd5';
-
-  ctx.fillStyle = bg;
+  const theme = chartTheme();
+  ctx.fillStyle = theme.bg;
   ctx.fillRect(0, 0, W, H);
 
-  ctx.strokeStyle = grid;
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= 3; i++) {
-    const y = padT + (plotH * i) / 3;
-    ctx.beginPath();
-    ctx.moveTo(padL, y);
-    ctx.lineTo(W - padR, y);
-    ctx.stroke();
-    const price = hi - ((hi - lo) * i) / 3;
-    ctx.fillStyle = text;
-    ctx.font = '10px system-ui, sans-serif';
-    ctx.textAlign = 'right';
-    ctx.fillText(Math.round(price).toLocaleString('ko-KR'), padL - 4, y + 3);
-  }
+  const geo = layoutPanes(W, H, bars.length);
+  const osc = oscSpecs(payload, theme);
+  drawPricePane(ctx, geo, payload, theme);
+  drawOscPane(ctx, geo, geo.rsi, bars, osc.rsi, theme);
+  drawOscPane(ctx, geo, geo.wr, bars, osc.wr, theme);
+  drawSignalMarkers(ctx, geo, payload, theme);
+  drawPriceLines(ctx, geo, chartPriceLines[key] || [], theme);
+  drawTimeAxis(ctx, geo, bars, String(payload.interval || key).toUpperCase(), theme);
+  canvas._geo = geo;
+  bindChartTooltip(key);
+}
 
-  bars.forEach((b, i) => {
-    const x = padL + i * slotW + slotW / 2;
-    if (!isDaily && i > 0) {
-      const d0 = barDate(bars[i - 1].timestamp);
-      const d1 = barDate(b.timestamp);
-      if (d0 !== d1) {
-        const sepX = padL + i * slotW;
-        ctx.strokeStyle = text;
-        ctx.globalAlpha = 0.35;
-        ctx.setLineDash([3, 3]);
-        ctx.beginPath();
-        ctx.moveTo(sepX, padT);
-        ctx.lineTo(sepX, padT + plotH);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.globalAlpha = 1;
-        ctx.font = '9px system-ui, sans-serif';
-        ctx.fillStyle = text;
-        ctx.textAlign = 'left';
-        ctx.fillText(d1.slice(5), sepX + 2, padT + 10);
-      }
-    }
-    const openY = yOf(b.open);
-    const closeY = yOf(b.close);
-    const highY = yOf(b.high);
-    const lowY = yOf(b.low);
-    const bullish = b.close >= b.open;
-    const color = bullish ? up : down;
-    const bodyW = Math.max(2, slotW * 0.55);
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(x, highY);
-    ctx.lineTo(x, lowY);
-    ctx.stroke();
-    ctx.fillStyle = color;
-    const top = Math.min(openY, closeY);
-    const h = Math.max(1, Math.abs(closeY - openY));
-    ctx.fillRect(x - bodyW / 2, top, bodyW, h);
+function updateIndicatorFields() {
+  const ma = (chartPayloads['1D'] && chartPayloads['1D'].ma_latest) || {};
+  MA_PERIODS.forEach((n) => {
+    const el = $(`detailMa${n}`);
+    if (el) el.textContent = ma[`ma${n}`] != null ? fmtWon(ma[`ma${n}`]) : '-';
   });
-
-  if (isDaily) {
-    drawMaLine(ctx, bars, 'ma120', MA_COLORS[120], padL, slotW, yOf);
-    drawMaLine(ctx, bars, 'ma180', MA_COLORS[180], padL, slotW, yOf);
-    drawChartLegend(ctx, [
-      { label: 'MA120', color: MA_COLORS[120] },
-      { label: 'MA180', color: MA_COLORS[180] },
-    ], W, padT);
-  }
-
-  const n = bars.length;
-  if (n > 0) {
-    ctx.fillStyle = text;
-    ctx.font = '9px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    const idxs = [0, Math.floor(n / 2), n - 1];
-    idxs.forEach((i) => {
-      const label = barTimeLabel(bars[i].timestamp, interval);
-      if (!label) return;
-      const x = padL + i * slotW + slotW / 2;
-      ctx.fillText(label, x, H - 6);
-    });
-  }
+  CHART_ORDER.forEach((key) => {
+    const il = (chartPayloads[key] && chartPayloads[key].indicator_latest) || {};
+    const rsiEl = $(`detailRsi${key}`);
+    const wrEl = $(`detailWr${key}`);
+    if (rsiEl) rsiEl.textContent = fmtInd(il.rsi);
+    if (wrEl) wrEl.textContent = fmtInd(il.wr);
+  });
 }
 
-function updateMaDetailFields(payload) {
-  const ma = (payload && payload.ma_latest) || {};
-  const el120 = $('detailMa120');
-  const el180 = $('detailMa180');
-  if (el120) el120.textContent = ma.ma120 != null ? fmtWon(ma.ma120) : '-';
-  if (el180) el180.textContent = ma.ma180 != null ? fmtWon(ma.ma180) : '-';
-}
-
-async function loadAnalysisChart(stockCode) {
-  const canvas = $('analysisChartCanvas');
-  const statusEl = $('analysisChartStatus');
+async function loadOneChart(key, stockCode, seq) {
+  const spec = CHART_SPECS[key];
+  const canvas = $(`chartCanvas${key}`);
   if (!canvas) return;
-  if (statusEl) {
-    statusEl.style.display = 'block';
-    statusEl.textContent = '일봉 차트 불러오는 중…';
-    statusEl.classList.remove('err', 'warn');
-  }
   canvas.style.display = 'none';
+  renderChartSummary(key, null);
+  setChartStatus(key, `${spec.title} 불러오는 중…`);
   try {
     const data = await fetchJSON(
-      `/fundamentals/${encodeURIComponent(stockCode)}/chart?interval=1D&bars=120`,
+      `/fundamentals/${encodeURIComponent(stockCode)}/chart?interval=${key}&bars=${spec.bars}`,
     );
-    chartPayload = data;
-    renderAnalysisChart(canvas, data);
-    updateMaDetailFields(data);
+    if (seq !== chartLoadSeq) return;
+    chartPayloads[key] = data;
+    renderChart(key);
   } catch (e) {
-    chartPayload = null;
-    updateMaDetailFields(null);
-    if (statusEl) {
-      const detail = (e && e.detail) ? String(e.detail) : '';
-      statusEl.textContent = detail
-        ? `차트 실패: ${detail}`
-        : '차트를 불러오지 못했습니다 (장외·API 제한일 수 있음)';
-      statusEl.classList.add('err');
-      statusEl.style.display = 'block';
-    }
+    if (seq !== chartLoadSeq) return;
+    chartPayloads[key] = null;
+    const detail = (e && e.detail) ? String(e.detail) : '';
+    renderChartSummary(key, null);
+    setChartStatus(key, detail
+      ? `${spec.title} 실패: ${detail}`
+      : `${spec.title}를 불러오지 못했습니다 (장외·API 제한일 수 있음)`, true);
     canvas.style.display = 'none';
   }
+  updateIndicatorFields();
+}
+
+function loadAnalysisCharts(stockCode) {
+  resetChartState();
+  const seq = chartLoadSeq;
+  updateIndicatorFields();
+  return Promise.all(CHART_ORDER.map((key) => loadOneChart(key, stockCode, seq)));
 }
 
 function onChartResize() {
-  if (!chartPayload) return;
-  const canvas = $('analysisChartCanvas');
-  if (!canvas || canvas.style.display === 'none') return;
   if (chartResizeTimer) clearTimeout(chartResizeTimer);
-  chartResizeTimer = setTimeout(() => renderAnalysisChart(canvas, chartPayload), 120);
+  chartResizeTimer = setTimeout(() => {
+    CHART_ORDER.forEach((key) => {
+      if (chartPayloads[key]) renderChart(key);
+    });
+  }, 120);
 }
 
 async function renderDetailFallback(code, name) {
   const c = String(code || '').trim().replace(/^A/i, '').padStart(6, '0');
   $('detailTitle').textContent = name ? `${name} (${c})` : `종목 (${c})`;
-  $('detailHint').textContent = '기본적분석 마트에 없음 · 일봉 차트만 표시';
+  $('detailHint').textContent = '기본적분석 마트에 없음 · 주봉·일봉 차트만 표시';
   $('detailBody').innerHTML = `
+    ${chartSectionsHtml()}
     <div class="detail-section">
       <div class="detail-section-title">회사 정보</div>
       ${companyProfilePlaceholderHtml()}
     </div>
-    <div class="detail-section analysis-chart-section">
-      <div class="detail-section-title">일봉 차트 <span class="hint">최근 120거래일 · MA120/180</span></div>
-      <div class="analysis-chart-wrap" id="analysisChartWrap">
-        <div class="analysis-chart-status" id="analysisChartStatus">차트 불러오는 중…</div>
-        <canvas class="analysis-chart-canvas" id="analysisChartCanvas" aria-label="일봉 차트"></canvas>
-      </div>
-    </div>
+    <div class="detail-grid">${indicatorFieldsHtml()}</div>
     <div class="empty" style="margin-top:12px;"><span class="ico">ℹ️</span>재무 지표는 <code>run_fundamental_batch.bat</code> 적재 후 표시됩니다.</div>`;
   loadCompanyProfile(c);
-  await loadAnalysisChart(c);
+  await loadAnalysisCharts(c);
 }
 
 async function selectStock(code) {
@@ -695,6 +1115,7 @@ function resetFilters() {
   $('fltMaxPer').value = '';
   $('fltMaxPbr').value = '';
   $('fltMinRoe').value = '';
+  $('fltMaxWeeklyRsi').value = '';
   state.sortBy = 'market_cap';
   state.sortDesc = true;
   loadList();

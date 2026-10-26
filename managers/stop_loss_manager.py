@@ -1463,7 +1463,7 @@ class StopLossManager:
         is_ymgp = (strategy_key or "").strip().lower() == "ymgp"
         is_jongga = (strategy_key or "").strip().lower() == "jongga"
         is_fractal = (strategy_key or "").strip().lower() == "fractal"
-        if is_fractal or (strategy_key or "").strip().lower() == "rwm_bowl":
+        if is_fractal or (strategy_key or "").strip().lower() in ("rwm_bowl", "rsi_ladder"):
             return []
         if is_breakout:
             sl = self._num(getattr(settings, "breakout_stop_loss_pct", None))
@@ -1914,6 +1914,10 @@ class StopLossManager:
                 await self._monitor_rwm_exit(
                     position, int(current_price), peak, profit_loss, profit_loss_rate,
                 )
+                return
+
+            if getattr(position, "strategy_key", None) == "rsi_ladder":
+                await self._monitor_ladder_exit(position, int(current_price), peak)
                 return
 
             # 종가배팅: 매수 당일은 청산 모니터 스킵, 익일부터 고정손절·트레일
@@ -2794,9 +2798,14 @@ class StopLossManager:
                                     asyncio.create_task(notify_sell_filled_async(snap2, remaining_qty=None))
                         except Exception as e:
                             logger.error(f"🛡️ [RECONCILE] COMPLETED 보정 실패: {e}")
-                    elif acct_qty < pos.buy_quantity:
-                        open_qty = remaining_position_quantity(session, pos)
-                        sold_qty = max(0, open_qty - int(acct_qty))
+                    elif acct_qty < max(int(pos.buy_quantity or 0), self._ladder_pre_sell_qty(pos, sell)):
+                        # buy_quantity 는 부분체결 확정 때마다 계좌 수량으로 재동기화되므로
+                        # 완료 매도 누계를 다시 빼면 2번째 부분매도부터 0주가 된다 — 감소분 기준, 주문수량 상한.
+                        # 분할매수는 감시 루프가 먼저 buy_quantity 를 줄여도 매도 직전 보유수량으로 판정한다.
+                        base_qty = max(int(pos.buy_quantity or 0), self._ladder_pre_sell_qty(pos, sell))
+                        sold_qty = max(0, base_qty - int(acct_qty))
+                        if int(sell.sell_quantity or 0) > 0:
+                            sold_qty = min(sold_qty, int(sell.sell_quantity))
                         if sold_qty <= 0:
                             logger.warning(
                                 f"🛡️ [RECONCILE] 매도수량 0 — 완료 매도 누계가 포지션 수량과 일치 "
@@ -3036,6 +3045,25 @@ class StopLossManager:
             closed += 1
 
         return closed
+
+    @staticmethod
+    def _ladder_pre_sell_qty(pos: Position, sell: SellOrder) -> int:
+        """분할매수 부분매도의 매도 직전 보유수량 (해당 매도 주문일 때만, 아니면 0)."""
+        if str(getattr(pos, "strategy_key", "") or "") != "rsi_ladder":
+            return 0
+        try:
+            from utils.rsi_ladder import get_ladder_store
+
+            plan = get_ladder_store().open_plan_for(str(pos.stock_code or ""))
+            pending = (plan or {}).get("pending_sell") or {}
+            if pending.get("status") != "SENT" or not pending.get("sent_utc"):
+                return 0
+            sent = datetime.fromisoformat(str(pending["sent_utc"]))
+            if sell.created_at and sell.created_at < sent - timedelta(seconds=10):
+                return 0
+            return int(pending.get("pre_hold") or 0)
+        except Exception:
+            return 0
 
     @staticmethod
     def _finalize_sell_in_session(session: Session, sell: SellOrder, pos: Position):
@@ -3568,6 +3596,44 @@ class StopLossManager:
         if await self._has_pending_sell_order(position.id, for_reason=sell_reason):
             return
         await self._execute_sell_order(position, current_price, sell_reason, detail)
+
+    async def _monitor_ladder_exit(self, position: Position, current_price: int, peak: int) -> None:
+        """RSI 분할매수: 글로벌 손절·트레일링·익절 미사용.
+
+        매도 판정(S0~S3·수동)은 managers/rsi_ladder_scheduler 가 15:05 에 계획에 pending_sell 로 기록하고,
+        여기서 정규장 중 지정 수량만 매도한다.
+        """
+        from utils.rsi_ladder import SELL_REASON_CODE, SELL_RULE_LABEL, get_ladder_store
+
+        await self._update_position_tracking(position.id, peak, None)
+        if not is_krx_session():
+            return
+        store = get_ladder_store()
+        plan = store.open_plan_for(str(position.stock_code or ""))
+        pending = (plan or {}).get("pending_sell")
+        if not plan or not pending or pending.get("status") != "QUEUED":
+            return
+        if await self._has_any_pending_sell_order(position.id):
+            return
+        hold = int(position.buy_quantity or 0)
+        qty = min(int(pending.get("qty") or 0), hold)
+        rules = list(pending.get("rules") or [])
+        if qty <= 0 or not rules:
+            pending.update(status="FAILED", error="매도 수량 0")
+            store.save()
+            return
+        reason = SELL_REASON_CODE.get(rules[-1], "LADDER_MANUAL")
+        detail = (
+            f"분할매수 {' + '.join(SELL_RULE_LABEL.get(r, r) for r in rules)}: "
+            f"{qty}주 / 보유 {hold}주 · 판정가 {int(pending.get('price') or 0):,}"
+        )
+        pending.update(status="SENT", sent_utc=utc_now_naive().isoformat(timespec="seconds"),
+                       sent_at=now_kst().isoformat(timespec="seconds"), sent_qty=qty, pre_hold=hold)
+        store.save()
+        await self._execute_sell_order(
+            position, current_price, reason, detail,
+            quantity=None if qty >= hold else qty,
+        )
 
     async def _persist_ma1592_impulse(self, position_id: int, stock_code: str = "") -> None:
         """impulse_seen 스티키 → Position.trailing_armed + 장부."""

@@ -142,7 +142,22 @@ def _strategy_windows(settings) -> list:
                 _parse_hm(getattr(settings, "rwm_pb_end", None), (14, 30)),
             )
         )
+    if rsi_ladder_enabled():
+        windows.append(("분할매수", dt_time(*RSI_LADDER_BUY_START), dt_time(*RSI_LADDER_BUY_END)))
     return windows
+
+
+RSI_LADDER_BUY_START = (9, 0)
+RSI_LADDER_BUY_END = (15, 20)
+
+
+def rsi_ladder_enabled() -> bool:
+    try:
+        from utils.rsi_ladder import get_ladder_store
+
+        return get_ladder_store().enabled
+    except Exception:
+        return False
 
 
 def should_auto_shutdown_server(
