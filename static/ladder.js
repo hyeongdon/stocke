@@ -615,6 +615,81 @@
     }, 400);
   }
 
+  const suggest = { items: [], active: -1, timer: null, seq: 0 };
+
+  function renderSuggest() {
+    const ul = document.getElementById('stockSuggest');
+    if (!suggest.items.length) {
+      ul.innerHTML = '<li class="empty">검색 결과 없음</li>';
+    } else {
+      ul.innerHTML = suggest.items.map((s, i) =>
+        '<li role="option" data-i="' + i + '"' + (i === suggest.active ? ' class="active" aria-selected="true"' : '') + '>' +
+        '<b>' + esc(s.name) + '</b><span class="code">' + esc(s.code) + '</span><span class="mkt">' + esc(s.market) + '</span></li>'
+      ).join('');
+      const act = ul.querySelector('li.active');
+      if (act) act.scrollIntoView({ block: 'nearest' });
+    }
+    ul.hidden = false;
+  }
+
+  function hideSuggest() {
+    document.getElementById('stockSuggest').hidden = true;
+    suggest.active = -1;
+  }
+
+  function onSearchInput() {
+    const q = document.getElementById('newPlanForm').elements.search.value.trim();
+    clearTimeout(suggest.timer);
+    if (!q) {
+      suggest.items = [];
+      hideSuggest();
+      return;
+    }
+    const seq = ++suggest.seq;
+    suggest.timer = setTimeout(async () => {
+      try {
+        const r = await api('GET', '/api/ladder/search?q=' + encodeURIComponent(q));
+        if (seq !== suggest.seq) return;
+        suggest.items = r.items || [];
+        suggest.active = suggest.items.length ? 0 : -1;
+        renderSuggest();
+      } catch (e) {
+        if (seq === suggest.seq) toast(e.message, 'err');
+      }
+    }, 150);
+  }
+
+  function pickSuggest(i) {
+    const s = suggest.items[i];
+    if (!s) return;
+    const f = document.getElementById('newPlanForm');
+    f.elements.search.value = s.name + ' (' + s.code + ')';
+    f.elements.code.value = s.code;
+    f.elements.name.value = s.name;
+    hideSuggest();
+    onCodeInput();
+    renderPreview();
+  }
+
+  function onSearchKey(e) {
+    const ul = document.getElementById('stockSuggest');
+    if (e.key === 'Escape') {
+      if (!ul.hidden) { e.preventDefault(); hideSuggest(); }
+      return;
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (!ul.hidden && suggest.active >= 0) pickSuggest(suggest.active);
+      return;
+    }
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && suggest.items.length) {
+      e.preventDefault();
+      const n = suggest.items.length;
+      suggest.active = ul.hidden ? 0 : (suggest.active + (e.key === 'ArrowDown' ? 1 : -1) + n) % n;
+      renderSuggest();
+    }
+  }
+
   function openModal(show) {
     document.getElementById('newPlanModal').hidden = !show;
     if (show) renderPreview();
@@ -673,6 +748,15 @@
     });
     const form = document.getElementById('newPlanForm');
     form.elements.code.addEventListener('input', onCodeInput);
+    form.elements.search.addEventListener('input', onSearchInput);
+    form.elements.search.addEventListener('keydown', onSearchKey);
+    form.elements.search.addEventListener('focus', () => { if (suggest.items.length && form.elements.search.value.trim()) renderSuggest(); });
+    form.elements.search.addEventListener('blur', hideSuggest);
+    document.getElementById('stockSuggest').addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      const li = e.target.closest('li[data-i]');
+      if (li) pickSuggest(Number(li.dataset.i));
+    });
     form.addEventListener('input', renderPreview);
     form.addEventListener('change', renderPreview);
     form.addEventListener('submit', submitForm);

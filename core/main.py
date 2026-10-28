@@ -6410,6 +6410,57 @@ async def ladder_quote(code: str):
             "error": market.get("error")}
 
 
+_stock_dir_cache: Dict[str, Any] = {"date": None, "rows": []}
+
+
+def _stock_directory() -> List[Dict[str, Any]]:
+    """최신 기본적분석 스냅샷 기준 전 종목 (코드·이름·시장·시총), 일자별 캐시."""
+    from sqlalchemy import func
+    from core.models import FundamentalSnapshot, get_db
+
+    for db in get_db():
+        latest = db.query(func.max(FundamentalSnapshot.as_of_date)).scalar()
+        if latest is None:
+            return []
+        if _stock_dir_cache["date"] == latest:
+            return _stock_dir_cache["rows"]
+        rows = (
+            db.query(FundamentalSnapshot.stock_code, FundamentalSnapshot.stock_name,
+                     FundamentalSnapshot.market, FundamentalSnapshot.market_cap)
+            .filter(FundamentalSnapshot.as_of_date == latest)
+            .all()
+        )
+        out = [
+            {"code": str(r[0]).strip(), "name": str(r[1] or "").strip(), "market": r[2] or "",
+             "market_cap": r[3] or 0.0, "_key": str(r[1] or "").replace(" ", "").lower()}
+            for r in rows if r[0]
+        ]
+        out.sort(key=lambda x: -x["market_cap"])
+        _stock_dir_cache.update(date=latest, rows=out)
+        return out
+    return []
+
+
+@app.get("/api/ladder/search")
+async def ladder_search(q: str = "", limit: int = 15):
+    """새 계획 입력용 — 종목명/코드 검색 (정확 > 앞부분 > 포함, 같은 순위는 시총순)."""
+    key = (q or "").replace(" ", "").lower()
+    if not key:
+        return {"items": []}
+    limit = max(1, min(int(limit or 15), 50))
+    ranked = []
+    for r in _stock_directory():
+        if r["code"].startswith(key):
+            rank = 0 if r["code"] == key else 1
+        elif key in r["_key"]:
+            rank = 0 if r["_key"] == key else (1 if r["_key"].startswith(key) else 2)
+        else:
+            continue
+        ranked.append((rank, r))
+    ranked.sort(key=lambda t: t[0])
+    return {"items": [{k: v for k, v in r.items() if k != "_key"} for _, r in ranked[:limit]]}
+
+
 @app.post("/api/ladder/plans")
 async def ladder_create(req: LadderPlanRequest):
     res = await _ladder_acall(rsi_ladder_scheduler.create_plan(

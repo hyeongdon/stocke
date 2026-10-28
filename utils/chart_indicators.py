@@ -18,7 +18,7 @@ from utils.rwm_bowl import (
     williams_turns,
 )
 
-MA_PERIODS: Tuple[int, ...] = (10, 20, 60, 120)
+MA_PERIODS: Tuple[int, ...] = (5, 10, 20, 60, 120)
 SESSION_CLOSE_MIN = 15 * 60 + 30
 
 SIGNAL_RSI_OS = "RSI_OS"

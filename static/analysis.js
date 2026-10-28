@@ -347,14 +347,16 @@ function renderDetail(row) {
   loadAnalysisCharts(row.stock_code);
 }
 
-const MA_PERIODS = [10, 20, 60, 120];
+const MA_PERIODS = [5, 10, 20, 60, 120];
 const MA_COLORS = {
+  5: '#ff1a1a',
   10: '#ff4fa3',
   20: '#ffd400',
   60: '#2563eb',
   120: '#9ca3af',
 };
 const MA_WIDTHS = {
+  5: 1.2,
   10: 1.2,
   20: 2.4,
   60: 2.4,
@@ -382,8 +384,8 @@ function toggleMaVisible(n) {
 
 const CHART_ORDER = ['1D', '1W'];
 const CHART_SPECS = {
-  '1W': { title: '주봉 차트', hint: '최근 104주 · MA10/20/60/120주', bars: 104, unit: '주' },
-  '1D': { title: '일봉 차트', hint: '최근 1년(250일) · MA10/20/60/120일', bars: 250, unit: '일' },
+  '1W': { title: '주봉 차트', hint: '최근 104주 · MA5/10/20/60/120주', bars: 104, unit: '주' },
+  '1D': { title: '일봉 차트', hint: '최근 1년(250일) · MA5/10/20/60/120일', bars: 250, unit: '일' },
 };
 const CHART_HEIGHT = 400;
 const PRICE_MARKER_ROOM = 38;
