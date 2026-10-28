@@ -12,11 +12,6 @@ PYTHON="$PROJECT_DIR/venv/bin/python"
 NOTIFY="$PROJECT_DIR/scripts/notify_deployment_sync.py"
 
 mkdir -p "$LOG_DIR"
-exec 9>"$LOCK_FILE"
-if ! flock -n 9; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] sync already running" | tee -a "$LOG_FILE"
-    exit 1
-fi
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
@@ -32,6 +27,28 @@ notify() {
         log "WARNING: notification script or venv Python not found"
     fi
 }
+
+lock_holders() {
+    local fd pid
+    for fd in /proc/[0-9]*/fd/*; do
+        if [ "$(readlink "$fd" 2>/dev/null)" = "$LOCK_FILE" ]; then
+            pid=${fd#/proc/}
+            echo "${pid%%/*}"
+        fi
+    done | sort -u | while read -r pid; do
+        [ "$pid" = "$$" ] && continue
+        ps -o pid=,lstart=,args= -p "$pid" 2>/dev/null | cut -c1-120
+    done
+}
+
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+    holders=$(lock_holders | tr '\n' ' ')
+    message="중단: 동기화 잠금이 이미 잡혀 있음 (보유 프로세스: ${holders:-확인 불가})"
+    log "ERROR: $message"
+    notify failure "$message"
+    exit 1
+fi
 
 cd "$PROJECT_DIR" || {
     log "ERROR: project directory not found: $PROJECT_DIR"
@@ -95,7 +112,8 @@ fi
 
 after=$(git rev-parse HEAD)
 log "source updated: ${before:0:7} -> ${after:0:7}"
-if ! "$PROJECT_DIR/shell/restart_server.sh" >> "$LOG_FILE" 2>&1; then
+# 9>&- : 새로 뜨는 서버가 잠금 fd 를 물려받으면 이후 동기화가 영구히 막힌다
+if ! "$PROJECT_DIR/shell/restart_server.sh" 9>&- >> "$LOG_FILE" 2>&1; then
     message="소스 반영 후 서버 재시작 실패 (커밋 ${after:0:7})"
     log "ERROR: $message"
     notify failure "$message"
