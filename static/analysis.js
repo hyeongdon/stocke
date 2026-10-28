@@ -398,10 +398,20 @@ let chartLoadSeq = 0;
 let chartResizeTimer = null;
 
 const chartPriceLines = {};
+// 추세선 끝점은 픽셀이 아니라 (봉 인덱스, 가격)으로 저장해야 리사이즈·MA 토글 후에도 같은 캔들에 붙어 있다
+const chartTrendLines = {};
+const chartTrendDrafts = {};
+const TREND_DRAG_MIN_PX = 5;
+const LINE_HIT_PX = 5;
 
 function resetChartState() {
   chartLoadSeq += 1;
-  CHART_ORDER.forEach((k) => { chartPayloads[k] = null; chartPriceLines[k] = []; });
+  CHART_ORDER.forEach((k) => {
+    chartPayloads[k] = null;
+    chartPriceLines[k] = [];
+    chartTrendLines[k] = [];
+    chartTrendDrafts[k] = null;
+  });
 }
 
 function indicatorFieldsHtml() {
@@ -462,6 +472,7 @@ function chartTheme() {
     down: '#3b82f6',
     osc: v('--osc-line', '#cbd5e1'),
     priceLine: v('--price-line', '#fbbf24'),
+    trendLine: v('--trend-line', '#22d3ee'),
     sig: { rsi: v('--sig-rsi', '#a78bfa'), wr: v('--sig-wr', '#34d399') },
   };
 }
@@ -514,6 +525,7 @@ function layoutPanes(W, H, n) {
   return {
     W, H, padL, padR, padT, padB, plotW, slotW, price, rsi, wr,
     xOf: (i) => padL + i * slotW + slotW / 2,
+    idxOf: (x) => (x - padL - slotW / 2) / slotW,
   };
 }
 
@@ -806,6 +818,49 @@ function drawPriceLines(ctx, geo, lines, theme) {
   });
 }
 
+function trendLinePx(geo, t) {
+  const pane = geo.price;
+  return { x1: geo.xOf(t.i1), y1: pane.yOf(t.p1), x2: geo.xOf(t.i2), y2: pane.yOf(t.p2) };
+}
+
+function drawTrendLines(ctx, geo, lines, theme) {
+  const pane = geo.price;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(geo.padL, pane.top, geo.plotW, pane.candleH);
+  ctx.clip();
+  ctx.strokeStyle = theme.trendLine;
+  ctx.fillStyle = theme.trendLine;
+  ctx.lineWidth = 1.5;
+  lines.forEach((t) => {
+    const { x1, y1, x2, y2 } = trendLinePx(geo, t);
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+    [[x1, y1], [x2, y2]].forEach(([x, y]) => {
+      ctx.beginPath();
+      ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  });
+  ctx.restore();
+}
+
+function segmentDistance(px, py, { x1, y1, x2, y2 }) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len2 = dx * dx + dy * dy;
+  const t = len2 ? Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / len2)) : 0;
+  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+}
+
+function inPricePane(geo, mx, my) {
+  const pane = geo && geo.price;
+  return !!(pane && pane.priceOf && mx >= geo.padL && mx <= geo.W - geo.padR
+    && my >= pane.top && my <= pane.top + pane.candleH);
+}
+
 function drawTimeAxis(ctx, geo, bars, interval, theme) {
   const n = bars.length;
   if (!n) return;
@@ -857,10 +912,53 @@ function bindChartTooltip(key) {
   const cursor = $(`chartCursor${key}`);
   if (!canvas || !tip || !cursor || canvas.dataset.tipBound) return;
   canvas.dataset.tipBound = '1';
+  let press = null;
+  let suppressClick = false;
+  const localPoint = (e) => {
+    const rect = canvas.getBoundingClientRect();
+    return { mx: e.clientX - rect.left, my: e.clientY - rect.top };
+  };
+  const anchorAt = (geo, mx, my) => {
+    const pane = geo.price;
+    const x = Math.min(Math.max(mx, geo.padL), geo.W - geo.padR);
+    const y = Math.min(Math.max(my, pane.top), pane.top + pane.candleH);
+    return { i: geo.idxOf(x), p: pane.priceOf(y) };
+  };
+  canvas.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    const geo = canvas._geo;
+    const { mx, my } = localPoint(e);
+    if (!inPricePane(geo, mx, my) || legendHitAt(geo, mx, my)) return;
+    press = { mx, my, start: anchorAt(geo, mx, my), dragging: false };
+    canvas.setPointerCapture(e.pointerId);
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    const geo = canvas._geo;
+    if (!press || !geo) return;
+    const { mx, my } = localPoint(e);
+    if (!press.dragging && Math.hypot(mx - press.mx, my - press.my) < TREND_DRAG_MIN_PX) return;
+    press.dragging = true;
+    const end = anchorAt(geo, mx, my);
+    chartTrendDrafts[key] = { i1: press.start.i, p1: press.start.p, i2: end.i, p2: end.p };
+    renderChart(key);
+  });
+  const endPress = (commit) => {
+    if (!press) return;
+    const draft = chartTrendDrafts[key];
+    if (press.dragging) {
+      suppressClick = true;
+      if (commit && draft) (chartTrendLines[key] || (chartTrendLines[key] = [])).push(draft);
+    }
+    press = null;
+    chartTrendDrafts[key] = null;
+    if (draft) renderChart(key);
+  };
+  canvas.addEventListener('pointerup', () => endPress(true));
+  canvas.addEventListener('pointercancel', () => endPress(false));
   canvas.addEventListener('mousemove', (e) => {
     const payload = chartPayloads[key];
     const geo = canvas._geo;
-    if (!payload || !geo) return;
+    if (!payload || !geo || press) return;
     const rect = canvas.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
@@ -891,20 +989,28 @@ function bindChartTooltip(key) {
   });
   canvas.addEventListener('mouseleave', () => hideChartTooltip(key));
   canvas.addEventListener('click', (e) => {
-    const rect = canvas.getBoundingClientRect();
+    if (suppressClick) {
+      suppressClick = false;
+      return;
+    }
     const geo = canvas._geo;
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
+    const { mx, my } = localPoint(e);
     const hit = legendHitAt(geo, mx, my);
     if (hit) {
       toggleMaVisible(hit.id);
       return;
     }
-    const pane = geo && geo.price;
-    if (!pane || !pane.priceOf || mx < geo.padL || mx > geo.W - geo.padR
-      || my < pane.top || my > pane.top + pane.candleH) return;
+    if (!inPricePane(geo, mx, my)) return;
+    const pane = geo.price;
+    const trends = chartTrendLines[key] || [];
+    const nearTrend = trends.findIndex((t) => segmentDistance(mx, my, trendLinePx(geo, t)) <= LINE_HIT_PX);
+    if (nearTrend >= 0) {
+      trends.splice(nearTrend, 1);
+      renderChart(key);
+      return;
+    }
     const lines = chartPriceLines[key] || (chartPriceLines[key] = []);
-    const near = lines.findIndex((p) => Math.abs(pane.yOf(p) - my) <= 5);
+    const near = lines.findIndex((p) => Math.abs(pane.yOf(p) - my) <= LINE_HIT_PX);
     if (near >= 0) lines.splice(near, 1);
     else lines.push(pane.priceOf(my));
     renderChart(key);
@@ -998,6 +1104,8 @@ function renderChart(key) {
   drawOscPane(ctx, geo, geo.wr, bars, osc.wr, theme);
   drawSignalMarkers(ctx, geo, payload, theme);
   drawPriceLines(ctx, geo, chartPriceLines[key] || [], theme);
+  const draft = chartTrendDrafts[key];
+  drawTrendLines(ctx, geo, draft ? [...(chartTrendLines[key] || []), draft] : (chartTrendLines[key] || []), theme);
   drawTimeAxis(ctx, geo, bars, String(payload.interval || key).toUpperCase(), theme);
   canvas._geo = geo;
   bindChartTooltip(key);
