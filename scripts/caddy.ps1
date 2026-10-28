@@ -71,11 +71,13 @@ function Install-Caddy {
 }
 
 function Ensure-FirewallRules {
-    $name = 'Stocke Caddy 80'
-    $existing = Get-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue
-    if (-not $existing) {
-        New-NetFirewallRule -DisplayName $name -Direction Inbound -LocalPort 80 -Protocol TCP -Action Allow | Out-Null
-        Write-Host "Firewall rule added: $name"
+    foreach ($port in @(80, 443)) {
+        $name = "Stocke Caddy $port"
+        $existing = Get-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue
+        if (-not $existing) {
+            New-NetFirewallRule -DisplayName $name -Direction Inbound -LocalPort $port -Protocol TCP -Action Allow | Out-Null
+            Write-Host "Firewall rule added: $name"
+        }
     }
 }
 
@@ -169,20 +171,29 @@ function Start-CaddyProxy {
     $proc.Id | Out-File -FilePath $PidFile -Encoding ascii
 
     $ok80 = Wait-PortListen 80
+    $ok443 = Wait-PortListen 443 10
 
     if (-not $proc.HasExited -and $ok80) {
-        $h = Test-ProxyHealth
         Write-Host ""
         Write-Host "Caddy started PID $($proc.Id)" -ForegroundColor Green
-        Write-Host "  Port 80  OK  -> http://hyungdon.store" -ForegroundColor Green
-        if ($h.http) {
-            Write-Host "  Health   OK  (proxy -> stocke:8000)" -ForegroundColor Green
+        Write-Host "  Port 80  OK" -ForegroundColor Green
+        if ($ok443) { Write-Host "  Port 443 OK" -ForegroundColor Green }
+        else { Write-Host "  Port 443 NOT listening" -ForegroundColor Yellow }
+        Write-Host "  Waiting for certificate (first run may take ~30s) ..."
+        $h = $null
+        for ($i = 0; $i -lt 12; $i++) {
+            $h = Test-ProxyHealth
+            if ($h.https) { break }
+            Start-Sleep -Seconds 5
+        }
+        if ($h.https) {
+            Write-Host "  HTTPS    OK  -> https://hyungdon.store" -ForegroundColor Green
         } else {
-            Write-Host "  Health   WARN (port open but backend check failed)" -ForegroundColor Yellow
+            Write-Host "  HTTPS    WARN (certificate not ready — check logs\caddy.log, router 80/443 forwarding)" -ForegroundColor Yellow
+            Show-CaddyLogTail
         }
         Write-Host ""
-        Write-Host "Open: http://hyungdon.store  (hosts file required at home)"
-        Write-Host "Do NOT use https:// — this setup is HTTP only."
+        Write-Host "Open: https://hyungdon.store"
     } else {
         Write-Host ""
         Write-Host "ERROR: Caddy did not bind port 80." -ForegroundColor Red
@@ -223,29 +234,29 @@ function Stop-CaddyProxy {
 }
 
 function Test-ProxyHealth {
-    $ok80 = $false
+    $ok443 = $false
     try {
-        $r = Invoke-WebRequest -Uri 'http://hyungdon.store/docs' -UseBasicParsing -TimeoutSec 8
-        $ok80 = ($r.StatusCode -eq 200)
+        $r = Invoke-WebRequest -Uri 'https://hyungdon.store/docs' -UseBasicParsing -TimeoutSec 8
+        $ok443 = ($r.StatusCode -eq 200)
     } catch { }
-    return @{ http = $ok80 }
+    return @{ https = $ok443 }
 }
 
 function Show-CaddyStatus {
-    Write-Host '--- Caddy proxy (HTTP 80 -> 8000) ---'
+    Write-Host '--- Caddy proxy (HTTP 80 / HTTPS 443 -> 8000) ---'
     if (Test-Path $CaddyExe) { & $CaddyExe version } else { Write-Host 'Not installed. Run: proxy.bat install' }
-    foreach ($port in @(80, 8000)) {
+    foreach ($port in @(80, 443, 8000)) {
         $pids = Get-ListenerPids $port
         if ($pids.Count) { Write-Host "Port $port LISTENING PID $($pids -join ', ')" }
         else { Write-Host "Port $port - (not running)" }
     }
     if ((Get-ListenerPids 80).Count -gt 0) {
         $h = Test-ProxyHealth
-        if ($h.http) {
-            Write-Host "Health: OK  -> http://hyungdon.store works" -ForegroundColor Green
+        if ($h.https) {
+            Write-Host "Health: OK  -> https://hyungdon.store works" -ForegroundColor Green
         } else {
-            Write-Host "Health: WARN (port 80 open but http://hyungdon.store failed)" -ForegroundColor Yellow
-            Write-Host "Check hosts file: 192.168.x.x hyungdon.store" -ForegroundColor Yellow
+            Write-Host "Health: WARN (https://hyungdon.store failed)" -ForegroundColor Yellow
+            Write-Host "Check: router forwards 80+443, hosts file 192.168.x.x hyungdon.store, logs\caddy.log" -ForegroundColor Yellow
         }
     } else {
         Write-Host ""

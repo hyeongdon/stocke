@@ -1,11 +1,19 @@
-# hyungdon.store — 집 LAN(hosts) + 외부 포트포워딩 80
-# HTTP만 사용 (집 Wi-Fi·외부 모두 http://hyungdon.store)
+# hyungdon.store — 집 LAN(hosts) + 외부 포트포워딩 80/443
+# HTTPS: Let's Encrypt 자동 발급 (공유기에서 80, 443 모두 이 PC로 포워딩 필요)
+# http://hyungdon.store 는 https 로 자동 리다이렉트
 
 {
 	admin off
-	auto_https off
+	servers {
+		protocols h1 h2
+	}
 }
 
-http://hyungdon.store, http://www.hyungdon.store {
+hyungdon.store {
+	reverse_proxy 127.0.0.1:8000
+}
+
+# localhost / 내부 IP / 공인 IP 직접 접속 (HTTP)
+:80 {
 	reverse_proxy 127.0.0.1:8000
 }
