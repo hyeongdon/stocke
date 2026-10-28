@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -99,13 +100,52 @@ def is_public_path(path: str) -> bool:
         "/favicon.ico",
         "/static/favicon.svg",
         "/static/login.html",
+        "/static/manifest.json",
         "/docs",
         "/openapi.json",
         "/redoc",
         "/api/realtime-candles/stats",   # 실시간 구독 현황 (모니터링용)
     }:
         return True
+    # 홈 화면 앱 아이콘 — iOS가 쿠키 없이 가져간다
+    if path.startswith("/static/icons/"):
+        return True
     # 실시간 봉 조회/구독 API — 배치·모니터링 스크립트에서 인증 없이 접근
     if path.startswith("/api/realtime-candles/"):
         return True
     return False
+
+
+_LOGIN_MAX_FAILURES = 5
+_LOGIN_WINDOW_SEC = 15 * 60
+_login_failures: dict[str, list[float]] = {}
+
+
+def _recent_failures(client_ip: str, now: float) -> list[float]:
+    attempts = [t for t in _login_failures.get(client_ip, []) if now - t < _LOGIN_WINDOW_SEC]
+    if attempts:
+        _login_failures[client_ip] = attempts
+    else:
+        _login_failures.pop(client_ip, None)
+    return attempts
+
+
+def login_locked_seconds(client_ip: str) -> int:
+    """연속 실패로 잠긴 경우 남은 초, 아니면 0."""
+    now = time.time()
+    attempts = _recent_failures(client_ip, now)
+    if len(attempts) < _LOGIN_MAX_FAILURES:
+        return 0
+    return max(1, int(_LOGIN_WINDOW_SEC - (now - attempts[0])))
+
+
+def record_login_failure(client_ip: str) -> None:
+    now = time.time()
+    attempts = _recent_failures(client_ip, now)
+    attempts.append(now)
+    _login_failures[client_ip] = attempts
+    logger.warning("🔒 [AUTH] 로그인 실패 ip=%s (%d/%d)", client_ip, len(attempts), _LOGIN_MAX_FAILURES)
+
+
+def clear_login_failures(client_ip: str) -> None:
+    _login_failures.pop(client_ip, None)

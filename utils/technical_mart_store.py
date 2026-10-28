@@ -177,24 +177,33 @@ def get_latest_map_by_codes(stock_codes: List[str], timeframe: str = "1D") -> Di
     return out
 
 
-def codes_with_weekly_rsi_at_most(max_weekly_rsi: float, timeframe: str = "1D") -> List[str]:
-    """최신 스냅샷 기준 주봉 RSI ≤ max_weekly_rsi 종목코드."""
+def codes_with_rsi_at_most(
+    *,
+    max_weekly_rsi: Optional[float] = None,
+    max_daily_rsi: Optional[float] = None,
+    timeframe: str = "1D",
+) -> List[str]:
+    """최신 스냅샷 기준 주봉 RSI ≤ max_weekly_rsi 및 일봉 RSI ≤ max_daily_rsi 종목코드 (AND)."""
     tf = (timeframe or "1D").upper()
     for db in get_db():
         as_of_date = latest_as_of_date(tf)
         if as_of_date is None:
             return []
-        rows = (
-            db.query(TechnicalSnapshot.stock_code)
-            .filter(
-                TechnicalSnapshot.as_of_date == as_of_date,
-                TechnicalSnapshot.timeframe == tf,
+        q = db.query(TechnicalSnapshot.stock_code).filter(
+            TechnicalSnapshot.as_of_date == as_of_date,
+            TechnicalSnapshot.timeframe == tf,
+        )
+        if max_weekly_rsi is not None:
+            q = q.filter(
                 TechnicalSnapshot.weekly_rsi14.isnot(None),
                 TechnicalSnapshot.weekly_rsi14 <= max_weekly_rsi,
             )
-            .all()
-        )
-        return [r[0] for r in rows]
+        if max_daily_rsi is not None:
+            q = q.filter(
+                TechnicalSnapshot.rsi14.isnot(None),
+                TechnicalSnapshot.rsi14 <= max_daily_rsi,
+            )
+        return [r[0] for r in q.all()]
     return []
 
 

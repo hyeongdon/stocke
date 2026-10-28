@@ -5,13 +5,13 @@ const $ = (id) => document.getElementById(id);
 const SORT_COLS = [
   'stock_code', 'stock_name', 'market', 'current_price', 'market_cap',
   'per', 'pbr', 'roe', 'eps', 'dividend_per_share',
-  'revenue', 'operating_profit', 'foreign_ratio', 'weekly_rsi14', 'as_of_date',
+  'revenue', 'operating_profit', 'foreign_ratio', 'weekly_rsi14', 'daily_rsi14', 'as_of_date',
 ];
 
-const UNSORTABLE_COLS = ['weekly_rsi14'];
+const UNSORTABLE_COLS = ['weekly_rsi14', 'daily_rsi14'];
 const NUM_COLS = [
   'current_price', 'market_cap', 'per', 'pbr', 'roe', 'eps', 'dividend_per_share',
-  'revenue', 'operating_profit', 'foreign_ratio', 'weekly_rsi14',
+  'revenue', 'operating_profit', 'foreign_ratio', 'weekly_rsi14', 'daily_rsi14',
 ];
 
 const COL_LABELS = {
@@ -29,6 +29,7 @@ const COL_LABELS = {
   operating_profit: '영업이익',
   foreign_ratio: '외국인비율',
   weekly_rsi14: '주봉RSI',
+  daily_rsi14: '일봉RSI',
   as_of_date: '기준일',
 };
 
@@ -109,7 +110,14 @@ function cellValue(col, row) {
     case 'operating_profit': return fmtEok(row[col]);
     case 'foreign_ratio': return fmtPct(row.foreign_ratio);
     case 'weekly_rsi14': return fmtFloat(row.weekly_rsi14, 1);
+    case 'daily_rsi14': return fmtFloat(row.daily_rsi14, 1);
     case 'as_of_date': return row.as_of_date || '-';
+    case 'stock_name': {
+      const badge = row.below_ma60
+        ? ' <span class="trend-break-badge" title="키움 조건식 60일선 추세이탈 검색 결과">추세이탈</span>'
+        : '';
+      return esc(row.stock_name ?? '-') + badge;
+    }
     default: return esc(row[col] ?? '-');
   }
 }
@@ -129,6 +137,9 @@ function buildQuery() {
   if (minRoe) p.set('min_roe', minRoe);
   const maxWeeklyRsi = $('fltMaxWeeklyRsi').value.trim();
   if (maxWeeklyRsi) p.set('max_weekly_rsi', maxWeeklyRsi);
+  const maxDailyRsi = $('fltMaxDailyRsi').value.trim();
+  if (maxDailyRsi) p.set('max_daily_rsi', maxDailyRsi);
+  if ($('fltExcludeBelowMa60').checked) p.set('exclude_below_ma60', 'true');
   return p.toString();
 }
 
@@ -184,6 +195,21 @@ function renderSummary(summary, listMeta) {
   const shown = listMeta.items ? listMeta.items.length : 0;
   const total = listMeta.count != null ? listMeta.count : shown;
   $('statShown').textContent = `${fmtNum(shown)} / ${fmtNum(total)}`;
+}
+
+function renderTrendBreakInfo(tb) {
+  const el = $('trendBreakInfo');
+  if (!el) return;
+  if (!tb) { el.textContent = ''; return; }
+  const name = tb.condition_name || '60일선이탈';
+  if (!tb.fetched_at) {
+    el.textContent = tb.error ? `조건식 '${name}' 조회 실패: ${tb.error}` : '';
+    el.title = '';
+    return;
+  }
+  const at = String(tb.fetched_at).replace('T', ' ').slice(5, 16);
+  el.textContent = `추세이탈 ${fmtNum(tb.count)}종목 (${at} 조회${tb.error ? ' · 갱신 실패, 이전 결과' : ''})`;
+  el.title = tb.error ? String(tb.error) : `키움 조건식 '${name}'`;
 }
 
 function sortMark(col) {
@@ -357,7 +383,7 @@ function toggleMaVisible(n) {
 const CHART_ORDER = ['1D', '1W'];
 const CHART_SPECS = {
   '1W': { title: '주봉 차트', hint: '최근 104주 · MA10/20/60/120주', bars: 104, unit: '주' },
-  '1D': { title: '일봉 차트', hint: '최근 120일 · MA10/20/60/120일', bars: 120, unit: '일' },
+  '1D': { title: '일봉 차트', hint: '최근 1년(250일) · MA10/20/60/120일', bars: 250, unit: '일' },
 };
 const CHART_HEIGHT = 400;
 const PRICE_MARKER_ROOM = 38;
@@ -432,8 +458,8 @@ function chartTheme() {
     bg: v('--card', '#1a1d24'),
     grid: v('--border', '#333'),
     text: v('--muted', '#888'),
-    up: v('--up', '#e8a0a0'),
-    down: v('--down', '#5b9bd5'),
+    up: '#ef4444',
+    down: '#3b82f6',
     osc: v('--osc-line', '#cbd5e1'),
     priceLine: v('--price-line', '#fbbf24'),
     sig: { rsi: v('--sig-rsi', '#a78bfa'), wr: v('--sig-wr', '#34d399') },
@@ -580,7 +606,7 @@ function drawPricePane(ctx, geo, payload, theme) {
     ctx.fillText(Math.round(hi - ((hi - lo) * i) / 3).toLocaleString('ko-KR'), geo.padL - 4, y + 3);
   }
 
-  const bodyW = Math.max(2, geo.slotW * 0.55);
+  const bodyW = geo.slotW >= 4 ? geo.slotW * 0.55 : Math.max(1, geo.slotW - 1);
   bars.forEach((b, i) => {
     const x = geo.xOf(i);
     const color = b.close >= b.open ? theme.up : theme.down;
@@ -786,7 +812,9 @@ function drawTimeAxis(ctx, geo, bars, interval, theme) {
   ctx.fillStyle = theme.text;
   ctx.font = '9px system-ui, sans-serif';
   ctx.textAlign = 'center';
-  [...new Set([0, Math.floor(n / 2), n - 1])].forEach((i) => {
+  const ticks = Math.max(2, Math.min(n, Math.floor(geo.plotW / 90), 8));
+  const idxs = Array.from({ length: ticks }, (_, k) => Math.round((k * (n - 1)) / (ticks - 1)));
+  [...new Set(idxs)].forEach((i) => {
     const label = barTimeLabel(bars[i].timestamp, interval);
     if (label) ctx.fillText(label, geo.xOf(i), geo.H - 6);
   });
@@ -1090,11 +1118,12 @@ async function loadList(options) {
   try {
     const [summary, list] = await Promise.all([
       loadSummary(),
-      fetchJSON(`/fundamentals?${buildQuery()}`),
+      fetchJSON(`/fundamentals?${buildQuery()}`, { timeoutMs: 60000 }),
     ]);
     const empty = !summary.as_of_date && (!list.items || !list.items.length);
     showEmptyBanner(empty);
     renderSummary(summary, list);
+    renderTrendBreakInfo(list.trend_break);
     renderTable(list.items || []);
     if (autoSelect && state.selectedCode) {
       await selectStock(state.selectedCode);
@@ -1116,6 +1145,8 @@ function resetFilters() {
   $('fltMaxPbr').value = '';
   $('fltMinRoe').value = '';
   $('fltMaxWeeklyRsi').value = '';
+  $('fltMaxDailyRsi').value = '';
+  $('fltExcludeBelowMa60').checked = false;
   state.sortBy = 'market_cap';
   state.sortDesc = true;
   loadList();

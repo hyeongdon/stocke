@@ -318,10 +318,10 @@
   border-radius: 10px;
   padding: 10px 8px 6px;
   min-height: 160px;
-  /* 한국식: 양봉=연한 붉은색, 음봉=파란색 */
-  --v-up: #e8a0a0;
+  /* 한국식: 양봉=빨간색, 음봉=파란색 */
+  --v-up: #ef4444;
   --v-down: #5b9bd5;
-  --v-up-vol: rgba(232, 160, 160, 0.72);
+  --v-up-vol: rgba(239, 68, 68, 0.72);
   --v-down-vol: rgba(91, 155, 213, 0.72);
 }
 .v-chart-wrap.v-chart-scroll {
@@ -353,6 +353,6 @@
 .v-chart-legend .lg-buy { color: var(--accent-bright); }
 .v-chart-legend .lg-sell { color: var(--amber); }
 .v-chart-legend .lg-stop { color: var(--v-down, #5b9bd5); }
-.v-chart-legend .lg-take { color: var(--v-up, #e8a0a0); }
-.v-chart-legend .lg-up { color: var(--v-up, #e8a0a0); }
+.v-chart-legend .lg-take { color: var(--v-up, #ef4444); }
+.v-chart-legend .lg-up { color: var(--v-up, #ef4444); }
 .v-chart-legend .lg-down { color: var(--v-down, #5b9bd5); }

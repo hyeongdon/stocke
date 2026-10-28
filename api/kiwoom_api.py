@@ -962,23 +962,34 @@ class KiwoomAPI:
         websocket,
         condition_id: str,
         condition_name: str,
+        *,
+        max_pages: int = 1,
     ) -> List[Dict]:
-        search_param = {
-            "trnm": "CNSRREQ",
-            "seq": condition_id,
-            "search_type": "0",
-            "stex_tp": "K",
-            "cont_yn": "N",
-            "next_key": "",
-        }
-        await websocket.send(json.dumps(search_param))
-        logger.debug(f"CNSRREQ 전송: {condition_name} (ID={condition_id})")
-        data = await self._recv_cnsrreq_on_ws(websocket)
-        if not data:
-            raise TimeoutError(f"조건식 CNSRREQ 미수신: {condition_name}")
-        if data.get("return_code") not in (0, None):
-            raise RuntimeError(f"조건식 검색 실패: {condition_name} — {data}")
-        return self._parse_cnsrreq_stocks(data, condition_name)
+        stocks: List[Dict] = []
+        cont_yn, next_key = "N", ""
+        for page in range(max(1, max_pages)):
+            search_param = {
+                "trnm": "CNSRREQ",
+                "seq": condition_id,
+                "search_type": "0",
+                "stex_tp": "K",
+                "cont_yn": cont_yn,
+                "next_key": next_key,
+            }
+            await websocket.send(json.dumps(search_param))
+            logger.debug(f"CNSRREQ 전송: {condition_name} (ID={condition_id}, page={page + 1})")
+            data = await self._recv_cnsrreq_on_ws(websocket)
+            if not data:
+                raise TimeoutError(f"조건식 CNSRREQ 미수신: {condition_name}")
+            if data.get("return_code") not in (0, None):
+                raise RuntimeError(f"조건식 검색 실패: {condition_name} — {data}")
+            stocks.extend(self._parse_cnsrreq_stocks(data, condition_name))
+            cont_yn = str(data.get("cont_yn") or "N").upper()
+            next_key = str(data.get("next_key") or "")
+            if cont_yn != "Y" or not next_key:
+                break
+            await asyncio.sleep(0.3)
+        return stocks
 
     def condition_search_session(self) -> "ConditionSearchSession":
         return ConditionSearchSession(self)
@@ -4508,6 +4519,31 @@ class ConditionSearchSession:
         if last_err:
             raise last_err
         return []
+
+    async def search_all(self, condition_id: str, condition_name: str, *, max_pages: int = 50) -> List[Dict]:
+        """연속조회(cont_yn) 끝까지 수집 — 메모리 캐시 미사용 (search()의 캐시는 1페이지분)."""
+        last_err: Optional[BaseException] = None
+        for attempt in range(1, _CONDITION_SEARCH_MAX_ATTEMPTS + 1):
+            try:
+                if not self._websocket:
+                    self._websocket = await self._api._open_condition_websocket()
+                return await self._api._search_condition_on_websocket(
+                    self._websocket, condition_id, condition_name, max_pages=max_pages,
+                )
+            except Exception as e:
+                last_err = e
+                logger.warning(
+                    f"조건식 전체 검색 재시도 ({attempt}/{_CONDITION_SEARCH_MAX_ATTEMPTS}): "
+                    f"{condition_name} — {type(e).__name__}: {e!r}"
+                )
+            if attempt >= _CONDITION_SEARCH_MAX_ATTEMPTS:
+                break
+            await asyncio.sleep(0.4 * attempt)
+            try:
+                await self._reopen()
+            except Exception as e:
+                last_err = e
+        raise last_err or RuntimeError(f"조건식 전체 검색 실패: {condition_name}")
 
 
 # 전역 인스턴스

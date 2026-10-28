@@ -26,7 +26,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "[Console]::OutputEncodin
 
 set ERR=%ERRORLEVEL%
 
-if not "%ERR%"=="0" pause
+if not "%ERR%"=="0" if not defined STOCKE_PROXY_NONINTERACTIVE pause
 
 exit /b %ERR%
 

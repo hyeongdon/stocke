@@ -93,9 +93,12 @@ from utils.datetime_kst import kst_today, kst_now_iso, utc_naive_to_api_iso
 from utils.log_cleanup import cap_oversized_log
 from utils.stock_news_progress import get_stock_news_progress
 from utils.web_auth import (
+    clear_login_failures,
     clear_session,
     is_public_path,
+    login_locked_seconds,
     mark_session_login,
+    record_login_failure,
     session_max_age_seconds,
     session_username,
     verify_credentials,
@@ -1142,8 +1145,21 @@ async def auth_login(body: LoginRequest, request: Request):
     """아이디/비밀번호 검증 후 세션 발급 (기본 6시간)."""
     if not Config.AUTH_ENABLED:
         return {"ok": True, "auth_disabled": True}
+    forwarded = (
+        request.headers.get("cf-connecting-ip")
+        or (request.headers.get("x-forwarded-for") or "").split(",")[0]
+    ).strip()
+    client_ip = forwarded or (request.client.host if request.client else "unknown")
+    locked = login_locked_seconds(client_ip)
+    if locked:
+        raise HTTPException(
+            status_code=429,
+            detail=f"로그인 실패가 반복되어 잠겼습니다. {locked // 60 + 1}분 후 다시 시도하세요.",
+        )
     if not verify_credentials(body.username, body.password):
+        record_login_failure(client_ip)
         raise HTTPException(status_code=401, detail="아이디 또는 비밀번호가 올바르지 않습니다.")
+    clear_login_failures(client_ip)
     mark_session_login(request.session, body.username.strip())
     return {"ok": True, "username": body.username.strip()}
 
@@ -2099,17 +2115,35 @@ async def get_fundamentals(
     max_pbr: Optional[float] = None,
     min_roe: Optional[float] = None,
     max_weekly_rsi: Optional[float] = None,
+    max_daily_rsi: Optional[float] = None,
+    exclude_below_ma60: bool = False,
 ):
-    """기본적분석 마트 최신 스냅샷 목록 (배치 적재 데이터) + 기술적 마트 주봉 RSI."""
+    """기본적분석 마트 최신 스냅샷 목록 (배치 적재 데이터) + 기술적 마트 주봉/일봉 RSI + 조건식 60일선 추세이탈."""
     try:
         from utils.fundamental_mart_store import list_latest
-        from utils.technical_mart_store import codes_with_weekly_rsi_at_most, get_latest_map_by_codes
+        from utils.technical_mart_store import codes_with_rsi_at_most, get_latest_map_by_codes
+        from utils.trend_break_condition import CONDITION_NAME, get_trend_break_codes, load_cache
         from datetime import datetime as dt
 
         as_of_date = None
         if as_of:
             as_of_date = dt.strptime(as_of.strip()[:10], "%Y-%m-%d").date()
-        stock_codes = codes_with_weekly_rsi_at_most(max_weekly_rsi) if max_weekly_rsi is not None else None
+        stock_codes = None
+        if max_weekly_rsi is not None or max_daily_rsi is not None:
+            stock_codes = codes_with_rsi_at_most(max_weekly_rsi=max_weekly_rsi, max_daily_rsi=max_daily_rsi)
+        if exclude_below_ma60:
+            trend_break = await get_trend_break_codes()
+        else:
+            cache = load_cache()
+            usable = cache.get("condition_name") == CONDITION_NAME
+            trend_break = {
+                "condition_name": CONDITION_NAME,
+                "codes": set(cache.get("codes") or []) if usable else set(),
+                "fetched_at": cache.get("fetched_at") if usable else None,
+                "error": None,
+            }
+        break_codes = trend_break["codes"]
+        exclude_codes = sorted(break_codes) if exclude_below_ma60 else None
         result = list_latest(
             market=market,
             as_of_date=as_of_date,
@@ -2121,6 +2155,7 @@ async def get_fundamentals(
             max_pbr=max_pbr,
             min_roe=min_roe,
             stock_codes=stock_codes,
+            exclude_codes=exclude_codes,
         )
         items = result.get("items") or []
         tech = get_latest_map_by_codes([it["stock_code"] for it in items])
@@ -2128,6 +2163,14 @@ async def get_fundamentals(
             t = tech.get(it["stock_code"]) or {}
             it["weekly_rsi14"] = t.get("weekly_rsi14")
             it["weekly_rsi14_min26"] = t.get("weekly_rsi14_min26")
+            it["daily_rsi14"] = t.get("rsi14")
+            it["below_ma60"] = it["stock_code"] in break_codes if trend_break["fetched_at"] else None
+        result["trend_break"] = {
+            "condition_name": trend_break["condition_name"],
+            "count": len(break_codes),
+            "fetched_at": trend_break["fetched_at"],
+            "error": trend_break["error"],
+        }
         return result
     except ValueError:
         raise HTTPException(status_code=400, detail="as_of 형식은 YYYY-MM-DD")
@@ -2301,7 +2344,7 @@ async def get_fundamental_chart(
     interval: str = "1D",
     bars: Optional[int] = None,
 ):
-    """분석 화면용 차트 — 일봉(120일) · 주봉(104주) + MA10/20/60/120 · RSI · Williams %R · 신호.
+    """분석 화면용 차트 — 일봉(250일) · 주봉(104주) + MA10/20/60/120 · RSI · Williams %R · 신호.
 
     일봉·주봉 모두 같은 일봉 캐시(전체 봉)를 쓰고, 주봉 과거 구간만 키움 주봉(ka10082)으로 채운다.
     """
@@ -2326,7 +2369,7 @@ async def get_fundamental_chart(
                 mark_daily_partial(daily_rows, now)
                 return _indicator_chart_payload(
                     stock_code, "1D", daily_rows,
-                    _clamp_display_bars(bars, 120, 30, 200), "일",
+                    _clamp_display_bars(bars, 250, 30, 400), "일",
                     source_daily_bars=len(daily_rows),
                 )
 

@@ -6,8 +6,15 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <title>기본적분석</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="manifest" href="/static/manifest.json">
+  <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Stocke">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="theme-color" content="#131720">
   <link rel="stylesheet" href="/static/dashboard.css?v=64">
-  <link rel="stylesheet" href="/static/analysis.css?v=8">
+  <link rel="stylesheet" href="/static/analysis.css?v=9">
   <script src="/static/theme-sync.js?v=1"></script>
 </head>
 <body>
@@ -80,6 +87,9 @@
         <label>PBR ≤<input type="number" id="fltMaxPbr" placeholder="예: 2" step="0.1" min="0"></label>
         <label>ROE ≥<input type="number" id="fltMinRoe" placeholder="예: 10" step="0.1"></label>
         <label title="기술적 마트 배치(주봉 확정 RSI14) 기준">주봉RSI ≤<input type="number" id="fltMaxWeeklyRsi" placeholder="예: 30" step="1" min="0" max="100"></label>
+        <label title="기술적 마트 배치(일봉 RSI14) 기준">일봉RSI ≤<input type="number" id="fltMaxDailyRsi" placeholder="예: 30" step="1" min="0" max="100"></label>
+        <label class="analysis-check" title="키움 조건식(60일선 추세이탈) 결과 종목 제외 (해제 시 마지막 조회 결과를 '추세이탈' 배지로 표시)"><input type="checkbox" id="fltExcludeBelowMa60">60일선 이탈 제외</label>
+        <span class="hint" id="trendBreakInfo"></span>
         <button class="btn sm" id="btnApply" type="button">필터 적용</button>
         <button class="btn sm" id="btnReset" type="button">초기화</button>
       </div>
@@ -109,6 +119,6 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/static/analysis.js?v=13"></script>
+  <script src="/static/analysis.js?v=16"></script>
 </body>
 </html>

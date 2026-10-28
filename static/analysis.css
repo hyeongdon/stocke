@@ -70,6 +70,26 @@
   color: inherit;
 }
 .analysis-toolbar input[type="number"] { width: 90px; }
+.analysis-toolbar label.analysis-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 7px;
+  cursor: pointer;
+}
+
+.trend-break-badge {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--down);
+  background: var(--down-soft);
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  vertical-align: middle;
+}
 
 .analysis-banner {
   padding: 14px 18px;

@@ -876,14 +876,14 @@ function renderIntradayChart(canvas, payload) {
   const bg = styles.getPropertyValue('--card').trim() || '#1a1d24';
   const grid = styles.getPropertyValue('--border').trim() || '#333';
   const text = styles.getPropertyValue('--muted').trim() || '#888';
-  const up = styles.getPropertyValue('--v-up').trim() || '#e8a0a0';
+  const up = styles.getPropertyValue('--v-up').trim() || '#ef4444';
   const down = styles.getPropertyValue('--v-down').trim() || '#5b9bd5';
-  const upVol = styles.getPropertyValue('--v-up-vol').trim() || 'rgba(232, 160, 160, 0.72)';
+  const upVol = styles.getPropertyValue('--v-up-vol').trim() || 'rgba(239, 68, 68, 0.72)';
   const downVol = styles.getPropertyValue('--v-down-vol').trim() || 'rgba(91, 155, 213, 0.72)';
   const buyC = styles.getPropertyValue('--accent-bright').trim() || '#60a5fa';
   const sellC = styles.getPropertyValue('--amber').trim() || '#f59e0b';
   const stopC = styles.getPropertyValue('--v-down').trim() || '#5b9bd5';
-  const takeC = styles.getPropertyValue('--v-up').trim() || '#e8a0a0';
+  const takeC = styles.getPropertyValue('--v-up').trim() || '#ef4444';
   const trailC = styles.getPropertyValue('--muted').trim() || '#888';
   const ema90C = '#a78bfa';
 

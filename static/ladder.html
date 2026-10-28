@@ -5,6 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>분할매수 감시</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="manifest" href="/static/manifest.json">
+  <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Stocke">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="theme-color" content="#131720">
   <link rel="stylesheet" href="/static/dashboard.css?v=64">
   <link rel="stylesheet" href="/static/ladder.css?v=3">
   <script src="/static/theme-sync.js?v=1"></script>
@@ -108,7 +115,7 @@
             <input type="text" name="name" placeholder="코드 입력 시 자동">
           </label>
           <label>총 투자금 (원) — 차수당 = 투자금 ÷ 최대 차수
-            <input type="number" name="budget" value="10000000" min="10000" step="100000">
+            <input type="number" name="budget" value="10000000" min="10000" step="10000">
           </label>
           <label>메모
             <input type="text" name="memo" maxlength="100" placeholder="선택">

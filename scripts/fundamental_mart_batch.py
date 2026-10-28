@@ -67,8 +67,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--page-delay",
         type=float,
-        default=0.6,
-        help="페이지 간 대기(초) — 네이버 부하·차단 완화 (기본: 0.6)",
+        default=0.3,
+        help="목록 페이지 간 대기(초) — 네이버 부하·차단 완화 (기본: 0.3)",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="종목별 재무 API 동시 요청 수 (기본: 4)",
     )
     return parser.parse_args()
 
@@ -90,10 +96,15 @@ def main() -> int:
     def on_page(page: int, last_page: int, row_count: int) -> None:
         log.info("페이지 %d/%d — %d건", page, last_page, row_count)
 
+    def on_detail(done: int, total: int) -> None:
+        log.info("종목 재무 %d/%d", done, total)
+
     rows = crawl_all_markets(
         markets=markets,
         page_delay_sec=args.page_delay,
         on_page=on_page,
+        workers=args.workers,
+        on_detail=on_detail,
     )
     if not rows:
         log.error("수집된 데이터가 없습니다.")

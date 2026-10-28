@@ -460,7 +460,7 @@ def _run_batch(
         else:
             # 종목 유니버스(전체 종목) — 페이지 크롤이라 1~3분 걸릴 수 있음
             log.info("종목 유니버스 수집 시작 (네이버 시장 합산, 잠시 대기)...")
-            stocks = crawl_all_markets(markets=None, page_delay_sec=args.page_delay)
+            stocks = crawl_all_markets(markets=None, page_delay_sec=args.page_delay, with_details=False)
             log.info("종목 유니버스 수집 완료 raw=%d", len(stocks or []))
             all_stock_rows = []
             for r in stocks:

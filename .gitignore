@@ -64,6 +64,7 @@ htmlcov/
 dmypy.json
 stock_pipeline.log 
 tools/caddy/
+tools/cloudflared/
 deploy/caddy/data/
 deploy/caddy/config/
 logs/caddy.pid
