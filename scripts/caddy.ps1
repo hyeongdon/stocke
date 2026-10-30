@@ -1,9 +1,11 @@
 # Caddy reverse proxy: hyungdon.store :80 -> localhost:8000
-# Usage: proxy.bat install | start | stop | restart | status
+# Usage: proxy.bat install | start | stop | restart | status | ensure
+#   ensure: start only if Caddy is not already listening on 80 (for scheduled tasks)
+# Env (scheduled task): STOCKE_PROXY_NONINTERACTIVE=1, STOCKE_PROXY_WAIT_BACKEND_SEC=<sec>
 
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('install', 'start', 'stop', 'restart', 'status')]
+    [ValidateSet('install', 'start', 'stop', 'restart', 'status', 'ensure')]
     [string]$Action = 'status'
 )
 
@@ -21,6 +23,9 @@ $ConfigDir = Join-Path $Root 'deploy\caddy\config'
 $PidFile = Join-Path $Root 'logs\caddy.pid'
 $LogFile = Join-Path $Root 'logs\caddy.log'
 $CaddyVersion = '2.9.1'
+$NonInteractive = [bool]$env:STOCKE_PROXY_NONINTERACTIVE
+$WaitBackendSec = 0
+if ($env:STOCKE_PROXY_WAIT_BACKEND_SEC -match '^\d+$') { $WaitBackendSec = [int]$env:STOCKE_PROXY_WAIT_BACKEND_SEC }
 
 function Test-IsAdmin {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -30,6 +35,10 @@ function Test-IsAdmin {
 
 function Require-Admin([string]$why) {
     if (-not (Test-IsAdmin)) {
+        if ($NonInteractive) {
+            Write-Host "ERROR: admin required ($why) - run the scheduled task as SYSTEM/Highest" -ForegroundColor Red
+            exit 1
+        }
         Write-Host ""
         Write-Host "=== Admin required: $why ===" -ForegroundColor Yellow
         Write-Host "Click Yes on UAC, then proxy will start." -ForegroundColor Yellow
@@ -115,7 +124,7 @@ function Clear-StaleTlsLocks {
 }
 
 function Pause-IfElevated {
-    if (Test-IsAdmin) {
+    if ((Test-IsAdmin) -and -not $NonInteractive) {
         Write-Host ""
         Write-Host "Press Enter to close this window ..."
         Read-Host | Out-Null
@@ -127,6 +136,11 @@ function Start-CaddyProxy {
     Install-Caddy
     Ensure-FirewallRules
 
+    if (-not (Test-AppBackend) -and $WaitBackendSec -gt 0) {
+        Write-Host "Waiting for stocke on port 8000 (max ${WaitBackendSec}s) ..."
+        $deadline = (Get-Date).AddSeconds($WaitBackendSec)
+        while ((Get-Date) -lt $deadline -and -not (Test-AppBackend)) { Start-Sleep -Seconds 15 }
+    }
     if (-not (Test-AppBackend)) {
         Write-Host ""
         Write-Host "ERROR: stocke is not on port 8000." -ForegroundColor Red
@@ -233,6 +247,14 @@ function Stop-CaddyProxy {
     }
 }
 
+function Test-CaddyRunning {
+    foreach ($procId in (Get-ListenerPids 80)) {
+        $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
+        if ($p -and $p.Path -like '*\tools\caddy\caddy.exe') { return $true }
+    }
+    return $false
+}
+
 function Test-ProxyHealth {
     $ok443 = $false
     try {
@@ -278,4 +300,9 @@ switch ($Action) {
     'stop'    { Stop-CaddyProxy }
     'restart' { Stop-CaddyProxy; Start-Sleep 1; Start-CaddyProxy }
     'status'  { Show-CaddyStatus }
+    'ensure'  {
+        Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] ensure"
+        if (Test-CaddyRunning) { Write-Host 'Caddy already running - skip.' }
+        else { Start-CaddyProxy }
+    }
 }

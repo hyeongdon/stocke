@@ -174,7 +174,7 @@
       { k: '보유 원가 / 계획', v: fmt(cost / 10000) + '만', s: '계획 ' + fmt(budget / 10000) + '만 (' + (budget ? ((cost / budget) * 100).toFixed(0) : 0) + '%)' },
       { k: '평가손익', v: '<span class="' + cls(pnl) + '">' + (pnl > 0 ? '+' : '') + fmt(pnl / 10000) + '만</span>', s: '<span class="' + cls(pnlPct) + '">' + fmtPct(pnlPct) + '</span> (보유분)' },
       { k: '1차 진입 조건 충족', v: entryOk + '개', s: '현재가 기준 · 15:05 에 확정' },
-      { k: '지금 판정하면', v: '<span class="' + (buyNear ? 'ld-near' : '') + '">매수 ' + (buyNear + entryOk) + '</span> · <span class="' + (sellFire ? 'up' : '') + '">매도 ' + sellFire + '</span>', s: '현재가 기준 예상 (실제는 15:05)' },
+      { k: '지금 판정하면', v: '<span class="' + (buyNear ? 'ld-near' : '') + '">매수 ' + (buyNear + entryOk) + '</span> · <span class="' + (sellFire ? 'up' : '') + '">매도 ' + sellFire + '</span>', s: '추가매수는 장중 10분 감시 · 진입·매도는 15:05' },
     ];
     document.getElementById('summaryCards').innerHTML = cards
       .map((c) => '<div class="ld-stat"><div class="k">' + c.k + '</div><div class="v">' + c.v + '</div><div class="s">' + c.s + '</div></div>')
@@ -421,7 +421,7 @@
       let label;
       if (r.state === 'filled') label = '체결';
       else if (r.state === 'manual') label = '수동 추가';
-      else if (r.state === 'next') label = p.status === 'ACTIVE' ? '15:05 감시' : p.status === 'RSI_WAIT' ? '진입 대기' : '정지';
+      else if (r.state === 'next') label = p.status === 'ACTIVE' ? '장중 감시' : p.status === 'RSI_WAIT' ? '진입 대기' : '정지';
       else label = '대기';
       return '<tr class="' + r.state + '"><td>' + r.step + '차</td>' +
         '<td><span class="ld-step-state ' + r.state + '">' + label + '</span></td>' +
@@ -445,7 +445,7 @@
   }
 
   const EVENT_KIND = {
-    FILL: 'buy', BUY_SIGNAL: 'buy', SELL_FILL: 'sell', SELL_QUEUED: 'sell', BUY_FAIL: 'warn', SELL_FAIL: 'warn',
+    FILL: 'buy', FILL_PX: 'buy', BUY_SIGNAL: 'buy', SELL_FILL: 'sell', SELL_QUEUED: 'sell', BUY_FAIL: 'warn', SELL_FAIL: 'warn',
     JUDGE: 'judge', ARM: 'judge', DONE: 'sell', SYSTEM: 'info',
   };
 
@@ -738,7 +738,7 @@
     document.getElementById('btnRefresh').addEventListener('click', () => load(true));
     document.getElementById('btnWatchToggle').addEventListener('click', () => {
       const on = !(state.data && state.data.enabled);
-      if (on && !confirm('분할매수 자동 감시를 켭니다. 매일 15:05 판정에서 실제 주문이 나갑니다.')) return;
+      if (on && !confirm('분할매수 자동 감시를 켭니다. 장중 10분마다 추가매수, 매일 15:05 판정에서 진입·매도 주문이 실제로 나갑니다.')) return;
       run(() => api('POST', '/api/ladder/enabled', { enabled: on }), on ? '자동 감시 ON' : '자동 감시 OFF — 판정·주문 중지');
     });
     document.getElementById('btnNewPlan').addEventListener('click', () => openModal(true));

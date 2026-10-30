@@ -60,7 +60,7 @@ from api.api_rate_limiter import api_rate_limiter
 from managers.buy_order_executor import buy_order_executor
 from managers.strategy_manager import strategy_manager
 from managers.watchlist_sync_manager import watchlist_sync_manager
-from managers.stop_loss_manager import stop_loss_manager
+from managers.stop_loss_manager import NO_STOP_STRATEGIES, stop_loss_manager
 from managers.auto_trade_scanner import auto_trade_scanner
 from managers.scalping_strategy import scalping_manager
 from managers.cleanup_scheduler import cleanup_scheduler
@@ -2114,34 +2114,53 @@ async def get_fundamentals(
     max_per: Optional[float] = None,
     max_pbr: Optional[float] = None,
     min_roe: Optional[float] = None,
-    max_weekly_rsi: Optional[float] = None,
-    max_daily_rsi: Optional[float] = None,
+    weekly_rsi_only: bool = False,
+    daily_rsi_only: bool = False,
+    weekly_williams_only: bool = False,
+    daily_williams_only: bool = False,
+    bowl_only: bool = False,
+    ma2060_only: bool = False,
     exclude_below_ma60: bool = False,
 ):
-    """기본적분석 마트 최신 스냅샷 목록 (배치 적재 데이터) + 기술적 마트 주봉/일봉 RSI + 조건식 60일선 추세이탈."""
+    """기본적분석 마트 최신 스냅샷 목록 (배치 적재 데이터) + 기술적 마트 주봉/일봉 RSI
+    + 키움 조건식 필터(주봉RSI·일봉RSI·주봉윌리암·일봉윌리암·밥그릇·2060돌파 해당 종목만, 추세이탈 제외)."""
     try:
         from utils.fundamental_mart_store import list_latest
-        from utils.technical_mart_store import codes_with_rsi_at_most, get_latest_map_by_codes
-        from utils.trend_break_condition import CONDITION_NAME, get_trend_break_codes, load_cache
+        from utils.technical_mart_store import get_latest_map_by_codes
+        from utils.condition_code_sets import (
+            BOWL, DAILY_RSI, DAILY_WILLIAMS, MA2060, TREND_BREAK, WEEKLY_RSI, WEEKLY_WILLIAMS,
+        )
         from datetime import datetime as dt
 
         as_of_date = None
         if as_of:
             as_of_date = dt.strptime(as_of.strip()[:10], "%Y-%m-%d").date()
+        cond_sets = {}
+        for cs, active in (
+            (TREND_BREAK, exclude_below_ma60),
+            (WEEKLY_RSI, weekly_rsi_only),
+            (DAILY_RSI, daily_rsi_only),
+            (WEEKLY_WILLIAMS, weekly_williams_only),
+            (DAILY_WILLIAMS, daily_williams_only),
+            (BOWL, bowl_only),
+            (MA2060, ma2060_only),
+        ):
+            cond_sets[cs.key] = await cs.get_codes() if active else cs.cached_codes()
         stock_codes = None
-        if max_weekly_rsi is not None or max_daily_rsi is not None:
-            stock_codes = codes_with_rsi_at_most(max_weekly_rsi=max_weekly_rsi, max_daily_rsi=max_daily_rsi)
-        if exclude_below_ma60:
-            trend_break = await get_trend_break_codes()
-        else:
-            cache = load_cache()
-            usable = cache.get("condition_name") == CONDITION_NAME
-            trend_break = {
-                "condition_name": CONDITION_NAME,
-                "codes": set(cache.get("codes") or []) if usable else set(),
-                "fetched_at": cache.get("fetched_at") if usable else None,
-                "error": None,
-            }
+        for key, active in (
+            ("weekly_rsi", weekly_rsi_only),
+            ("daily_rsi", daily_rsi_only),
+            ("weekly_williams", weekly_williams_only),
+            ("daily_williams", daily_williams_only),
+            ("bowl", bowl_only),
+            ("ma2060", ma2060_only),
+        ):
+            if active:
+                codes = cond_sets[key]["codes"]
+                stock_codes = codes if stock_codes is None else stock_codes & codes
+        if stock_codes is not None:
+            stock_codes = sorted(stock_codes)
+        trend_break = cond_sets["trend_break"]
         break_codes = trend_break["codes"]
         exclude_codes = sorted(break_codes) if exclude_below_ma60 else None
         result = list_latest(
@@ -2165,12 +2184,13 @@ async def get_fundamentals(
             it["weekly_rsi14_min26"] = t.get("weekly_rsi14_min26")
             it["daily_rsi14"] = t.get("rsi14")
             it["below_ma60"] = it["stock_code"] in break_codes if trend_break["fetched_at"] else None
-        result["trend_break"] = {
-            "condition_name": trend_break["condition_name"],
-            "count": len(break_codes),
-            "fetched_at": trend_break["fetched_at"],
-            "error": trend_break["error"],
-        }
+            for key in ("weekly_rsi", "daily_rsi", "weekly_williams", "daily_williams", "bowl", "ma2060"):
+                cs = cond_sets[key]
+                it[f"{key}_hit"] = it["stock_code"] in cs["codes"] if cs["fetched_at"] else None
+        result["condition_sets"] = [
+            {k: cs[k] for k in ("key", "label", "condition_name", "count", "fetched_at", "error")}
+            for cs in cond_sets.values()
+        ]
         return result
     except ValueError:
         raise HTTPException(status_code=400, detail="as_of 형식은 YYYY-MM-DD")
@@ -3011,7 +3031,7 @@ async def _attach_index_intraday_bars(payload: dict, date: str) -> None:
 
 @app.get("/market/indices")
 async def market_indices_api(force: bool = False, date: Optional[str] = None):
-    """주요 지수(코스피·코스닥·나스닥·다우) 스냅샷. date=YYYY-MM-DD 이면 해당일 종가."""
+    """주요 지수(VIX·코스피·코스닥·나스닥·다우) 스냅샷. date=YYYY-MM-DD 이면 해당일 종가."""
     try:
         from utils.market_indices import fetch_market_indices, fetch_market_indices_for_date
 
@@ -5380,6 +5400,7 @@ async def get_positions(status: str = "HOLDING", limit: int = 50, with_levels: b
             strategy_stop_loss_rate = stop_loss_manager.strategy_stop_loss_rate(
                 global_settings, strategy_key,
             )
+            stop_policy = NO_STOP_STRATEGIES.get(str(strategy_key or "").strip().lower())
             row = {
                 "id": pos.id,
                 "stock_code": pos.stock_code,
@@ -5425,6 +5446,9 @@ async def get_positions(status: str = "HOLDING", limit: int = 50, with_levels: b
                 "manual_avg_down_pct": avg_down_pct,
                 "manual_avg_down_amount": avg_down_amount,
             }
+            if stop_policy:
+                row.update(stop_policy=stop_policy, stop_loss_rate=None, applied_stop_loss_rate=None,
+                           take_profit_rate=None, applied_take_profit_rate=None, stop_loss_price=None)
             if with_levels and pos.status == "HOLDING":
                 try:
                     ex = await stop_loss_manager.compute_exit_levels(

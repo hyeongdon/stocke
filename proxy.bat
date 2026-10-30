@@ -16,6 +16,8 @@ if /i "%~1"=="start" goto run_elevated
 
 if /i "%~1"=="restart" goto run_elevated
 
+if /i "%~1"=="ensure" goto run_elevated
+
 goto run_normal
 
 

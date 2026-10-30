@@ -448,12 +448,30 @@ function renderMarketIndexItem(it, filterDate) {
   const intradayBars = it.intraday_bars && it.intraday_bars.length ? it.intraday_bars : null;
   const sparkBars = intradayBars
     || (it.bars && it.bars.length ? it.bars : [{ open: it.open, high: it.high, low: it.low, close: it.value }]);
-  return `<span class="market-index-item market-index-card ${dir}">
+  const title = String(it.key || '').toLowerCase() === 'vix' ? ' title="CBOE 변동성지수"' : '';
+  return `<span class="market-index-item market-index-card ${dir}"${title}>
     <span class="mi-top"><span class="mi-label">${esc(label)}</span><span class="mi-delta">${deltaParts.join(' ') || '-'}</span></span>
     ${ohlc}${hiLo}
     ${renderInvestorBadges(it)}
     ${renderIndexSpark(sparkBars, { intraday: !!intradayBars })}
   </span>`;
+}
+function renderMarketIndexStrip(items, filterDate) {
+  const list = items || [];
+  const vix = list.find((it) => String(it.key || '').toLowerCase() === 'vix');
+  const rest = list.filter((it) => it !== vix);
+  const html = [];
+  let stacked = false;
+  for (const it of rest) {
+    if (!stacked && vix && String(it.key || '').toLowerCase() === 'kospi') {
+      html.push(`<span class="market-index-stack">${renderMarketIndexItem(vix, filterDate)}${renderMarketIndexItem(it, filterDate)}</span>`);
+      stacked = true;
+    } else {
+      html.push(renderMarketIndexItem(it, filterDate));
+    }
+  }
+  if (vix && !stacked) html.unshift(renderMarketIndexItem(vix, filterDate));
+  return html.join('');
 }
 let _indexReqSeq = 0;
 async function loadMarketIndices() {
@@ -462,7 +480,7 @@ async function loadMarketIndices() {
   const dateParam = getDateFilterParam();
   const req = ++_indexReqSeq;
   if (!dateParam || dateParam === 'this_week') {
-    el.innerHTML = '<span class="market-index-skeleton">거래일(하루)을 고르면 코스피·코스닥·나스닥·다우가 표시됩니다</span>';
+    el.innerHTML = '<span class="market-index-skeleton">거래일(하루)을 고르면 VIX·코스피·코스닥·나스닥·다우가 표시됩니다</span>';
     return;
   }
   el.innerHTML = '<span class="market-index-skeleton">지수 불러오는 중…</span>';
@@ -487,7 +505,7 @@ async function loadMarketIndices() {
       ? `<span class="market-index-skeleton">${esc(dateParam)} ${asOf}</span>`
       : '';
     el.innerHTML = items.length
-      ? head + items.map((it) => renderMarketIndexItem(it, dateParam)).join('')
+      ? head + renderMarketIndexStrip(items, dateParam)
       : '<span class="market-index-skeleton">지수 데이터 없음</span>';
   } catch (e) {
     if (req !== _indexReqSeq) return;

@@ -80,7 +80,11 @@
   flex-wrap: wrap;
   overflow: visible;
   gap: 10px;
-  align-items: stretch;
+  align-items: flex-end;
+}
+.verify-market-indices .market-index-stack {
+  gap: 10px;
+  align-self: flex-end;
 }
 .verify-market-indices .market-index-item {
   font-size: 12px;

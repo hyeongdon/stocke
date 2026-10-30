@@ -2,7 +2,8 @@
 
 docs/PRD_RSI_LADDER.md 기준.
 - 1차 진입: (주봉 RSI 저점 OR 일봉 RSI 저점 에피소드 N회) AND 20/60 GC
-- 추가 매수: 15:05 현재가 ≤ 직전 체결가 × (1 - step%) 호가 내림, 하루 1단계, max_steps 까지
+- 추가 매수: 장중 10분마다 현재가 ≤ 직전 체결가 × (1 - step%) 호가 내림, 하루 1단계, max_steps 까지
+  (주문은 항상 시장가, 직전 체결가는 ka10076 실제 체결가로 보정)
 - 매도: S0 (무장 전·수익 중 MA20 이탈 50%, 1회), 무장(peak ≥ +15%) 후 S1 MA10 50% / S2 MA15 25% / S3 MA20 잔량
 """
 from __future__ import annotations
@@ -342,6 +343,29 @@ def auto_fills(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [f for f in plan.get("fills") or [] if not f.get("extra")]
 
 
+def _num(v: Any) -> int:
+    try:
+        return abs(int(float(str(v or 0).replace(",", "").strip() or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def execution_avg_price(rows: Sequence[Dict[str, Any]], order_id: str) -> Optional[int]:
+    """ka10076 체결내역에서 주문번호의 가중평균 체결가. 체결 없으면 None."""
+    key = str(order_id or "").strip().lstrip("0")
+    if not key:
+        return None
+    qty = amt = 0
+    for r in rows:
+        if str(r.get("ord_no") or "").strip().lstrip("0") != key:
+            continue
+        q, px = _num(r.get("cntr_qty")), _num(r.get("cntr_pric"))
+        if q > 0 and px > 0:
+            qty += q
+            amt += q * px
+    return int(round(amt / qty)) if qty else None
+
+
 def last_fill_price(plan: Dict[str, Any]) -> Optional[int]:
     fills = plan.get("fills") or []
     if not fills:
@@ -382,7 +406,23 @@ def judge_plan(plan: Dict[str, Any], *, price: float, bars: Sequence[Dict[str, A
         out["exit"] = ex
         out["sells"] = ex["sells"]
 
-    if status != "ACTIVE" or out["sells"] or plan.get("pending_buy") or plan.get("pending_sell"):
+    if out["sells"]:
+        return out
+    add = evaluate_add_buy(plan, price=price, today=today)
+    out["trigger"] = add["trigger"]
+    out["buy"] = add["buy"]
+    out["notes"].extend(add["notes"])
+    return out
+
+
+def evaluate_add_buy(plan: Dict[str, Any], *, price: float, today: date) -> Dict[str, Any]:
+    """추가 매수(-step% 사다리) 판정 — 현재가만 사용 (장중 감시 · 15:05 판정 공용).
+
+    반환: {"buy": {...} | None, "trigger": int | None, "notes": [..]}
+    """
+    out: Dict[str, Any] = {"buy": None, "trigger": None, "notes": []}
+    prof = merge_profile(plan.get("profile"))
+    if plan.get("status") != "ACTIVE" or plan.get("pending_buy") or plan.get("pending_sell"):
         return out
     if plan.get("last_buy_date") == today.isoformat():
         return out
@@ -390,7 +430,7 @@ def judge_plan(plan: Dict[str, Any], *, price: float, bars: Sequence[Dict[str, A
     if n_auto >= int(prof["max_steps"]):
         return out
     lp = last_fill_price(plan)
-    if not lp:
+    if not lp or not price or price <= 0:
         return out
     trig = next_trigger(lp, prof["step_pct"])
     out["trigger"] = trig

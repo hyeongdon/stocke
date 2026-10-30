@@ -4,8 +4,10 @@ from utils.rsi_ladder import (
     LadderStore,
     bars_with_today,
     count_low_episodes,
+    evaluate_add_buy,
     evaluate_entry,
     evaluate_exit,
+    execution_avg_price,
     gc_state,
     judge_plan,
     ladder_preview,
@@ -157,6 +159,18 @@ def test_no_add_buy_twice_same_day():
     assert r["buy"] is None
 
 
+def test_intraday_add_buy_uses_price_only():
+    today = date(2025, 6, 2)
+    p = _plan(fills=[{"step": 1, "price": 70_000, "qty": 14}])
+    assert evaluate_add_buy(p, price=66_600, today=today)["buy"] is None
+    r = evaluate_add_buy(p, price=66_000, today=today)
+    assert r["trigger"] == 66_500 and r["buy"]["step"] == 2
+    p["last_buy_date"] = today.isoformat()
+    assert evaluate_add_buy(p, price=60_000, today=today)["buy"] is None
+    assert evaluate_add_buy(_plan(fills=p["fills"], pending_sell={"status": "QUEUED"}),
+                            price=60_000, today=today)["buy"] is None
+
+
 def test_full_plan_does_not_buy():
     fills = [{"step": i, "price": 70_000, "qty": 1} for i in range(1, 11)]
     p = _plan(status="FULL", fills=fills)
@@ -172,6 +186,26 @@ def test_extra_manual_fills_do_not_count_as_steps():
     r = judge_plan(p, price=60_000, bars=_flat_bars(60_000), weekly_bars=None, hold=10, avg=70_000,
                    today=date(2025, 6, 2))
     assert r["buy"]["step"] == 10
+
+
+def test_execution_avg_price_weighted_by_order():
+    rows = [
+        {"ord_no": "0012345", "cntr_qty": "10", "cntr_pric": "+9,000"},
+        {"ord_no": "0012345", "cntr_qty": "5", "cntr_pric": "9030"},
+        {"ord_no": "0099999", "cntr_qty": "100", "cntr_pric": "1"},
+        {"ord_no": "0012345", "cntr_qty": "0", "cntr_pric": "0"},
+    ]
+    assert execution_avg_price(rows, "12345") == 9_010
+    assert execution_avg_price(rows, "777") is None
+    assert execution_avg_price(rows, "") is None
+
+
+def test_gap_down_fill_reanchors_next_trigger():
+    p = _plan(fills=[{"step": 1, "price": 10_000, "qty": 100}, {"step": 2, "price": 8_800, "qty": 113}])
+    r = judge_plan(p, price=8_400, bars=_flat_bars(8_400), weekly_bars=None, hold=213, avg=9_380,
+                   today=date(2025, 6, 3))
+    assert r["trigger"] == 8_360  # 9,500 이 아니라 실제 체결가 8,800 × 0.95
+    assert r["buy"] is None
 
 
 # ── 매도 ──
@@ -298,6 +332,29 @@ def test_risk_gate_and_overnight_treat_ladder_as_swing():
         [OvernightCandidate(position_id=1, strategy_key="rsi_ladder", pnl_rate=-12.0)], keep_slots=0,
     )
     assert keep == {1} and not liq
+
+
+def test_ladder_exit_levels_show_no_stop():
+    from types import SimpleNamespace
+
+    from managers.stop_loss_manager import StopLossManager
+
+    settings = SimpleNamespace(stop_loss_rate=5.0, take_profit_rate=10.0)
+    assert StopLossManager.strategy_stop_loss_rate(settings, "rsi_ladder") is None
+    assert StopLossManager.strategy_stop_loss_rate(settings, "legacy") == 5.0
+
+    ex = {"effective_stop_price": 95_000, "stop_loss_price_pct": 95_000, "trailing_start_price": 110_000,
+          "levels": [{"reason": "STOP_LOSS", "price": 95_000, "method": "PCT"}], "current_price": 98_000}
+    out = StopLossManager.overlay_global_exit_settings(ex, 100_000, settings, "rsi_ladder")
+    assert out["levels"] == []
+    assert out["effective_stop_price"] is None and out["stop_loss_price_pct"] is None
+    assert out["trailing_start_price"] is None
+    assert out["stop_policy"].startswith("손절 없음")
+    assert out["current_price"] == 98_000
+
+    legacy = StopLossManager.overlay_global_exit_settings({"levels": []}, 100_000, settings, "legacy")
+    assert legacy["effective_stop_price"] == 95_000
+    assert "stop_policy" not in legacy
 
 
 # ── 저장소 ──

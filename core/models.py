@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Generator, Optional
 
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, create_engine, UniqueConstraint, Date, text, JSON, Float, Index, Text, inspect
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, create_engine, UniqueConstraint, Date, text, JSON, Float, Index, Text, inspect, event
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from .config import Config, get_account_mode
@@ -24,9 +24,26 @@ else:
     # SQLite용 엔진 설정 (기존 코드 유지)
     engine = create_engine(
         DATABASE_URL,
-        connect_args={"check_same_thread": False, "timeout": 30},
+        connect_args={"check_same_thread": False, "timeout": 60},
         future=True,
     )
+
+    # 여러 스케줄러가 동시에 쓰는 환경: WAL로 읽기/쓰기 동시성 확보, busy_timeout으로 잠금 대기
+    @event.listens_for(engine, "connect")
+    def _sqlite_on_connect(dbapi_conn, _record):
+        cur = dbapi_conn.cursor()
+        try:
+            cur.execute("PRAGMA busy_timeout=60000")
+            if ":memory:" not in DATABASE_URL and DATABASE_URL.rstrip("/") != "sqlite:":
+                try:
+                    cur.execute("PRAGMA journal_mode=WAL")
+                except Exception:
+                    # 다른 프로세스가 잠금 중이면 전환 실패 가능. WAL은 파일에 영구 저장되므로 다음 연결에서 재시도
+                    pass
+                cur.execute("PRAGMA synchronous=NORMAL")
+        finally:
+            cur.close()
+
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
 Base = declarative_base()
@@ -1549,9 +1566,14 @@ def init_db() -> None:
                         ats_cols.discard(old_col)
                         ats_cols.add(new_col)
                     elif old_col in ats_cols and new_col in ats_cols:
-                        conn.execute(text(
-                            f"UPDATE auto_trade_settings SET {new_col} = {old_col}"
-                        ))
+                        # 새 컬럼이 UI 저장값을 갖고 있으므로 복사하지 않음(매 기동 시 OFF→ON 덮어쓰기 방지)
+                        try:
+                            conn.execute(text(
+                                f"ALTER TABLE auto_trade_settings DROP COLUMN {old_col}"
+                            ))
+                            ats_cols.discard(old_col)
+                        except Exception:
+                            pass
                 conn.execute(text(
                     "UPDATE positions SET strategy_key = 'ma1592' "
                     "WHERE strategy_key = 'ma1590'"

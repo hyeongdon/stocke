@@ -1081,13 +1081,17 @@ def buy_order_route(
     settings: Optional[AutoTradeSettings],
     current_price: int,
     now: Optional[datetime] = None,
+    *,
+    force_market: bool = False,
 ) -> Tuple[int, str, str]:
     """(주문가격, trde_tp, dmst_stex_tp).
 
-    KRX 정규장(09:00~15:30): 설정 그대로(기본 시장가/KRX).
+    KRX 정규장(09:00~15:30): 설정 그대로(기본 시장가/KRX). force_market 이면 설정 무관 시장가.
     NXT 연장(그 외 거래 가능 시간): 시장가 미지원 → SOR+지정가.
     """
     price, trde = order_params(settings, current_price) if settings else (0, "3")
+    if force_market:
+        price, trde = 0, "3"
     if is_krx_session(now):
         return price, trde, "KRX"
     px = int(current_price or 0)

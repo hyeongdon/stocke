@@ -77,6 +77,11 @@ SELL_REASON_PRIORITY = {
 }
 STALE_SELL_ORDER_MINUTES = 15
 
+# 가격 손절·트레일 없이 전략 자체 매도 규칙만 쓰는 전략 → 화면 표시 문구
+NO_STOP_STRATEGIES = {
+    "rsi_ladder": "손절 없음 · 사다리 매도 규칙 (수익 중 MA20 이탈 50% · +15% 무장 후 MA10/15/20 단계 매도)",
+}
+
 
 def is_sell_qty_shortage_error(msg: Optional[str]) -> bool:
     """키움 모의/실전: 매도가능수량 부족 (이미 체결·중복 주문 포함)."""
@@ -385,6 +390,8 @@ class StopLossManager:
         if not settings:
             return None
         sk = (strategy_key or "").strip().lower()
+        if sk in NO_STOP_STRATEGIES:
+            return None
         field = {
             "breakout": "breakout_stop_loss_pct",
             "ymgp": "ymgp_stop_loss_pct",
@@ -405,6 +412,18 @@ class StopLossManager:
     ) -> dict:
         """exit_levels에 전략별 설정 손절율·%손절가를 명시한다."""
         out = dict(ex or {})
+        if (strategy_key or "").strip().lower() in NO_STOP_STRATEGIES:
+            for k in (
+                "stop_loss_rate", "stop_loss_price_pct", "effective_stop_price", "effective_stop_reason",
+                "stop_distance_pct", "trailing_start_rate", "trailing_start_price", "trailing_floor_price",
+                "trailing_stop_pct", "take_profit_price", "take_profit_rate", "take_profit_rate_setting",
+            ):
+                out[k] = None
+            out["trailing_active"] = False
+            out["trailing_armed"] = False
+            out["levels"] = []
+            out["stop_policy"] = NO_STOP_STRATEGIES[(strategy_key or "").strip().lower()]
+            return out
         if not settings or not buy_price:
             return out
         sl = StopLossManager.strategy_stop_loss_rate(settings, strategy_key)

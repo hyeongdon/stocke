@@ -1,4 +1,4 @@
-"""네이버 금융 기준 주요 지수(코스피·코스닥·나스닥·다우) 조회."""
+"""네이버 금융 기준 주요 지수(VIX·코스피·코스닥·나스닥·다우) 조회."""
 from __future__ import annotations
 
 import ast
@@ -26,6 +26,11 @@ KR_DAY_URL = (
 )
 WORLD_DAY_URL = (
     "https://finance.naver.com/world/worldDayListJson.naver?symbol={symbol}&fdtc=0&page={page}"
+)
+VIX_BASIC_URL = "https://api.stock.naver.com/index/.VIX/basic"
+VIX_DAY_URL = (
+    "https://api.stock.naver.com/chart/foreign/index/.VIX/day"
+    "?startDateTime={start}000000&endDateTime={end}000000"
 )
 INVESTOR_TREND_URL = "https://m.stock.naver.com/api/index/{code}/trend"
 INVESTOR_DAY_URL = (
@@ -436,6 +441,46 @@ def _fetch_domestic(code: str) -> Dict[str, Any]:
     return row
 
 
+def _direction_from_compare(compare: object) -> str:
+    if not isinstance(compare, dict):
+        return "flat"
+    code = str(compare.get("code") or "")
+    name = str(compare.get("name") or "").upper()
+    if code in {"1", "2"} or name in {"RISING", "UPPER_LIMIT"}:
+        return "up"
+    if code in {"4", "5"} or name in {"FALLING", "LOWER_LIMIT"}:
+        return "down"
+    return "flat"
+
+
+def _fetch_vix() -> Dict[str, Any]:
+    """CBOE VIX. 등락 부호는 compareToPreviousPrice 코드로 맞춘다."""
+    resp = requests.get(VIX_BASIC_URL, timeout=12, headers=HEADERS)
+    resp.raise_for_status()
+    data = resp.json()
+    if not isinstance(data, dict):
+        raise RuntimeError("VIX empty")
+    direction = _direction_from_compare(data.get("compareToPreviousPrice"))
+    value = _to_float(data.get("closePrice"))
+    if value is None:
+        raise RuntimeError("VIX empty")
+    change = _signed_change(_to_float(data.get("compareToPreviousClosePrice")), direction)
+    pct = _to_float(data.get("fluctuationsRatio"))
+    if pct is not None and direction == "down" and pct > 0:
+        pct = -pct
+    return {
+        "key": "vix",
+        "label": "VIX",
+        "value": value,
+        "change": round(change, 2) if change is not None else None,
+        "change_pct": round(pct, 2) if pct is not None else None,
+        "direction": direction,
+        "open": _to_float(data.get("openPriceRaw")),
+        "high": _to_float(data.get("highPriceRaw")),
+        "low": _to_float(data.get("lowPriceRaw")),
+    }
+
+
 def _fetch_world(symbol: str, label: str) -> Dict[str, Any]:
     resp = requests.get(WORLD_URL.format(symbol=symbol), timeout=12, headers=HEADERS)
     resp.raise_for_status()
@@ -586,12 +631,13 @@ def fetch_market_indices(force: bool = False) -> Dict[str, Any]:
     errors: List[str] = []
 
     jobs = [
+        ("VIX", _fetch_vix),
         ("KOSPI", lambda: _fetch_domestic("KOSPI")),
         ("KOSDAQ", lambda: _fetch_domestic("KOSDAQ")),
         ("나스닥", lambda: _fetch_world("NAS@IXIC", "나스닥")),
         ("다우", lambda: _fetch_world("DJI@DJI", "다우")),
     ]
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    with ThreadPoolExecutor(max_workers=5) as pool:
         futs = {pool.submit(fn): name for name, fn in jobs}
         for fut in as_completed(futs):
             name = futs[fut]
@@ -599,7 +645,7 @@ def fetch_market_indices(force: bool = False) -> Dict[str, Any]:
                 indices.append(fut.result())
             except Exception as exc:
                 errors.append(f"{name}: {exc}")
-    order = {"kospi": 0, "kosdaq": 1, "나스닥": 2, "다우": 3}
+    order = {"vix": 0, "kospi": 1, "kosdaq": 2, "나스닥": 3, "다우": 4}
     indices.sort(key=lambda row: order.get(str(row.get("key") or row.get("label") or ""), 9))
 
     if not indices:
@@ -827,6 +873,64 @@ def _world_bars(rows: List[Dict[str, Any]], ymd: str) -> List[Dict[str, Any]]:
     return [by_day[d] for d in sorted(by_day)]
 
 
+def _fetch_vix_day_bars(ymd: str) -> List[Dict[str, Any]]:
+    end_dt = datetime.strptime(ymd, "%Y-%m-%d")
+    start = (end_dt - timedelta(days=45)).strftime("%Y%m%d")
+    end = end_dt.strftime("%Y%m%d")
+    resp = requests.get(
+        VIX_DAY_URL.format(start=start, end=end),
+        timeout=12,
+        headers=HEADERS,
+    )
+    resp.raise_for_status()
+    rows = resp.json()
+    bars: List[Dict[str, Any]] = []
+    if not isinstance(rows, list):
+        return bars
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        d = _parse_ymd(str(row.get("localDate") or ""))
+        close = _to_float(row.get("closePrice"))
+        if not d or d > ymd or close is None:
+            continue
+        bars.append(
+            _bar_dict(
+                d,
+                _to_float(row.get("openPrice")),
+                _to_float(row.get("highPrice")),
+                _to_float(row.get("lowPrice")),
+                close,
+            )
+        )
+    bars.sort(key=lambda x: x["date"])
+    by_day: Dict[str, Dict[str, Any]] = {b["date"]: b for b in bars}
+    return [by_day[d] for d in sorted(by_day)]
+
+
+def _vix_index_on_date(ymd: str) -> Dict[str, Any]:
+    bars = _fetch_vix_day_bars(ymd)
+    picked = _bar_on_date(bars, ymd)
+    if picked is None:
+        return _closed_row("vix", "VIX", ymd)
+    bar, prev = picked
+    close = bar.get("close")
+    change = (close - prev) if prev is not None and close is not None else None
+    pct = ((change / prev) * 100.0) if prev and change is not None else None
+    return _index_row(
+        "vix",
+        "VIX",
+        close,
+        change,
+        pct,
+        session_date=bar["date"],
+        open_=bar.get("open"),
+        high=bar.get("high"),
+        low=bar.get("low"),
+        bars=_spark_bars(bars, ymd),
+    )
+
+
 def _world_index_on_date(symbol: str, label: str, ymd: str) -> Dict[str, Any]:
     key = "nasdaq" if "NAS" in symbol else "dow"
     rows = _fetch_world_day_pages(symbol, ymd)
@@ -885,6 +989,11 @@ def fetch_market_indices_for_date(ymd: str, force: bool = False) -> Dict[str, An
 
     indices: List[Dict[str, Any]] = []
     errors: List[str] = []
+    try:
+        indices.append(_vix_index_on_date(parsed))
+    except Exception as exc:
+        errors.append(f"VIX: {exc}")
+        indices.append(_closed_row("vix", "VIX", parsed))
     for code, label in (("KOSPI", "코스피"), ("KOSDAQ", "코스닥")):
         try:
             indices.append(_kr_index_on_date(code, label, parsed))

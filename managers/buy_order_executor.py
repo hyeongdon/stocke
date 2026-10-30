@@ -153,30 +153,37 @@ class BuyOrderExecutor:
         
         try:
             while self.is_running:
-                # 자동매매 설정 로드
-                await self._load_auto_trade_settings()
-                
-                # 자동매매가 활성화된 경우에만 처리
-                if self.auto_trade_settings and self.auto_trade_settings.is_enabled:
-                    allowed, off_reason = auto_trade_engines_allowed()
-                    if not allowed:
-                        logger.debug(f"💰 [BUY_EXECUTOR] {off_reason} — 신호 처리 건너뜀")
+                try:
+                    # 자동매매 설정 로드
+                    await self._load_auto_trade_settings()
+
+                    # 자동매매가 활성화된 경우에만 처리
+                    if self.auto_trade_settings and self.auto_trade_settings.is_enabled:
+                        allowed, off_reason = auto_trade_engines_allowed()
+                        if not allowed:
+                            logger.debug(f"💰 [BUY_EXECUTOR] {off_reason} — 신호 처리 건너뜀")
+                        else:
+                            # PENDING 매수를 WATCHING 재평가보다 먼저 — 관측 차트 호출에
+                            # API 슬롯이 소진되어 계좌조회/주문이 밀리지 않게 한다.
+                            await self._process_pending_signals()
+                            await self._process_watching_signals()
                     else:
-                        # PENDING 매수를 WATCHING 재평가보다 먼저 — 관측 차트 호출에
-                        # API 슬롯이 소진되어 계좌조회/주문이 밀리지 않게 한다.
-                        await self._process_pending_signals()
-                        await self._process_watching_signals()
-                else:
-                    logger.debug("💰 [BUY_EXECUTOR] 자동매매 비활성화 상태 - 신호 처리 건너뜀")
+                        logger.debug("💰 [BUY_EXECUTOR] 자동매매 비활성화 상태 - 신호 처리 건너뜀")
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    # sqlite 'database is locked' 등 일시 오류로 루프가 죽으면 PENDING 신호가 방치된다
+                    logger.error(f"💰 [BUY_EXECUTOR] 처리 중 오류 (다음 주기 재시도): {e}")
 
                 try:
                     poll = int(getattr(self.auto_trade_settings, "scan_interval_sec", None) or 60)
-                except (TypeError, ValueError):
+                except Exception:
                     poll = 60
                 await asyncio.sleep(max(15, min(600, poll)))
         except Exception as e:
             logger.error(f"💰 [BUY_EXECUTOR] 처리 중 오류: {e}")
         finally:
+            self.is_running = False
             logger.info("💰 [BUY_EXECUTOR] 매수 주문 처리기 종료")
     
     async def stop_processing(self):
@@ -1792,6 +1799,7 @@ class BuyOrderExecutor:
                 # 키움 API로 매수 주문. NXT 연장은 시장가 미지원 → SOR+지정가
                 order_price, order_type, stex = buy_order_route(
                     self.auto_trade_settings, current_price,
+                    force_market=parse_signal_meta(signal).get("strategy") == "rsi_ladder",
                 )
                 if stex != "KRX" and order_price <= 0:
                     await self._update_signal_status(

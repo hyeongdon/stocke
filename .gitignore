@@ -25,6 +25,9 @@ dist/
 *.sqlite
 *.sqlite3
 stock_pipeline.db
+*.db-wal
+*.db-shm
+*.db-journal
 
 # 로그 파일 (서버/로컬 환경마다 내용이 다르므로 전체 제외)
 *.log

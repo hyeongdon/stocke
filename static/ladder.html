@@ -21,7 +21,7 @@
     <div class="topbar-inner">
       <div class="brand">
         <h1>분할매수 감시</h1>
-        <span class="sub">RSI 저점 + 20/60 GC · 15:05 −5% 추가매수 · 최대 10차 · 이평 단계 익절</span>
+        <span class="sub">RSI 저점 + 20/60 GC · 장중 10분 감시 −5% 추가매수 · 최대 10차 · 이평 단계 익절</span>
       </div>
       <nav class="tabs">
         <a href="/dashboard" class="tab">대시보드</a>
@@ -32,7 +32,7 @@
       </nav>
       <div class="topbar-actions ladder-top-actions">
         <span class="ld-mock-badge" id="modeBadge" title="계좌 모드 · 자동매매 상태">계좌 확인 중</span>
-        <span class="ld-judge-clock" id="judgeClock" title="매수·매도 판정은 매일 15:05 현재가 기준">다음 판정 15:05</span>
+        <span class="ld-judge-clock" id="judgeClock" title="추가 매수는 장중 10분마다 현재가로 감시 · 1차 진입·매도 판정은 매일 15:05">다음 판정 15:05</span>
         <span class="hint" id="lastJudge"></span>
         <button type="button" class="btn sm" id="btnRefresh" title="현재가·지표 다시 조회">↻</button>
         <button type="button" class="btn sm" id="btnJudge" title="지금 현재가로 판정하면 어떤 주문이 나갈지 미리 봅니다 (주문 없음)">판정 미리보기</button>
@@ -78,7 +78,7 @@
         </div>
         <div class="ld-legend hint">
           진행 점: <i class="ld-dot on"></i> 체결 <i class="ld-dot next"></i> 다음 매수 <i class="ld-dot"></i> 대기 ·
-          거리 = 현재가 대비 다음 매수가(15:05 현재가가 이 가격 이하면 매수) · ⚡ 3% 이내
+          거리 = 현재가 대비 다음 매수가(장중 10분마다 현재가가 이 가격 이하면 매수) · ⚡ 3% 이내
         </div>
       </div>
 
@@ -151,7 +151,7 @@
             </label>
           </div>
 
-          <div class="ld-form-sec">추가 매수 (매일 15:05 현재가 기준)</div>
+          <div class="ld-form-sec">추가 매수 (장중 10분마다 현재가 기준 · 하루 1단계)</div>
           <div class="ld-form-row">
             <label>하락 간격 %
               <input type="number" name="step" value="5" min="1" max="30" step="0.5">
@@ -183,6 +183,6 @@
     </div>
   </div>
 
-  <script src="/static/ladder.js?v=5"></script>
+  <script src="/static/ladder.js?v=6"></script>
 </body>
 </html>

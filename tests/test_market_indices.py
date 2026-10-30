@@ -15,6 +15,7 @@ from utils.market_indices import (
     _fetch_investor_daily,
     _fetch_investor_intraday,
     _fetch_investor_trend,
+    _fetch_vix,
     _merge_live_investor,
     _parse_investor_day_rows,
     _parse_investor_time_rows,
@@ -489,6 +490,99 @@ class InvestorTrendTests(unittest.TestCase):
         self.assertTrue(investor_refresh_due(now))
         self.assertFalse(investor_refresh_due(datetime(2026, 8, 18, 8, 0, tzinfo=KST)))
         self.assertFalse(investor_refresh_due(datetime(2026, 8, 18, 16, 0, tzinfo=KST)))
+
+
+VIX_BASIC = {
+    "closePrice": "18.13",
+    "compareToPreviousClosePrice": "0.93",
+    "fluctuationsRatio": "5.41",
+    "openPriceRaw": "18.43",
+    "highPriceRaw": "18.62",
+    "lowPriceRaw": "18.03",
+    "compareToPreviousPrice": {"code": "2", "name": "RISING"},
+    "indexName": "VIX",
+}
+
+VIX_BARS = [
+    {"localDate": "20260813", "closePrice": 16.2, "openPrice": 16.0, "highPrice": 16.5, "lowPrice": 15.8},
+    {"localDate": "20260814", "closePrice": 17.1, "openPrice": 16.4, "highPrice": 17.4, "lowPrice": 16.1},
+]
+
+
+class VixIndexTests(unittest.TestCase):
+    def setUp(self):
+        _CACHE["at"] = 0.0
+        _CACHE["data"] = None
+        _HIST_CACHE.clear()
+
+    @mock.patch("utils.market_indices.requests.get")
+    def test_fetch_vix_signs_a_drop(self, mock_get):
+        falling = dict(VIX_BASIC)
+        falling["compareToPreviousPrice"] = {"code": "5", "name": "FALLING"}
+        falling["compareToPreviousClosePrice"] = "0.40"
+        falling["fluctuationsRatio"] = "2.10"
+        resp = mock.Mock()
+        resp.raise_for_status = mock.Mock()
+        resp.json = mock.Mock(return_value=falling)
+        mock_get.return_value = resp
+        row = _fetch_vix()
+        self.assertEqual(row["key"], "vix")
+        self.assertEqual(row["label"], "VIX")
+        self.assertEqual(row["direction"], "down")
+        self.assertAlmostEqual(row["change"], -0.40)
+        self.assertAlmostEqual(row["change_pct"], -2.10)
+        self.assertAlmostEqual(row["open"], 18.43)
+
+    @mock.patch("utils.market_indices.kst_today")
+    @mock.patch("utils.market_indices.requests.get")
+    def test_live_orders_vix_before_kospi(self, mock_get, mock_today):
+        mock_today.return_value = mock.Mock(isoformat=lambda: "2026-08-18")
+
+        def _resp(url, **kwargs):
+            r = mock.Mock()
+            r.raise_for_status = mock.Mock()
+            if ".VIX" in url:
+                r.json = mock.Mock(return_value=VIX_BASIC)
+            elif "api/realtime" in url:
+                code = "KOSPI" if "KOSPI" in url else "KOSDAQ"
+                r.json = mock.Mock(return_value=_poll_payload(code))
+            else:
+                r.text = ""
+            return r
+
+        mock_get.side_effect = _resp
+        payload = fetch_market_indices(force=True)
+        keys = [row["key"] for row in payload["indices"]]
+        self.assertLess(keys.index("vix"), keys.index("kospi"))
+        vix = next(row for row in payload["indices"] if row["key"] == "vix")
+        self.assertAlmostEqual(vix["value"], 18.13)
+        self.assertEqual(vix["direction"], "up")
+        self.assertAlmostEqual(vix["change_pct"], 5.41)
+
+    @mock.patch("utils.market_indices.kst_today")
+    @mock.patch("utils.market_indices.requests.get")
+    def test_historical_vix_uses_prior_close(self, mock_get, mock_today):
+        mock_today.return_value = mock.Mock(isoformat=lambda: "2026-08-15")
+
+        def _resp(url, **kwargs):
+            r = mock.Mock()
+            r.raise_for_status = mock.Mock()
+            if ".VIX" in url:
+                r.json = mock.Mock(return_value=VIX_BARS)
+            elif "siseJson" in url:
+                r.text = KR_JSON if "KOSPI" in url else KOSDAQ_JSON
+            else:
+                r.json = mock.Mock(return_value=[])
+            return r
+
+        mock_get.side_effect = _resp
+        payload = fetch_market_indices_for_date("2026-08-14")
+        vix = next(row for row in payload["indices"] if row["key"] == "vix")
+        self.assertFalse(vix["closed"])
+        self.assertAlmostEqual(vix["value"], 17.1)
+        self.assertAlmostEqual(vix["change"], round(17.1 - 16.2, 2))
+        self.assertEqual(payload["indices"][0]["key"], "vix")
+        self.assertEqual(payload["indices"][1]["key"], "kospi")
 
 
 if __name__ == "__main__":

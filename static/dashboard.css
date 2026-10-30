@@ -779,9 +779,18 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 #pane-auto > .auto-subtabs-bar {
   flex-shrink: 0;
 }
+.market-index-stack {
+  display: inline-flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 4px;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+.market-index-stack .market-index-item { width: 100%; }
 .market-indices {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: flex-end;
   gap: 8px;
   margin-left: auto;
@@ -1950,6 +1959,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
   .market-indices {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-items: end;
     gap: 6px;
     width: 100%;
     margin-left: 0;

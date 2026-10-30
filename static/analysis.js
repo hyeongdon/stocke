@@ -38,6 +38,9 @@ let state = {
   sortDesc: true,
   selectedCode: null,
   loading: false,
+  lastItems: null,
+  lastSummary: null,
+  lastListMeta: null,
 };
 
 let toastTimer = null;
@@ -97,6 +100,18 @@ function fmtPct(v) {
   return fmtFloat(n, 2) + '%';
 }
 
+function badgeHtml(row) {
+  let badge = '';
+  if (row.below_ma60) badge += ' <span class="trend-break-badge" title="키움 조건식 추세이탈 검색 결과">추세이탈</span>';
+  if (row.weekly_rsi_hit) badge += ' <span class="rsi-cond-badge" title="키움 조건식 주봉RSI 검색 결과">주RSI</span>';
+  if (row.daily_rsi_hit) badge += ' <span class="rsi-cond-badge" title="키움 조건식 일봉RSI 검색 결과">일RSI</span>';
+  if (row.weekly_williams_hit) badge += ' <span class="wr-cond-badge" title="키움 조건식 주봉윌리암 검색 결과">주WR</span>';
+  if (row.daily_williams_hit) badge += ' <span class="wr-cond-badge" title="키움 조건식 일봉윌리암 검색 결과">일WR</span>';
+  if (row.bowl_hit) badge += ' <span class="bowl-cond-badge" title="키움 조건식 밥그릇 검색 결과">밥그릇</span>';
+  if (row.ma2060_hit) badge += ' <span class="gc-cond-badge" title="키움 조건식 2060돌파 검색 결과 — 20일·60일 이평 골든크로스">2060</span>';
+  return badge;
+}
+
 function cellValue(col, row) {
   switch (col) {
     case 'current_price': return fmtWon(row.current_price);
@@ -112,14 +127,87 @@ function cellValue(col, row) {
     case 'weekly_rsi14': return fmtFloat(row.weekly_rsi14, 1);
     case 'daily_rsi14': return fmtFloat(row.daily_rsi14, 1);
     case 'as_of_date': return row.as_of_date || '-';
-    case 'stock_name': {
-      const badge = row.below_ma60
-        ? ' <span class="trend-break-badge" title="키움 조건식 60일선 추세이탈 검색 결과">추세이탈</span>'
-        : '';
-      return esc(row.stock_name ?? '-') + badge;
-    }
+    case 'stock_name': return esc(row.stock_name ?? '-') + badgeHtml(row);
     default: return esc(row[col] ?? '-');
   }
+}
+
+const PHONE_MQ = window.matchMedia('(max-width: 960px)');
+function phoneLayout() { return PHONE_MQ.matches; }
+function coarsePointer() { return window.matchMedia('(pointer: coarse)').matches; }
+
+let filterUserOpen = false;
+let lastPhoneLayout = phoneLayout();
+
+function hasActiveFilters() {
+  return Boolean(
+    $('fltMarket').value
+    || $('fltMaxPer').value.trim()
+    || $('fltMaxPbr').value.trim()
+    || $('fltMinRoe').value.trim()
+    || $('fltWeeklyRsiOnly').checked
+    || $('fltDailyRsiOnly').checked
+    || $('fltWeeklyWilliamsOnly').checked
+    || $('fltDailyWilliamsOnly').checked
+    || $('fltBowlOnly').checked
+    || $('fltMa2060Only').checked
+    || $('fltExcludeBelowMa60').checked
+    || ($('fltSortBy').value || 'market_cap') !== 'market_cap'
+    || ($('fltLimit').value || '500') !== '500'
+  );
+}
+
+function updateFilterSummary() {
+  const el = $('filterSummary');
+  if (!el) return;
+  const sort = $('fltSortBy').value || state.sortBy;
+  const parts = [$('fltMarket').value || '전체', `${COL_LABELS[sort] || sort}${state.sortDesc ? '↓' : '↑'}`];
+  const maxPer = $('fltMaxPer').value.trim();
+  const maxPbr = $('fltMaxPbr').value.trim();
+  const minRoe = $('fltMinRoe').value.trim();
+  if (maxPer) parts.push(`PER≤${maxPer}`);
+  if (maxPbr) parts.push(`PBR≤${maxPbr}`);
+  if (minRoe) parts.push(`ROE≥${minRoe}`);
+  if ($('fltWeeklyRsiOnly').checked) parts.push('주RSI');
+  if ($('fltDailyRsiOnly').checked) parts.push('일RSI');
+  if ($('fltWeeklyWilliamsOnly').checked) parts.push('주WR');
+  if ($('fltDailyWilliamsOnly').checked) parts.push('일WR');
+  if ($('fltBowlOnly').checked) parts.push('밥그릇');
+  if ($('fltMa2060Only').checked) parts.push('2060');
+  if ($('fltExcludeBelowMa60').checked) parts.push('추세이탈제외');
+  if (($('fltLimit').value || '500') !== '500') parts.push(`${$('fltLimit').value}건`);
+  el.textContent = parts.join(' · ');
+}
+
+function applyFilterPanel() {
+  const card = document.querySelector('.analysis-toolbar-card');
+  const btn = $('btnFilterToggle');
+  const open = !phoneLayout() || filterUserOpen;
+  if (card) card.classList.toggle('is-open', open);
+  if (btn) {
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    btn.classList.toggle('has-filters', hasActiveFilters());
+  }
+  updateFilterSummary();
+}
+
+function syncSortDirButton() {
+  const btn = $('btnSortDir');
+  if (!btn) return;
+  btn.textContent = state.sortDesc ? '내림차순' : '오름차순';
+  btn.setAttribute('aria-pressed', state.sortDesc ? 'true' : 'false');
+}
+
+function scrollAnalysisTarget(id) {
+  const el = $(id);
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: phoneLayout() ? 'start' : 'nearest' });
+}
+
+function markSelectedCode(code) {
+  document.querySelectorAll('tr.data-row, button.analysis-row').forEach((el) => {
+    el.classList.toggle('selected', el.dataset.code === code);
+  });
 }
 
 function buildQuery() {
@@ -135,10 +223,12 @@ function buildQuery() {
   if (maxPer) p.set('max_per', maxPer);
   if (maxPbr) p.set('max_pbr', maxPbr);
   if (minRoe) p.set('min_roe', minRoe);
-  const maxWeeklyRsi = $('fltMaxWeeklyRsi').value.trim();
-  if (maxWeeklyRsi) p.set('max_weekly_rsi', maxWeeklyRsi);
-  const maxDailyRsi = $('fltMaxDailyRsi').value.trim();
-  if (maxDailyRsi) p.set('max_daily_rsi', maxDailyRsi);
+  if ($('fltWeeklyRsiOnly').checked) p.set('weekly_rsi_only', 'true');
+  if ($('fltDailyRsiOnly').checked) p.set('daily_rsi_only', 'true');
+  if ($('fltWeeklyWilliamsOnly').checked) p.set('weekly_williams_only', 'true');
+  if ($('fltDailyWilliamsOnly').checked) p.set('daily_williams_only', 'true');
+  if ($('fltBowlOnly').checked) p.set('bowl_only', 'true');
+  if ($('fltMa2060Only').checked) p.set('ma2060_only', 'true');
   if ($('fltExcludeBelowMa60').checked) p.set('exclude_below_ma60', 'true');
   return p.toString();
 }
@@ -188,8 +278,12 @@ function showEmptyBanner(show) {
 }
 
 function renderSummary(summary, listMeta) {
+  state.lastSummary = summary;
+  state.lastListMeta = listMeta;
   $('statTotal').textContent = summary.total != null ? fmtNum(summary.total) : '-';
-  $('statDate').textContent = summary.as_of_date || listMeta.as_of_date || '-';
+  const asOf = summary.as_of_date || listMeta.as_of_date || '-';
+  $('statDate').textContent = asOf;
+  $('statDate').title = asOf === '-' ? '' : asOf;
   $('statKospi').textContent = summary.kospi != null ? fmtNum(summary.kospi) : '-';
   $('statKosdaq').textContent = summary.kosdaq != null ? fmtNum(summary.kosdaq) : '-';
   const shown = listMeta.items ? listMeta.items.length : 0;
@@ -197,19 +291,25 @@ function renderSummary(summary, listMeta) {
   $('statShown').textContent = `${fmtNum(shown)} / ${fmtNum(total)}`;
 }
 
-function renderTrendBreakInfo(tb) {
-  const el = $('trendBreakInfo');
+function renderConditionSetInfo(sets) {
+  const el = $('conditionSetInfo');
   if (!el) return;
-  if (!tb) { el.textContent = ''; return; }
-  const name = tb.condition_name || '60일선이탈';
-  if (!tb.fetched_at) {
-    el.textContent = tb.error ? `조건식 '${name}' 조회 실패: ${tb.error}` : '';
-    el.title = '';
-    return;
+  const texts = [];
+  const titles = [];
+  for (const cs of sets || []) {
+    if (!cs.fetched_at) {
+      if (cs.error) {
+        texts.push(`${cs.label} 조회 실패`);
+        titles.push(`조건식 '${cs.condition_name}': ${cs.error}`);
+      }
+      continue;
+    }
+    const at = String(cs.fetched_at).replace('T', ' ').slice(5, 16);
+    texts.push(`${cs.label} ${fmtNum(cs.count)}종목 (${at}${cs.error ? ' · 갱신 실패, 이전 결과' : ''})`);
+    titles.push(cs.error ? `조건식 '${cs.condition_name}': ${cs.error}` : `키움 조건식 '${cs.condition_name}'`);
   }
-  const at = String(tb.fetched_at).replace('T', ' ').slice(5, 16);
-  el.textContent = `추세이탈 ${fmtNum(tb.count)}종목 (${at} 조회${tb.error ? ' · 갱신 실패, 이전 결과' : ''})`;
-  el.title = tb.error ? String(tb.error) : `키움 조건식 '${name}'`;
+  el.textContent = texts.join(' · ');
+  el.title = titles.join('\n');
 }
 
 function sortMark(col) {
@@ -217,11 +317,54 @@ function sortMark(col) {
   return state.sortDesc ? '▼' : '▲';
 }
 
+function renderMobileList(items) {
+  const wrap = $('tableWrap');
+  const cards = items.map((row) => {
+    const sel = row.stock_code === state.selectedCode ? ' selected' : '';
+    const metrics = [
+      ['PER', fmtFloat(row.per, 2)],
+      ['PBR', fmtFloat(row.pbr, 2)],
+      ['ROE', fmtFloat(row.roe, 2)],
+    ].map(([k, v]) => `<span><em>${k}</em>${v}</span>`).join('');
+    return `<button type="button" class="analysis-row${sel}" data-code="${esc(row.stock_code)}">
+      <span class="analysis-row-body">
+        <span class="analysis-row-top">
+          <span class="analysis-row-name">${esc(row.stock_name ?? '-')}${badgeHtml(row)}</span>
+          <span class="analysis-row-price">${fmtWon(row.current_price)}</span>
+        </span>
+        <span class="analysis-row-sub">
+          <span class="analysis-row-meta">${esc(row.stock_code)} · ${esc(row.market || '-')}</span>
+          <span class="analysis-row-cap">${fmtEok(row.market_cap)}</span>
+        </span>
+        <span class="analysis-row-metrics">${metrics}</span>
+      </span>
+    </button>`;
+  }).join('');
+  wrap.innerHTML = `<div class="analysis-list">${cards}</div>`;
+  const selected = wrap.querySelector('.analysis-row.selected');
+  if (!selected) return;
+  const rowTop = selected.getBoundingClientRect().top - wrap.getBoundingClientRect().top + wrap.scrollTop;
+  const rowBottom = rowTop + selected.offsetHeight;
+  if (rowTop < wrap.scrollTop) wrap.scrollTop = rowTop;
+  else if (rowBottom > wrap.scrollTop + wrap.clientHeight) wrap.scrollTop = rowBottom - wrap.clientHeight;
+}
+
 function renderTable(items) {
+  state.lastItems = items;
   const wrap = $('tableWrap');
   if (!items.length) {
     wrap.innerHTML = '<div class="empty"><span class="ico">📭</span>조건에 맞는 종목이 없습니다.</div>';
     $('tableHint').textContent = '';
+    syncSortDirButton();
+    return;
+  }
+  if (phoneLayout()) {
+    renderMobileList(items);
+    $('tableHint').textContent = '';
+    syncSortDirButton();
+    wrap.querySelectorAll('button.analysis-row').forEach((btn) => {
+      btn.onclick = () => selectStock(btn.dataset.code, { scrollDetail: true });
+    });
     return;
   }
   const head = SORT_COLS.map((col) => {
@@ -250,8 +393,9 @@ function renderTable(items) {
     };
   });
   wrap.querySelectorAll('tr.data-row').forEach((tr) => {
-    tr.onclick = () => selectStock(tr.dataset.code);
+    tr.onclick = () => selectStock(tr.dataset.code, { scrollDetail: true });
   });
+  syncSortDirButton();
 }
 
 function detailField(label, value) {
@@ -343,6 +487,7 @@ function renderDetail(row) {
     <div class="detail-section"><div class="detail-section-title">밸류에이션</div><div class="detail-grid">${valBlock}</div></div>
     <div class="detail-section"><div class="detail-section-title">재무</div><div class="detail-grid">${finBlock}</div></div>
     <div class="detail-section"><div class="detail-section-title">메타</div><div class="detail-grid">${metaBlock}</div></div>`;
+  applyChartDrawMode();
   loadCompanyProfile(row.stock_code);
   loadAnalysisCharts(row.stock_code);
 }
@@ -388,10 +533,16 @@ const CHART_SPECS = {
   '1D': { title: '일봉 차트', hint: '최근 1년(250일) · MA5/10/20/60/120일', bars: 250, unit: '일' },
 };
 const CHART_HEIGHT = 400;
+
+function chartPixelHeight() {
+  if (!phoneLayout()) return CHART_HEIGHT;
+  if (window.matchMedia('(max-height: 500px)').matches) return 240;
+  return 300;
+}
 const PRICE_MARKER_ROOM = 38;
 
 const SIGNAL_META = {
-  RSI_OS: { label: 'RSI 과매도 진입', short: 'RSI과매도', shape: 'circle', color: 'rsi', pane: 'rsi', key: 'rsi', order: 0 },
+  RSI_OS: { label: 'RSI 과매도 진입', short: 'RSI과매도', shape: 'triangle', color: 'rsi', pane: 'rsi', key: 'rsi', order: 0 },
   WR_BUY: { label: 'Williams 매수', short: 'W매수', shape: 'triangle', color: 'wr', pane: 'wr', key: 'wr', order: 1 },
 };
 
@@ -405,6 +556,60 @@ const chartTrendLines = {};
 const chartTrendDrafts = {};
 const TREND_DRAG_MIN_PX = 5;
 const LINE_HIT_PX = 5;
+const COARSE_DRAG_MIN_PX = 12;
+const COARSE_LINE_HIT_PX = 20;
+const CHART_DRAW_MODES = ['view', 'hline', 'trend'];
+const CHART_DRAW_HINTS = {
+  view: '봉을 누르면 시세',
+  hline: '가격칸을 누르면 가로선, 선 위를 누르면 삭제',
+  trend: '가격칸을 끌면 추세선, 선 위를 누르면 삭제',
+};
+let chartDrawMode = 'view';
+
+function trendDragMinPx() {
+  return coarsePointer() ? COARSE_DRAG_MIN_PX : TREND_DRAG_MIN_PX;
+}
+
+function chartLineHitPx() {
+  return coarsePointer() ? COARSE_LINE_HIT_PX : LINE_HIT_PX;
+}
+
+function chartToolsHtml() {
+  const buttons = [
+    ['view', '보기'],
+    ['hline', '가로선'],
+    ['trend', '추세선'],
+  ].map(([id, label]) => {
+    const on = id === chartDrawMode;
+    return `<button type="button" class="analysis-chart-tool${on ? ' on' : ''}" data-mode="${id}" aria-pressed="${on ? 'true' : 'false'}">${label}</button>`;
+  }).join('');
+  return `<div class="analysis-chart-tools" role="group" aria-label="차트 그리기">${buttons}<span class="analysis-chart-tool-hint">${CHART_DRAW_HINTS[chartDrawMode]}</span></div>`;
+}
+
+function applyChartDrawMode() {
+  document.querySelectorAll('.analysis-chart-tool').forEach((btn) => {
+    const on = btn.dataset.mode === chartDrawMode;
+    btn.classList.toggle('on', on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+  document.querySelectorAll('.analysis-chart-tool-hint').forEach((el) => {
+    el.textContent = CHART_DRAW_HINTS[chartDrawMode] || '';
+  });
+  const coarse = coarsePointer();
+  CHART_ORDER.forEach((k) => {
+    const canvas = $(`chartCanvas${k}`);
+    if (!canvas) return;
+    canvas.classList.toggle('draw-trend', coarse && chartDrawMode === 'trend');
+    canvas.classList.toggle('draw-hline', coarse && chartDrawMode === 'hline');
+  });
+}
+
+function setChartDrawMode(mode) {
+  if (!CHART_DRAW_MODES.includes(mode) || mode === chartDrawMode) return;
+  chartDrawMode = mode;
+  CHART_ORDER.forEach((k) => hideChartTooltip(k));
+  applyChartDrawMode();
+}
 
 function resetChartState() {
   chartLoadSeq += 1;
@@ -432,6 +637,7 @@ function chartSectionsHtml() {
     return `
     <div class="detail-section analysis-chart-section">
       <div class="detail-section-title">${spec.title} <span class="hint">${spec.hint}</span></div>
+      ${chartToolsHtml()}
       <div class="analysis-chart-summary" id="chartSummary${key}"></div>
       <div class="analysis-chart-wrap" id="chartWrap${key}">
         <div class="analysis-chart-status" id="chartStatus${key}">차트 불러오는 중…</div>
@@ -475,7 +681,7 @@ function chartTheme() {
     osc: v('--osc-line', '#cbd5e1'),
     priceLine: v('--price-line', '#fbbf24'),
     trendLine: v('--trend-line', '#22d3ee'),
-    sig: { rsi: v('--sig-rsi', '#a78bfa'), wr: v('--sig-wr', '#34d399') },
+    sig: { rsi: v('--sig-rsi', '#ef4444'), wr: v('--sig-wr', '#ffffff') },
   };
 }
 
@@ -511,8 +717,8 @@ function valueSegments(bars, key) {
 }
 
 function layoutPanes(W, H, n) {
-  const padL = 48;
-  const padR = 8;
+  const padL = W < 480 ? 58 : 48;
+  const padR = W < 480 ? 6 : 8;
   const padT = 14;
   const padB = 22;
   const gap = 10;
@@ -802,11 +1008,12 @@ function drawPriceLines(ctx, geo, lines, theme) {
   const right = geo.W - geo.padR;
   ctx.font = 'bold 10px system-ui, sans-serif';
   ctx.textAlign = 'right';
+  const coarse = coarsePointer();
   lines.forEach((price) => {
     const y = Math.round(pane.yOf(price)) + 0.5;
     if (y < pane.top || y > pane.top + pane.candleH) return;
     ctx.strokeStyle = theme.priceLine;
-    ctx.lineWidth = 1;
+    ctx.lineWidth = coarse ? 2 : 1;
     ctx.beginPath();
     ctx.moveTo(left, y);
     ctx.lineTo(right, y);
@@ -831,9 +1038,11 @@ function drawTrendLines(ctx, geo, lines, theme) {
   ctx.beginPath();
   ctx.rect(geo.padL, pane.top, geo.plotW, pane.candleH);
   ctx.clip();
+  const coarse = coarsePointer();
   ctx.strokeStyle = theme.trendLine;
   ctx.fillStyle = theme.trendLine;
-  ctx.lineWidth = 1.5;
+  ctx.lineWidth = coarse ? 2.5 : 1.5;
+  const knob = coarse ? 4 : 2.5;
   lines.forEach((t) => {
     const { x1, y1, x2, y2 } = trendLinePx(geo, t);
     ctx.beginPath();
@@ -842,7 +1051,7 @@ function drawTrendLines(ctx, geo, lines, theme) {
     ctx.stroke();
     [[x1, y1], [x2, y2]].forEach(([x, y]) => {
       ctx.beginPath();
-      ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+      ctx.arc(x, y, knob, 0, Math.PI * 2);
       ctx.fill();
     });
   });
@@ -855,6 +1064,24 @@ function segmentDistance(px, py, { x1, y1, x2, y2 }) {
   const len2 = dx * dx + dy * dy;
   const t = len2 ? Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / len2)) : 0;
   return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+}
+
+function removeTrendAt(key, geo, mx, my) {
+  const trends = chartTrendLines[key] || [];
+  const near = trends.findIndex((t) => segmentDistance(mx, my, trendLinePx(geo, t)) <= chartLineHitPx());
+  if (near < 0) return false;
+  trends.splice(near, 1);
+  renderChart(key);
+  return true;
+}
+
+function togglePriceLineAt(key, geo, my) {
+  const pane = geo.price;
+  const lines = chartPriceLines[key] || (chartPriceLines[key] = []);
+  const near = lines.findIndex((p) => Math.abs(pane.yOf(p) - my) <= chartLineHitPx());
+  if (near >= 0) lines.splice(near, 1);
+  else lines.push(pane.priceOf(my));
+  renderChart(key);
 }
 
 function inPricePane(geo, mx, my) {
@@ -901,6 +1128,37 @@ function tooltipHtml(payload, i) {
     ${sigs}`;
 }
 
+function showChartTooltip(key, mx, my) {
+  const canvas = $(`chartCanvas${key}`);
+  const tip = $(`chartTip${key}`);
+  const cursor = $(`chartCursor${key}`);
+  const payload = chartPayloads[key];
+  const geo = canvas && canvas._geo;
+  if (!canvas || !tip || !cursor || !payload || !geo) return;
+  if (legendHitAt(geo, mx, my)) {
+    hideChartTooltip(key);
+    return;
+  }
+  const i = Math.floor((mx - geo.padL) / geo.slotW);
+  if (i < 0 || i >= payload.bars.length || my < geo.padT || my > geo.H - geo.padB) {
+    hideChartTooltip(key);
+    return;
+  }
+  const x = geo.xOf(i);
+  cursor.style.display = 'block';
+  cursor.style.left = `${Math.round(x)}px`;
+  cursor.style.top = `${canvas.offsetTop + geo.padT}px`;
+  cursor.style.height = `${geo.H - geo.padT - geo.padB}px`;
+  tip.innerHTML = tooltipHtml(payload, i);
+  tip.style.display = 'block';
+  const tw = tip.offsetWidth;
+  const th = tip.offsetHeight;
+  const left = x > geo.W / 2 ? x - tw - 12 : x + 12;
+  const top = Math.min(Math.max(my - th / 2, 4), Math.max(4, geo.H - th - 4));
+  tip.style.left = `${Math.max(4, left)}px`;
+  tip.style.top = `${canvas.offsetTop + top}px`;
+}
+
 function hideChartTooltip(key) {
   const tip = $(`chartTip${key}`);
   const cursor = $(`chartCursor${key}`);
@@ -916,6 +1174,8 @@ function bindChartTooltip(key) {
   canvas.dataset.tipBound = '1';
   let press = null;
   let suppressClick = false;
+  let pointerMoved = false;
+  let gestureOrigin = null;
   const localPoint = (e) => {
     const rect = canvas.getBoundingClientRect();
     return { mx: e.clientX - rect.left, my: e.clientY - rect.top };
@@ -928,18 +1188,26 @@ function bindChartTooltip(key) {
   };
   canvas.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
-    const geo = canvas._geo;
     const { mx, my } = localPoint(e);
+    pointerMoved = false;
+    gestureOrigin = { mx, my };
+    if (coarsePointer() && chartDrawMode !== 'trend') return;
+    const geo = canvas._geo;
     if (!inPricePane(geo, mx, my) || legendHitAt(geo, mx, my)) return;
     press = { mx, my, start: anchorAt(geo, mx, my), dragging: false };
-    canvas.setPointerCapture(e.pointerId);
-  });
+    if (coarsePointer()) e.preventDefault();
+    try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* 캡처 불가 */ }
+  }, { passive: false });
   canvas.addEventListener('pointermove', (e) => {
+    const { mx, my } = localPoint(e);
+    if (gestureOrigin && Math.hypot(mx - gestureOrigin.mx, my - gestureOrigin.my) >= trendDragMinPx()) {
+      pointerMoved = true;
+    }
     const geo = canvas._geo;
     if (!press || !geo) return;
-    const { mx, my } = localPoint(e);
-    if (!press.dragging && Math.hypot(mx - press.mx, my - press.my) < TREND_DRAG_MIN_PX) return;
+    if (!press.dragging && Math.hypot(mx - press.mx, my - press.my) < trendDragMinPx()) return;
     press.dragging = true;
+    hideChartTooltip(key);
     const end = anchorAt(geo, mx, my);
     chartTrendDrafts[key] = { i1: press.start.i, p1: press.start.p, i2: end.i, p2: end.p };
     renderChart(key);
@@ -947,9 +1215,17 @@ function bindChartTooltip(key) {
   const endPress = (commit) => {
     if (!press) return;
     const draft = chartTrendDrafts[key];
-    if (press.dragging) {
+    const dragged = press.dragging;
+    const origin = { mx: press.mx, my: press.my };
+    if (dragged) {
       suppressClick = true;
       if (commit && draft) (chartTrendLines[key] || (chartTrendLines[key] = [])).push(draft);
+    } else if (commit && coarsePointer() && chartDrawMode === 'trend') {
+      suppressClick = true;
+      const geo = canvas._geo;
+      if (geo && inPricePane(geo, origin.mx, origin.my) && !legendHitAt(geo, origin.mx, origin.my)) {
+        removeTrendAt(key, geo, origin.mx, origin.my);
+      }
     }
     press = null;
     chartTrendDrafts[key] = null;
@@ -957,7 +1233,11 @@ function bindChartTooltip(key) {
   };
   canvas.addEventListener('pointerup', () => endPress(true));
   canvas.addEventListener('pointercancel', () => endPress(false));
+  canvas.addEventListener('contextmenu', (e) => {
+    if (coarsePointer() && chartDrawMode !== 'view') e.preventDefault();
+  });
   canvas.addEventListener('mousemove', (e) => {
+    if (coarsePointer()) return;
     const payload = chartPayloads[key];
     const geo = canvas._geo;
     if (!payload || !geo || press) return;
@@ -970,24 +1250,7 @@ function bindChartTooltip(key) {
       return;
     }
     canvas.style.cursor = '';
-    const i = Math.floor((mx - geo.padL) / geo.slotW);
-    if (i < 0 || i >= payload.bars.length || my < geo.padT || my > geo.H - geo.padB) {
-      hideChartTooltip(key);
-      return;
-    }
-    const x = geo.xOf(i);
-    cursor.style.display = 'block';
-    cursor.style.left = `${Math.round(x)}px`;
-    cursor.style.top = `${canvas.offsetTop + geo.padT}px`;
-    cursor.style.height = `${geo.H - geo.padT - geo.padB}px`;
-    tip.innerHTML = tooltipHtml(payload, i);
-    tip.style.display = 'block';
-    const tw = tip.offsetWidth;
-    const th = tip.offsetHeight;
-    const left = x > geo.W / 2 ? x - tw - 12 : x + 12;
-    const top = Math.min(Math.max(my - th / 2, 4), geo.H - th - 4);
-    tip.style.left = `${Math.max(4, left)}px`;
-    tip.style.top = `${canvas.offsetTop + top}px`;
+    showChartTooltip(key, mx, my);
   });
   canvas.addEventListener('mouseleave', () => hideChartTooltip(key));
   canvas.addEventListener('click', (e) => {
@@ -1002,20 +1265,22 @@ function bindChartTooltip(key) {
       toggleMaVisible(hit.id);
       return;
     }
-    if (!inPricePane(geo, mx, my)) return;
-    const pane = geo.price;
-    const trends = chartTrendLines[key] || [];
-    const nearTrend = trends.findIndex((t) => segmentDistance(mx, my, trendLinePx(geo, t)) <= LINE_HIT_PX);
-    if (nearTrend >= 0) {
-      trends.splice(nearTrend, 1);
-      renderChart(key);
+    if (coarsePointer()) {
+      if (pointerMoved) {
+        pointerMoved = false;
+        return;
+      }
+      if (chartDrawMode === 'view') {
+        showChartTooltip(key, mx, my);
+        return;
+      }
+      if (chartDrawMode === 'trend' || !inPricePane(geo, mx, my)) return;
+      togglePriceLineAt(key, geo, my);
       return;
     }
-    const lines = chartPriceLines[key] || (chartPriceLines[key] = []);
-    const near = lines.findIndex((p) => Math.abs(pane.yOf(p) - my) <= LINE_HIT_PX);
-    if (near >= 0) lines.splice(near, 1);
-    else lines.push(pane.priceOf(my));
-    renderChart(key);
+    if (!inPricePane(geo, mx, my)) return;
+    if (removeTrendAt(key, geo, mx, my)) return;
+    togglePriceLineAt(key, geo, my);
   });
 }
 
@@ -1085,13 +1350,20 @@ function renderChart(key) {
   renderChartSummary(key, payload);
 
   const W = Math.max((wrap && wrap.clientWidth) || 360, 280);
-  const H = CHART_HEIGHT;
+  const H = chartPixelHeight();
   const dpr = window.devicePixelRatio || 1;
-  canvas.width = Math.round(W * dpr);
-  canvas.height = Math.round(H * dpr);
+  const bw = Math.round(W * dpr);
+  const bh = Math.round(H * dpr);
+  // 드래그 중 width를 다시 넣으면 터치 포인터가 끊길 수 있어 크기가 같을 때는 비트맵을 유지한다
+  if (canvas.width !== bw || canvas.height !== bh) {
+    canvas.width = bw;
+    canvas.height = bh;
+  }
   canvas.style.width = `${W}px`;
   canvas.style.height = `${H}px`;
   canvas.style.display = 'block';
+  canvas.classList.toggle('draw-trend', coarsePointer() && chartDrawMode === 'trend');
+  canvas.classList.toggle('draw-hline', coarsePointer() && chartDrawMode === 'hline');
 
   const ctx = canvas.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1183,21 +1455,21 @@ async function renderDetailFallback(code, name) {
     </div>
     <div class="detail-grid">${indicatorFieldsHtml()}</div>
     <div class="empty" style="margin-top:12px;"><span class="ico">ℹ️</span>재무 지표는 <code>run_fundamental_batch.bat</code> 적재 후 표시됩니다.</div>`;
+  applyChartDrawMode();
   loadCompanyProfile(c);
   await loadAnalysisCharts(c);
 }
 
-async function selectStock(code) {
+async function selectStock(code, options) {
   const c = String(code || '').trim().replace(/^A/i, '').replace(/\D/g, '').padStart(6, '0');
   if (!c || c === '000000') return;
   state.selectedCode = c;
   syncUrlCode(c);
   const search = $('codeSearch');
   if (search) search.value = c;
-  document.querySelectorAll('tr.data-row').forEach((tr) => {
-    tr.classList.toggle('selected', tr.dataset.code === c);
-  });
+  markSelectedCode(c);
   $('detailBody').innerHTML = '<div class="skeleton">상세 불러오는 중…</div>';
+  if (options && options.scrollDetail) scrollAnalysisTarget('detailCard');
   try {
     const row = await fetchJSON(`/fundamentals/${encodeURIComponent(c)}`);
     renderDetail(row);
@@ -1224,7 +1496,7 @@ async function loadList(options) {
   if (state.loading) return;
   state.loading = true;
   const wrap = $('tableWrap');
-  if (wrap && !wrap.querySelector('.tbl')) wrap.innerHTML = '<div class="skeleton">데이터 불러오는 중…</div>';
+  if (wrap && !wrap.querySelector('.tbl, .analysis-list')) wrap.innerHTML = '<div class="skeleton">데이터 불러오는 중…</div>';
   try {
     const [summary, list] = await Promise.all([
       loadSummary(),
@@ -1233,7 +1505,7 @@ async function loadList(options) {
     const empty = !summary.as_of_date && (!list.items || !list.items.length);
     showEmptyBanner(empty);
     renderSummary(summary, list);
-    renderTrendBreakInfo(list.trend_break);
+    renderConditionSetInfo(list.condition_sets);
     renderTable(list.items || []);
     if (autoSelect && state.selectedCode) {
       await selectStock(state.selectedCode);
@@ -1244,6 +1516,7 @@ async function loadList(options) {
     toast('목록 조회 실패', true);
   } finally {
     state.loading = false;
+    applyFilterPanel();
   }
 }
 
@@ -1254,11 +1527,17 @@ function resetFilters() {
   $('fltMaxPer').value = '';
   $('fltMaxPbr').value = '';
   $('fltMinRoe').value = '';
-  $('fltMaxWeeklyRsi').value = '';
-  $('fltMaxDailyRsi').value = '';
+  $('fltWeeklyRsiOnly').checked = false;
+  $('fltDailyRsiOnly').checked = false;
+  $('fltWeeklyWilliamsOnly').checked = false;
+  $('fltDailyWilliamsOnly').checked = false;
+  $('fltBowlOnly').checked = false;
+  $('fltMa2060Only').checked = false;
   $('fltExcludeBelowMa60').checked = false;
   state.sortBy = 'market_cap';
   state.sortDesc = true;
+  if (phoneLayout()) filterUserOpen = false;
+  applyFilterPanel();
   loadList();
 }
 
@@ -1294,29 +1573,61 @@ function initFromUrl() {
   }
 }
 
+function onPhoneLayoutChange() {
+  const next = phoneLayout();
+  if (next === lastPhoneLayout) return;
+  lastPhoneLayout = next;
+  applyFilterPanel();
+  if (state.lastItems) renderTable(state.lastItems);
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   initFromUrl();
+  if (phoneLayout() && hasActiveFilters()) filterUserOpen = true;
+  applyFilterPanel();
+  syncSortDirButton();
   $('btnRefresh').onclick = () => loadList();
+  $('btnFilterToggle').onclick = () => {
+    filterUserOpen = !filterUserOpen;
+    applyFilterPanel();
+  };
+  $('btnSortDir').onclick = () => {
+    state.sortDesc = !state.sortDesc;
+    syncSortDirButton();
+    updateFilterSummary();
+    loadList();
+  };
+  $('btnBackList').onclick = () => {
+    const card = document.querySelector('.analysis-table-card');
+    if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
   $('btnApply').onclick = () => {
     state.sortBy = $('fltSortBy').value || 'market_cap';
+    if (phoneLayout()) filterUserOpen = false;
+    applyFilterPanel();
     loadList();
   };
   $('btnReset').onclick = resetFilters;
-  $('fltSortBy').onchange = () => { state.sortBy = $('fltSortBy').value; };
+  $('fltSortBy').onchange = () => {
+    state.sortBy = $('fltSortBy').value;
+    updateFilterSummary();
+  };
   $('codeSearch').addEventListener('keydown', (e) => {
     if (e.key !== 'Enter') return;
     e.preventDefault();
     const v = $('codeSearch').value.trim().replace(/\D/g, '');
     if (v.length < 4) { toast('종목코드를 4~6자리로 입력하세요.', true); return; }
-    selectStock(v);
+    selectStock(v, { scrollDetail: true });
   });
   const pendingCode = state.selectedCode;
-  if (pendingCode) {
-    selectStock(pendingCode).then(() => {
-      const card = $('detailCard');
-      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    });
-  }
+  if (pendingCode) selectStock(pendingCode, { scrollDetail: true });
   loadList({ autoSelect: !pendingCode });
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('.analysis-chart-tool');
+    if (!btn) return;
+    setChartDrawMode(btn.dataset.mode);
+  });
   window.addEventListener('resize', onChartResize);
+  if (PHONE_MQ.addEventListener) PHONE_MQ.addEventListener('change', onPhoneLayoutChange);
+  else if (PHONE_MQ.addListener) PHONE_MQ.addListener(onPhoneLayoutChange);
 });

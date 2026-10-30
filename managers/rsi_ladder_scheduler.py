@@ -1,5 +1,6 @@
 """RSI 저점 분할매수(-5% 사다리) 스케줄러 (docs/PRD_RSI_LADDER.md).
 
+- 장중(09:00~15:20) 10분마다 가격 감시: 현재가 ≤ 다음 트리거면 추가 매수 (하루 1단계)
 - 15:05~15:20 하루 1회 판정: 현재가 + 확정 일봉으로 1차 진입 / 추가 매수 / S0~S3 매도 결정
 - 매수: 기존 매수 신호 경로(PendingBuySignal → BuyOrderExecutor), strategy="rsi_ladder"
 - 매도: 계획에 pending_sell 기록 → StopLossManager._monitor_ladder_exit 가 정규장에 지정 수량 매도
@@ -22,8 +23,10 @@ from utils.rsi_ladder import (
     STRATEGY_KEY,
     auto_fills,
     bars_with_today,
+    evaluate_add_buy,
     evaluate_entry,
     evaluate_exit,
+    execution_avg_price,
     get_ladder_store,
     judge_plan,
     last_fill_price,
@@ -39,10 +42,15 @@ _LOOP_SEC = 10
 JUDGE_HM = (15, 5)
 JUDGE_END_HM = (15, 20)
 SUMMARY_HM = (15, 40)
+WATCH_START_HM = (9, 0)
+WATCH_END_HM = JUDGE_END_HM
+_WATCH_INTERVAL_SEC = 600
 _DAILY_MAX_BARS = 400
 _SNAPSHOT_TTL = 60.0
 _BUY_PENDING_TIMEOUT_MIN = 30
 _SELL_SENT_RETRY_MIN = 3
+_EXEC_PX_INTERVAL_SEC = 30
+_EXEC_PX_MAX_TRIES = 10
 _FAILED_SIGNAL = ("FAILED", "EXPIRED", "CANCELLED")
 
 
@@ -113,6 +121,8 @@ class RsiLadderScheduler:
         self._task: Optional[asyncio.Task] = None
         self._lock = asyncio.Lock()
         self._fail_until = 0.0
+        self._exec_px_after = 0.0
+        self._watch_after = 0.0
         self._snap_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 
     # ───────────────────────── lifecycle ─────────────────────────
@@ -153,6 +163,7 @@ class RsiLadderScheduler:
         if not self.my_plans(open_only=True):
             return
         self.reconcile()
+        await self._refine_fill_prices()
         now = now_kst()
         if not store.enabled or not is_krx_trading_day(now):
             return
@@ -160,6 +171,9 @@ class RsiLadderScheduler:
         last = store.data.get("last_judge") or {}
         if JUDGE_HM <= _hm(now) < JUDGE_END_HM and last.get("date") != today:
             await self.run_judge(trigger="15:05")
+        if WATCH_START_HM <= _hm(now) < WATCH_END_HM and time.time() >= self._watch_after:
+            self._watch_after = time.time() + _WATCH_INTERVAL_SEC
+            await self.run_price_watch()
         if SUMMARY_HM <= _hm(now) and store.data.get("last_summary") != today:
             store.data["last_summary"] = today
             store.save()
@@ -252,6 +266,29 @@ class RsiLadderScheduler:
     async def run_judge(self, *, trigger: str = "manual", dry_run: bool = False) -> Dict[str, Any]:
         async with self._lock:
             return await self._run_judge(trigger, dry_run)
+
+    async def run_price_watch(self) -> List[Dict[str, Any]]:
+        """장중 가격 감시 — ACTIVE 계획의 추가 매수 트리거만 현재가로 확인 (일봉·매도 판정 없음)."""
+        async with self._lock:
+            today = now_kst().date()
+            results: List[Dict[str, Any]] = []
+            for plan in self.my_plans(open_only=True):
+                if plan.get("status") != "ACTIVE" or plan.get("pending_buy") or plan.get("pending_sell"):
+                    continue
+                price = await self._price(plan["code"])
+                if not price:
+                    continue
+                add = evaluate_add_buy(plan, price=price, today=today)
+                row = {"plan_id": plan["id"], "code": plan["code"], "price": price,
+                       "trigger": add["trigger"], "buy": add["buy"]}
+                if add["buy"]:
+                    b = add["buy"]
+                    ok, msg = await self._submit_buy(plan, step=b["step"], qty=b["qty"], price=price,
+                                                     reason=f"[장중 감시] {b['reason']}", extra=False)
+                    row["buy_result"] = msg
+                    self._snap_cache.pop(plan["id"], None)
+                results.append(row)
+            return results
 
     async def _run_judge(self, trigger: str, dry_run: bool) -> Dict[str, Any]:
         store = get_ladder_store()
@@ -502,6 +539,7 @@ class RsiLadderScheduler:
         step = 0 if extra else len(auto_fills(plan)) + 1
         plan.setdefault("fills", []).append({
             "step": step, "price": int(fill.price), "qty": int(fill.quantity), "fill_id": int(fill.id),
+            "order_id": str(fill.order_id or ""), "exec_px": False,
             "at": now_kst().isoformat(timespec="seconds"), "extra": extra,
         })
         plan["pending_buy"] = None
@@ -518,6 +556,66 @@ class RsiLadderScheduler:
             ))
         store.add_event(plan["id"], "FILL", msg, save=False)
         notes.append(f"{plan.get('name')} {msg}")
+
+    async def _refine_fill_prices(self) -> None:
+        """체결 기록가(주문 직전 현재가)를 ka10076 실제 체결가로 보정 — 다음 차수 트리거 기준."""
+        todo = [
+            (plan, f) for plan in self.my_plans(open_only=True) for f in plan.get("fills") or []
+            if f.get("order_id") and not f.get("exec_px") and int(f.get("px_tries") or 0) < _EXEC_PX_MAX_TRIES
+        ]
+        if not todo or time.time() < self._exec_px_after:
+            return
+        self._exec_px_after = time.time() + _EXEC_PX_INTERVAL_SEC
+        from api.kiwoom_api import kiwoom_api
+
+        store = get_ladder_store()
+        rows_by_code: Dict[str, Optional[List[Dict[str, Any]]]] = {}
+        for plan, f in todo:
+            code = plan["code"]
+            if code not in rows_by_code:
+                try:
+                    res = await kiwoom_api.get_executions(sell_tp="2", stk_cd=code)
+                    rows_by_code[code] = res.get("items") or [] if res.get("success") else None
+                except Exception as e:
+                    logger.debug(f"[LADDER] 체결내역 조회 실패 {code}: {e}")
+                    rows_by_code[code] = None
+            rows = rows_by_code[code]
+            if rows is None:
+                continue
+            f["px_tries"] = int(f.get("px_tries") or 0) + 1
+            px = execution_avg_price(rows, f["order_id"])
+            if not px:
+                continue
+            f["exec_px"] = True
+            old = int(f.get("price") or 0)
+            if px == old:
+                continue
+            f["quote_price"] = old
+            f["price"] = px
+            self._update_fill_row(f.get("fill_id"), px)
+            label = "수동 추가" if f.get("extra") else f"{f.get('step')}차"
+            store.add_event(plan["id"], "FILL_PX", f"{label} 체결가 보정 {_won(old)} → {_won(px)} (실제 체결가)",
+                            save=False)
+            _log(f"분할매수 {plan.get('name')} {label} 체결가 보정 {_won(old)} → {_won(px)}", stock_code=code)
+        store.save()
+        self._snap_cache.clear()
+
+    @staticmethod
+    def _update_fill_row(fill_id: Any, price: int) -> None:
+        from core.models import PositionBuyFill, get_db
+
+        if not fill_id:
+            return
+        try:
+            for db in get_db():
+                row = db.query(PositionBuyFill).filter(PositionBuyFill.id == int(fill_id)).first()
+                if row is not None:
+                    row.price = int(price)
+                    row.amount = int(price) * int(row.quantity or 0)
+                    db.commit()
+                break
+        except Exception as e:
+            logger.debug(f"[LADDER] 체결 이력 가격 갱신 실패 {fill_id}: {e}")
 
     def _apply_sell(self, plan: Dict[str, Any], ps: Dict[str, Any], so) -> None:
         store = get_ladder_store()

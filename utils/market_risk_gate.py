@@ -527,10 +527,12 @@ def count_strategy_new_buys_today(
     stock_market이 kospi|kosdaq이면 해당 시장 종목만 집계.
     시장 미상 종목은 시장별 집계에서 제외.
     """
+    from core.config import get_account_mode
     from core.models import PendingBuySignal, Position
     from utils.auto_trade_engine import parse_signal_meta
     from utils.datetime_kst import kst_day_end_utc_naive_exclusive, kst_day_start_utc_naive
 
+    account_mode = get_account_mode()
     key = normalize_strategy_key(strategy)
     market_key = normalize_stock_market(stock_market)
     start = kst_day_start_utc_naive()

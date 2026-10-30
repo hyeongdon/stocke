@@ -93,7 +93,25 @@ function renderMarketIndexItem(it) {
   const deltaParts = [];
   if (it.change != null) deltaParts.push(fmtIndexDelta(it.change));
   if (it.change_pct != null) deltaParts.push(`(${fmtIndexPct(it.change_pct)})`);
-  return `<span class="market-index-item ${dir}"><span class="mi-label">${esc(it.label)}</span>${renderMarketIndexMiniChart(it)}<span class="mi-value">${fmtIndexValue(it.value)}</span><span class="mi-delta">${deltaParts.join(' ') || '-'}</span>${renderInvestorBadges(it)}</span>`;
+  const title = String(it.key || '').toLowerCase() === 'vix' ? ' title="CBOE 변동성지수"' : '';
+  return `<span class="market-index-item ${dir}"${title}><span class="mi-label">${esc(it.label)}</span>${renderMarketIndexMiniChart(it)}<span class="mi-value">${fmtIndexValue(it.value)}</span><span class="mi-delta">${deltaParts.join(' ') || '-'}</span>${renderInvestorBadges(it)}</span>`;
+}
+function renderMarketIndexStrip(items) {
+  const list = items || [];
+  const vix = list.find(it => String(it.key || '').toLowerCase() === 'vix');
+  const rest = list.filter(it => it !== vix);
+  const html = [];
+  let stacked = false;
+  for (const it of rest) {
+    if (!stacked && vix && String(it.key || '').toLowerCase() === 'kospi') {
+      html.push(`<span class="market-index-stack">${renderMarketIndexItem(vix)}${renderMarketIndexItem(it)}</span>`);
+      stacked = true;
+    } else {
+      html.push(renderMarketIndexItem(it));
+    }
+  }
+  if (vix && !stacked) html.unshift(renderMarketIndexItem(vix));
+  return html.join('');
 }
 function hmMinutes(t) {
   const m = /^(\d{1,2}):(\d{2})$/.exec(String(t || '').trim());
@@ -248,7 +266,7 @@ async function loadMarketIndices(opts) {
     const d = await fetchJSON('/market/indices', { timeoutMs: 15000 });
     const items = d.indices || [];
     el.innerHTML = items.length
-      ? items.map(renderMarketIndexItem).join('')
+      ? renderMarketIndexStrip(items)
       : '<span class="market-index-skeleton">지수 데이터 없음</span>';
     renderInvestorFlow(items, d.investor_updated_at);
     const hasFlow = items.some(it => (it.investor_intraday || []).length >= 2);
@@ -1810,6 +1828,7 @@ function renderPositionCards(items, containerId) {
     const atrTxt = ex.atr ? `ATR ${num(ex.atr)}원 (${ex.atr_period}일)` : (ex.levels_live === false ? 'ATR: 새로고침 시 계산' : 'ATR 미사용 (%기준)');
     const reason = REASON_LABEL[ex.effective_stop_reason] || ex.effective_stop_reason || '-';
     const methodLbl = effMeta.method === 'ATR' ? 'ATR' : (effMeta.method === 'PCT' ? 'PCT' : '');
+    const stopPolicy = ex.stop_policy || p.stop_policy || '';
 
     const chips = (ex.levels || []).map((l) => renderLevelChip(l, ex, p, effStop, pctRate)).join('');
 
@@ -1826,8 +1845,8 @@ function renderPositionCards(items, containerId) {
       <div class="pos-metrics">
         <div><div class="pk">매입단가</div><div class="pv">${num(positionBuyPrice(p))}</div></div>
         <div><div class="pk">현재가</div><div class="pv">${num(cur)}</div></div>
-        <div><div class="pk">손절율${methodLbl ? ` <span class="pk-sub">(${methodLbl})</span>` : ''}</div><div class="pv down">${effRate != null ? `−${effRate.toFixed(1)}%` : '-'}</div></div>
-        <div><div class="pk">손절가${methodLbl ? ` <span class="pk-sub">(${methodLbl})</span>` : ''}</div><div class="pv down">${effPrice ? num(effPrice) : '-'}</div></div>
+        <div><div class="pk">손절율${methodLbl ? ` <span class="pk-sub">(${methodLbl})</span>` : ''}</div><div class="pv ${stopPolicy ? 'flat' : 'down'}">${stopPolicy ? '없음' : (effRate != null ? `−${effRate.toFixed(1)}%` : '-')}</div></div>
+        <div><div class="pk">손절가${methodLbl ? ` <span class="pk-sub">(${methodLbl})</span>` : ''}</div><div class="pv ${stopPolicy ? 'flat' : 'down'}">${stopPolicy ? '없음' : (effPrice ? num(effPrice) : '-')}</div></div>
         <div><div class="pk">매입금액</div><div class="pv">${won(buyAmt)}</div></div>
         <div><div class="pk">비중</div><div class="pv" title="평가금액 ÷ 키움 주식총평가">${weight.toFixed(1)}%</div></div>
         <div><div class="pk">고점</div><div class="pv">${num(ex.peak_price || p.peak_price || cur)}</div></div>
@@ -1837,13 +1856,16 @@ function renderPositionCards(items, containerId) {
         ${ex.trailing_floor_price ? `<div><div class="pk">익절 바닥</div><div class="pv up">${num(ex.trailing_floor_price)}</div></div>` : ''}
         <div><div class="pk">${ex.atr ? 'ATR' : '변동성'}</div><div class="pv text-cyan">${ex.atr ? num(ex.atr) + '원' : '-'}</div></div>
       </div>
-      <div class="pos-stop-bar ${safe ? 'safe' : ''}">
+      ${stopPolicy ? `<div class="pos-stop-bar safe">
+        <div class="stop-main">${esc(stopPolicy)}</div>
+        <div class="stop-sub">글로벌 손절·트레일링·장마감 청산 미적용 · 손실 구간은 추가 매수/수동 판단</div>
+      </div>` : `<div class="pos-stop-bar ${safe ? 'safe' : ''}">
         <div class="stop-main">유효 손절선 <span style="color:var(--down);">${effPrice ? num(effPrice) + '원' : '-'}</span>
           ${effDisplay.rate != null && effPrice ? `<span class="stop-pct-hint"> · ${methodLbl || esc(reason)} ${effDisplay.prefix}−${effDisplay.rate.toFixed(1)}%</span>` : ''}
           <span class="pill run" style="margin-left:6px;">${esc(reason)}</span></div>
         <div class="stop-sub">${atrTxt}${dist != null ? ` · 손절선까지 ${dist.toFixed(2)}%` : ''}${ex.trailing_armed && peakDropAmt != null ? ` · 고점대비 ${fmtPeakDrop(peakDropAmt, peakDropPct)}` : ''}${ex.trailing_armed && trailPctSetting > 0 ? ` · 트레일 기준 −${trailPctSetting.toFixed(1)}%` : ''}${softConfirmStopHint(p)}${ex.liquidate_time ? ` · ${ex.liquidate_time} 장마감청산` : ''}${ex.levels_live ? ' · 실시간' : ''}</div>
         ${chips ? `<div class="pos-levels">${chips}</div>` : ''}
-      </div>
+      </div>`}
       <div class="pos-card-actions">${renderPosActionButtons(p)}</div>
     </div>`;
   }).join('')}</div>`;
@@ -1888,15 +1910,16 @@ function renderPositionsTable(items) {
     const themeChips = posNameTagsHtml(p);
     const soft = softConfirmMeta(p);
     const softHint = soft ? ` · SOFT ${soft.text}` : '';
+    const stopPolicy = ex.stop_policy || p.stop_policy || '';
     return `<tr>
       <td><span class="stock-name">${esc(p.stock_name)}</span>${themeChips}<span class="stock-code">${esc(p.stock_code)}</span></td>
       <td class="num">${num(positionBuyPrice(p))}</td><td class="num">${num(ex.current_price || p.current_price || p.buy_price)}</td>
       <td class="num">${num(p.buy_quantity)}</td>
       <td class="num">${won(buyAmt)}</td><td class="num">${weights[i].toFixed(1)}%</td>
       <td class="num ${signClass(pl)}">${pnlStr(pl)}</td><td class="num ${signClass(rate)}">${rateStr(rate)}</td>
-      <td class="num down">${effRate != null ? `−${effRate.toFixed(1)}%` : '-'}</td>
-      <td class="num down">${effPrice ? num(effPrice) : '-'}</td>
-      <td><span class="hint">${esc(reason)}${effMeta.method ? ` · ${effMeta.method}` : ''}${ex.atr ? ` · ATR ${num(ex.atr)}` : ''}${softHint}</span></td>
+      <td class="num ${stopPolicy ? 'flat' : 'down'}">${stopPolicy ? '없음' : (effRate != null ? `−${effRate.toFixed(1)}%` : '-')}</td>
+      <td class="num ${stopPolicy ? 'flat' : 'down'}">${stopPolicy ? '없음' : (effPrice ? num(effPrice) : '-')}</td>
+      <td><span class="hint"${stopPolicy ? ` title="${esc(stopPolicy)}"` : ''}>${stopPolicy ? '사다리 매도 규칙' : esc(reason)}${effMeta.method ? ` · ${effMeta.method}` : ''}${ex.atr ? ` · ATR ${num(ex.atr)}` : ''}${softHint}</span></td>
       <td class="pos-action-cell">${renderPosActionButtons(p)}</td></tr>`;
   }).join('');
   return `<table class="tbl"><thead><tr>
