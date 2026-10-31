@@ -13,6 +13,8 @@ from utils.rsi_ladder import (
     ladder_preview,
     merge_profile,
     next_trigger,
+    step_amounts,
+    step_budget,
     step_qty,
     tick_floor,
 )
@@ -60,6 +62,42 @@ def test_next_trigger_is_minus_step_floored():
 def test_step_qty_uses_budget_over_steps():
     p = _plan(budget=10_000_000)
     assert step_qty(p, 70_000) == 14  # 1,000,000 / 70,000
+
+
+def test_grow_amounts_rise_and_sum_to_budget():
+    amounts = step_amounts(10_000_000, 10, "grow", 1.2)
+    assert sum(amounts) == 10_000_000
+    assert amounts[0] < 1_000_000 < amounts[-1]
+    assert all(amounts[i] < amounts[i + 1] for i in range(9))
+    for i in range(8):
+        assert 1.15 <= amounts[i + 1] / amounts[i] <= 1.25
+
+    p = _plan(profile=merge_profile({"alloc_mode": "grow", "alloc_ratio": 1.2}))
+    assert step_budget(p, 1) == amounts[0]
+    assert step_qty(p, 70_000, step=10) > step_qty(p, 70_000, step=1)
+    assert merge_profile({})["alloc_mode"] == "equal"
+    assert merge_profile({"alloc_mode": "nope"})["alloc_mode"] == "equal"
+    assert merge_profile({})["first_boost"] is False
+
+
+def test_first_boost_takes_set_share_rest_stays_equal():
+    amounts = step_amounts(10_000_000, 10, "equal", 1.2, first_boost=True, first_boost_pct=20)
+    assert amounts[0] == 2_000_000
+    assert amounts[1:] == [888_888] * 9
+    assert sum(amounts) == 2_000_000 + 888_888 * 9
+    plain = step_amounts(10_000_000, 10, "equal", 1.2, first_boost=False, first_boost_pct=20)
+    assert plain == [1_000_000] * 10
+
+    grown = step_amounts(10_000_000, 10, "grow", 1.2, first_boost=True, first_boost_pct=30)
+    assert grown[0] == 3_000_000
+    assert grown[1:] == step_amounts(7_000_000, 9, "grow", 1.2)
+    assert sum(grown) == 10_000_000
+    assert step_amounts(10_000_000, 1, "equal", first_boost=True, first_boost_pct=40) == [10_000_000]
+
+    p = _plan(profile=merge_profile({"first_boost": True, "first_boost_pct": 200}))
+    assert p["profile"]["first_boost_pct"] == 80.0
+    assert step_budget(p, 1) == 8_000_000
+    assert step_budget(p, 1) > step_budget(p, 2)
 
 
 def test_ladder_preview_steps_down():
@@ -210,19 +248,45 @@ def test_gap_down_fill_reanchors_next_trigger():
 
 # ── 매도 ──
 
-def test_s0_only_in_profit_below_ma20():
+def test_no_sell_before_arm_even_in_profit_below_ma20():
     ma = {"ma10": 0, "ma15": 0, "ma20": 11_000, "ma60": 0}
     p = _plan()
     r = evaluate_exit(p, price=10_500, avg=10_000, hold=100, ma=ma)
-    assert r["sells"] == [{"rule": "S0", "qty": 50}]
+    assert r["sells"] == []
+    assert not r["armed"]
     r2 = evaluate_exit(p, price=9_500, avg=10_000, hold=100, ma=ma)
     assert r2["sells"] == []
 
 
-def test_s0_once_per_cycle():
-    ma = {"ma20": 11_000}
-    p = _plan(sell_flags={"S0": True})
-    assert evaluate_exit(p, price=10_500, avg=10_000, hold=50, ma=ma)["sells"] == []
+def test_take_profit_hold_waits_three_minutes_then_queues():
+    from datetime import datetime
+
+    from utils.datetime_kst import KST
+    from utils.rsi_ladder import cancel_sell_hold, confirm_sell_hold, release_sell_hold
+
+    now = datetime(2026, 10, 31, 15, 5, tzinfo=KST)
+    plan = _plan(status="EXITING", sell_flags={"S1": True}, pending_sell={
+        "status": "HOLD", "rules": ["S1"], "qty": 50,
+        "execute_at": "2026-10-31T15:08:00+09:00", "status_before": "ACTIVE",
+    })
+    assert release_sell_hold(plan, now) is False
+    assert plan["pending_sell"]["status"] == "HOLD"
+    assert release_sell_hold(plan, datetime(2026, 10, 31, 15, 8, tzinfo=KST)) is True
+    assert plan["pending_sell"]["status"] == "QUEUED"
+
+
+def test_cancel_take_profit_hold_restores_rule():
+    from utils.rsi_ladder import cancel_sell_hold, confirm_sell_hold
+
+    plan = _plan(status="EXITING", sell_flags={"S1": True}, pending_sell={
+        "status": "HOLD", "rules": ["S1"], "qty": 50, "status_before": "ACTIVE",
+    })
+    assert confirm_sell_hold(_plan(pending_sell={"status": "QUEUED"})) is False
+    assert cancel_sell_hold(plan) is True
+    assert plan["pending_sell"] is None
+    assert plan["sell_flags"] == {}
+    assert plan["status"] == "ACTIVE"
+    assert cancel_sell_hold(plan) is False
 
 
 def test_arm_then_staged_take_profit():
@@ -250,9 +314,9 @@ def test_gap_down_fires_all_stages_same_day():
     assert sum(s["qty"] for s in r["sells"]) == 100
 
 
-def test_sell_day_blocks_buy():
+def test_pre_arm_ma20_break_does_not_block_buy():
     p = _plan(fills=[{"step": 1, "price": 70_000, "qty": 100}], sell_flags={}, armed=False)
-    bars = _bars([80_000] * 79 + [66_000])  # MA20 ≈ 80k, 현재가 < 트리거 이지만 손실 → S0 아님
+    bars = _bars([80_000] * 79 + [66_000])
     r = judge_plan(p, price=66_000, bars=bars, weekly_bars=None, hold=100, avg=70_000, today=date(2025, 6, 2))
     assert r["sells"] == []
     assert r["buy"] is not None
@@ -260,8 +324,8 @@ def test_sell_day_blocks_buy():
     p2 = _plan(fills=[{"step": 1, "price": 60_000, "qty": 100}])
     bars2 = _bars([80_000] * 79 + [57_000])
     r2 = judge_plan(p2, price=57_000, bars=bars2, weekly_bars=None, hold=100, avg=50_000, today=date(2025, 6, 2))
-    assert r2["sells"] and r2["sells"][0]["rule"] == "S0"
-    assert r2["buy"] is None
+    assert r2["sells"] == []
+    assert r2["buy"] is not None
 
 
 # ── 연동 ──
@@ -358,6 +422,115 @@ def test_ladder_exit_levels_show_no_stop():
 
 
 # ── 저장소 ──
+
+def test_update_plan_only_while_waiting(tmp_path, monkeypatch):
+    import pytest
+
+    from managers.rsi_ladder_scheduler import LadderError, RsiLadderScheduler
+
+    store = _store_with_plan(tmp_path, monkeypatch)
+    plan = store.create_plan(code="005930", name="삼성전자", budget=1_000_000, profile={"step_pct": 5})
+    sch = RsiLadderScheduler()
+    updated = sch.update_plan(
+        plan["id"], name="삼성전자우", budget=2_000_000, memo="조정",
+        profile={"step_pct": 4, "max_steps": 8},
+    )
+    assert updated["name"] == "삼성전자우"
+    assert updated["budget"] == 2_000_000
+    assert updated["memo"] == "조정"
+    assert updated["profile"]["step_pct"] == 4.0
+    assert updated["profile"]["max_steps"] == 8
+    assert updated["profile"]["weekly_lookback_weeks"] == 26
+
+    plan["pending_buy"] = {"status": "QUEUED"}
+    with pytest.raises(LadderError, match="매수가 시작"):
+        sch.update_plan(plan["id"], budget=3_000_000)
+    assert plan["budget"] == 2_000_000
+
+    plan["pending_buy"] = None
+    plan["status"] = "ACTIVE"
+    plan["fills"] = [{"step": 1, "price": 70_000, "qty": 10}]
+    with pytest.raises(LadderError, match="매수가 시작"):
+        sch.update_plan(plan["id"], budget=3_000_000)
+    assert plan["budget"] == 2_000_000
+
+
+def test_bars_cache_stays_fresh_until_close_needs_today(monkeypatch):
+    import time
+    from datetime import datetime
+
+    from managers.rsi_ladder_scheduler import RsiLadderScheduler
+
+    monkeypatch.setattr("utils.market_hours.is_krx_trading_day", lambda now=None: True)
+    bars = [{"date": date(2026, 10, 29), "close": 1.0}]
+    assert RsiLadderScheduler._bars_are_fresh(time.time(), [], datetime(2026, 10, 30, 14, 0)) is False
+    assert RsiLadderScheduler._bars_are_fresh(time.time(), bars, datetime(2026, 10, 30, 14, 0)) is True
+    assert RsiLadderScheduler._bars_are_fresh(time.time(), bars, datetime(2026, 10, 30, 15, 45)) is False
+    assert RsiLadderScheduler._bars_are_fresh(time.time() - 13 * 3600, bars, datetime(2026, 10, 30, 14, 0)) is False
+
+
+def test_off_session_screen_uses_last_close_without_quote():
+    import asyncio
+    import time
+    from datetime import datetime
+
+    from managers.rsi_ladder_scheduler import RsiLadderScheduler
+
+    sched = RsiLadderScheduler()
+    sched._bar_disk_loaded = True
+    bars = []
+    d = date(2026, 10, 19)
+    for i in range(10):
+        while d.weekday() >= 5:
+            d += timedelta(days=1)
+        bars.append({"date": d, "open": 1000.0, "high": 1000.0, "low": 1000.0, "close": float(1000 + i), "volume": 1.0})
+        d += timedelta(days=1)
+    sched._bar_cache["005930"] = (time.time(), bars)
+
+    async def _no_price(*_a, **_k):
+        raise AssertionError("시세 API")
+
+    sched._price = _no_price
+    price, out, _weekly, live = asyncio.run(
+        sched._market_inputs("005930", datetime(2026, 10, 31, 23, 0), allow_fetch=False)
+    )
+    assert live is False
+    assert price == int(bars[-1]["close"])
+    assert out[-1]["date"] == bars[-1]["date"]
+    assert out[-1]["date"].weekday() < 5
+
+
+def test_screen_state_does_not_wait_on_kiwoom():
+    import asyncio
+    import time
+
+    from managers.rsi_ladder_scheduler import RsiLadderScheduler
+
+    sched = RsiLadderScheduler()
+    sched._bar_disk_loaded = True
+    warmed = []
+    sched._schedule_warm = lambda codes: warmed.extend(codes)
+    sched._schedule_quotes = lambda codes, now: None
+    sched.my_plans = lambda open_only=False: [{
+        "id": "t1", "code": "005930", "name": "삼성전자", "budget": 1_000_000,
+        "profile": {}, "status": "RSI_WAIT", "fills": [], "sells": [],
+        "sell_flags": {}, "armed": False, "base_qty": 0, "peak_pnl_pct": 0.0,
+        "pending_buy": None, "pending_sell": None,
+    }]
+    sched._holdings = lambda: ({}, {})
+
+    async def _run():
+        t0 = time.perf_counter()
+        data = await sched.state()
+        return data, time.perf_counter() - t0
+
+    data, elapsed = asyncio.run(_run())
+    assert elapsed < 10
+    assert data["warming"] is True
+    assert warmed == ["005930"]
+    assert data["plans"][0]["market"]["pending"] is True
+    assert "불러오는 중" in data["plans"][0]["market"]["error"]
+
 
 def test_store_roundtrip(tmp_path):
     s = LadderStore(tmp_path / "st.json")

@@ -4,7 +4,8 @@ docs/PRD_RSI_LADDER.md 기준.
 - 1차 진입: (주봉 RSI 저점 OR 일봉 RSI 저점 에피소드 N회) AND 20/60 GC
 - 추가 매수: 장중 10분마다 현재가 ≤ 직전 체결가 × (1 - step%) 호가 내림, 하루 1단계, max_steps 까지
   (주문은 항상 시장가, 직전 체결가는 ka10076 실제 체결가로 보정)
-- 매도: S0 (무장 전·수익 중 MA20 이탈 50%, 1회), 무장(peak ≥ +15%) 후 S1 MA10 50% / S2 MA15 25% / S3 MA20 잔량
+- 매도: 무장 전에는 매도 없음. 무장(peak ≥ +15%) 후 S1 MA10 50% / S2 MA15 25% / S3 MA20 잔량
+  익절은 알림 후 3분 유예(취소 없으면 매도)
 """
 from __future__ import annotations
 
@@ -44,7 +45,11 @@ DEFAULT_PROFILE: Dict[str, Any] = {
     "gc_near_pct": 2.0,
     "step_pct": 5.0,
     "max_steps": 10,
-    "s0_enabled": True,
+    "alloc_mode": "equal",        # equal=차수마다 같은 금액 / grow=다음 차수가 이전의 alloc_ratio 배
+    "alloc_ratio": 1.2,
+    "first_boost": False,         # True면 1차가 총액의 first_boost_pct%
+    "first_boost_pct": 20.0,
+    "s0_enabled": False,
     "s0_profit_only": True,
     "tp_arm_pct": 15.0,
     "s1_ratio": 0.5,
@@ -68,6 +73,9 @@ SELL_REASON_CODE = {
     "MANUAL_HALF": "LADDER_MANUAL",
     "MANUAL_ALL": "LADDER_MANUAL",
 }
+
+TAKE_PROFIT_RULES = ("S1", "S2", "S3")
+SELL_CONFIRM_SEC = 180
 
 
 # ───────────────────────── 기본 계산 ─────────────────────────
@@ -103,6 +111,59 @@ def tick_floor(price: float) -> int:
     return int(v)
 
 
+def is_take_profit(rules: Sequence[str]) -> bool:
+    return any(r in TAKE_PROFIT_RULES for r in (rules or []))
+
+
+def sell_hold_ready(pending: Optional[Dict[str, Any]], now: datetime) -> bool:
+    """익절 유예(HOLD)가 끝났으면 True. 시각을 못 읽으면 바로 진행한다."""
+    if not pending or pending.get("status") != "HOLD":
+        return False
+    raw = pending.get("execute_at")
+    if not raw:
+        return True
+    try:
+        from utils.datetime_kst import as_kst
+
+        return as_kst(now) >= as_kst(datetime.fromisoformat(str(raw)))
+    except (TypeError, ValueError):
+        return True
+
+
+def release_sell_hold(plan: Dict[str, Any], now: datetime) -> bool:
+    """유예가 끝난 익절을 주문 대기(QUEUED)로 넘긴다."""
+    pending = plan.get("pending_sell") or {}
+    if not sell_hold_ready(pending, now):
+        return False
+    pending["status"] = "QUEUED"
+    return True
+
+
+def confirm_sell_hold(plan: Dict[str, Any]) -> bool:
+    """유예 중 바로 익절."""
+    pending = plan.get("pending_sell") or {}
+    if pending.get("status") != "HOLD":
+        return False
+    pending["status"] = "QUEUED"
+    return True
+
+
+def cancel_sell_hold(plan: Dict[str, Any]) -> bool:
+    """유예 중 이번 익절 취소. 같은 규칙은 다음 판정에서 다시 볼 수 있게 플래그를 되돌린다."""
+    pending = plan.get("pending_sell") or {}
+    if pending.get("status") != "HOLD":
+        return False
+    flags = plan.setdefault("sell_flags", {})
+    for rule in pending.get("rules") or []:
+        if rule in TAKE_PROFIT_RULES:
+            flags.pop(rule, None)
+    prev = pending.get("status_before")
+    if plan.get("status") == "EXITING" and prev in PLAN_STATUSES:
+        plan["status"] = prev
+    plan["pending_sell"] = None
+    return True
+
+
 def merge_profile(overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     p = dict(DEFAULT_PROFILE)
     for k, v in (overrides or {}).items():
@@ -121,37 +182,79 @@ def merge_profile(overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
                 pass
     p["max_steps"] = max(1, min(20, int(p["max_steps"])))
     p["step_pct"] = max(0.5, min(50.0, float(p["step_pct"])))
+    p["alloc_ratio"] = round(max(1.05, min(3.0, float(p["alloc_ratio"]))), 2)
+    p["first_boost_pct"] = round(max(5.0, min(80.0, float(p["first_boost_pct"]))), 1)
+    if p["alloc_mode"] not in ("equal", "grow"):
+        p["alloc_mode"] = "equal"
     if p["entry_mode"] not in ("auto", "manual"):
         p["entry_mode"] = "auto"
     return p
 
 
-def step_budget(plan: Dict[str, Any]) -> int:
-    prof = plan.get("profile") or {}
-    steps = max(1, int(prof.get("max_steps") or 10))
-    return int(int(plan.get("budget") or 0) // steps)
+def step_amounts(budget: int, steps: int, mode: str = "equal", ratio: float = 1.2,
+                 first_boost: bool = False, first_boost_pct: float = 20.0) -> List[int]:
+    """차수별 예산. 균등은 총액//차수, 증가는 이전 차수의 ratio배(합 = 총액).
+
+    first_boost면 1차가 총액의 first_boost_pct%이고, 나머지를 같은 방식으로 나눈다.
+    """
+    n = max(1, int(steps))
+    budget = max(0, int(budget))
+    if first_boost and n > 1 and budget > 0:
+        pct = max(5.0, min(80.0, float(first_boost_pct)))
+        first = int(budget * pct / 100.0)
+        tail = step_amounts(budget - first, n - 1, mode, ratio)
+        return [first] + tail
+    return _split_amounts(budget, n, mode, ratio)
 
 
-def step_qty(plan: Dict[str, Any], price: float) -> int:
+def _split_amounts(budget: int, steps: int, mode: str, ratio: float) -> List[int]:
+    n = max(1, int(steps))
+    budget = max(0, int(budget))
+    grow = mode == "grow" and float(ratio) > 1.0 and n > 1
+    if not grow:
+        return [budget // n] * n
+    weights = [float(ratio) ** i for i in range(n)]
+    total_w = sum(weights)
+    out = [int(budget * w / total_w) for w in weights]
+    out[-1] += budget - sum(out)
+    return out
+
+
+def step_budget(plan: Dict[str, Any], step: int = 1) -> int:
+    prof = merge_profile(plan.get("profile") or {})
+    amounts = step_amounts(
+        int(plan.get("budget") or 0), int(prof["max_steps"]), prof["alloc_mode"], prof["alloc_ratio"],
+        bool(prof["first_boost"]), float(prof["first_boost_pct"]),
+    )
+    if int(step) <= 0:
+        return amounts[-1]
+    idx = max(0, min(int(step) - 1, len(amounts) - 1))
+    return amounts[idx]
+
+
+def step_qty(plan: Dict[str, Any], price: float, step: int = 1) -> int:
     if not price or price <= 0:
         return 0
-    return int(step_budget(plan) // float(price))
+    return int(step_budget(plan, step) // float(price))
 
 
 def next_trigger(last_fill_price: float, step_pct: float) -> int:
     return tick_floor(float(last_fill_price) * (1.0 - float(step_pct) / 100.0))
 
 
-def ladder_preview(base_price: float, budget: int, step_pct: float, max_steps: int) -> List[Dict[str, Any]]:
+def ladder_preview(base_price: float, budget: int, step_pct: float, max_steps: int,
+                   alloc_mode: str = "equal", alloc_ratio: float = 1.2,
+                   first_boost: bool = False, first_boost_pct: float = 20.0) -> List[Dict[str, Any]]:
     """기준가에서 매 단계 -step% 가정한 예상 사다리 (UI 미리보기)."""
     out: List[Dict[str, Any]] = []
-    per = int(budget // max(1, max_steps))
+    amounts = step_amounts(budget, max_steps, alloc_mode, alloc_ratio, first_boost, first_boost_pct)
     px = tick_floor(base_price)
     cum_qty = 0
     cum_amt = 0
     for i in range(1, max_steps + 1):
         if i > 1:
             px = next_trigger(px, step_pct)
+        per = amounts[i - 1]
         qty = int(per // px) if px > 0 else 0
         cum_qty += qty
         cum_amt += qty * px
@@ -274,7 +377,7 @@ def evaluate_entry(bars: Sequence[Dict[str, Any]], profile: Dict[str, Any], *,
 
 def moving_averages(closes: Sequence[float]) -> Dict[str, Optional[float]]:
     out: Dict[str, Optional[float]] = {}
-    for n in (10, 15, 20, 60):
+    for n in (5, 10, 15, 20, 60):
         s = sma_series(closes, n)
         out[f"ma{n}"] = float(s[-1]) if s and s[-1] is not None else None
     return out
@@ -282,7 +385,7 @@ def moving_averages(closes: Sequence[float]) -> Dict[str, Optional[float]]:
 
 def evaluate_exit(plan: Dict[str, Any], *, price: float, avg: float, hold: int,
                   ma: Dict[str, Optional[float]]) -> Dict[str, Any]:
-    """S0~S3 판정. plan 은 변경하지 않고 결정만 반환한다.
+    """익절 판정. 무장 전에는 매도하지 않고, 무장 후 S1~S3 만 판정한다. plan 은 변경하지 않는다.
 
     반환: {"sells": [{"rule", "qty"}], "armed", "peak_pct", "base_qty", "flags"}
     """
@@ -304,11 +407,6 @@ def evaluate_exit(plan: Dict[str, Any], *, price: float, avg: float, hold: int,
     remaining = int(hold)
 
     if not armed:
-        if (prof["s0_enabled"] and not flags.get("S0") and ma20 is not None and price < ma20
-                and (price > avg or not prof["s0_profit_only"])):
-            qty = max(1, remaining // 2) if remaining > 1 else remaining
-            sells.append({"rule": "S0", "qty": qty})
-            flags["S0"] = True
         return {"sells": sells, "armed": armed, "peak_pct": peak, "base_qty": base_qty, "flags": flags}
 
     def _base() -> int:
@@ -394,7 +492,7 @@ def judge_plan(plan: Dict[str, Any], *, price: float, bars: Sequence[Dict[str, A
         ent = evaluate_entry(bars, prof, weekly_bars=weekly_bars)
         out["entry"] = ent
         if prof["entry_mode"] == "auto" and ent["ok"] and not plan.get("pending_buy"):
-            qty = step_qty(plan, price)
+            qty = step_qty(plan, price, step=1)
             if qty > 0:
                 out["buy"] = {"step": 1, "qty": qty, "price": int(price), "reason": "1차 자동 진입"}
             else:
@@ -435,7 +533,7 @@ def evaluate_add_buy(plan: Dict[str, Any], *, price: float, today: date) -> Dict
     trig = next_trigger(lp, prof["step_pct"])
     out["trigger"] = trig
     if price <= trig:
-        qty = step_qty(plan, price)
+        qty = step_qty(plan, price, step=n_auto + 1)
         if qty > 0:
             out["buy"] = {"step": n_auto + 1, "qty": qty, "price": int(price),
                           "reason": f"{n_auto + 1}차 추가 (현재가 {int(price):,} ≤ 트리거 {trig:,})"}

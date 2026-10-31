@@ -13,7 +13,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="theme-color" content="#131720">
   <link rel="stylesheet" href="/static/dashboard.css?v=64">
-  <link rel="stylesheet" href="/static/ladder.css?v=4">
+  <link rel="stylesheet" href="/static/ladder.css?v=10">
   <script src="/static/theme-sync.js?v=1"></script>
 </head>
 <body>
@@ -73,7 +73,7 @@
                 <th>매도 단계</th>
               </tr>
             </thead>
-            <tbody></tbody>
+            <tbody><tr><td colspan="9" class="hint">불러오는 중…</td></tr></tbody>
           </table>
         </div>
         <div class="ld-legend hint">
@@ -102,13 +102,13 @@
   <div class="ld-modal" id="newPlanModal" hidden>
     <div class="ld-modal-box card">
       <div class="card-head">
-        <h3>새 분할매수 사다리</h3>
+        <h3 id="planModalTitle">새 분할매수 사다리</h3>
         <button type="button" class="btn sm" id="btnCloseModal">✕</button>
       </div>
       <div class="card-body ld-modal-body">
-        <form class="ld-form" id="newPlanForm" autocomplete="off">
+        <form class="ld-form" id="newPlanForm" autocomplete="off" novalidate>
           <div class="ld-form-sec">종목 · 금액</div>
-          <label>종목 검색 (이름 또는 코드)
+          <label class="ld-stock-search">종목 검색 (이름 또는 코드)
             <div class="ld-search">
               <input type="text" name="search" placeholder="삼성전자, 005930 …" role="combobox" aria-autocomplete="list" aria-controls="stockSuggest">
               <ul class="ld-suggest" id="stockSuggest" role="listbox" hidden></ul>
@@ -117,12 +117,29 @@
           <label>종목코드
             <input type="text" name="code" maxlength="6" placeholder="005930" required>
           </label>
+          <div class="hint" id="editLockHint" hidden>진입 대기 설정을 저장합니다. 종목은 그대로 두고 예산·조건·메모를 바꿉니다.</div>
           <label>종목명 (자동 조회)
             <input type="text" name="name" placeholder="코드 입력 시 자동">
           </label>
-          <label>총 투자금 (원) — 차수당 = 투자금 ÷ 최대 차수
-            <input type="number" name="budget" value="10000000" min="10000" step="10000">
+          <label>총 투자금 (원)
+            <input type="text" name="budget" class="ld-money" inputmode="numeric" value="10,000,000" autocomplete="off" placeholder="10,000,000">
           </label>
+          <label>금액 분할
+            <select name="alloc">
+              <option value="equal">균등 — 차수마다 같은 금액</option>
+              <option value="grow">증가 — 차수가 오를수록 커짐</option>
+            </select>
+          </label>
+          <label class="ld-alloc-grow" hidden>다음 차수 배수
+            <input type="number" name="allocRatio" value="1.2" min="1.05" max="3" step="0.05">
+          </label>
+          <label class="ld-check">
+            <input type="checkbox" name="firstBoost"> 1차 비중 높이기
+          </label>
+          <label class="ld-first-boost" hidden>1차 비중 (총 투자금 %)
+            <input type="number" name="firstBoostPct" value="20" min="5" max="80" step="1">
+          </label>
+          <div class="hint" id="allocHint"></div>
           <label>메모
             <input type="text" name="memo" maxlength="100" placeholder="선택">
           </label>
@@ -134,7 +151,7 @@
               <option value="manual">수동: 등록 즉시 1차 시장가 매수 (정규장)</option>
             </select>
           </label>
-          <div class="ld-form-row">
+          <div class="ld-form-row ld-entry-rsi">
             <label>주봉 RSI ≤
               <input type="number" name="rsiW" value="30" min="5" max="50">
             </label>
@@ -142,7 +159,7 @@
               <input type="number" name="rsiD" value="30" min="5" max="50">
             </label>
           </div>
-          <div class="ld-form-row">
+          <div class="ld-form-row ld-entry-rsi">
             <label>일봉 기간(일)
               <input type="number" name="lookback" value="120" min="20" max="250">
             </label>
@@ -162,20 +179,19 @@
           </div>
 
           <div class="ld-form-sec">매도</div>
-          <label class="ld-check"><input type="checkbox" name="s0" checked> 무장 전, 수익 중 20일선 이탈 시 50% 매도</label>
           <label>익절 무장 수익률 %
             <input type="number" name="arm" value="15" min="1" max="100" step="0.5">
           </label>
-          <div class="hint">무장 후: 10일선 이탈 50% → 15일선 이탈 25% → 20일선 이탈 나머지</div>
+          <div class="hint">무장 후: 10일선 이탈 50% → 15일선 이탈 25% → 20일선 이탈 나머지. 익절은 텔레그램으로 알리고, 3분 안에 취소가 없으면 매도합니다.</div>
           <div class="ld-form-actions">
-            <button type="submit" class="btn primary">등록</button>
+            <button type="submit" class="btn primary" id="planSubmit">등록</button>
           </div>
         </form>
         <div class="ld-preview">
           <div class="ld-preview-head">사다리 미리보기</div>
           <div id="previewSummary" class="hint"></div>
           <table class="ld-table ld-steps" id="previewTable">
-            <thead><tr><th>차수</th><th class="r">매수가</th><th class="r">1차 대비</th><th class="r">수량</th><th class="r">금액</th><th class="r">누적 평단</th><th class="r">+15% 무장가</th></tr></thead>
+            <thead><tr><th>차수</th><th class="r">매수가</th><th class="r">1차 대비</th><th class="r">수량</th><th class="r">금액</th><th class="r">누적 금액</th><th class="r">누적 평단</th><th class="r">+15% 무장가</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -183,6 +199,6 @@
     </div>
   </div>
 
-  <script src="/static/ladder.js?v=6"></script>
+  <script src="/static/ladder.js?v=17"></script>
 </body>
 </html>

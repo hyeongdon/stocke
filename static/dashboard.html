@@ -13,7 +13,7 @@
   <meta name="apple-mobile-web-app-title" content="Stocke">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="theme-color" content="#131720">
-  <link rel="stylesheet" href="/static/dashboard.css?v=120">
+  <link rel="stylesheet" href="/static/dashboard.css?v=123">
   <script src="/static/theme-sync.js?v=1"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
@@ -72,7 +72,17 @@
       <div class="auto-subpane active" id="auto-sub-monitor">
         <div class="auto-layout">
 
-        <!-- 1행: 수급 흐름(왼쪽) + 후보(오른쪽) -->
+        <!-- 1행: 보유 포지션 (전체 너비) -->
+        <div class="card compact-card positions-card">
+          <div class="card-head">
+            <div><h3>보유 포지션 <span class="hint" id="autoHoldingCount"></span></h3>
+              <div class="hint" style="margin-top:2px;">현재가·ATR·손절선 10초 갱신 · 비중=평가금액÷주식총평가</div></div>
+            <button class="btn sm" id="autoPosRefresh">새로고침</button>
+          </div>
+          <div class="card-body scroll positions-card-body" id="autoPositionsBody"><div class="empty"><span class="ico">💼</span>로딩 중...</div></div>
+        </div>
+
+        <!-- 2행: 수급 흐름(왼쪽) + 후보(오른쪽) -->
         <div class="auto-row-2 auto-row-top">
 
           <!-- 수급 흐름 (좌측) -->
@@ -190,16 +200,6 @@
           </div><!-- /.cand-tabs-card -->
 
         </div><!-- /.auto-row-2 (수급+후보) -->
-
-        <!-- 2행: 보유 포지션 (전체 너비) -->
-        <div class="card compact-card positions-card">
-          <div class="card-head">
-            <div><h3>보유 포지션 <span class="hint" id="autoHoldingCount"></span></h3>
-              <div class="hint" style="margin-top:2px;">현재가·ATR·손절선 10초 갱신 · 비중=평가금액÷주식총평가</div></div>
-            <button class="btn sm" id="autoPosRefresh">새로고침</button>
-          </div>
-          <div class="card-body scroll positions-card-body" id="autoPositionsBody"><div class="empty"><span class="ico">💼</span>로딩 중...</div></div>
-        </div>
 
         <!-- 3행: 체결 로그 + 실시간 활동 로그 -->
         <div class="auto-row-2 auto-row-logs">
@@ -404,6 +404,6 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/static/dashboard.js?v=180"></script>
+  <script src="/static/dashboard.js?v=183"></script>
 </body>
 </html>

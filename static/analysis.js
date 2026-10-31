@@ -132,6 +132,9 @@ function cellValue(col, row) {
   }
 }
 
+const DEFAULT_LIMIT = '1000';
+const DEFAULT_MIN_CAP = 1000; // 억원. 1000 = 1천억
+
 const PHONE_MQ = window.matchMedia('(max-width: 960px)');
 function phoneLayout() { return PHONE_MQ.matches; }
 function coarsePointer() { return window.matchMedia('(pointer: coarse)').matches; }
@@ -139,12 +142,26 @@ function coarsePointer() { return window.matchMedia('(pointer: coarse)').matches
 let filterUserOpen = false;
 let lastPhoneLayout = phoneLayout();
 
+function minCapInput() {
+  return $('fltMinCap').value.trim();
+}
+
+function fmtCapThreshold(v) {
+  const n = parseNum(v);
+  if (n === null) return '';
+  if (n >= EOK_PER_JO && n % EOK_PER_JO === 0) return `${n / EOK_PER_JO}조`;
+  if (n >= 1000 && n % 1000 === 0) return `${n / 1000}천억`;
+  return `${fmtNum(n, 0)}억`;
+}
+
 function hasActiveFilters() {
+  const minCap = parseNum(minCapInput());
   return Boolean(
     $('fltMarket').value
     || $('fltMaxPer').value.trim()
     || $('fltMaxPbr').value.trim()
     || $('fltMinRoe').value.trim()
+    || minCap !== DEFAULT_MIN_CAP
     || $('fltWeeklyRsiOnly').checked
     || $('fltDailyRsiOnly').checked
     || $('fltWeeklyWilliamsOnly').checked
@@ -153,7 +170,7 @@ function hasActiveFilters() {
     || $('fltMa2060Only').checked
     || $('fltExcludeBelowMa60').checked
     || ($('fltSortBy').value || 'market_cap') !== 'market_cap'
-    || ($('fltLimit').value || '500') !== '500'
+    || ($('fltLimit').value || DEFAULT_LIMIT) !== DEFAULT_LIMIT
   );
 }
 
@@ -165,6 +182,8 @@ function updateFilterSummary() {
   const maxPer = $('fltMaxPer').value.trim();
   const maxPbr = $('fltMaxPbr').value.trim();
   const minRoe = $('fltMinRoe').value.trim();
+  const minCap = minCapInput();
+  if (minCap) parts.push(`시총≥${fmtCapThreshold(minCap)}`);
   if (maxPer) parts.push(`PER≤${maxPer}`);
   if (maxPbr) parts.push(`PBR≤${maxPbr}`);
   if (minRoe) parts.push(`ROE≥${minRoe}`);
@@ -175,7 +194,7 @@ function updateFilterSummary() {
   if ($('fltBowlOnly').checked) parts.push('밥그릇');
   if ($('fltMa2060Only').checked) parts.push('2060');
   if ($('fltExcludeBelowMa60').checked) parts.push('추세이탈제외');
-  if (($('fltLimit').value || '500') !== '500') parts.push(`${$('fltLimit').value}건`);
+  if (($('fltLimit').value || DEFAULT_LIMIT) !== DEFAULT_LIMIT) parts.push(`${$('fltLimit').value}건`);
   el.textContent = parts.join(' · ');
 }
 
@@ -214,12 +233,14 @@ function buildQuery() {
   const p = new URLSearchParams();
   const market = $('fltMarket').value;
   if (market) p.set('market', market);
-  p.set('limit', $('fltLimit').value || '500');
+  p.set('limit', $('fltLimit').value || DEFAULT_LIMIT);
   p.set('sort_by', state.sortBy);
   p.set('sort_desc', state.sortDesc ? 'true' : 'false');
   const maxPer = $('fltMaxPer').value.trim();
   const maxPbr = $('fltMaxPbr').value.trim();
   const minRoe = $('fltMinRoe').value.trim();
+  const minCap = minCapInput();
+  if (minCap) p.set('min_market_cap', minCap);
   if (maxPer) p.set('max_per', maxPer);
   if (maxPbr) p.set('max_pbr', maxPbr);
   if (minRoe) p.set('min_roe', minRoe);
@@ -1523,7 +1544,8 @@ async function loadList(options) {
 function resetFilters() {
   $('fltMarket').value = '';
   $('fltSortBy').value = 'market_cap';
-  $('fltLimit').value = '500';
+  $('fltLimit').value = DEFAULT_LIMIT;
+  $('fltMinCap').value = String(DEFAULT_MIN_CAP);
   $('fltMaxPer').value = '';
   $('fltMaxPbr').value = '';
   $('fltMinRoe').value = '';

@@ -69,8 +69,34 @@ function fmtIndexPct(v) {
   const sign = n > 0 ? '+' : '';
   return `${sign}${n.toFixed(2)}%`;
 }
-function renderMarketIndexMiniChart(_it) {
-  return '';
+function renderMarketIndexMiniChart(it) {
+  const key = String((it && it.key) || '').toLowerCase();
+  if (!['kospi', 'kosdaq', 'nasdaq', 'dow'].includes(key)) return '';
+  const closes = (it.year_closes || []).map(Number).filter((n) => Number.isFinite(n) && n > 0);
+  if (closes.length < 2) return '';
+  const w = 96;
+  const h = 28;
+  const padX = 1.5;
+  const padY = 3;
+  const min = Math.min(...closes);
+  const max = Math.max(...closes);
+  const span = max - min || 1;
+  const xy = closes.map((v, i) => {
+    const x = padX + (i / (closes.length - 1)) * (w - padX * 2);
+    const y = padY + (1 - (v - min) / span) * (h - padY * 2);
+    return [x, y];
+  });
+  const pts = xy.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+  const base = (h - 1).toFixed(1);
+  const area = `${xy[0][0].toFixed(1)},${base} ${pts} ${xy[xy.length - 1][0].toFixed(1)},${base}`;
+  const first = closes[0];
+  const last = closes[closes.length - 1];
+  const chg = ((last - first) / first) * 100;
+  const dir = chg > 0.05 ? 'up' : (chg < -0.05 ? 'down' : 'flat');
+  const sign = chg > 0 ? '+' : '';
+  const tip = `최근 1년 ${sign}${chg.toFixed(1)}%`;
+  const [lx, ly] = xy[xy.length - 1];
+  return `<svg class="mi-mini-chart ${dir}" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(tip)}"><title>${esc(tip)}</title><polygon points="${area}"></polygon><polyline points="${pts}"></polyline><circle cx="${lx.toFixed(1)}" cy="${ly.toFixed(1)}" r="1.7"></circle></svg>`;
 }
 function fmtEok(v) {
   if (v == null || Number.isNaN(Number(v))) return '-';
@@ -88,30 +114,74 @@ function renderInvestorBadges(it) {
   ].filter(Boolean).join(' · ');
   return `<span class="mi-investor" title="${esc(tip)}">${chip('외', inv.foreign)}${chip('기', inv.institution)}</span>`;
 }
+function fearMood(it) {
+  const key = String((it && it.key) || '').toLowerCase();
+  if (key !== 'vix') return null;
+  const n = Number(it && it.value);
+  if (!Number.isFinite(n)) return null;
+  const bands = [
+    { max: 15, key: 'calm', label: '안정', range: '15 미만' },
+    { max: 20, key: 'normal', label: '보통', range: '15~20' },
+    { max: 25, key: 'watch', label: '경계', range: '20~25' },
+    { max: 30, key: 'uneasy', label: '불안', range: '25~30' },
+    { max: 40, key: 'fear', label: '공포', range: '30~40' },
+  ];
+  const hit = bands.find((b) => n < b.max) || { key: 'panic', label: '패닉', range: '40 이상' };
+  const title = `미국 변동성지수(VIX) ${fmtIndexValue(n)} · ${hit.label}(${hit.range}). 15 미만 안정 · 15~20 보통 · 20~25 경계 · 25~30 불안 · 30~40 공포 · 40 이상 패닉. 오를수록 미국 시장 불안`;
+  return {
+    key: hit.key,
+    html: `<span class="mi-mood mi-mood-${hit.key}">${hit.label}</span>`,
+    title,
+  };
+}
+function volHint(it) {
+  const key = String((it && it.key) || '').toLowerCase();
+  if (key !== 'vkospi') return null;
+  const n = Number(it && it.value);
+  const shown = Number.isFinite(n) ? fmtIndexValue(n) : '-';
+  return `한국 변동성지수(VKOSPI) ${shown}. 코스피200 옵션에 반영된 향후 30일 기대 변동성. 높을수록 하루 출렁임이 큼`;
+}
 function renderMarketIndexItem(it) {
   const dir = signClass(it.change_pct ?? it.change);
   const deltaParts = [];
   if (it.change != null) deltaParts.push(fmtIndexDelta(it.change));
   if (it.change_pct != null) deltaParts.push(`(${fmtIndexPct(it.change_pct)})`);
-  const title = String(it.key || '').toLowerCase() === 'vix' ? ' title="CBOE 변동성지수"' : '';
-  return `<span class="market-index-item ${dir}"${title}><span class="mi-label">${esc(it.label)}</span>${renderMarketIndexMiniChart(it)}<span class="mi-value">${fmtIndexValue(it.value)}</span><span class="mi-delta">${deltaParts.join(' ') || '-'}</span>${renderInvestorBadges(it)}</span>`;
+  const mood = fearMood(it);
+  const hint = mood ? mood.title : volHint(it);
+  const title = hint ? ` title="${esc(hint)}"` : '';
+  const moodHtml = mood ? mood.html : '';
+  const moodCls = mood ? ` mood-${mood.key}` : '';
+  const chart = renderMarketIndexMiniChart(it);
+  const yearCls = chart ? ' has-year' : '';
+  return `<span class="market-index-item ${dir}${moodCls}${yearCls}"${title}><span class="mi-head"><span class="mi-label">${esc(it.label)}</span>${moodHtml}</span>${chart}<span class="mi-value">${fmtIndexValue(it.value)}</span><span class="mi-delta">${deltaParts.join(' ') || '-'}</span>${renderInvestorBadges(it)}</span>`;
 }
+const MARKET_INDEX_GROUPS = [
+  { id: 'kr', label: '한국', keys: ['kospi', 'kosdaq'] },
+  { id: 'us', label: '미국', keys: ['nasdaq', 'dow'] },
+  { id: 'fear', label: '공포지수', keys: ['vix'] },
+  { id: 'vol', label: '변동성', keys: ['vkospi'] },
+];
 function renderMarketIndexStrip(items) {
   const list = items || [];
-  const vix = list.find(it => String(it.key || '').toLowerCase() === 'vix');
-  const rest = list.filter(it => it !== vix);
-  const html = [];
-  let stacked = false;
-  for (const it of rest) {
-    if (!stacked && vix && String(it.key || '').toLowerCase() === 'kospi') {
-      html.push(`<span class="market-index-stack">${renderMarketIndexItem(vix)}${renderMarketIndexItem(it)}</span>`);
-      stacked = true;
-    } else {
-      html.push(renderMarketIndexItem(it));
-    }
-  }
-  if (vix && !stacked) html.unshift(renderMarketIndexItem(vix));
-  return html.join('');
+  const byKey = new Map();
+  list.forEach((it) => {
+    const key = String((it && it.key) || '').toLowerCase();
+    if (key) byKey.set(key, it);
+  });
+  const used = new Set();
+  const groups = MARKET_INDEX_GROUPS.map((g) => {
+    const rows = g.keys.map((k) => byKey.get(k)).filter(Boolean);
+    rows.forEach((it) => used.add(it));
+    return { ...g, rows };
+  }).filter((g) => g.rows.length);
+  const rest = list.filter((it) => !used.has(it));
+  if (rest.length) groups.push({ id: 'other', label: '기타', rows: rest });
+  return groups.map((g) => (
+    `<section class="mi-group mi-group-${g.id}" aria-label="${esc(g.label)}">` +
+    `<span class="mi-group-label">${esc(g.label)}</span>` +
+    `<span class="mi-group-body">${g.rows.map((it) => renderMarketIndexItem(it)).join('')}</span>` +
+    `</section>`
+  )).join('');
 }
 function hmMinutes(t) {
   const m = /^(\d{1,2}):(\d{2})$/.exec(String(t || '').trim());

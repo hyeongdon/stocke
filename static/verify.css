@@ -104,6 +104,7 @@
   justify-content: space-between;
   gap: 8px;
 }
+.verify-market-indices .mi-mood { font-size: 10px; }
 .verify-market-indices .mi-ohlc {
   display: flex;
   justify-content: space-between;

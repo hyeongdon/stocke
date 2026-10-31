@@ -1461,6 +1461,21 @@ class KiwoomAPI:
         px = int(parsed.get("current_price") or 0)
         return px if px > 0 else None
 
+    def peek_cached_price(self, stock_code: str) -> Optional[int]:
+        """캐시에 남은 현재가. 네트워크 호출 없음."""
+        try:
+            stock_code = self.normalize_stock_code(stock_code)
+            cached = self._price_cache.get(stock_code)
+            if not cached:
+                return None
+            price, timestamp = cached
+            age = datetime.now().timestamp() - float(timestamp)
+            if age < self._price_cache_ttl and price:
+                return int(price)
+        except Exception:
+            return None
+        return None
+
     async def get_current_price(
         self, stock_code: str, *, priority=None, allow_off_hours: bool = False,
     ) -> Optional[int]:

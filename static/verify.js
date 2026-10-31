@@ -448,29 +448,54 @@ function renderMarketIndexItem(it, filterDate) {
   const intradayBars = it.intraday_bars && it.intraday_bars.length ? it.intraday_bars : null;
   const sparkBars = intradayBars
     || (it.bars && it.bars.length ? it.bars : [{ open: it.open, high: it.high, low: it.low, close: it.value }]);
-  const title = String(it.key || '').toLowerCase() === 'vix' ? ' title="CBOE 변동성지수"' : '';
-  return `<span class="market-index-item market-index-card ${dir}"${title}>
-    <span class="mi-top"><span class="mi-label">${esc(label)}</span><span class="mi-delta">${deltaParts.join(' ') || '-'}</span></span>
+  const mood = fearMood(it);
+  const hint = mood ? mood.title : volHint(it);
+  const title = hint ? ` title="${esc(hint)}"` : '';
+  const moodHtml = mood ? mood.html : '';
+  const moodCls = mood ? ` mood-${mood.key}` : '';
+  return `<span class="market-index-item market-index-card ${dir}${moodCls}"${title}>
+    <span class="mi-top"><span class="mi-head"><span class="mi-label">${esc(label)}</span>${moodHtml}</span><span class="mi-delta">${deltaParts.join(' ') || '-'}</span></span>
     ${ohlc}${hiLo}
     ${renderInvestorBadges(it)}
     ${renderIndexSpark(sparkBars, { intraday: !!intradayBars })}
   </span>`;
 }
+function fearMood(it) {
+  const key = String((it && it.key) || '').toLowerCase();
+  if (key !== 'vix') return null;
+  const n = Number(it && it.value);
+  if (!Number.isFinite(n)) return null;
+  const bands = [
+    { max: 15, key: 'calm', label: '안정', range: '15 미만' },
+    { max: 20, key: 'normal', label: '보통', range: '15~20' },
+    { max: 25, key: 'watch', label: '경계', range: '20~25' },
+    { max: 30, key: 'uneasy', label: '불안', range: '25~30' },
+    { max: 40, key: 'fear', label: '공포', range: '30~40' },
+  ];
+  const hit = bands.find((b) => n < b.max) || { key: 'panic', label: '패닉', range: '40 이상' };
+  const title = `미국 변동성지수(VIX) ${fmtIndexValue(n)} · ${hit.label}(${hit.range}). 15 미만 안정 · 15~20 보통 · 20~25 경계 · 25~30 불안 · 30~40 공포 · 40 이상 패닉. 오를수록 미국 시장 불안`;
+  return {
+    key: hit.key,
+    html: `<span class="mi-mood mi-mood-${hit.key}">${hit.label}</span>`,
+    title,
+  };
+}
+function volHint(it) {
+  const key = String((it && it.key) || '').toLowerCase();
+  if (key !== 'vkospi') return null;
+  const n = Number(it && it.value);
+  const shown = Number.isFinite(n) ? fmtIndexValue(n) : '-';
+  return `한국 변동성지수(VKOSPI) ${shown}. 코스피200 옵션에 반영된 향후 30일 기대 변동성. 높을수록 하루 출렁임이 큼`;
+}
 function renderMarketIndexStrip(items, filterDate) {
   const list = items || [];
-  const vix = list.find((it) => String(it.key || '').toLowerCase() === 'vix');
-  const rest = list.filter((it) => it !== vix);
-  const html = [];
-  let stacked = false;
-  for (const it of rest) {
-    if (!stacked && vix && String(it.key || '').toLowerCase() === 'kospi') {
-      html.push(`<span class="market-index-stack">${renderMarketIndexItem(vix, filterDate)}${renderMarketIndexItem(it, filterDate)}</span>`);
-      stacked = true;
-    } else {
-      html.push(renderMarketIndexItem(it, filterDate));
-    }
+  const keyOf = (it) => String((it && it.key) || '').toLowerCase();
+  const fear = list.filter((it) => keyOf(it) === 'vix');
+  const rest = list.filter((it) => keyOf(it) !== 'vix');
+  const html = rest.map((it) => renderMarketIndexItem(it, filterDate));
+  if (fear.length) {
+    html.unshift(`<span class="market-index-stack">${fear.map((it) => renderMarketIndexItem(it, filterDate)).join('')}</span>`);
   }
-  if (vix && !stacked) html.unshift(renderMarketIndexItem(vix, filterDate));
   return html.join('');
 }
 let _indexReqSeq = 0;
@@ -480,7 +505,7 @@ async function loadMarketIndices() {
   const dateParam = getDateFilterParam();
   const req = ++_indexReqSeq;
   if (!dateParam || dateParam === 'this_week') {
-    el.innerHTML = '<span class="market-index-skeleton">거래일(하루)을 고르면 VIX·코스피·코스닥·나스닥·다우가 표시됩니다</span>';
+    el.innerHTML = '<span class="market-index-skeleton">거래일(하루)을 고르면 VIX·VKOSPI·코스피·코스닥·나스닥·다우가 표시됩니다</span>';
     return;
   }
   el.innerHTML = '<span class="market-index-skeleton">지수 불러오는 중…</span>';

@@ -103,6 +103,7 @@
 .ld-chart text { font-size: 10px; fill: var(--muted); }
 .ld-chart-legend { display: flex; gap: 10px; flex-wrap: wrap; font-size: 10.5px; color: var(--muted); margin: 4px 0 12px; }
 .ld-chart-legend span::before { content: ''; display: inline-block; width: 14px; height: 2px; margin-right: 4px; vertical-align: middle; background: currentColor; }
+.ld-chart-legend .ld-ma-thick::before { height: 4px; }
 
 .ld-steps tbody tr { cursor: default; }
 .ld-steps tr.filled td { color: var(--text); }
@@ -136,6 +137,16 @@
   background: var(--bg-elevated); border: 1px solid var(--border); color: var(--text);
   border-radius: 6px; padding: 6px 8px; font-size: 12px;
 }
+.ld-form input.ld-money { text-align: right; font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
+.ld-entry-rsi.is-off { opacity: 0.42; }
+.ld-form label.ld-alloc-grow[hidden],
+.ld-form label.ld-first-boost[hidden],
+.ld-form label.ld-stock-search[hidden],
+#editLockHint[hidden] { display: none; }
+.ld-form input:disabled, .ld-form input:read-only { cursor: not-allowed; color: var(--muted); }
+.ld-editable { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+.ld-editable:hover { color: var(--amber); }
+.ld-table td .btn.sm { margin-left: 4px; vertical-align: middle; }
 .ld-search { position: relative; display: flex; flex-direction: column; }
 .ld-suggest {
   position: absolute; top: 100%; left: 0; right: 0; z-index: 10; margin: 2px 0 0; padding: 2px 0; list-style: none;

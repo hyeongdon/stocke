@@ -178,6 +178,7 @@ def list_latest(
     max_per: Optional[float] = None,
     max_pbr: Optional[float] = None,
     min_roe: Optional[float] = None,
+    min_market_cap: Optional[float] = None,
     stock_codes: Optional[List[str]] = None,
     exclude_codes: Optional[List[str]] = None,
 ) -> Dict:
@@ -199,6 +200,11 @@ def list_latest(
             q = q.filter(FundamentalSnapshot.pbr.isnot(None), FundamentalSnapshot.pbr <= max_pbr)
         if min_roe is not None:
             q = q.filter(FundamentalSnapshot.roe.isnot(None), FundamentalSnapshot.roe >= min_roe)
+        if min_market_cap is not None:
+            q = q.filter(
+                FundamentalSnapshot.market_cap.isnot(None),
+                FundamentalSnapshot.market_cap >= min_market_cap,
+            )
         if stock_codes is not None:
             q = q.filter(FundamentalSnapshot.stock_code.in_(stock_codes))
         if exclude_codes:

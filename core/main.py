@@ -2114,6 +2114,7 @@ async def get_fundamentals(
     max_per: Optional[float] = None,
     max_pbr: Optional[float] = None,
     min_roe: Optional[float] = None,
+    min_market_cap: Optional[float] = None,
     weekly_rsi_only: bool = False,
     daily_rsi_only: bool = False,
     weekly_williams_only: bool = False,
@@ -2173,6 +2174,7 @@ async def get_fundamentals(
             max_per=max_per,
             max_pbr=max_pbr,
             min_roe=min_roe,
+            min_market_cap=min_market_cap,
             stock_codes=stock_codes,
             exclude_codes=exclude_codes,
         )
@@ -3031,7 +3033,7 @@ async def _attach_index_intraday_bars(payload: dict, date: str) -> None:
 
 @app.get("/market/indices")
 async def market_indices_api(force: bool = False, date: Optional[str] = None):
-    """주요 지수(VIX·코스피·코스닥·나스닥·다우) 스냅샷. date=YYYY-MM-DD 이면 해당일 종가."""
+    """주요 지수(VIX·VKOSPI·코스피·코스닥·나스닥·다우) 스냅샷. date=YYYY-MM-DD 이면 해당일 종가."""
     try:
         from utils.market_indices import fetch_market_indices, fetch_market_indices_for_date
 
@@ -6367,6 +6369,7 @@ class LadderPlanRequest(BaseModel):
 class LadderUpdateRequest(BaseModel):
     budget: Optional[int] = None
     memo: Optional[str] = None
+    name: Optional[str] = None
     profile: Optional[Dict[str, Any]] = None
 
 
@@ -6376,6 +6379,10 @@ class LadderToggleRequest(BaseModel):
 
 class LadderSellRequest(BaseModel):
     mode: str = "half"
+
+
+class LadderDecideRequest(BaseModel):
+    action: str
 
 
 def _ladder_call(fn, *args, **kwargs):
@@ -6411,12 +6418,18 @@ async def ladder_toggle(req: LadderToggleRequest):
 
 
 @app.get("/api/ladder/preview")
-async def ladder_preview_api(price: int, budget: int, step_pct: float = 5.0, max_steps: int = 10):
+async def ladder_preview_api(price: int, budget: int, step_pct: float = 5.0, max_steps: int = 10,
+                             alloc_mode: str = "equal", alloc_ratio: float = 1.2,
+                             first_boost: bool = False, first_boost_pct: float = 20.0):
     from utils.rsi_ladder import ladder_preview
 
     if price <= 0 or budget <= 0:
         raise HTTPException(status_code=400, detail="가격·예산을 입력하세요")
-    return {"rows": ladder_preview(price, budget, step_pct, max(1, min(20, max_steps)))}
+    mode = alloc_mode if alloc_mode in ("equal", "grow") else "equal"
+    return {"rows": ladder_preview(
+        price, budget, step_pct, max(1, min(20, max_steps)), mode, alloc_ratio,
+        first_boost, first_boost_pct,
+    )}
 
 
 @app.get("/api/ladder/quote/{code}")
@@ -6498,14 +6511,23 @@ async def ladder_create(req: LadderPlanRequest):
 
 @app.patch("/api/ladder/plans/{plan_id}")
 async def ladder_update(plan_id: str, req: LadderUpdateRequest):
-    return _ladder_call(rsi_ladder_scheduler.update_plan, plan_id,
-                        budget=req.budget, memo=req.memo, profile=req.profile)
+    plan = _ladder_call(rsi_ladder_scheduler.update_plan, plan_id,
+                        budget=req.budget, memo=req.memo, profile=req.profile, name=req.name)
+    log_activity("SYSTEM", f"분할매수 설정 변경 {plan['name']}({plan['code']})", "info",
+                 stock_code=plan["code"])
+    return plan
 
 
 @app.delete("/api/ladder/plans/{plan_id}")
 async def ladder_delete(plan_id: str):
     _ladder_call(rsi_ladder_scheduler.delete, plan_id)
     return {"ok": True}
+
+
+@app.post("/api/ladder/plans/{plan_id}/sell-decide")
+async def ladder_sell_decide(plan_id: str, req: LadderDecideRequest):
+    """익절 유예 중 바로 익절(go) 또는 이번 익절 취소(cancel)."""
+    return _ladder_call(rsi_ladder_scheduler.decide_sell, plan_id, req.action)
 
 
 @app.post("/api/ladder/plans/{plan_id}/{action}")

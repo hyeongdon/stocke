@@ -1,9 +1,10 @@
 """RSI 저점 분할매수(-5% 사다리) 스케줄러 (docs/PRD_RSI_LADDER.md).
 
 - 장중(09:00~15:20) 10분마다 가격 감시: 현재가 ≤ 다음 트리거면 추가 매수 (하루 1단계)
-- 15:05~15:20 하루 1회 판정: 현재가 + 확정 일봉으로 1차 진입 / 추가 매수 / S0~S3 매도 결정
+- 15:05~15:20 하루 1회 판정: 현재가 + 확정 일봉으로 1차 진입 / 추가 매수 / 무장 후 S1~S3 매도 결정
 - 매수: 기존 매수 신호 경로(PendingBuySignal → BuyOrderExecutor), strategy="rsi_ladder"
-- 매도: 계획에 pending_sell 기록 → StopLossManager._monitor_ladder_exit 가 정규장에 지정 수량 매도
+- 매도: 익절(S1~S3)은 텔레그램 알림 후 3분 유예, 취소 없으면 pending_sell QUEUED
+  → StopLossManager._monitor_ladder_exit 가 정규장에 지정 수량 매도. 수동 매도는 바로 QUEUED
 - 10초 루프: 체결(PositionBuyFill · SellOrder) 대조로 계획 상태 갱신
 - 15:40 장후 요약 텔레그램
 """
@@ -11,17 +12,22 @@ from __future__ import annotations
 
 import asyncio
 import html
+import json
 import logging
 import time
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from utils.datetime_kst import now_kst
 from utils.rsi_ladder import (
     OPEN_STATUSES,
+    SELL_CONFIRM_SEC,
     SELL_RULE_LABEL,
     STRATEGY_KEY,
     auto_fills,
+    cancel_sell_hold,
+    confirm_sell_hold,
     bars_with_today,
     evaluate_add_buy,
     evaluate_entry,
@@ -29,10 +35,12 @@ from utils.rsi_ladder import (
     execution_avg_price,
     get_ladder_store,
     judge_plan,
+    is_take_profit,
     last_fill_price,
     merge_profile,
     moving_averages,
     next_trigger,
+    release_sell_hold,
     step_qty,
 )
 
@@ -47,6 +55,10 @@ WATCH_END_HM = JUDGE_END_HM
 _WATCH_INTERVAL_SEC = 600
 _DAILY_MAX_BARS = 400
 _SNAPSHOT_TTL = 60.0
+_BARS_TTL_SEC = 12 * 3600
+_BAR_CACHE_PATH = Path(__file__).resolve().parents[1] / "logs" / "_ladder_daily_bars.json"
+_WARM_COOLDOWN_SEC = 20.0
+_QUOTE_REFRESH_SEC = 60.0
 _BUY_PENDING_TIMEOUT_MIN = 30
 _SELL_SENT_RETRY_MIN = 3
 _EXEC_PX_INTERVAL_SEC = 30
@@ -124,6 +136,14 @@ class RsiLadderScheduler:
         self._exec_px_after = 0.0
         self._watch_after = 0.0
         self._snap_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+        self._bar_cache: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
+        self._bar_disk_loaded = False
+        self._warm_inflight: set = set()
+        self._warm_after = 0.0
+        self._quote_after = 0.0
+        self._quote_on = False
+        self._tg_offset: Optional[int] = None
+        self._tg_primed = False
 
     # ───────────────────────── lifecycle ─────────────────────────
 
@@ -163,6 +183,7 @@ class RsiLadderScheduler:
         if not self.my_plans(open_only=True):
             return
         self.reconcile()
+        await self._advance_sell_holds()
         await self._refine_fill_prices()
         now = now_kst()
         if not store.enabled or not is_krx_trading_day(now):
@@ -219,38 +240,188 @@ class RsiLadderScheduler:
             break
         return mine, others
 
-    async def _bars(self, code: str, now: datetime) -> List[Dict[str, Any]]:
+    @staticmethod
+    def _bars_are_fresh(fetched_at: float, bars: List[Dict[str, Any]], now: datetime) -> bool:
+        """확정 일봉은 장중에 거의 안 변한다. 장마감 뒤에만 당일 봉이 들어갔는지 본다."""
+        from utils.market_hours import is_krx_trading_day
+
+        if not bars or time.time() - float(fetched_at) > _BARS_TTL_SEC:
+            return False
+        if is_krx_trading_day(now) and _hm(now) >= (15, 40):
+            if bars[-1]["date"] < now.date():
+                return False
+        return True
+
+    def _load_bar_disk(self) -> None:
+        if self._bar_disk_loaded:
+            return
+        self._bar_disk_loaded = True
+        if not _BAR_CACHE_PATH.exists():
+            return
+        try:
+            from utils.rwm_bowl import normalize_daily_bars
+
+            raw = json.loads(_BAR_CACHE_PATH.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning(f"🪜 [LADDER] 일봉 캐시 읽기 실패: {e}")
+            return
+        if not isinstance(raw, dict):
+            return
+        for code, ent in raw.items():
+            if not isinstance(ent, dict):
+                continue
+            try:
+                fetched = float(ent.get("fetched_at") or 0)
+            except (TypeError, ValueError):
+                continue
+            bars = normalize_daily_bars(ent.get("bars") or [])
+            if bars:
+                self._bar_cache[str(code)] = (fetched, bars)
+
+    def _save_bar_disk(self) -> None:
+        payload = {}
+        for code, (fetched, bars) in self._bar_cache.items():
+            payload[code] = {
+                "fetched_at": fetched,
+                "bars": [{**b, "date": b["date"].isoformat()} for b in bars],
+            }
+        try:
+            _BAR_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _BAR_CACHE_PATH.with_suffix(".tmp")
+            tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(_BAR_CACHE_PATH)
+        except Exception as e:
+            logger.warning(f"🪜 [LADDER] 일봉 캐시 저장 실패: {e}")
+
+    def _bar_entry(self, code: str, now: datetime) -> Tuple[Optional[List[Dict[str, Any]]], bool]:
+        self._load_bar_disk()
+        ent = self._bar_cache.get(code)
+        if not ent or not ent[1]:
+            return None, False
+        return ent[1], self._bars_are_fresh(ent[0], ent[1], now)
+
+    def _schedule_warm(self, codes: List[str]) -> None:
+        """화면 응답을 막지 않고 일봉을 뒤에서 받는다. 실패해도 바로 다시 치지 않는다."""
+        pending = []
+        for code in codes:
+            if code and code not in self._warm_inflight and code not in pending:
+                pending.append(code)
+        if not pending or time.time() < self._warm_after:
+            return
+        self._warm_after = time.time() + _WARM_COOLDOWN_SEC
+        self._warm_inflight.update(pending)
+
+        async def _run() -> None:
+            now = now_kst()
+            try:
+                from utils.market_hours import is_krx_session
+
+                for code in pending:
+                    try:
+                        await self._bars(code, now, allow_fetch=True)
+                        if is_krx_session(now):
+                            await self._price(code, allow_fetch=True)
+                    except Exception as e:
+                        logger.warning(f"🪜 [LADDER] 화면용 시세 갱신 실패 {code}: {e}")
+                    finally:
+                        self._warm_inflight.discard(code)
+                self._snap_cache.clear()
+                if is_krx_session(now):
+                    self._quote_after = time.time() + _QUOTE_REFRESH_SEC
+            except Exception as e:
+                logger.warning(f"🪜 [LADDER] 화면용 시세 갱신 실패: {e}")
+                self._warm_inflight.difference_update(pending)
+
+        try:
+            asyncio.get_running_loop()
+            self._warm_task = asyncio.create_task(_run())
+        except RuntimeError:
+            self._warm_inflight.difference_update(pending)
+
+    def _schedule_quotes(self, codes: List[str], now: datetime) -> None:
+        """장중 현재가만 뒤에서 갱신. 화면 요청은 캐시·보유 현재가로 바로 그린다."""
+        from utils.market_hours import is_krx_session
+
+        if not codes or not is_krx_session(now) or self._quote_on or time.time() < self._quote_after:
+            return
+        self._quote_after = time.time() + _QUOTE_REFRESH_SEC
+        self._quote_on = True
+        uniq = list(dict.fromkeys(codes))
+
+        async def _run() -> None:
+            try:
+                for code in uniq:
+                    await self._price(code, allow_fetch=True)
+                self._snap_cache.clear()
+            except Exception as e:
+                logger.warning(f"🪜 [LADDER] 현재가 갱신 실패: {e}")
+            finally:
+                self._quote_on = False
+
+        try:
+            asyncio.get_running_loop()
+            self._quote_task = asyncio.create_task(_run())
+        except RuntimeError:
+            self._quote_on = False
+
+    async def _bars(self, code: str, now: datetime, *, allow_fetch: bool = True) -> List[Dict[str, Any]]:
+        """확정 일봉. 화면 로딩(allow_fetch=False)은 저장된 봉만 쓰고, 없으면 빈 목록."""
+        cached, fresh = self._bar_entry(code, now)
+        if fresh:
+            return cached or []
+        if not allow_fetch:
+            return cached or []
         from api.kiwoom_api import kiwoom_api
         from utils.rwm_bowl import drop_unconfirmed_daily, normalize_daily_bars
 
         raw = await kiwoom_api.get_stock_chart_data(
-            code, "1D", max_bars=_DAILY_MAX_BARS, allow_off_hours=True, cache_ttl_sec=60,
+            code, "1D", max_bars=_DAILY_MAX_BARS, allow_off_hours=True,
         )
-        return drop_unconfirmed_daily(normalize_daily_bars(raw or []), now.replace(tzinfo=None))
+        bars = drop_unconfirmed_daily(normalize_daily_bars(raw or []), now.replace(tzinfo=None))
+        if not bars:
+            return cached or []
+        self._bar_cache[code] = (time.time(), bars)
+        self._save_bar_disk()
+        return bars
 
-    @staticmethod
-    async def _price(code: str) -> Optional[int]:
+    async def _price(self, code: str, *, allow_fetch: bool = True) -> Optional[int]:
         from api.kiwoom_api import kiwoom_api
 
         try:
+            hit = kiwoom_api.peek_cached_price(code)
+            if hit:
+                return hit
+            if not allow_fetch:
+                return None
             px = await kiwoom_api.get_current_price(code, allow_off_hours=True)
             return int(px) if px else None
         except Exception:
             return None
 
-    async def _market_inputs(self, code: str, now: datetime):
-        """(현재가, 판정용 일봉(당일 임시봉 포함), 주봉용 확정 일봉)."""
-        confirmed = await self._bars(code, now)
-        price = await self._price(code)
+    async def _market_inputs(self, code: str, now: datetime, *, allow_fetch: bool = True):
+        """(현재가, 판정용 일봉, 주봉용 확정 일봉, 현재가가 장중 시세인지).
+
+        휴장에는 마지막 확정 종가를 쓰고 시세 API는 호출하지 않는다.
+        당일 임시봉은 거래일에만 붙인다.
+        """
+        from utils.market_hours import is_krx_session, is_krx_trading_day
+
+        confirmed = await self._bars(code, now, allow_fetch=allow_fetch)
+        price = None
+        price_live = False
+        if is_krx_session(now):
+            price = await self._price(code, allow_fetch=allow_fetch)
+            price_live = bool(price)
         if not price and confirmed:
             price = int(confirmed[-1]["close"])
         today = now.date()
-        if confirmed and confirmed[-1]["date"] == today:
+        use_today = bool(price) and is_krx_trading_day(now) and _hm(now) >= (9, 0)
+        if use_today:
             bars = bars_with_today(confirmed, today, price)
         else:
-            bars = bars_with_today(confirmed, today, price) if price else list(confirmed)
-        weekly = [b for b in confirmed if b["date"] < today] or confirmed
-        return price, bars, weekly
+            bars = [b for b in confirmed if b["date"] <= today]
+        weekly = [b for b in confirmed if b["date"] < today] or list(confirmed)
+        return price, bars, weekly, price_live
 
     @staticmethod
     async def resolve_name(code: str) -> str:
@@ -301,7 +472,7 @@ class RsiLadderScheduler:
         for plan in self.my_plans(open_only=True):
             code = plan["code"]
             try:
-                price, bars, weekly = await self._market_inputs(code, now)
+                price, bars, weekly, _live = await self._market_inputs(code, now)
             except Exception as e:
                 results.append({"plan_id": plan["id"], "code": code, "error": f"시세 조회 실패: {e}"})
                 continue
@@ -334,9 +505,11 @@ class RsiLadderScheduler:
                 row["notes"].append("이전 매도 대기 중 — 매도 판정 보류")
             elif res["sells"]:
                 plan["sell_flags"] = ex["flags"]
-                self._queue_sell(plan, [s["rule"] for s in res["sells"]], sum(s["qty"] for s in res["sells"]),
-                                 price, hold)
-                if any(s["rule"] in ("S1", "S2", "S3") for s in res["sells"]):
+                rules = [s["rule"] for s in res["sells"]]
+                before = plan.get("status")
+                self._queue_sell(plan, rules, sum(s["qty"] for s in res["sells"]), price, hold,
+                                 grace=is_take_profit(rules), status_before=before)
+                if is_take_profit(rules):
                     plan["status"] = "EXITING"
             elif res["buy"]:
                 b = res["buy"]
@@ -415,19 +588,209 @@ class RsiLadderScheduler:
         )
         return True, msg
 
-    def _queue_sell(self, plan: Dict[str, Any], rules: List[str], qty: int, price: int, hold: int) -> None:
+    def _queue_sell(self, plan: Dict[str, Any], rules: List[str], qty: int, price: int, hold: int, *,
+                    grace: bool = False, status_before: Optional[str] = None) -> None:
         store = get_ladder_store()
-        plan["pending_sell"] = {
-            "rules": rules, "qty": int(qty), "price": int(price), "hold": int(hold), "status": "QUEUED",
-            "created_at": now_kst().isoformat(timespec="seconds"),
+        now = now_kst()
+        pending: Dict[str, Any] = {
+            "rules": rules, "qty": int(qty), "price": int(price), "hold": int(hold),
+            "status": "HOLD" if grace else "QUEUED",
+            "created_at": now.isoformat(timespec="seconds"),
         }
+        if grace:
+            pending["execute_at"] = (now + timedelta(seconds=SELL_CONFIRM_SEC)).isoformat(timespec="seconds")
+            pending["status_before"] = status_before
+        plan["pending_sell"] = pending
         labels = " + ".join(SELL_RULE_LABEL.get(r, r) for r in rules)
+        if grace:
+            store.add_event(plan["id"], "SELL_HOLD",
+                            f"익절 유예 {SELL_CONFIRM_SEC // 60}분 — {qty}주 / 보유 {hold}주 — {labels}")
+            _log(f"분할매수 {plan.get('name')} 익절 유예 {qty}주 — {labels}", stock_code=plan["code"])
+            asyncio.create_task(self._notify_sell_hold(plan))
+            return
         store.add_event(plan["id"], "SELL_QUEUED", f"매도 대기 {qty}주 / 보유 {hold}주 — {labels}")
         _log(f"분할매수 {plan.get('name')} 매도 대기 {qty}주 — {labels}", stock_code=plan["code"])
         asyncio.create_task(_send_telegram(
             f"<b>[분할매수 · 매도]</b> {html.escape(plan.get('name') or '')} ({plan['code']}) "
             f"{qty}주 / 보유 {hold}주 @ {_won(price)}\n{html.escape(labels)}"
         ))
+
+    async def _notify_sell_hold(self, plan: Dict[str, Any]) -> None:
+        ps = plan.get("pending_sell") or {}
+        if ps.get("status") != "HOLD":
+            return
+        rules = list(ps.get("rules") or [])
+        labels = " + ".join(SELL_RULE_LABEL.get(r, r) for r in rules)
+        name = html.escape(plan.get("name") or "")
+        text = (
+            f"<b>[분할매수 · 익절 확인]</b> {name} ({plan['code']})\n"
+            f"{html.escape(labels)}\n"
+            f"{int(ps.get('qty') or 0)}주 / 보유 {int(ps.get('hold') or 0)}주 @ {_won(ps.get('price'))}\n"
+            f"{SELL_CONFIRM_SEC // 60}분 안에 취소하지 않으면 익절합니다."
+        )
+        markup = {"inline_keyboard": [[
+            {"text": "이번 익절 취소", "callback_data": f"ld:{plan['id']}:no"},
+            {"text": "바로 익절", "callback_data": f"ld:{plan['id']}:go"},
+        ]]}
+        try:
+            from notifications.telegram_notifier import TelegramNotifier
+
+            tg = TelegramNotifier()
+            if not tg.is_configured():
+                return
+            mid = await asyncio.to_thread(tg.send_message_id, text, "HTML", markup)
+        except Exception as e:
+            logger.debug(f"[LADDER] 익절 확인 알림 실패: {e}")
+            return
+        if not mid:
+            return
+        current = plan.get("pending_sell") or {}
+        if current.get("status") == "HOLD" and current.get("created_at") == ps.get("created_at"):
+            current["tg_message_id"] = int(mid)
+            get_ladder_store().save()
+
+    async def _advance_sell_holds(self) -> None:
+        """유예가 끝난 익절은 주문 대기로 넘기고, 텔레그램 버튼 응답을 반영한다."""
+        try:
+            released = self._release_due_holds()
+            await self._poll_sell_decisions()
+        except Exception as e:
+            logger.debug(f"[LADDER] 익절 유예 처리 실패: {e}")
+            return
+        for plan in released:
+            ps = plan.get("pending_sell") or {}
+            labels = " + ".join(SELL_RULE_LABEL.get(r, r) for r in (ps.get("rules") or []))
+            await _send_telegram(
+                f"<b>[분할매수 · 익절 진행]</b> {html.escape(plan.get('name') or '')} ({plan['code']})\n"
+                f"응답 없음 — {int(ps.get('qty') or 0)}주 익절합니다.\n{html.escape(labels)}"
+            )
+
+    def _release_due_holds(self) -> List[Dict[str, Any]]:
+        store = get_ladder_store()
+        now = now_kst()
+        released: List[Dict[str, Any]] = []
+        changed = False
+        with store.lock:
+            for plan in self.my_plans(open_only=True):
+                if not release_sell_hold(plan, now):
+                    continue
+                ps = plan.get("pending_sell") or {}
+                labels = " + ".join(SELL_RULE_LABEL.get(r, r) for r in (ps.get("rules") or []))
+                store.add_event(plan["id"], "SELL_QUEUED",
+                                f"유예 종료 — 익절 {int(ps.get('qty') or 0)}주 — {labels}", save=False)
+                _log(f"분할매수 {plan.get('name')} 유예 종료, 익절 진행", stock_code=plan["code"])
+                released.append(plan)
+                changed = True
+            if changed:
+                store.save()
+        return released
+
+    def decide_sell(self, plan_id: str, action: str) -> Dict[str, Any]:
+        """유예 중 익절을 바로 실행하거나 취소한다. action: go | cancel"""
+        store = get_ladder_store()
+        act = (action or "").strip().lower()
+        with store.lock:
+            plan = self._get_plan(plan_id)
+            ps = dict(plan.get("pending_sell") or {})
+            if act == "cancel":
+                if not cancel_sell_hold(plan):
+                    raise LadderError("취소할 익절 유예가 없습니다")
+                labels = " + ".join(SELL_RULE_LABEL.get(r, r) for r in (ps.get("rules") or []))
+                store.add_event(plan["id"], "SELL_CANCEL", f"익절 취소 — {labels}")
+                result = {"action": "cancel", "plan_id": plan_id}
+            elif act == "go":
+                if not confirm_sell_hold(plan):
+                    raise LadderError("바로 진행할 익절 유예가 없습니다")
+                labels = " + ".join(SELL_RULE_LABEL.get(r, r) for r in (ps.get("rules") or []))
+                store.add_event(plan["id"], "SELL_QUEUED", f"바로 익절 {int(ps.get('qty') or 0)}주 — {labels}")
+                result = {"action": "go", "plan_id": plan_id, "qty": int(ps.get("qty") or 0)}
+            else:
+                raise LadderError("알 수 없는 익절 결정")
+        _log(
+            f"분할매수 {plan.get('name')} " + ("익절 취소" if act == "cancel" else "바로 익절") + f" — {labels}",
+            stock_code=plan["code"],
+        )
+        self._clear_sell_buttons(ps)
+        if act == "cancel":
+            asyncio.create_task(_send_telegram(
+                f"<b>[분할매수 · 익절 취소]</b> {html.escape(plan.get('name') or '')} ({plan['code']})\n"
+                f"이번 익절을 건너뜁니다.\n{html.escape(labels)}"
+            ))
+        else:
+            asyncio.create_task(_send_telegram(
+                f"<b>[분할매수 · 바로 익절]</b> {html.escape(plan.get('name') or '')} ({plan['code']})\n"
+                f"{int(ps.get('qty') or 0)}주 익절합니다.\n{html.escape(labels)}"
+            ))
+        return result
+
+    @staticmethod
+    def _clear_sell_buttons(pending: Dict[str, Any]) -> None:
+        mid = pending.get("tg_message_id")
+        if not mid:
+            return
+        try:
+            from notifications.telegram_notifier import TelegramNotifier
+
+            TelegramNotifier().clear_reply_markup(int(mid))
+        except Exception:
+            pass
+
+    async def _poll_sell_decisions(self) -> None:
+        if not any((p.get("pending_sell") or {}).get("status") == "HOLD" for p in self.my_plans(open_only=True)):
+            return
+        try:
+            from core.config import Config
+            from notifications.telegram_notifier import TelegramNotifier
+
+            tg = TelegramNotifier()
+            if not tg.is_configured():
+                return
+            store = get_ladder_store()
+            saved = store.data.get("tg_update_offset")
+            if not self._tg_primed and self._tg_offset is None:
+                if saved == "ready":
+                    self._tg_primed = True
+                elif saved not in (None, ""):
+                    self._tg_offset = int(saved)
+                    self._tg_primed = True
+            updates = await asyncio.to_thread(tg.get_updates, self._tg_offset)
+        except Exception as e:
+            logger.debug(f"[LADDER] 텔레그램 버튼 조회 실패: {e}")
+            return
+        store = get_ladder_store()
+        if not self._tg_primed:
+            self._tg_primed = True
+            if updates:
+                self._tg_offset = max(int(u.get("update_id") or 0) for u in updates) + 1
+            store.data["tg_update_offset"] = self._tg_offset if self._tg_offset else "ready"
+            store.save()
+            return
+        if not updates:
+            return
+        chat = str(Config.TELEGRAM_CHAT_ID or "")
+        for upd in updates:
+            uid = int(upd.get("update_id") or 0)
+            if uid:
+                self._tg_offset = uid + 1
+            cq = upd.get("callback_query") or {}
+            data = str(cq.get("data") or "")
+            msg = cq.get("message") or {}
+            from_chat = str((msg.get("chat") or {}).get("id") or "")
+            parts = data.split(":")
+            if from_chat != chat or len(parts) != 3 or parts[0] != "ld" or parts[2] not in ("go", "no"):
+                if cq.get("id"):
+                    await asyncio.to_thread(tg.answer_callback, cq["id"], "처리할 수 없는 버튼입니다")
+                continue
+            action = "cancel" if parts[2] == "no" else "go"
+            try:
+                self.decide_sell(parts[1], action)
+                note = "이번 익절을 취소했습니다" if action == "cancel" else "바로 익절합니다"
+            except LadderError:
+                note = "이미 처리된 익절입니다"
+            if cq.get("id"):
+                await asyncio.to_thread(tg.answer_callback, cq["id"], note)
+        store.data["tg_update_offset"] = self._tg_offset
+        store.save()
 
     # ───────────────────────── 체결 대조 ─────────────────────────
 
@@ -666,9 +1029,15 @@ class RsiLadderScheduler:
         return result
 
     def update_plan(self, plan_id: str, *, budget: Optional[int] = None, memo: Optional[str] = None,
-                    profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                    profile: Optional[Dict[str, Any]] = None, name: Optional[str] = None) -> Dict[str, Any]:
         store = get_ladder_store()
         plan = self._get_plan(plan_id)
+        if plan.get("fills") or plan.get("pending_buy"):
+            raise LadderError("매수가 시작되어 수정할 수 없습니다")
+        if plan.get("status") != "RSI_WAIT":
+            raise LadderError("진입 대기일 때만 수정할 수 있습니다")
+        if name is not None and str(name).strip():
+            plan["name"] = str(name).strip()
         if budget is not None and int(budget) > 0:
             plan["budget"] = int(budget)
         if memo is not None:
@@ -729,10 +1098,10 @@ class RsiLadderScheduler:
         price = await self._price(plan["code"])
         if not price:
             raise LadderError("현재가 조회 실패")
-        qty = step_qty(plan, price)
         n_auto = len(auto_fills(plan))
         max_steps = int(merge_profile(plan.get("profile"))["max_steps"])
         extra = n_auto >= max_steps
+        qty = step_qty(plan, price, step=0 if extra else n_auto + 1)
         step = 0 if extra else n_auto + 1
         reason = "수동 추가 매수 (사다리 소진 후)" if extra else f"{step}차 수동 매수"
         async with self._lock:
@@ -747,7 +1116,7 @@ class RsiLadderScheduler:
         plan = self._get_plan(plan_id)
         if not is_krx_session():
             raise LadderError("정규장에만 수동 매도할 수 있습니다")
-        if (plan.get("pending_sell") or {}).get("status") in ("QUEUED", "SENT"):
+        if (plan.get("pending_sell") or {}).get("status") in ("HOLD", "QUEUED", "SENT"):
             raise LadderError("이미 매도 대기 중입니다")
         mine, _ = self._holdings()
         pos = mine.get(plan["code"])
@@ -772,17 +1141,26 @@ class RsiLadderScheduler:
     # ───────────────────────── UI 스냅샷 ─────────────────────────
 
     async def plan_view(self, plan: Dict[str, Any], mine: Dict[str, Dict[str, Any]], *,
-                        force: bool = False) -> Dict[str, Any]:
+                        force: bool = False, allow_fetch: bool = True) -> Dict[str, Any]:
+        from utils.market_hours import is_krx_session
+
         pid = plan["id"]
         cached = self._snap_cache.get(pid)
         if cached and not force and time.time() - cached[0] < _SNAPSHOT_TTL:
             market = cached[1]
         else:
-            market = await self._market_view(plan)
-            self._snap_cache[pid] = (time.time(), market)
+            market = await self._market_view(plan, allow_fetch=allow_fetch)
+            if not market.get("pending"):
+                self._snap_cache[pid] = (time.time(), market)
         pos = mine.get(plan["code"]) or {}
         hold, avg = int(pos.get("qty") or 0), int(pos.get("avg") or 0)
-        price = market.get("price") or pos.get("current_price") or 0
+        held_px = int(pos.get("current_price") or 0)
+        if market.get("price_live"):
+            price = int(market.get("price") or 0) or held_px
+        elif held_px and is_krx_session():
+            price = held_px
+        else:
+            price = int(market.get("price") or 0) or held_px
         prof = merge_profile(plan.get("profile"))
         lp = last_fill_price(plan)
         trig = next_trigger(lp, prof["step_pct"]) if lp else None
@@ -801,30 +1179,35 @@ class RsiLadderScheduler:
             "invested": invested,
             "auto_steps": len(auto_fills(plan)),
             "next_trigger": trig if plan.get("status") == "ACTIVE" else None,
-            "next_qty": step_qty(plan, trig) if trig else None,
+            "next_qty": step_qty(plan, trig, step=len(auto_fills(plan)) + 1) if trig else None,
             "market": market,
             "exit_preview": exit_preview,
         }
 
-    async def _market_view(self, plan: Dict[str, Any]) -> Dict[str, Any]:
+    async def _market_view(self, plan: Dict[str, Any], *, allow_fetch: bool = True) -> Dict[str, Any]:
         if plan.get("status") == "DONE":
             return {}
         now = now_kst()
         try:
-            price, bars, weekly = await self._market_inputs(plan["code"], now)
+            price, bars, weekly, price_live = await self._market_inputs(
+                plan["code"], now, allow_fetch=allow_fetch,
+            )
         except Exception as e:
             return {"error": f"시세 조회 실패: {e}"}
         if not bars:
-            return {"error": "일봉 없음", "price": price}
+            if allow_fetch:
+                return {"error": "일봉 없음", "price": price}
+            return {"error": "일봉 불러오는 중", "price": price, "pending": True, "price_live": False}
         from utils.rwm_bowl import sma_series
 
         closes = [float(b["close"]) for b in bars]
         entry = evaluate_entry(bars, plan.get("profile") or {}, weekly_bars=weekly) if len(bars) >= 61 else None
-        tail = 120
+        tail = 150
         series = {f"ma{n}": [round(v, 1) if v is not None else None for v in sma_series(closes, n)[-tail:]]
-                  for n in (10, 15, 20, 60)}
+                  for n in (5, 10, 20, 60)}
         return {
             "price": price,
+            "price_live": price_live,
             "ma": moving_averages(closes),
             "entry": entry,
             "chart": {
@@ -835,16 +1218,36 @@ class RsiLadderScheduler:
         }
 
     async def state(self, *, force: bool = False, plan_id: Optional[str] = None) -> Dict[str, Any]:
+        """화면용 상태. 키움 호출은 하지 않고, 없는 일봉·장중 현재가는 뒤에서 채운다."""
         store = get_ladder_store()
         mine, _ = self._holdings()
         plans = self.my_plans()
-        views = []
-        for p in plans:
-            if plan_id and p["id"] != plan_id:
-                continue
-            views.append(await self.plan_view(p, mine, force=force))
-        settings = _load_settings()
         now = now_kst()
+        if force:
+            self._snap_cache.clear()
+            self._quote_after = 0.0
+        open_plans = [p for p in plans if not plan_id or p["id"] == plan_id]
+        missing: List[str] = []
+        stale: List[str] = []
+        quote_codes: List[str] = []
+        for p in open_plans:
+            if p.get("status") == "DONE":
+                continue
+            bars, fresh = self._bar_entry(p["code"], now)
+            quote_codes.append(p["code"])
+            if not bars:
+                missing.append(p["code"])
+            elif not fresh:
+                stale.append(p["code"])
+        if missing or stale:
+            self._schedule_warm(missing + stale)
+        elif quote_codes:
+            self._schedule_quotes(quote_codes, now)
+        views = []
+        for p in open_plans:
+            views.append(await self.plan_view(p, mine, force=force, allow_fetch=False))
+        settings = _load_settings()
+        warming = bool(missing or stale or self._warm_inflight)
         return {
             "enabled": store.enabled,
             "auto_trade_on": bool(getattr(settings, "is_enabled", False)) if settings else False,
@@ -854,6 +1257,7 @@ class RsiLadderScheduler:
             "last_judge": store.data.get("last_judge") or {},
             "plans": views,
             "events": list(reversed((store.data.get("events") or [])[-100:])),
+            "warming": warming,
         }
 
     # ───────────────────────── 장후 요약 ─────────────────────────

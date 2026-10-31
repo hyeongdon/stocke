@@ -1,4 +1,8 @@
-"""네이버 금융 기준 주요 지수(VIX·코스피·코스닥·나스닥·다우) 조회."""
+"""주요 지수(VIX·VKOSPI·코스피·코스닥·나스닥·다우) 조회.
+
+VIX·코스피·코스닥·나스닥·다우는 네이버 금융, VKOSPI(코스피200 변동성지수)는
+증권플러스 시세. 네이버 지수 API에는 VKOSPI가 없다.
+"""
 from __future__ import annotations
 
 import ast
@@ -19,7 +23,11 @@ from utils.market_hours import is_krx_trading_day
 
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 POLL_URL = "https://polling.finance.naver.com/api/realtime?query=SERVICE_INDEX:{code}"
-WORLD_URL = "https://finance.naver.com/world/sise.naver?symbol={symbol}"
+INDEX_BASIC_URL = "https://api.stock.naver.com/index/{code}/basic"
+_WORLD_REUTERS = {
+    "NAS@IXIC": (".IXIC", "nasdaq"),
+    "DJI@DJI": (".DJI", "dow"),
+}
 KR_DAY_URL = (
     "https://api.finance.naver.com/siseJson.naver"
     "?symbol={code}&requestType=1&startTime={start}&endTime={end}&timeframe=day"
@@ -32,6 +40,27 @@ VIX_DAY_URL = (
     "https://api.stock.naver.com/chart/foreign/index/.VIX/day"
     "?startDateTime={start}000000&endDateTime={end}000000"
 )
+INDEX_DAY_CHART_URL = (
+    "https://api.stock.naver.com/chart/{market}/index/{code}/day"
+    "?startDateTime={start}000000&endDateTime={end}235959"
+)
+_YEAR_SPECS = (
+    ("kospi", "domestic", "KOSPI"),
+    ("kosdaq", "domestic", "KOSDAQ"),
+    ("nasdaq", "foreign", ".IXIC"),
+    ("dow", "foreign", ".DJI"),
+)
+_YEAR_LOOKBACK_DAYS = 370
+_YEAR_POINTS = 72
+_YEAR_CACHE_TTL_SEC = 6 * 3600
+_YEAR_FAIL_TTL_SEC = 300
+VKOSPI_QUOTE_URL = "https://mweb-api.stockplus.com/api/securities/KOREA-O2901P"
+VKOSPI_CANDLES_URL = VKOSPI_QUOTE_URL + "/day_candles.json"
+_VKOSPI_HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "application/json",
+    "Referer": "https://www.stockplus.com/",
+}
 INVESTOR_TREND_URL = "https://m.stock.naver.com/api/index/{code}/trend"
 INVESTOR_DAY_URL = (
     "https://finance.naver.com/sise/investorDealTrendDay.naver"
@@ -53,6 +82,8 @@ _INV_FETCH_LOCKS: Dict[str, threading.Lock] = {}
 _CACHE_LOCK = threading.Lock()
 _CACHE: Dict[str, Any] = {"at": 0.0, "data": None}
 _CACHE_TTL_SEC = 45
+_YEAR_LOCK = threading.Lock()
+_YEAR_CACHE: Dict[str, Any] = {"at": 0.0, "series": None, "ok": False}
 _HIST_CACHE: Dict[str, Any] = {}
 _HIST_CACHE_TTL_SEC = 3600
 _INTRADAY_HISTORY: Dict[str, Dict[str, Any]] = {}
@@ -64,21 +95,6 @@ INV_REFRESH_START = dt_time(8, 50)
 INV_REFRESH_END = dt_time(15, 40)
 _INV_SNAP_LOCK = threading.Lock()
 _INV_SNAP: Dict[str, Any] = {"data": None}
-
-
-def _parse_digit_spans(container) -> str:
-    if not container:
-        return ""
-    parts: List[str] = []
-    for span in container.find_all("span"):
-        cls = " ".join(span.get("class") or [])
-        if cls == "shim":
-            parts.append(",")
-        elif cls == "jum":
-            parts.append(".")
-        elif cls.startswith("no"):
-            parts.append(span.get_text(strip=True))
-    return "".join(parts)
 
 
 def _to_float(text: object) -> Optional[float]:
@@ -100,17 +116,6 @@ def _direction_from_rf(rf: object) -> str:
     if code in {"1", "2"}:
         return "up"
     if code in {"4", "5"}:
-        return "down"
-    return "flat"
-
-
-def _direction_from_em(em) -> str:
-    if not em:
-        return "flat"
-    cls = " ".join(em.get("class") or [])
-    if "no_up" in cls:
-        return "up"
-    if "no_down" in cls:
         return "down"
     return "flat"
 
@@ -453,24 +458,21 @@ def _direction_from_compare(compare: object) -> str:
     return "flat"
 
 
-def _fetch_vix() -> Dict[str, Any]:
-    """CBOE VIX. 등락 부호는 compareToPreviousPrice 코드로 맞춘다."""
-    resp = requests.get(VIX_BASIC_URL, timeout=12, headers=HEADERS)
-    resp.raise_for_status()
-    data = resp.json()
+def _row_from_basic(data: object, key: str, label: str) -> Dict[str, Any]:
+    """네이버 index basic JSON. 등락 부호는 compareToPreviousPrice 코드로 맞춘다."""
     if not isinstance(data, dict):
-        raise RuntimeError("VIX empty")
+        raise RuntimeError(f"{label} empty")
     direction = _direction_from_compare(data.get("compareToPreviousPrice"))
     value = _to_float(data.get("closePrice"))
     if value is None:
-        raise RuntimeError("VIX empty")
+        raise RuntimeError(f"{label} empty")
     change = _signed_change(_to_float(data.get("compareToPreviousClosePrice")), direction)
     pct = _to_float(data.get("fluctuationsRatio"))
     if pct is not None and direction == "down" and pct > 0:
         pct = -pct
     return {
-        "key": "vix",
-        "label": "VIX",
+        "key": key,
+        "label": label,
         "value": value,
         "change": round(change, 2) if change is not None else None,
         "change_pct": round(pct, 2) if pct is not None else None,
@@ -481,32 +483,71 @@ def _fetch_vix() -> Dict[str, Any]:
     }
 
 
-def _fetch_world(symbol: str, label: str) -> Dict[str, Any]:
-    resp = requests.get(WORLD_URL.format(symbol=symbol), timeout=12, headers=HEADERS)
+def _fetch_vix() -> Dict[str, Any]:
+    """CBOE VIX."""
+    resp = requests.get(VIX_BASIC_URL, timeout=12, headers=HEADERS)
     resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "html.parser")
-    today_em = soup.select_one("p.no_today em")
-    exday = soup.select_one("p.no_exday")
-    ems = exday.select("em") if exday else []
+    return _row_from_basic(resp.json(), "vix", "VIX")
 
-    direction = _direction_from_em(today_em)
-    value = _to_float(_parse_digit_spans(today_em))
-    change = _signed_change(_to_float(_parse_digit_spans(ems[0] if ems else None)), direction)
 
-    pct = _to_float(_parse_digit_spans(ems[1] if len(ems) > 1 else None))
-    if pct is None and value and change is not None and value - change:
-        pct = (change / (value - change)) * 100.0
-    if pct is not None and direction == "down" and pct > 0:
+def _vkospi_direction(name: object) -> str:
+    code = str(name or "").upper()
+    if code in {"RISE", "UPPER_LIMIT"}:
+        return "up"
+    if code in {"FALL", "LOWER_LIMIT"}:
+        return "down"
+    return "flat"
+
+
+def _vkospi_pct(rate: Optional[float], direction: str) -> Optional[float]:
+    """증권플러스 changePriceRate 는 비율(0.0175 = 1.75%)."""
+    if rate is None:
+        return None
+    pct = rate * 100.0
+    if direction == "down" and pct > 0:
         pct = -pct
+    if direction == "up" and pct < 0:
+        pct = abs(pct)
+    return round(pct, 2)
 
+
+def _fetch_vkospi() -> Dict[str, Any]:
+    """코스피200 변동성지수. 오르면 국내 시장 불안이 커진 상태."""
+    resp = requests.get(VKOSPI_QUOTE_URL, timeout=12, headers=_VKOSPI_HEADERS)
+    resp.raise_for_status()
+    payload = resp.json() or {}
+    data = payload.get("recentSecurity") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        raise RuntimeError("VKOSPI empty")
+    value = _to_float(data.get("tradePrice"))
+    if value is None:
+        raise RuntimeError("VKOSPI empty")
+    direction = _vkospi_direction(data.get("change"))
+    change = _to_float(data.get("signedChangePrice"))
+    if change is None:
+        change = _signed_change(_to_float(data.get("changePrice")), direction)
+    rate = _to_float(data.get("signedChangeRate"))
+    if rate is None:
+        rate = _to_float(data.get("changePriceRate"))
     return {
-        "key": label,
-        "label": label,
+        "key": "vkospi",
+        "label": "VKOSPI",
         "value": value,
-        "change": change,
-        "change_pct": round(pct, 2) if pct is not None else None,
+        "change": round(change, 2) if change is not None else None,
+        "change_pct": _vkospi_pct(rate, direction),
         "direction": direction,
+        "open": _to_float(data.get("openingPrice")),
+        "high": _to_float(data.get("highPrice")),
+        "low": _to_float(data.get("lowPrice")),
     }
+
+
+def _fetch_world(symbol: str, label: str) -> Dict[str, Any]:
+    """나스닥·다우. 해외시세 HTML은 개편되어 값이 비므로 index basic JSON을 쓴다."""
+    reuters, key = _WORLD_REUTERS.get(symbol, (symbol, label))
+    resp = requests.get(INDEX_BASIC_URL.format(code=reuters), timeout=12, headers=HEADERS)
+    resp.raise_for_status()
+    return _row_from_basic(resp.json(), key, label)
 
 
 def clear_investor_snapshot_cache() -> None:
@@ -621,23 +662,131 @@ def _with_investor_snapshot(payload: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _closes_from_chart_rows(rows: object) -> List[float]:
+    """네이버 일봉 차트 JSON → 날짜순 종가."""
+    if not isinstance(rows, list):
+        return []
+    by_day: Dict[str, float] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        ymd = _parse_ymd(str(row.get("localDate") or ""))
+        close = _to_float(row.get("closePrice"))
+        if ymd and close is not None and close > 0:
+            by_day[ymd] = round(close, 2)
+    return [by_day[d] for d in sorted(by_day)]
+
+
+def _downsample_closes(closes: List[float], limit: int = _YEAR_POINTS) -> List[float]:
+    """양 끝은 유지하고 사이만 균등하게 줄인다."""
+    n = len(closes)
+    if n <= limit or limit < 2:
+        return list(closes)
+    idxs = sorted({int(round(i * (n - 1) / (limit - 1))) for i in range(limit)})
+    return [closes[i] for i in idxs]
+
+
+def _fetch_index_year_closes(market: str, code: str) -> List[float]:
+    end = kst_today()
+    start = end - timedelta(days=_YEAR_LOOKBACK_DAYS)
+    resp = requests.get(
+        INDEX_DAY_CHART_URL.format(
+            market=market,
+            code=code,
+            start=start.strftime("%Y%m%d"),
+            end=end.strftime("%Y%m%d"),
+        ),
+        timeout=12,
+        headers=HEADERS,
+    )
+    resp.raise_for_status()
+    return _downsample_closes(_closes_from_chart_rows(resp.json()))
+
+
+def _fetch_year_closes_map() -> Dict[str, List[float]]:
+    out: Dict[str, List[float]] = {}
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futs = {
+            pool.submit(_fetch_index_year_closes, market, code): key
+            for key, market, code in _YEAR_SPECS
+        }
+        for fut in as_completed(futs):
+            key = futs[fut]
+            try:
+                closes = fut.result()
+            except Exception:
+                closes = []
+            if len(closes) >= 2:
+                out[key] = closes
+    return out
+
+
+def _cached_year_closes(force: bool = False) -> Dict[str, List[float]]:
+    now = time.time()
+    with _YEAR_LOCK:
+        series = _YEAR_CACHE.get("series")
+        age = now - float(_YEAR_CACHE.get("at") or 0)
+        ttl = _YEAR_CACHE_TTL_SEC if _YEAR_CACHE.get("ok") else _YEAR_FAIL_TTL_SEC
+        if not force and isinstance(series, dict) and age < ttl:
+            return series
+    loaded = _fetch_year_closes_map()
+    with _YEAR_LOCK:
+        _YEAR_CACHE["at"] = time.time()
+        _YEAR_CACHE["series"] = loaded
+        _YEAR_CACHE["ok"] = bool(loaded)
+        return loaded
+
+
+def _with_live_tail(closes: List[float], value: object) -> List[float]:
+    """캐시된 일봉 끝에 현재가가 의미 있게 다르면 붙인다."""
+    live_raw = _to_float(value)
+    if live_raw is None or live_raw <= 0 or not closes:
+        return list(closes)
+    live = round(live_raw, 2)
+    last = closes[-1]
+    if last and abs(live - last) / abs(last) < 0.0002:
+        return list(closes)
+    return list(closes) + [live]
+
+
+def _with_year_closes(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """코스피·코스닥·나스닥·다우에 최근 1년 종가 스파크를 붙인다."""
+    try:
+        series = _cached_year_closes()
+    except Exception:
+        return payload
+    if not series:
+        return payload
+    out = dict(payload)
+    indices: List[Dict[str, Any]] = []
+    for row in payload.get("indices") or []:
+        item = dict(row)
+        closes = series.get(str(item.get("key") or "").lower())
+        if closes:
+            item["year_closes"] = _with_live_tail(closes, item.get("value"))
+        indices.append(item)
+    out["indices"] = indices
+    return out
+
+
 def fetch_market_indices(force: bool = False) -> Dict[str, Any]:
     now = time.time()
     with _CACHE_LOCK:
         if not force and _CACHE.get("data") and now - float(_CACHE.get("at") or 0) < _CACHE_TTL_SEC:
-            return _with_investor_snapshot(dict(_CACHE["data"]))
+            return _with_year_closes(_with_investor_snapshot(dict(_CACHE["data"])))
 
     indices: List[Dict[str, Any]] = []
     errors: List[str] = []
 
     jobs = [
         ("VIX", _fetch_vix),
+        ("VKOSPI", _fetch_vkospi),
         ("KOSPI", lambda: _fetch_domestic("KOSPI")),
         ("KOSDAQ", lambda: _fetch_domestic("KOSDAQ")),
         ("나스닥", lambda: _fetch_world("NAS@IXIC", "나스닥")),
         ("다우", lambda: _fetch_world("DJI@DJI", "다우")),
     ]
-    with ThreadPoolExecutor(max_workers=5) as pool:
+    with ThreadPoolExecutor(max_workers=6) as pool:
         futs = {pool.submit(fn): name for name, fn in jobs}
         for fut in as_completed(futs):
             name = futs[fut]
@@ -645,7 +794,16 @@ def fetch_market_indices(force: bool = False) -> Dict[str, Any]:
                 indices.append(fut.result())
             except Exception as exc:
                 errors.append(f"{name}: {exc}")
-    order = {"vix": 0, "kospi": 1, "kosdaq": 2, "나스닥": 3, "다우": 4}
+    order = {
+        "vix": 0,
+        "vkospi": 1,
+        "kospi": 2,
+        "kosdaq": 3,
+        "nasdaq": 4,
+        "나스닥": 4,
+        "dow": 5,
+        "다우": 5,
+    }
     indices.sort(key=lambda row: order.get(str(row.get("key") or row.get("label") or ""), 9))
 
     if not indices:
@@ -654,7 +812,7 @@ def fetch_market_indices(force: bool = False) -> Dict[str, Any]:
         if stale and stale.get("indices"):
             payload = dict(stale)
             payload["errors"] = list(stale.get("errors") or []) + errors + ["using_cache"]
-            return _with_investor_snapshot(payload)
+            return _with_year_closes(_with_investor_snapshot(payload))
 
     payload = {
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -666,7 +824,7 @@ def fetch_market_indices(force: bool = False) -> Dict[str, Any]:
     with _CACHE_LOCK:
         _CACHE["at"] = now
         _CACHE["data"] = payload
-    return _with_investor_snapshot(dict(payload))
+    return _with_year_closes(_with_investor_snapshot(dict(payload)))
 
 
 def _ymd_compact(ymd: str) -> str:
@@ -908,6 +1066,70 @@ def _fetch_vix_day_bars(ymd: str) -> List[Dict[str, Any]]:
     return [by_day[d] for d in sorted(by_day)]
 
 
+def _fetch_vkospi_day_bars(ymd: str) -> List[Dict[str, Any]]:
+    """지정일 포함 최근 일봉. day_candles 의 to 는 미포함이라 다음 날을 넘긴다."""
+    end = datetime.strptime(ymd, "%Y-%m-%d") + timedelta(days=1)
+    resp = requests.get(
+        VKOSPI_CANDLES_URL,
+        params={"limit": 40, "to": end.strftime("%Y-%m-%d"), "format": "json"},
+        timeout=12,
+        headers=_VKOSPI_HEADERS,
+    )
+    resp.raise_for_status()
+    payload = resp.json() or {}
+    rows = payload.get("dayCandles") if isinstance(payload, dict) else None
+    bars: List[Dict[str, Any]] = []
+    if not isinstance(rows, list):
+        return bars
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        raw = str(row.get("date") or "")
+        d = raw[:10]
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d) or d > ymd:
+            continue
+        close = _to_float(row.get("tradePrice"))
+        if close is None:
+            continue
+        change = _to_float(row.get("changePrice"))
+        rate = _to_float(row.get("changePriceRate"))
+        direction = _vkospi_direction(row.get("change"))
+        bars.append(
+            {
+                "date": d,
+                "close": close,
+                "change": round(change, 2) if change is not None else None,
+                "change_pct": _vkospi_pct(rate, direction),
+            }
+        )
+    by_day: Dict[str, Dict[str, Any]] = {b["date"]: b for b in bars}
+    ordered = [by_day[d] for d in sorted(by_day)]
+    # 일봉은 종가·등락만 온다. 스파크 몸통은 전일 종가에서 당일 종가로 그린다.
+    for i, bar in enumerate(ordered):
+        prev = ordered[i - 1]["close"] if i else bar["close"]
+        close = bar["close"]
+        bar["open"] = prev
+        bar["high"] = max(prev, close)
+        bar["low"] = min(prev, close)
+    return ordered
+
+
+def _vkospi_index_on_date(ymd: str) -> Dict[str, Any]:
+    bars = _fetch_vkospi_day_bars(ymd)
+    bar = next((b for b in bars if b["date"] == ymd), None)
+    if bar is None:
+        return _closed_row("vkospi", "VKOSPI", ymd)
+    return _index_row(
+        "vkospi",
+        "VKOSPI",
+        bar.get("close"),
+        bar.get("change"),
+        bar.get("change_pct"),
+        session_date=bar["date"],
+        bars=_spark_bars(bars, ymd),
+    )
+
+
 def _vix_index_on_date(ymd: str) -> Dict[str, Any]:
     bars = _fetch_vix_day_bars(ymd)
     picked = _bar_on_date(bars, ymd)
@@ -994,6 +1216,11 @@ def fetch_market_indices_for_date(ymd: str, force: bool = False) -> Dict[str, An
     except Exception as exc:
         errors.append(f"VIX: {exc}")
         indices.append(_closed_row("vix", "VIX", parsed))
+    try:
+        indices.append(_vkospi_index_on_date(parsed))
+    except Exception as exc:
+        errors.append(f"VKOSPI: {exc}")
+        indices.append(_closed_row("vkospi", "VKOSPI", parsed))
     for code, label in (("KOSPI", "코스피"), ("KOSDAQ", "코스닥")):
         try:
             indices.append(_kr_index_on_date(code, label, parsed))
