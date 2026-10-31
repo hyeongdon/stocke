@@ -79,6 +79,19 @@ class MarketFundsTest(unittest.TestCase):
             mf.fetch_market_funds(force=True)
         self.assertEqual(fetch.call_count, 4)
 
+    def test_snapshot_with_shorter_history_is_refetched(self):
+        with mock.patch.object(mf, "_fetch_kofia", side_effect=_fake_fetch()):
+            mf.fetch_market_funds()
+        snapshot = mf.load_snapshot()
+        snapshot.pop("history_days")
+        mf._save_snapshot(snapshot)
+
+        with mock.patch.object(mf, "_fetch_kofia", side_effect=_fake_fetch()) as fetch:
+            mf.fetch_market_funds()
+
+        self.assertEqual(fetch.call_count, 2)
+        self.assertEqual(mf.load_snapshot()["history_days"], mf.HISTORY_DAYS)
+
     def test_expired_snapshot_refetches(self):
         with mock.patch.object(mf, "_fetch_kofia", side_effect=_fake_fetch()) as fetch:
             mf.fetch_market_funds()

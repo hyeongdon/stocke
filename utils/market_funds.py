@@ -21,7 +21,7 @@ KOFIA_HEADERS = {
 }
 OBJ_DEPOSIT = "STATSCU0100000060BO"  # 증시자금추이
 OBJ_CREDIT = "STATSCU0100000070BO"  # 신용공여 잔고 추이
-HISTORY_DAYS = 400
+HISTORY_DAYS = 30 * 365
 SNAPSHOT_TTL_SEC = 3 * 3600
 ERROR_RETRY_SEC = 600
 
@@ -135,6 +135,8 @@ def _save_snapshot(payload: Dict[str, Any]) -> None:
 def _snapshot_fresh(snap: Optional[Dict[str, Any]]) -> bool:
     if not snap:
         return False
+    if snap.get("history_days") != HISTORY_DAYS:
+        return False
     return time.time() - float(snap.get("at") or 0) < SNAPSHOT_TTL_SEC
 
 
@@ -189,6 +191,7 @@ def fetch_market_funds(force: bool = False) -> Dict[str, Any]:
         payload = {
             "at": now - SNAPSHOT_TTL_SEC + ERROR_RETRY_SEC if errors else now,
             "updated_at": kst_now_iso(),
+            "history_days": HISTORY_DAYS,
             "deposit": fresh.get("deposit", prev.get("deposit") or []),
             "credit": fresh.get("credit", prev.get("credit") or []),
         }

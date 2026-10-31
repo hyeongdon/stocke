@@ -1,7 +1,7 @@
-"""주요 지수(VIX·VKOSPI·코스피·코스닥·나스닥·다우) 조회.
+"""주요 지수(VIX·VKOSPI·코스피·코스닥·코스피200 선물·나스닥·다우) 조회.
 
-VIX·코스피·코스닥·나스닥·다우는 네이버 금융, VKOSPI(코스피200 변동성지수)는
-증권플러스 시세. 네이버 지수 API에는 VKOSPI가 없다.
+VIX·코스피·코스닥·코스피200 선물·나스닥·다우는 네이버 금융,
+VKOSPI(코스피200 변동성지수)는 증권플러스 시세. 네이버 지수 API에는 VKOSPI가 없다.
 """
 from __future__ import annotations
 
@@ -431,9 +431,14 @@ def _fetch_domestic(code: str) -> Dict[str, Any]:
     if pct is not None and direction == "down" and pct > 0:
         pct = -pct
     intraday = _record_intraday(code, value, open_)
+    labels = {
+        "KOSPI": "코스피",
+        "KOSDAQ": "코스닥",
+        "FUT": "코스피200 야간선물",
+    }
     row = {
         "key": code.lower(),
-        "label": "코스피" if code == "KOSPI" else "코스닥",
+        "label": labels.get(code, code),
         "value": value,
         "change": change,
         "change_pct": pct,
@@ -783,6 +788,7 @@ def fetch_market_indices(force: bool = False) -> Dict[str, Any]:
         ("VKOSPI", _fetch_vkospi),
         ("KOSPI", lambda: _fetch_domestic("KOSPI")),
         ("KOSDAQ", lambda: _fetch_domestic("KOSDAQ")),
+        ("코스피200 선물", lambda: _fetch_domestic("FUT")),
         ("나스닥", lambda: _fetch_world("NAS@IXIC", "나스닥")),
         ("다우", lambda: _fetch_world("DJI@DJI", "다우")),
     ]
@@ -799,10 +805,11 @@ def fetch_market_indices(force: bool = False) -> Dict[str, Any]:
         "vkospi": 1,
         "kospi": 2,
         "kosdaq": 3,
-        "nasdaq": 4,
-        "나스닥": 4,
-        "dow": 5,
-        "다우": 5,
+        "fut": 4,
+        "nasdaq": 5,
+        "나스닥": 5,
+        "dow": 6,
+        "다우": 6,
     }
     indices.sort(key=lambda row: order.get(str(row.get("key") or row.get("label") or ""), 9))
 

@@ -156,7 +156,7 @@ function renderMarketIndexItem(it) {
   return `<span class="market-index-item ${dir}${moodCls}${yearCls}"${title}><span class="mi-head"><span class="mi-label">${esc(it.label)}</span>${moodHtml}</span>${chart}<span class="mi-value">${fmtIndexValue(it.value)}</span><span class="mi-delta">${deltaParts.join(' ') || '-'}</span>${renderInvestorBadges(it)}</span>`;
 }
 const MARKET_INDEX_GROUPS = [
-  { id: 'kr', label: '한국', keys: ['kospi', 'kosdaq'] },
+  { id: 'kr', label: '한국', keys: ['kospi', 'kosdaq', 'fut'] },
   { id: 'us', label: '미국', keys: ['nasdaq', 'dow'] },
   { id: 'fear', label: '공포지수', keys: ['vix'] },
   { id: 'vol', label: '변동성', keys: ['vkospi'] },

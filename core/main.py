@@ -3033,7 +3033,7 @@ async def _attach_index_intraday_bars(payload: dict, date: str) -> None:
 
 @app.get("/market/indices")
 async def market_indices_api(force: bool = False, date: Optional[str] = None):
-    """주요 지수(VIX·VKOSPI·코스피·코스닥·나스닥·다우) 스냅샷. date=YYYY-MM-DD 이면 해당일 종가."""
+    """주요 지수와 코스피200 선물 스냅샷. date=YYYY-MM-DD 이면 해당일 종가."""
     try:
         from utils.market_indices import fetch_market_indices, fetch_market_indices_for_date
 
@@ -7224,4 +7224,3 @@ async def manual_avg_down_position(position_id: int):
     except Exception as e:
         logger.error(f"수동 물타기 주문 오류: {e}")
         raise HTTPException(status_code=500, detail="수동 물타기 주문 중 오류가 발생했습니다.")
-

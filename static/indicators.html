@@ -13,9 +13,9 @@
   <meta name="apple-mobile-web-app-title" content="Stocke">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="theme-color" content="#131720">
-  <link rel="stylesheet" href="/static/dashboard.css?v=124">
-  <link rel="stylesheet" href="/static/indicators.css?v=3">
-  <script src="/static/theme-sync.js?v=1"></script>
+  <link rel="stylesheet" href="/static/dashboard.css?v=126">
+  <link rel="stylesheet" href="/static/indicators.css?v=4">
+  <script src="/static/theme-sync.js?v=2"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -48,8 +48,12 @@
         </div>
         <div class="ind-grain-switch" role="tablist" aria-label="조회 기간">
           <button type="button" class="ind-range-btn" data-range="60">3개월</button>
-          <button type="button" class="ind-range-btn active" data-range="125">6개월</button>
+          <button type="button" class="ind-range-btn" data-range="125">6개월</button>
           <button type="button" class="ind-range-btn" data-range="250">1년</button>
+          <button type="button" class="ind-range-btn" data-range="750">3년</button>
+          <button type="button" class="ind-range-btn" data-range="1250">5년</button>
+          <button type="button" class="ind-range-btn" data-range="2500">10년</button>
+          <button type="button" class="ind-range-btn active" data-range="0">전체</button>
         </div>
       </div>
       <div class="card-body">
@@ -87,6 +91,6 @@
   </div>
 
   <script src="/static/indicators.js?v=2"></script>
-  <script src="/static/indicators_funds.js?v=1"></script>
+  <script src="/static/indicators_funds.js?v=2"></script>
 </body>
 </html>

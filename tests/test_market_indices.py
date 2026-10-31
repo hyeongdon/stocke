@@ -399,7 +399,7 @@ class InvestorTrendTests(unittest.TestCase):
             r = mock.Mock()
             r.raise_for_status = mock.Mock()
             if "api/realtime" in url:
-                code = "KOSPI" if "KOSPI" in url else "KOSDAQ"
+                code = url.rsplit(":", 1)[-1]
                 r.json = mock.Mock(return_value=_poll_payload(code))
             elif "investorDealTrendTime" in url or "/trend" in url:
                 raise AssertionError(url)
@@ -426,7 +426,7 @@ class InvestorTrendTests(unittest.TestCase):
             r = mock.Mock()
             r.raise_for_status = mock.Mock()
             if "api/realtime" in url:
-                code = "KOSPI" if "KOSPI" in url else "KOSDAQ"
+                code = url.rsplit(":", 1)[-1]
                 r.json = mock.Mock(return_value=_poll_payload(code))
             elif "index/KOSPI/trend" in url:
                 r.json = mock.Mock(return_value=TREND_KOSPI)
@@ -470,7 +470,7 @@ class InvestorTrendTests(unittest.TestCase):
             r = mock.Mock()
             r.raise_for_status = mock.Mock()
             if "api/realtime" in url:
-                code = "KOSPI" if "KOSPI" in url else "KOSDAQ"
+                code = url.rsplit(":", 1)[-1]
                 r.json = mock.Mock(return_value=_poll_payload(code))
             else:
                 r.text = ""
@@ -629,7 +629,7 @@ class VixIndexTests(unittest.TestCase):
                     "compareToPreviousPrice": {"code": "5", "name": "FALLING"},
                 })
             elif "api/realtime" in url:
-                code = "KOSPI" if "KOSPI" in url else "KOSDAQ"
+                code = url.rsplit(":", 1)[-1]
                 r.json = mock.Mock(return_value=_poll_payload(code))
             else:
                 r.text = ""
@@ -638,7 +638,7 @@ class VixIndexTests(unittest.TestCase):
         mock_get.side_effect = _resp
         payload = fetch_market_indices(force=True)
         keys = [row["key"] for row in payload["indices"]]
-        self.assertEqual(keys, ["vix", "vkospi", "kospi", "kosdaq", "nasdaq", "dow"])
+        self.assertEqual(keys, ["vix", "vkospi", "kospi", "kosdaq", "fut", "nasdaq", "dow"])
         vix = next(row for row in payload["indices"] if row["key"] == "vix")
         self.assertAlmostEqual(vix["value"], 18.13)
         self.assertEqual(vix["direction"], "up")
@@ -649,6 +649,11 @@ class VixIndexTests(unittest.TestCase):
         self.assertEqual(vkospi["direction"], "down")
         self.assertAlmostEqual(vkospi["change"], -1.20)
         self.assertAlmostEqual(vkospi["change_pct"], -2.37)
+        future = next(row for row in payload["indices"] if row["key"] == "fut")
+        self.assertEqual(future["label"], "코스피200 야간선물")
+        self.assertAlmostEqual(future["value"], 6977.94)
+        self.assertAlmostEqual(future["change"], 25.0)
+        self.assertTrue(any("SERVICE_INDEX:FUT" in call.args[0] for call in mock_get.call_args_list))
         nasdaq = next(row for row in payload["indices"] if row["key"] == "nasdaq")
         self.assertEqual(nasdaq["label"], "나스닥")
         self.assertAlmostEqual(nasdaq["value"], 25437.0)

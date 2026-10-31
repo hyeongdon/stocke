@@ -1,7 +1,7 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   let rows = [];
-  let range = 125;
+  let range = 0;
   let fundChart;
   let forcedChart;
 
