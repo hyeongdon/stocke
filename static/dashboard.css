@@ -26,64 +26,135 @@
   --glow: 0 0 0 1px rgba(124, 108, 240, 0.08);
 }
 
-/* ===== 실전투자 (Real Trading) 톤업 스킨 ===== */
+/* ===== 계좌 환경 스킨 ===== */
+html.mode-mock,
+body.mode-mock {
+  --bg: #0b1518;
+  --bg-elevated: #102125;
+  --card: #142a2f;
+  --card-hover: #1b363b;
+  --border: #285056;
+  --border-light: #35666a;
+  --text: #e8fbf8;
+  --text-secondary: #b6d6d1;
+  --muted: #82a7a4;
+  --accent: #0f9f91;
+  --accent-bright: #5eead4;
+  --accent-soft: rgba(20, 184, 166, 0.16);
+  --amber: #fbbf24;
+  --amber-soft: rgba(251, 191, 36, 0.12);
+  --green: #2dd4bf;
+  --green-soft: rgba(45, 212, 191, 0.12);
+  --shadow: 0 4px 24px rgba(0, 0, 0, 0.38);
+  --glow: 0 0 0 1px rgba(45, 212, 191, 0.2);
+}
+
+body.mode-mock {
+  background: var(--bg);
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(20, 184, 166, 0.16), transparent),
+    linear-gradient(180deg, #0b1518 0%, #0d1b20 100%);
+}
+
+body.mode-mock .topbar {
+  background: rgba(9, 25, 29, 0.97);
+  border-top: 4px solid #14b8a6;
+  border-bottom: 2px solid #0f766e;
+  box-shadow: 0 3px 18px rgba(20, 184, 166, 0.14);
+}
+
+body.mode-mock .brand h1 {
+  background: linear-gradient(135deg, #f0fdfa 0%, #5eead4 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+body.mode-mock .brand::after {
+  content: 'SIMULATION · 모의투자';
+  font-size: 9px;
+  font-weight: 900;
+  color: #99f6e4;
+  background: rgba(13, 148, 136, 0.2);
+  border: 1px dashed rgba(45, 212, 191, 0.72);
+  padding: 2px 7px;
+  border-radius: 3px;
+  letter-spacing: 0.45px;
+  margin-left: 6px;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+body.mode-mock .topbar .tab.active {
+  background: #0f766e;
+  box-shadow: 0 1px 8px rgba(45, 212, 191, 0.28);
+}
+
+body.mode-mock .topbar-site-switch {
+  border: 1px dashed rgba(45, 212, 191, 0.7);
+  color: #99f6e4;
+  background: rgba(13, 148, 136, 0.12);
+}
+
+/* 실전은 모의와 다른 경고형 프레임과 고대비 오렌지 포인트를 사용 */
 html.mode-real,
 body.mode-real {
-  --bg: #2a3448;
-  --bg-elevated: #35425a;
-  --card: #3e4c68;
-  --card-hover: #4a5a78;
-  --border: #627492;
-  --border-light: #7486a4;
+  --bg: #211713;
+  --bg-elevated: #2b1d17;
+  --card: #35231b;
+  --card-hover: #422b20;
+  --border: #69402c;
+  --border-light: #805337;
   --text: #f8fafc;
-  --text-secondary: #e2e8f0;
-  --muted: #c5d0e0;
-  --accent: #6366f1;
-  --accent-bright: #818cf8;
-  --accent-soft: rgba(99, 102, 241, 0.2);
+  --text-secondary: #f2d5c1;
+  --muted: #c4a18b;
+  --accent: #ea580c;
+  --accent-bright: #fdba74;
+  --accent-soft: rgba(234, 88, 12, 0.18);
   --cyan: #38bdf8;
   --up: #34d399;
   --up-soft: rgba(52, 211, 153, 0.16);
   --down: #f87171;
   --down-soft: rgba(248, 113, 113, 0.16);
-  --amber: #f59e0b;
-  --amber-soft: rgba(245, 158, 11, 0.2);
+  --amber: #fbbf24;
+  --amber-soft: rgba(251, 191, 36, 0.2);
   --green: #10b981;
   --green-soft: rgba(16, 185, 129, 0.16);
-  --shadow: 0 4px 24px rgba(0, 0, 0, 0.22);
-  --glow: 0 0 0 1px rgba(245, 158, 11, 0.25);
+  --shadow: 0 4px 24px rgba(0, 0, 0, 0.42);
+  --glow: 0 0 0 1px rgba(249, 115, 22, 0.28);
 }
 
 body.mode-real {
   background: var(--bg);
   background-image:
-    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(245, 158, 11, 0.12), transparent),
-    linear-gradient(180deg, #2a3448 0%, #334058 100%);
+    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(249, 115, 22, 0.15), transparent),
+    linear-gradient(180deg, #211713 0%, #281912 100%);
 }
 
 body.mode-real .topbar {
-  background: rgba(52, 64, 86, 0.96);
-  border-bottom: 2px solid #f59e0b;
-  box-shadow: 0 2px 12px rgba(245, 158, 11, 0.12);
+  background: rgba(37, 22, 16, 0.98);
+  border-top: 4px solid #ef4444;
+  border-bottom: 2px solid #f97316;
+  box-shadow: 0 3px 18px rgba(239, 68, 68, 0.16);
 }
 
 body.mode-real .brand h1 {
-  background: linear-gradient(135deg, #ffffff 0%, #fbbf24 100%);
+  background: linear-gradient(135deg, #ffffff 0%, #fdba74 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
 
 body.mode-real .brand::after {
-  content: '⚡ REAL (실전)';
-  font-size: 10px;
-  font-weight: 800;
-  color: #10b981;
-  background: rgba(16, 185, 129, 0.18);
-  border: 1px solid rgba(16, 185, 129, 0.4);
-  padding: 1px 6px;
-  border-radius: 4px;
-  letter-spacing: 0.3px;
+  content: 'REAL MONEY · 실전투자';
+  font-size: 9px;
+  font-weight: 900;
+  color: #fecaca;
+  background: rgba(185, 28, 28, 0.24);
+  border: 1px solid rgba(248, 113, 113, 0.68);
+  padding: 2px 7px;
+  border-radius: 3px;
+  letter-spacing: 0.45px;
   margin-left: 6px;
   display: inline-block;
   vertical-align: middle;
@@ -91,24 +162,35 @@ body.mode-real .brand::after {
 
 .conn-badge.mode-real-badge {
   background: rgba(245, 158, 11, 0.18) !important;
-  color: #f59e0b !important;
-  border: 1px solid rgba(245, 158, 11, 0.45) !important;
+  color: #fdba74 !important;
+  border: 1px solid rgba(249, 115, 22, 0.65) !important;
   font-weight: 800;
 }
 .conn-badge.mode-real-badge .dot {
-  background: #f59e0b !important;
-  box-shadow: 0 0 6px #f59e0b !important;
+  background: #ef4444 !important;
+  box-shadow: 0 0 7px #ef4444 !important;
+}
+
+body.mode-real .topbar .tab.active {
+  background: #c2410c;
+  box-shadow: 0 1px 8px rgba(249, 115, 22, 0.3);
+}
+
+body.mode-real .topbar-site-switch {
+  border: 1px solid rgba(249, 115, 22, 0.62);
+  color: #fdba74;
+  background: rgba(194, 65, 12, 0.18);
 }
 
 .conn-badge.mode-mock-badge {
-  background: rgba(99, 102, 241, 0.15);
-  color: #818cf8;
-  border: 1px solid rgba(99, 102, 241, 0.35);
+  background: rgba(13, 148, 136, 0.18);
+  color: #5eead4;
+  border: 1px dashed rgba(45, 212, 191, 0.58);
   font-weight: 700;
 }
 .conn-badge.mode-mock-badge .dot {
-  background: #818cf8;
-  box-shadow: 0 0 4px #818cf8;
+  background: #2dd4bf;
+  box-shadow: 0 0 5px #2dd4bf;
 }
 
 * { box-sizing: border-box; }

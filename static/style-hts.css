@@ -33,15 +33,42 @@
     --font-mono: 'Consolas', 'Lucida Console', 'Courier New', monospace;
 }
 
-/* 실전투자(실계좌) 톤업 스킨 */
+/* 계좌 환경을 HTS 화면에서도 고정 프레임과 라벨로 구분 */
+body.mode-mock {
+    --accent: #00a99a;
+    --bg-selected: #d7f4ef;
+}
+body.mode-mock header.bg-primary {
+    background: linear-gradient(135deg, #075e59 0%, #073b42 100%) !important;
+    border-top: 4px solid #2dd4bf;
+    border-bottom: 2px solid #00a99a;
+}
+body.mode-mock header.bg-primary h1::after {
+    content: ' [SIMULATION · 모의투자]';
+    font-size: 11px;
+    font-weight: 900;
+    color: #99f6e4;
+    letter-spacing: 0.3px;
+}
+body.mode-mock .nav-tabs .nav-link.active {
+    border-top: 2px solid #00a99a !important;
+}
+
+/* 실전투자(실계좌) 경고형 스킨 */
 body.mode-real header.bg-primary {
-    background: linear-gradient(135deg, #d97706 0%, #b45309 100%) !important;
+    background: linear-gradient(135deg, #9a3412 0%, #431407 100%) !important;
+    border-top: 4px solid #ef4444;
+    border-bottom: 2px solid #f97316;
 }
 body.mode-real header.bg-primary h1::after {
-    content: ' [⚡ 실전투자 (실계좌)]';
-    font-size: 12px;
-    font-weight: bold;
-    color: #fef3c7;
+    content: ' [REAL MONEY · 실전투자]';
+    font-size: 11px;
+    font-weight: 900;
+    color: #fecaca;
+    letter-spacing: 0.3px;
+}
+body.mode-real .nav-tabs .nav-link.active {
+    border-top: 2px solid #ef4444 !important;
 }
 
 /* 전체 */
@@ -665,4 +692,3 @@ header h1 {
 .rounded, .rounded-circle, .rounded-pill {
     border-radius: 0 !important;
 }
-
