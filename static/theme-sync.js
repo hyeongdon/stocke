@@ -5,6 +5,11 @@
     const isRealBool = (isReal === true || isReal === 'true' || isReal === 'real');
     const root = document.documentElement;
     const body = document.body;
+    const themeColor = document.querySelector('meta[name="theme-color"]');
+
+    if (themeColor) {
+      themeColor.setAttribute('content', isRealBool ? '#f3f5f8' : '#131720');
+    }
     
     if (isRealBool) {
       root.classList.add('mode-real');

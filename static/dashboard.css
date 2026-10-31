@@ -1,5 +1,5 @@
 :root {
-  --dash-topbar-h: 44px;
+  --dash-topbar-h: 50px;
   --dash-wrap-pad: 32px;
   --bg: #0a0c10;
   --bg-elevated: #0f1218;
@@ -29,6 +29,7 @@
 /* ===== 계좌 환경 스킨 ===== */
 html.mode-mock,
 body.mode-mock {
+  --dash-topbar-h: 56px;
   --bg: #0b1518;
   --bg-elevated: #102125;
   --card: #142a2f;
@@ -61,6 +62,7 @@ body.mode-mock .topbar {
   border-top: 4px solid #14b8a6;
   border-bottom: 2px solid #0f766e;
   box-shadow: 0 3px 18px rgba(20, 184, 166, 0.14);
+  padding-top: 6px;
 }
 
 body.mode-mock .brand h1 {
@@ -99,47 +101,47 @@ body.mode-mock .topbar-site-switch {
 /* 실전은 모의와 다른 경고형 프레임과 고대비 오렌지 포인트를 사용 */
 html.mode-real,
 body.mode-real {
-  --bg: #211713;
-  --bg-elevated: #2b1d17;
-  --card: #35231b;
-  --card-hover: #422b20;
-  --border: #69402c;
-  --border-light: #805337;
-  --text: #f8fafc;
-  --text-secondary: #f2d5c1;
-  --muted: #c4a18b;
-  --accent: #ea580c;
-  --accent-bright: #fdba74;
-  --accent-soft: rgba(234, 88, 12, 0.18);
-  --cyan: #38bdf8;
-  --up: #34d399;
-  --up-soft: rgba(52, 211, 153, 0.16);
-  --down: #f87171;
-  --down-soft: rgba(248, 113, 113, 0.16);
-  --amber: #fbbf24;
-  --amber-soft: rgba(251, 191, 36, 0.2);
-  --green: #10b981;
-  --green-soft: rgba(16, 185, 129, 0.16);
-  --shadow: 0 4px 24px rgba(0, 0, 0, 0.42);
-  --glow: 0 0 0 1px rgba(249, 115, 22, 0.28);
+  --bg: #f3f5f8;
+  --bg-elevated: #f8fafc;
+  --card: #ffffff;
+  --card-hover: #f1f5f9;
+  --border: #dce2e9;
+  --border-light: #cbd5e1;
+  --text: #172033;
+  --text-secondary: #334155;
+  --muted: #64748b;
+  --accent: #c2410c;
+  --accent-bright: #ea580c;
+  --accent-soft: rgba(234, 88, 12, 0.1);
+  --cyan: #0369a1;
+  --up: #15803d;
+  --up-soft: rgba(21, 128, 61, 0.1);
+  --down: #b91c1c;
+  --down-soft: rgba(185, 28, 28, 0.1);
+  --amber: #a16207;
+  --amber-soft: rgba(161, 98, 7, 0.11);
+  --green: #15803d;
+  --green-soft: rgba(21, 128, 61, 0.09);
+  --shadow: 0 3px 14px rgba(15, 23, 42, 0.07);
+  --glow: 0 0 0 1px rgba(194, 65, 12, 0.04);
 }
 
 body.mode-real {
   background: var(--bg);
   background-image:
-    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(249, 115, 22, 0.15), transparent),
-    linear-gradient(180deg, #211713 0%, #281912 100%);
+    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(249, 115, 22, 0.07), transparent),
+    linear-gradient(180deg, #f8fafc 0%, #f1f4f8 100%);
 }
 
 body.mode-real .topbar {
-  background: rgba(37, 22, 16, 0.98);
-  border-top: 4px solid #ef4444;
-  border-bottom: 2px solid #f97316;
-  box-shadow: 0 3px 18px rgba(239, 68, 68, 0.16);
+  background: rgba(255, 255, 255, 0.96);
+  border-top: 3px solid #ea580c;
+  border-bottom: 1px solid #dce2e9;
+  box-shadow: 0 3px 14px rgba(15, 23, 42, 0.08);
 }
 
 body.mode-real .brand h1 {
-  background: linear-gradient(135deg, #ffffff 0%, #fdba74 100%);
+  background: linear-gradient(135deg, #9a3412 0%, #f97316 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -149,9 +151,9 @@ body.mode-real .brand::after {
   content: 'REAL MONEY · 실전투자';
   font-size: 9px;
   font-weight: 900;
-  color: #fecaca;
-  background: rgba(185, 28, 28, 0.24);
-  border: 1px solid rgba(248, 113, 113, 0.68);
+  color: #9a3412;
+  background: #fff7ed;
+  border: 1px solid #fdba74;
   padding: 2px 7px;
   border-radius: 3px;
   letter-spacing: 0.45px;
@@ -161,25 +163,67 @@ body.mode-real .brand::after {
 }
 
 .conn-badge.mode-real-badge {
-  background: rgba(245, 158, 11, 0.18) !important;
-  color: #fdba74 !important;
-  border: 1px solid rgba(249, 115, 22, 0.65) !important;
+  background: #fff7ed !important;
+  color: #9a3412 !important;
+  border: 1px solid #fdba74 !important;
   font-weight: 800;
 }
 .conn-badge.mode-real-badge .dot {
-  background: #ef4444 !important;
-  box-shadow: 0 0 7px #ef4444 !important;
+  background: #ea580c !important;
+  box-shadow: 0 0 5px rgba(234, 88, 12, 0.45) !important;
 }
 
 body.mode-real .topbar .tab.active {
   background: #c2410c;
-  box-shadow: 0 1px 8px rgba(249, 115, 22, 0.3);
+  box-shadow: 0 1px 6px rgba(194, 65, 12, 0.2);
 }
 
 body.mode-real .topbar-site-switch {
-  border: 1px solid rgba(249, 115, 22, 0.62);
-  color: #fdba74;
-  background: rgba(194, 65, 12, 0.18);
+  border: 1px solid #fdba74;
+  color: #9a3412;
+  background: #fff7ed;
+}
+
+body.mode-real .activity-console {
+  background: #f8fafc;
+  color: #334155;
+}
+
+body.mode-real .activity-line .ts { color: #64748b; }
+body.mode-real .activity-line.info .msg { color: #334155; }
+body.mode-real .field input::placeholder { color: #94a3b8; }
+body.mode-real .tbl td { border-bottom-color: rgba(148, 163, 184, 0.35); }
+body.mode-real .tbl tr:hover td { background: var(--accent-soft); }
+body.mode-real .auto-screener-body .tbl td {
+  background: var(--card);
+  border-bottom-color: rgba(148, 163, 184, 0.3);
+}
+body.mode-real .auto-screener-body .tbl tr.screener-out td {
+  background: rgba(148, 163, 184, 0.12);
+}
+body.mode-real .settings-card .cond-picker {
+  background: rgba(148, 163, 184, 0.08);
+}
+body.mode-real #auto-sub-settings .settings-card .form-actions {
+  background: rgba(255, 255, 255, 0.96);
+}
+body.mode-real .settings-card .form-section,
+body.mode-real .settings-card .sizing-add-section,
+body.mode-real .pos-card-actions {
+  border-color: rgba(148, 163, 184, 0.4);
+}
+body.mode-real .stat-deposit .delta-stack .cash-sep { background: #dce2e9; }
+body.mode-real .batch-progress-track { background: #e2e8f0; }
+body.mode-real .holiday-scroll {
+  background: #ffffff;
+  border-color: #dce2e9;
+}
+body.mode-real .holiday-month { border-bottom-color: rgba(148, 163, 184, 0.35); }
+body.mode-real .auto-screener-body .tbl tr.screener-out td { opacity: 0.55; }
+body.mode-real .field input:focus,
+body.mode-real .field select:focus,
+body.mode-real .select-dark:focus {
+  box-shadow: 0 0 0 2px rgba(194, 65, 12, 0.16);
 }
 
 .conn-badge.mode-mock-badge {
@@ -2235,6 +2279,18 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
   .topbar-head { grid-area: head; }
   .topbar .tabs { grid-area: tabs; width: auto; justify-self: center; }
   .topbar-actions { grid-area: actions; justify-self: end; width: auto; }
+}
+
+@media (min-width: 960px) and (max-width: 1500px) {
+  :root { --dash-topbar-h: 92px; }
+  .topbar-inner {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "head actions"
+      "tabs tabs";
+  }
+  .topbar-head { min-width: 0; }
+  .topbar .tabs { width: 100%; justify-self: stretch; }
 }
 
 /* Auto-layout: 내부 2열 래퍼 — [수급+후보], [체결+활동로그] */

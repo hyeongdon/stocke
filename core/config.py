@@ -202,7 +202,7 @@ class Config:
 
     # 대시보드 상단: 실전 ↔ 모의 사이트 이동
     REAL_SITE_URL = (os.getenv("REAL_SITE_URL", "http://144.24.81.83:8001/dashboard") or "").strip()
-    MOCK_SITE_URL = (os.getenv("MOCK_SITE_URL", "http://127.0.0.1:8000/dashboard") or "").strip()
+    MOCK_SITE_URL = (os.getenv("MOCK_SITE_URL", "https://hyungdon.store/login?next=/dashboard") or "").strip()
     
     # 로그 디렉토리 생성
     Path(LOG_FILE).parent.mkdir(parents=True, exist_ok=True)

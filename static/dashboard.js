@@ -585,7 +585,7 @@ function applySiteSwitchLink(isMock) {
   const a = $('btnSiteSwitch');
   if (!a) return;
   const realUrl = window._realSiteUrl || 'http://144.24.81.83:8001/dashboard';
-  const mockUrl = window._mockSiteUrl || 'http://127.0.0.1:8000/dashboard';
+  const mockUrl = window._mockSiteUrl || 'https://hyungdon.store/login?next=/dashboard';
   if (isMock) {
     a.href = realUrl;
     a.textContent = '실전으로';
