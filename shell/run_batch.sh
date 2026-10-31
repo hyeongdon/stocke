@@ -17,7 +17,7 @@ mkdir -p "$ROOT_DIR/logs"
 
 usage() {
     echo "Usage: $0 <batch-name>"
-    echo "Batches: condition-alert, condition-alert-realtime, daily-trade-journal, failed-buy-signals, fundamental, kiwoom-pnl-sync, realtime-candle-cleanup, theme-mart, trade-industry"
+    echo "Batches: condition-alert, condition-alert-realtime, daily-trade-journal, failed-buy-signals, fundamental, kiwoom-pnl-sync, realtime-candle-cleanup, technical-mart, theme-mart, trade-industry"
 }
 
 if [[ $# -ne 1 ]]; then
@@ -50,6 +50,11 @@ case "$1" in
         SCRIPT="scripts/fundamental_mart_batch.py"
         ARGS=()
         LOG_FILE="$ROOT_DIR/logs/fundamental_mart_batch.log"
+        ;;
+    technical-mart)
+        SCRIPT="scripts/technical_mart_batch.py"
+        ARGS=()
+        LOG_FILE="$ROOT_DIR/logs/technical_mart_batch.log"
         ;;
     kiwoom-pnl-sync)
         SCRIPT="scripts/kiwoom_db_pnl_sync_batch.py"

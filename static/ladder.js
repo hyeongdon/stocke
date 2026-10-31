@@ -20,7 +20,7 @@
   const NEAR_PCT = 3;
   const CHART_LEN = 150;
   const REFRESH_MS = 30000;
-  const MA_COLORS = { 5: '#3b82f6', 10: '#f472b6', 20: '#9ae600', 60: '#e2e8f0' };
+  const MA_COLORS = { 5: '#3b82f6', 10: '#f472b6', 20: '#9ae600', 60: '#6b7280' };
   const MA_WIDTH = { 5: 1.35, 10: 1.25, 20: 2.6, 60: 2.6 };
   const CHART_MAS = [5, 10, 20, 60];
 
@@ -464,7 +464,7 @@
       const color = r.state === 'filled' ? 'var(--accent-bright)' : r.state === 'next' ? 'var(--amber)' : 'var(--border-light)';
       svg += hline(r.price, color, r.state === 'filled' ? '' : '4 4', r.step + '차 ' + fmt(r.price));
     });
-    if (p.avg && p.hold) svg += hline(p.avg, 'var(--cyan)', '', '평단 ' + fmt(p.avg), true);
+    if (p.avg && p.hold) svg += hline(p.avg, 'var(--cyan)', '4 4', '평단 ' + fmt(p.avg), true);
     if (ap) svg += hline(ap, 'var(--up)', '6 3', '무장가 ' + fmt(ap), true);
     [60, 20, 10, 5].forEach((n) => {
       const s = series[n];
