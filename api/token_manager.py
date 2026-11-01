@@ -1,15 +1,26 @@
-from datetime import datetime, timedelta
-from typing import Optional
-import requests
 import logging
 import threading
-from core.config import Config
+from datetime import datetime, timedelta
+from typing import Optional
+
+import requests
 import urllib3
+
+from core.config import Config
 
 # SSL 검증 비활성화 경고 억제 (모의투자 서버 연결 문제 해결)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = logging.getLogger(__name__)
+
+
+def _get_account_credentials() -> tuple[str, str, str, str]:
+    is_mock = Config.KIWOOM_USE_MOCK_ACCOUNT
+    app_key = Config.KIWOOM_MOCK_APP_KEY if is_mock else Config.KIWOOM_APP_KEY
+    app_secret = Config.KIWOOM_MOCK_APP_SECRET if is_mock else Config.KIWOOM_APP_SECRET
+    base_host = Config.KIWOOM_MOCK_API_URL if is_mock else Config.KIWOOM_REAL_API_URL
+    return ("1" if is_mock else "0"), app_key, app_secret, base_host
+
 
 _shared_token_manager: Optional["TokenManager"] = None
 _shared_token_lock = threading.Lock()
@@ -50,22 +61,12 @@ class TokenManager:
         
         try:
             # 투자구분 설정 (모의투자/실전투자)
-            investment_type = "1" if Config.KIWOOM_USE_MOCK_ACCOUNT else "0"  # 1: 모의투자, 0: 실전투자
             account_type = "모의투자" if Config.KIWOOM_USE_MOCK_ACCOUNT else "실전투자"
-            
-            # 계좌 타입에 따른 App Key 선택
-            if Config.KIWOOM_USE_MOCK_ACCOUNT:
-                app_key = Config.KIWOOM_MOCK_APP_KEY
-                app_secret = Config.KIWOOM_MOCK_APP_SECRET
-            else:
-                app_key = Config.KIWOOM_APP_KEY
-                app_secret = Config.KIWOOM_APP_SECRET
+            investment_type, app_key, app_secret, base_host = _get_account_credentials()
             
             logger.debug(f"🔑 [TOKEN_DEBUG] 키움 API 토큰 발급 요청 - 투자구분: {account_type} (코드: {investment_type})")
             logger.debug(f"🔑 [TOKEN_DEBUG] 사용할 App Key: {app_key[:10]}...")
             
-            # 엔드포인트 도메인 분기 (실전/모의)
-            base_host = Config.KIWOOM_MOCK_API_URL if Config.KIWOOM_USE_MOCK_ACCOUNT else Config.KIWOOM_REAL_API_URL
             auth_url = f"{base_host}/oauth2/token"
             
             logger.debug(f"🔑 [TOKEN_DEBUG] 인증 URL: {auth_url}")
@@ -174,18 +175,7 @@ class TokenManager:
             return self._authenticate_unlocked()
         
         try:
-            # 투자구분 설정 (모의투자/실전투자)
-            investment_type = "1" if Config.KIWOOM_USE_MOCK_ACCOUNT else "0"  # 1: 모의투자, 0: 실전투자
-            
-            # 계좌 타입에 따른 App Key 선택
-            if Config.KIWOOM_USE_MOCK_ACCOUNT:
-                app_key = Config.KIWOOM_MOCK_APP_KEY
-                app_secret = Config.KIWOOM_MOCK_APP_SECRET
-            else:
-                app_key = Config.KIWOOM_APP_KEY
-                app_secret = Config.KIWOOM_APP_SECRET
-            
-            base_host = Config.KIWOOM_MOCK_API_URL if Config.KIWOOM_USE_MOCK_ACCOUNT else Config.KIWOOM_REAL_API_URL
+            investment_type, app_key, app_secret, base_host = _get_account_credentials()
             response = requests.post(
                 f"{base_host}/oauth2/token",
                 data={

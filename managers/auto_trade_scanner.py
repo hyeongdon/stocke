@@ -364,7 +364,7 @@ class AutoTradeScanner:
         prog = self._scan_progress
         if prog and prog.get("active"):
             self._update_scan_progress()  # elapsed 갱신
-            return {
+            load = {
                 "in_progress": True,
                 "phase": prog.get("phase"),
                 "targets_total": int(prog.get("targets_total") or 0),
@@ -378,29 +378,29 @@ class AutoTradeScanner:
                 "elapsed_sec": prog.get("elapsed_sec"),
                 "eta_sec": prog.get("eta_sec"),
                 "started_at": prog.get("started_at"),
-                "last_scan_duration_sec": self._last_scan_duration_sec,
-                "last_scan_targets": self.last_scan_targets,
             }
-        return {
-            "in_progress": False,
-            "phase": None,
-            "targets_total": int(self.last_scan_targets or 0),
-            "scanned": int(self.last_scan_targets or 0),
-            "created": int(self.last_scan_created or 0),
-            "remaining": 0,
-            "current_code": None,
-            "current_name": None,
-            "targets_by": {
-                k: int((v or {}).get("targets") or 0)
-                for k, v in (self.last_scan_by_strategy or {}).items()
-            },
-            "gate_pause_sec": None,
-            "elapsed_sec": None,
-            "eta_sec": 0,
-            "started_at": None,
-            "last_scan_duration_sec": self._last_scan_duration_sec,
-            "last_scan_targets": self.last_scan_targets,
-        }
+        else:
+            load = {
+                "in_progress": False,
+                "phase": None,
+                "targets_total": int(self.last_scan_targets or 0),
+                "scanned": int(self.last_scan_targets or 0),
+                "created": int(self.last_scan_created or 0),
+                "remaining": 0,
+                "current_code": None,
+                "current_name": None,
+                "targets_by": {
+                    k: int((v or {}).get("targets") or 0)
+                    for k, v in (self.last_scan_by_strategy or {}).items()
+                },
+                "gate_pause_sec": None,
+                "elapsed_sec": None,
+                "eta_sec": 0,
+                "started_at": None,
+            }
+        load["last_scan_duration_sec"] = self._last_scan_duration_sec
+        load["last_scan_targets"] = self.last_scan_targets
+        return load
 
     def get_status(self) -> Dict:
         active = self.is_session_active()
@@ -2747,11 +2747,15 @@ class AutoTradeScanner:
 
     async def _has_pending_signal_only(self, stock_code: str) -> bool:
         for db in get_db():
-            return db.query(PendingBuySignal).filter(
-                PendingBuySignal.stock_code == stock_code,
-                PendingBuySignal.status.in_(["PENDING", "PROCESSING", "ORDERED"]),
-            ).first() is not None
+            return self._has_active_pending_signal(db, stock_code)
         return False
+
+    @staticmethod
+    def _has_active_pending_signal(session: Session, stock_code: str) -> bool:
+        return session.query(PendingBuySignal).filter(
+            PendingBuySignal.stock_code == stock_code,
+            PendingBuySignal.status.in_(["PENDING", "PROCESSING", "ORDERED"]),
+        ).first() is not None
 
     async def _has_open_interest(self, stock_code: str) -> bool:
         for db in get_db():
@@ -2762,11 +2766,7 @@ class AutoTradeScanner:
             ).first()
             if holding:
                 return True
-            pending = session.query(PendingBuySignal).filter(
-                PendingBuySignal.stock_code == stock_code,
-                PendingBuySignal.status.in_(["PENDING", "PROCESSING", "ORDERED"]),
-            ).first()
-            if pending:
+            if self._has_active_pending_signal(session, stock_code):
                 return True
         return False
 

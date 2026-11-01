@@ -20,7 +20,7 @@
   const NEAR_PCT = 3;
   const CHART_LEN = 150;
   const REFRESH_MS = 30000;
-  const MA_COLORS = { 5: '#3b82f6', 10: '#f472b6', 20: '#9ae600', 60: '#6b7280' };
+  const MA_COLORS = { 5: '#38bdf8', 10: '#3b82f6', 20: '#9ae600', 60: '#6b7280' };
   const MA_WIDTH = { 5: 1.35, 10: 1.25, 20: 2.6, 60: 2.6 };
   const CHART_MAS = [5, 10, 20, 60];
 

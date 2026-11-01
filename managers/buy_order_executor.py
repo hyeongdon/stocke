@@ -83,6 +83,45 @@ class BuyOrderExecutor:
         self.stop_loss_manager = stop_loss_manager
 
     @staticmethod
+    def _poll_interval(settings: Optional[AutoTradeSettings]) -> int:
+        """설정된 처리 주기를 허용 범위 안의 초 단위 값으로 반환한다."""
+        try:
+            interval = int(getattr(settings, "scan_interval_sec", None) or 60)
+        except (TypeError, ValueError):
+            interval = 60
+        return max(15, min(600, interval))
+
+    @staticmethod
+    def _normalize_watch_pack(strategy: str, pack: str) -> Optional[str]:
+        """WATCHING 게이트에서 사용할 전략 패키지명을 정규화한다."""
+        strategy_key = (strategy or "").strip().lower()
+        pack_key = (pack or "").strip().lower()
+        mapping = {
+            "breakout": "oversold_breakout",
+            "sangtta": "sangtta_breakout",
+            "jongga": "jongga_closing",
+            "fractal": "ema_fractal_pullback",
+            "ymgp": "ymgp",
+        }
+        if strategy_key in mapping:
+            return mapping[strategy_key]
+        if pack_key in {
+            "oversold_breakout",
+            "sangtta_breakout",
+            "jongga_closing",
+            "ema_fractal_pullback",
+            "yeokmaegongpa",
+        }:
+            return {
+                "oversold_breakout": "oversold_breakout",
+                "sangtta_breakout": "sangtta_breakout",
+                "jongga_closing": "jongga_closing",
+                "ema_fractal_pullback": "ema_fractal_pullback",
+                "yeokmaegongpa": "ymgp",
+            }[pack_key]
+        return None
+
+    @staticmethod
     def _is_transient_buy_failure(reason: str, *, retryable_flag: bool = False) -> bool:
         if retryable_flag:
             return True
@@ -90,6 +129,19 @@ class BuyOrderExecutor:
             return False
         lower = reason.lower()
         return any(m.lower() in lower for m in _TRANSIENT_BUY_REASON_MARKERS)
+
+    async def _handle_signal_failure(
+        self,
+        signal: Optional[PendingBuySignal],
+        reason: str,
+    ) -> None:
+        """일시 장애와 영구 실패를 동일한 규칙으로 처리한다."""
+        if signal is None:
+            return
+        if self._is_transient_buy_failure(reason):
+            await self._defer_transient_failure(signal.id, reason)
+            return
+        await self._update_signal_status(signal.id, "FAILED", reason)
 
     @staticmethod
     def _buy_sizing_price(current_price: int, settings: Optional[AutoTradeSettings]) -> int:
@@ -122,18 +174,13 @@ class BuyOrderExecutor:
         active = self.is_session_active()
         settings = get_auto_trade_settings_sync()
         window = linked_trading_session_window_str(settings) if settings else None
-        try:
-            poll = int(getattr(settings, "scan_interval_sec", None) or 60)
-        except (TypeError, ValueError):
-            poll = 60
-        poll = max(15, min(600, poll))
         return {
             "is_running": self.is_running,
             "is_active": active,
             "session_window": window,
             "trade_start_time": settings.trade_start_time if settings else None,
             "trade_end_time": settings.trade_end_time if settings else None,
-            "scan_interval_sec": poll,
+            "scan_interval_sec": self._poll_interval(settings),
             "max_invest_amount": (
                 settings.max_invest_amount if settings else 0
             ),
@@ -143,11 +190,7 @@ class BuyOrderExecutor:
     async def start_processing(self):
         """매수 주문 처리 시작"""
         logger.info("💰 [BUY_EXECUTOR] 매수 주문 처리기 시작")
-        try:
-            poll0 = int(getattr(get_auto_trade_settings_sync(), "scan_interval_sec", None) or 60)
-        except (TypeError, ValueError, AttributeError):
-            poll0 = 60
-        poll0 = max(15, min(600, poll0))
+        poll0 = self._poll_interval(get_auto_trade_settings_sync())
         log_activity("BUY", f"매수 실행기 시작 ({poll0}초 주기)", "info")
         self.is_running = True
         
@@ -175,11 +218,7 @@ class BuyOrderExecutor:
                     # sqlite 'database is locked' 등 일시 오류로 루프가 죽으면 PENDING 신호가 방치된다
                     logger.error(f"💰 [BUY_EXECUTOR] 처리 중 오류 (다음 주기 재시도): {e}")
 
-                try:
-                    poll = int(getattr(self.auto_trade_settings, "scan_interval_sec", None) or 60)
-                except Exception:
-                    poll = 60
-                await asyncio.sleep(max(15, min(600, poll)))
+                await asyncio.sleep(self._poll_interval(self.auto_trade_settings))
         except Exception as e:
             logger.error(f"💰 [BUY_EXECUTOR] 처리 중 오류: {e}")
         finally:
@@ -282,25 +321,20 @@ class BuyOrderExecutor:
         meta = parse_signal_meta(signal)
         strategy = str(meta.get("strategy") or "")
         pack = str(meta.get("gate_pack") or "")
-        if strategy == "breakout" or pack == "oversold_breakout":
-            pack = "oversold_breakout"
-        elif strategy == "sangtta" or pack == "sangtta_breakout":
-            pack = "sangtta_breakout"
-        elif strategy == "ymgp" or pack == "yeokmaegongpa":
+        resolved_pack = self._normalize_watch_pack(strategy, pack)
+
+        if resolved_pack == "ymgp":
             await self._update_signal_status(
                 signal.id, "EXPIRED", "역매공파 전략 폐기"
             )
             return
-        elif strategy == "jongga" or pack in ("jongga_closing", "jongga"):
-            pack = "jongga_closing"
-        elif strategy == "fractal" or pack in ("ema_fractal_pullback", "fractal"):
-            pack = "ema_fractal_pullback"
-        else:
+        if resolved_pack is None:
             # 레거시 등은 WATCHING 미사용 — 정리
             await self._update_signal_status(
                 signal.id, "EXPIRED", "관측 대상 아님"
             )
             return
+        pack = resolved_pack
 
         current_price = await self._get_current_price(signal.stock_code)
         if not current_price:
@@ -416,11 +450,7 @@ class BuyOrderExecutor:
                     await self._process_single_signal(signal)
                 except Exception as e:
                     logger.error(f"💰 [BUY_EXECUTOR] 신호 처리 오류 (ID: {signal.id}): {e}")
-                    reason = str(e)
-                    if self._is_transient_buy_failure(reason):
-                        await self._defer_transient_failure(signal.id, reason)
-                    else:
-                        await self._update_signal_status(signal.id, "FAILED", reason)
+                    await self._handle_signal_failure(signal, str(e))
                 
                 # API 제한을 고려한 대기 (키움 제한: 1분당 20회)
                 debug_tracer.log_checkpoint(f"[{idx}/{len(pending_signals)}] 신호 처리 완료, 5초 대기", "BUY_EXECUTOR")
@@ -449,6 +479,148 @@ class BuyOrderExecutor:
         
         return signals
     
+    async def _mark_signal_processing(self, signal: PendingBuySignal) -> None:
+        """신호를 처리 중 상태로 전환해 중복 주문을 방지한다."""
+        debug_tracer.log_checkpoint("상태 변경: PROCESSING", "BUY_EXECUTOR")
+        await self._update_signal_status(signal.id, "PROCESSING")
+
+    async def _evaluate_pre_order_gate(
+        self,
+        signal: PendingBuySignal,
+        meta: Dict,
+        current_price: int,
+    ) -> Optional[str]:
+        """전략별 시간/슬롯/게이트 재검증을 수행해 실패 이유를 반환한다."""
+        is_add_buy = bool(meta.get("is_add_buy"))
+        strategy = meta.get("strategy")
+        strategy_key = strategy or "legacy"
+        label = {
+            "legacy": "레거시",
+            "sangtta": "상따",
+            "breakout": "돌파",
+            "ymgp": "역매공파",
+            "jongga": "종가배팅",
+            "fractal": "프랙탈",
+            "ma1592": "15/92홀드",
+            "rwm_bowl": "RWM밥그릇",
+            "rsi_ladder": "분할매수",
+        }.get(strategy_key, strategy_key)
+
+        if not is_add_buy:
+            from utils.market_risk_gate import check_market_risk_buy_allowed
+            risk_ok, risk_reason = True, ""
+            for db in get_db():
+                risk_ok, risk_reason = check_market_risk_buy_allowed(
+                    self.auto_trade_settings,
+                    strategy,
+                    session=db,
+                    stock_code=signal.stock_code,
+                )
+                break
+            if not risk_ok:
+                return risk_reason
+
+        if not is_add_buy:
+            allowed, reason = allows_strategy_new_buy(
+                self.auto_trade_settings, strategy_key,
+            )
+            if not allowed:
+                return reason or f"{label} 시간 외"
+
+        if strategy_key == "legacy" and not is_add_buy:
+            from utils.auto_trade_engine import (
+                _count_strategy_slots,
+                effective_legacy_max_slots,
+                is_strategy_slot_available,
+            )
+            for db in get_db():
+                if not is_strategy_slot_available(
+                    self.auto_trade_settings, db, "legacy", for_new_signal=False,
+                ):
+                    used = _count_strategy_slots(db, "legacy")
+                    lim = effective_legacy_max_slots(self.auto_trade_settings)
+                    return f"레거시 슬롯 포화 ({used}/{lim})"
+                break
+
+        if strategy == "ymgp" and not is_add_buy:
+            return "역매공파 전략 폐기"
+
+        from utils.auto_trade_engine import _normalize_strategy_key
+        slot_strategy = _normalize_strategy_key(strategy_key)
+        if slot_strategy in ("sangtta", "breakout", "jongga", "fractal", "ma1592", "rwm_bowl") and not is_add_buy:
+            from utils.auto_trade_engine import (
+                is_strategy_slot_available,
+                _count_strategy_slots,
+                effective_sangtta_max_slots,
+                effective_breakout_max_slots,
+                effective_jongga_max_slots,
+                effective_fractal_max_slots,
+                effective_ma1592_max_slots,
+                effective_rwm_max_slots,
+            )
+            for db in get_db():
+                if not is_strategy_slot_available(
+                    self.auto_trade_settings, db, slot_strategy, for_new_signal=False,
+                ):
+                    used = _count_strategy_slots(db, slot_strategy)
+                    lim = {
+                        "sangtta": effective_sangtta_max_slots,
+                        "breakout": effective_breakout_max_slots,
+                        "jongga": effective_jongga_max_slots,
+                        "fractal": effective_fractal_max_slots,
+                        "ma1592": effective_ma1592_max_slots,
+                        "rwm_bowl": effective_rwm_max_slots,
+                    }[slot_strategy](self.auto_trade_settings)
+                    return f"{label} 슬롯 포화 ({used}/{lim})"
+                break
+
+            if strategy not in ("ma1592", "rwm_bowl"):
+                pack = {
+                    "sangtta": "sangtta_breakout",
+                    "breakout": "oversold_breakout",
+                    "jongga": "jongga_closing",
+                    "fractal": "ema_fractal_pullback",
+                }[strategy]
+                if strategy == "sangtta":
+                    _prev_close = int(meta.get("prev_close") or 0)
+                    if _prev_close > 0 and current_price > 0:
+                        _live_cr = round((current_price - _prev_close) / _prev_close * 100, 2)
+                    else:
+                        _live_cr = meta.get("change_rate")
+                    _gate_change_rate = _live_cr
+                else:
+                    _gate_change_rate = meta.get("change_rate")
+                gate_ok, gate_reason = await evaluate_gate_pack(
+                    self.kiwoom_api,
+                    self.auto_trade_settings,
+                    pack,
+                    signal.stock_code,
+                    current_price,
+                    change_rate=_gate_change_rate,
+                    ctx=meta,
+                    skip_time_check=True,
+                )
+                if not gate_ok:
+                    reason = f"{label} 게이트: {gate_reason}"
+                    if any(k in (gate_reason or "") for k in ("유예", "진입 확인 대기", "HOLD 대기", "프랙탈 대기")):
+                        return reason
+                    return reason
+        elif (
+            self.auto_trade_settings
+            and not is_add_buy
+            and strategy_key != "rsi_ladder"
+            and self.auto_trade_settings.use_entry_gate
+        ):
+            gate_ok, gate_reason = await check_entry_gate(
+                self.kiwoom_api,
+                self.auto_trade_settings,
+                signal.stock_code,
+                current_price,
+            )
+            if not gate_ok:
+                return f"진입 게이트: {gate_reason}"
+        return None
+
     @debug_tracer.trace_async(component="BUY_EXECUTOR")
     async def _process_single_signal(self, signal: PendingBuySignal):
         """단일 신호 처리"""
@@ -461,11 +633,8 @@ class BuyOrderExecutor:
                     signal.stock_code,
                 )
                 return
-            # 처리 중 상태로 먼저 변경 (자기 자신을 '대기 주문'으로 인식하는 문제 방지)
-            debug_tracer.log_checkpoint("상태 변경: PROCESSING", "BUY_EXECUTOR")
-            await self._update_signal_status(signal.id, "PROCESSING")
+            await self._mark_signal_processing(signal)
 
-            # 1~2. 검증·현재가 — 일시 장애는 재시도 후 PENDING 보류
             validation_result = None
             current_price = None
             for attempt in range(self.max_retry_attempts):
@@ -495,10 +664,7 @@ class BuyOrderExecutor:
                     if retryable and attempt < self.max_retry_attempts - 1:
                         await asyncio.sleep(self.retry_delay_seconds)
                         continue
-                    if retryable:
-                        await self._defer_transient_failure(signal.id, reason)
-                    else:
-                        await self._update_signal_status(signal.id, "FAILED", reason)
+                    await self._handle_signal_failure(signal, reason)
                     return
 
                 debug_tracer.log_checkpoint("2단계: 현재가 조회 시작", "BUY_EXECUTOR")
@@ -522,194 +688,28 @@ class BuyOrderExecutor:
                     if attempt < self.max_retry_attempts - 1:
                         await asyncio.sleep(self.retry_delay_seconds)
                         continue
-                    await self._defer_transient_failure(signal.id, reason)
+                    await self._handle_signal_failure(signal, reason)
                     return
                 break
 
             meta = parse_signal_meta(signal)
-            is_add_buy = bool(meta.get("is_add_buy"))
-            # 전략별 시간/슬롯/게이트 재검증 (보호)
-            strategy = meta.get("strategy")
-            # 추가매수(is_add_buy)여도 아래 분기에서 strategy_key를 참조하므로 항상 먼저 할당
-            strategy_key = strategy or "legacy"
-            label = {
-                "legacy": "레거시",
-                "sangtta": "상따",
-                "breakout": "돌파",
-                "ymgp": "역매공파",
-                "jongga": "종가배팅",
-                "fractal": "프랙탈",
-                "ma1592": "15/92홀드",
-                "rwm_bowl": "RWM밥그릇",
-                "rsi_ladder": "분할매수",
-            }.get(strategy_key, strategy_key)
-            if not is_add_buy:
-                from utils.market_risk_gate import check_market_risk_buy_allowed
-                risk_ok, risk_reason = True, ""
-                for db in get_db():
-                    risk_ok, risk_reason = check_market_risk_buy_allowed(
-                        self.auto_trade_settings,
-                        strategy,
-                        session=db,
-                        stock_code=signal.stock_code,
-                    )
-                    break
-                if not risk_ok:
-                    log_activity(
-                        "BUY",
-                        f"{risk_reason} - {signal.stock_name}",
-                        "warn",
-                        stock_code=signal.stock_code,
-                    )
-                    await self._update_signal_status(signal.id, "FAILED", risk_reason)
-                    return
-            if not is_add_buy:
-                allowed, reason = allows_strategy_new_buy(
-                    self.auto_trade_settings, strategy_key,
+            gate_failure = await self._evaluate_pre_order_gate(signal, meta, current_price)
+            if gate_failure:
+                logger.warning(
+                    f"💰 [BUY_EXECUTOR] 주문 직전 게이트 실패 - {signal.stock_name}: {gate_failure}"
                 )
-                if not allowed:
-                    log_activity(
-                        "BUY",
-                        f"{label} 시간 외 - {signal.stock_name}: {reason}",
-                        "warn",
-                        stock_code=signal.stock_code,
-                    )
-                    await self._update_signal_status(
-                        signal.id, "FAILED", reason or f"{label} 시간 외",
-                    )
-                    return
-            if strategy_key == "legacy" and not is_add_buy:
-                from utils.auto_trade_engine import (
-                    _count_strategy_slots,
-                    effective_legacy_max_slots,
-                    is_strategy_slot_available,
+                log_activity(
+                    "BUY",
+                    f"게이트 실패 {signal.stock_name}: {gate_failure}",
+                    "warn",
+                    stock_code=signal.stock_code,
                 )
-                for db in get_db():
-                    if not is_strategy_slot_available(
-                        self.auto_trade_settings, db, "legacy", for_new_signal=False,
-                    ):
-                        used = _count_strategy_slots(db, "legacy")
-                        lim = effective_legacy_max_slots(self.auto_trade_settings)
-                        msg = f"레거시 슬롯 포화 ({used}/{lim})"
-                        log_activity(
-                            "BUY", f"{msg} - {signal.stock_name}", "warn",
-                            stock_code=signal.stock_code,
-                        )
-                        await self._update_signal_status(signal.id, "FAILED", msg)
-                        return
-                    break
-            if strategy == "ymgp" and not is_add_buy:
-                await self._update_signal_status(signal.id, "FAILED", "역매공파 전략 폐기")
+                if any(k in (gate_failure or "") for k in ("유예", "진입 확인 대기", "HOLD 대기", "프랙탈 대기")):
+                    await self._defer_transient_failure(signal.id, gate_failure)
+                    return
+                await self._update_signal_status(signal.id, "FAILED", gate_failure)
                 return
-            from utils.auto_trade_engine import _normalize_strategy_key
-            slot_strategy = _normalize_strategy_key(strategy_key)
-            if slot_strategy in ("sangtta", "breakout", "jongga", "fractal", "ma1592", "rwm_bowl") and not is_add_buy:
-                from utils.auto_trade_engine import (
-                    is_strategy_slot_available,
-                    _count_strategy_slots,
-                    effective_sangtta_max_slots,
-                    effective_breakout_max_slots,
-                    effective_jongga_max_slots,
-                    effective_fractal_max_slots,
-                    effective_ma1592_max_slots,
-                    effective_rwm_max_slots,
-                )
-                for db in get_db():
-                    if not is_strategy_slot_available(
-                        self.auto_trade_settings, db, slot_strategy, for_new_signal=False,
-                    ):
-                        used = _count_strategy_slots(db, slot_strategy)
-                        lim = {
-                            "sangtta": effective_sangtta_max_slots,
-                            "breakout": effective_breakout_max_slots,
-                            "jongga": effective_jongga_max_slots,
-                            "fractal": effective_fractal_max_slots,
-                            "ma1592": effective_ma1592_max_slots,
-                            "rwm_bowl": effective_rwm_max_slots,
-                        }[slot_strategy](self.auto_trade_settings)
-                        msg = f"{label} 슬롯 포화 ({used}/{lim})"
-                        log_activity("BUY", f"{msg} - {signal.stock_name}", "warn", stock_code=signal.stock_code)
-                        await self._update_signal_status(signal.id, "FAILED", msg)
-                        return
-                    break
-                # MA1592: 스캐너 L3 통과 신호 신뢰 — 주문 직전 게이트 재평가 생략
-                # (터치 반등 봉·장부 상태 재평가 시 매수가 막히는 문제 방지)
-                # RWM 밥그릇: 3분봉 눌림 확인봉에서 신호 생성 — 게이트 팩 없음
-                if strategy not in ("ma1592", "rwm_bowl"):
-                    pack = {
-                        "sangtta": "sangtta_breakout",
-                        "breakout": "oversold_breakout",
-                        "jongga": "jongga_closing",
-                        "fractal": "ema_fractal_pullback",
-                    }[strategy]
-                    # 상따 전략은 시그널 생성 시점의 등락률(meta)이 아닌
-                    # 주문 직전 현재가 기준으로 live 등락률을 재계산해 밴드 이탈을 방지
-                    if strategy == "sangtta":
-                        _prev_close = int(meta.get("prev_close") or 0)
-                        if _prev_close > 0 and current_price > 0:
-                            _live_cr = round((current_price - _prev_close) / _prev_close * 100, 2)
-                        else:
-                            _live_cr = meta.get("change_rate")
-                        _gate_change_rate = _live_cr
-                    else:
-                        _gate_change_rate = meta.get("change_rate")
-                    gate_ok, gate_reason = await evaluate_gate_pack(
-                        self.kiwoom_api,
-                        self.auto_trade_settings,
-                        pack,
-                        signal.stock_code,
-                        current_price,
-                        change_rate=_gate_change_rate,
-                        ctx=meta,
-                        skip_time_check=True,
-                    )
-                    if not gate_ok:
-                        reason = f"{label} 게이트: {gate_reason}"
-                        logger.warning(f"💰 [BUY_EXECUTOR] 주문 직전 {label} 게이트 실패 - {signal.stock_name}: {reason}")
-                        # MA20 유예·HARD/SOFT/HOLD 대기는 조건 미충족이 아니라 "아직 대기"
-                        # → 즉시 FAILED 하지 않고 PENDING 보류 후 다음 사이클 재평가
-                        if any(k in (gate_reason or "") for k in ("유예", "진입 확인 대기", "HOLD 대기", "프랙탈 대기")):
-                            log_activity(
-                                "BUY",
-                                f"{label} 게이트 대기 {signal.stock_name}: {gate_reason}",
-                                "info",
-                                stock_code=signal.stock_code,
-                            )
-                            await self._defer_transient_failure(signal.id, reason)
-                            return
-                        log_activity(
-                            "BUY",
-                            f"{label} 게이트 실패 {signal.stock_name}: {gate_reason}",
-                            "warn",
-                            stock_code=signal.stock_code,
-                        )
-                        await self._update_signal_status(signal.id, "FAILED", reason)
-                        return
-            elif (
-                self.auto_trade_settings
-                and not is_add_buy
-                and strategy_key != "rsi_ladder"
-                and self.auto_trade_settings.use_entry_gate
-            ):
-                gate_ok, gate_reason = await check_entry_gate(
-                    self.kiwoom_api,
-                    self.auto_trade_settings,
-                    signal.stock_code,
-                    current_price,
-                )
-                if not gate_ok:
-                    reason = f"진입 게이트: {gate_reason}"
-                    logger.warning(f"💰 [BUY_EXECUTOR] 주문 직전 게이트 실패 - {signal.stock_name}: {reason}")
-                    log_activity(
-                        "BUY",
-                        f"게이트 실패 {signal.stock_name}: {gate_reason}",
-                        "warn",
-                        stock_code=signal.stock_code,
-                    )
-                    await self._update_signal_status(signal.id, "FAILED", reason)
-                    return
             
-            # 3. 매수 수량 계산
             debug_tracer.log_checkpoint("3단계: 매수 수량 계산 시작", "BUY_EXECUTOR")
             is_add_buy = bool(meta.get("is_add_buy"))
             qty_detail: Dict = {}
@@ -766,10 +766,7 @@ class BuyOrderExecutor:
                     "warn",
                     stock_code=signal.stock_code,
                 )
-                if self._is_transient_buy_failure(reason):
-                    await self._defer_transient_failure(signal.id, reason)
-                else:
-                    await self._update_signal_status(signal.id, "FAILED", reason)
+                await self._handle_signal_failure(signal, reason)
                 return
             
             # 4. 매수 주문 실행 (재시도 포함)
@@ -780,11 +777,7 @@ class BuyOrderExecutor:
             
         except Exception as e:
             logger.error(f"💰 [BUY_EXECUTOR] 신호 처리 중 오류 - {signal.stock_name}: {e}")
-            reason = str(e)
-            if self._is_transient_buy_failure(reason):
-                await self._defer_transient_failure(signal.id, reason)
-            else:
-                await self._update_signal_status(signal.id, "FAILED", reason)
+            await self._handle_signal_failure(signal, str(e))
     
     async def _validate_buy_conditions(self, signal: PendingBuySignal) -> Dict:
         """매수 전 검증"""

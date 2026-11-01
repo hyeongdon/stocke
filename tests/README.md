@@ -1,6 +1,8 @@
 # 테스트 파일 구조
 
-주식 자동매매 시스템의 테스트 파일들을 기능별로 분류했습니다.
+주식 자동매매 시스템의 자동 테스트와 수동 점검 스크립트를 기능별로 분류했습니다.
+`test_*.py` 파일 중 일부는 pytest 테스트가 아니라 실제 DB/API를 사용하는 수동 스크립트입니다.
+실행 전에 각 스크립트의 옵션과 부작용을 확인하세요.
 
 ## 📁 폴더 구조
 
@@ -29,15 +31,6 @@ python tests/buy_order/test_buy_order.py --execute
 python tests/buy_order/test_buy_order.py --signal-id 123 --execute
 ```
 
-### test_buy_debug.py
-**용도**: 매수 주문 각 단계별 상세 디버깅
-```bash
-python tests/buy_order/test_buy_debug.py
-```
-- 자동매매 설정 확인
-- 신호 검증 단계별 확인
-- 현재가 조회 및 수량 계산 확인
-
 ### test_buy_executor_debug.py
 **용도**: BuyOrderExecutor 내부 로직 디버깅
 ```bash
@@ -60,9 +53,6 @@ python tests/signal/test_signal_manager.py --stock-code 005930 --stock-name "삼
 # 신호 타입 지정
 python tests/signal/test_signal_manager.py --stock-code 005930 --stock-name "삼성전자" --signal-type reference
 ```
-
-### test_signal_creation_debug.py
-**용도**: 신호 생성 프로세스 디버깅
 
 ### test_condition_monitor.py
 **용도**: 조건식 모니터링 테스트
@@ -114,9 +104,6 @@ python tests/api/test_naver_crawler.py
 python tests/api/test_watchlist_sync.py
 ```
 
-### test_debug_mode.py
-**용도**: 전반적인 디버그 모드 테스트
-
 ---
 
 ## 🚀 빠른 시작
@@ -139,7 +126,7 @@ python tests/buy_order/test_buy_order.py --execute
 ### 3. 문제 발생 시 디버깅
 ```bash
 # 매수 프로세스 단계별 확인
-python tests/buy_order/test_buy_debug.py
+python tests/buy_order/test_buy_executor_debug.py
 
 # API 토큰 확인
 python tests/api/test_token.py
@@ -208,4 +195,3 @@ db.commit()
 
 - [프로젝트 메인 README](../README.md)
 - [프로세스 흐름도](../PROCESS_FLOW.md)
-

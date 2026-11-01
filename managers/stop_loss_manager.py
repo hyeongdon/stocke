@@ -81,6 +81,25 @@ STALE_SELL_ORDER_MINUTES = 15
 NO_STOP_STRATEGIES = {
     "rsi_ladder": "손절 없음 · 사다리 매도 규칙 (+15% 무장 후 MA10/15/20 단계 매도)",
 }
+NO_STOP_EXIT_KEYS = (
+    "stop_loss_rate",
+    "stop_loss_price_pct",
+    "effective_stop_price",
+    "effective_stop_reason",
+    "stop_distance_pct",
+    "trailing_start_rate",
+    "trailing_start_price",
+    "trailing_floor_price",
+    "trailing_stop_pct",
+    "take_profit_price",
+    "take_profit_rate",
+    "take_profit_rate_setting",
+)
+
+
+def _strategy_key_name(strategy_key: Optional[str]) -> str:
+    """전략 키를 비교하기 쉬운 소문자 형식으로 정규화한다."""
+    return (strategy_key or "").strip().lower()
 
 
 def is_sell_qty_shortage_error(msg: Optional[str]) -> bool:
@@ -389,7 +408,7 @@ class StopLossManager:
         """전략에 실제 적용되는 고정 손절률을 반환한다."""
         if not settings:
             return None
-        sk = (strategy_key or "").strip().lower()
+        sk = _strategy_key_name(strategy_key)
         if sk in NO_STOP_STRATEGIES:
             return None
         field = {
@@ -412,17 +431,13 @@ class StopLossManager:
     ) -> dict:
         """exit_levels에 전략별 설정 손절율·%손절가를 명시한다."""
         out = dict(ex or {})
-        if (strategy_key or "").strip().lower() in NO_STOP_STRATEGIES:
-            for k in (
-                "stop_loss_rate", "stop_loss_price_pct", "effective_stop_price", "effective_stop_reason",
-                "stop_distance_pct", "trailing_start_rate", "trailing_start_price", "trailing_floor_price",
-                "trailing_stop_pct", "take_profit_price", "take_profit_rate", "take_profit_rate_setting",
-            ):
+        if _strategy_key_name(strategy_key) in NO_STOP_STRATEGIES:
+            for k in NO_STOP_EXIT_KEYS:
                 out[k] = None
             out["trailing_active"] = False
             out["trailing_armed"] = False
             out["levels"] = []
-            out["stop_policy"] = NO_STOP_STRATEGIES[(strategy_key or "").strip().lower()]
+            out["stop_policy"] = NO_STOP_STRATEGIES[_strategy_key_name(strategy_key)]
             return out
         if not settings or not buy_price:
             return out

@@ -14,7 +14,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="theme-color" content="#131720">
   <link rel="stylesheet" href="/static/dashboard.css?v=126">
-  <link rel="stylesheet" href="/static/indicators.css?v=4">
+  <link rel="stylesheet" href="/static/indicators.css?v=5">
   <script src="/static/theme-sync.js?v=2"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
@@ -40,27 +40,41 @@
   </header>
 
   <div class="wrap">
-    <section class="card compact-card">
-      <div class="card-head">
-        <div>
+    <section class="card compact-card ind-section ind-funds-section">
+      <div class="card-head ind-section-head">
+        <div class="ind-section-copy">
+          <div class="ind-kicker"><span class="ind-live-dot"></span>MARKET LIQUIDITY</div>
           <h3>증시자금</h3>
-          <div class="hint">금융투자협회 FreeSIS · 전 영업일 기준 · 단위: <b>조원</b> (반대매매 비중은 %). <span id="fundsUpdated"></span></div>
+          <div class="hint">금융투자협회 FreeSIS · 전 영업일 기준 · 조원 단위, 반대매매 비중은 %</div>
+          <div class="ind-updated" id="fundsUpdated"></div>
         </div>
-        <div class="ind-grain-switch" role="tablist" aria-label="조회 기간">
+        <div class="ind-grain-switch ind-range-switch" role="tablist" aria-label="조회 기간">
           <button type="button" class="ind-range-btn" data-range="60">3개월</button>
           <button type="button" class="ind-range-btn" data-range="125">6개월</button>
-          <button type="button" class="ind-range-btn" data-range="250">1년</button>
+          <button type="button" class="ind-range-btn active" data-range="250">1년</button>
           <button type="button" class="ind-range-btn" data-range="750">3년</button>
           <button type="button" class="ind-range-btn" data-range="1250">5년</button>
           <button type="button" class="ind-range-btn" data-range="2500">10년</button>
-          <button type="button" class="ind-range-btn active" data-range="0">전체</button>
+          <button type="button" class="ind-range-btn" data-range="0">전체</button>
         </div>
       </div>
       <div class="card-body">
         <div class="ind-fund-tiles" id="fundTiles">불러오는 중...</div>
         <div class="ind-fund-charts">
-          <div class="ind-chart-wrap"><canvas id="fundChart" height="220"></canvas></div>
-          <div class="ind-chart-wrap"><canvas id="forcedChart" height="220"></canvas></div>
+          <div class="ind-chart-panel">
+            <div class="ind-chart-heading">
+              <div><h4>증시 대기자금</h4><span>투자자예탁금과 신용융자 잔고</span></div>
+              <span class="ind-chart-unit">단위 · 조원</span>
+            </div>
+            <div class="ind-chart-canvas"><canvas id="fundChart"></canvas></div>
+          </div>
+          <div class="ind-chart-panel">
+            <div class="ind-chart-heading">
+              <div><h4>시장 부담 지표</h4><span>반대매매 금액과 비중</span></div>
+              <span class="ind-chart-unit">억원 · %</span>
+            </div>
+            <div class="ind-chart-canvas"><canvas id="forcedChart"></canvas></div>
+          </div>
         </div>
       </div>
     </section>
@@ -91,6 +105,6 @@
   </div>
 
   <script src="/static/indicators.js?v=2"></script>
-  <script src="/static/indicators_funds.js?v=2"></script>
+  <script src="/static/indicators_funds.js?v=4"></script>
 </body>
 </html>

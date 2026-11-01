@@ -1,8 +1,8 @@
 import logging
 import time
 from datetime import datetime, timedelta
-from typing import Dict, Optional
 from enum import Enum
+from typing import Any, Dict, List, Optional
 
 from core.config import Config
 
@@ -20,14 +20,14 @@ class APIRateLimiter:
     
     def __init__(self):
         self.status = APILimitStatus.NORMAL
-        self.limit_until = None
+        self.limit_until: Optional[datetime] = None
         self.warning_count = 0
         self.max_warnings = 5  # 최대 경고 횟수
         self.warning_reset_hours = 1  # 경고 리셋 시간 (시간)
         self.last_warning_reset = datetime.now()
         
         # API 호출 기록
-        self.call_history = []
+        self.call_history: List[Dict[str, Any]] = []
         self.max_history_size = 100
         self.rate_limit_window = 60  # 1분 윈도우
         self.max_calls_per_window = Config.API_MAX_CALLS_PER_MIN
@@ -36,6 +36,13 @@ class APIRateLimiter:
         # 제한 복구 설정
         self.limit_duration_minutes = Config.API_LIMIT_DURATION_MIN
         self.recovery_check_interval = 300  # 복구 확인 간격 (초)
+
+    def _recent_calls(self, current_time: datetime) -> List[Dict[str, Any]]:
+        window_start = current_time - timedelta(seconds=self.rate_limit_window)
+        return [
+            call for call in self.call_history
+            if call["timestamp"] >= window_start
+        ]
 
     def seconds_until_available(self) -> float:
         """다음 API 호출 가능까지 대기 시간(초). 0이면 즉시 가능."""
@@ -48,8 +55,7 @@ class APIRateLimiter:
             if elapsed < self.min_call_interval:
                 return self.min_call_interval - elapsed
         # 분당 한도: 가장 오래된 호출이 윈도우 밖으로 나갈 때까지
-        window_start = current_time - timedelta(seconds=self.rate_limit_window)
-        recent = [c for c in self.call_history if c["timestamp"] >= window_start]
+        recent = self._recent_calls(current_time)
         if len(recent) >= self.max_calls_per_window:
             oldest = min(c["timestamp"] for c in recent)
             return max(0.05, (oldest + timedelta(seconds=self.rate_limit_window) - current_time).total_seconds())
@@ -99,11 +105,7 @@ class APIRateLimiter:
             if len(self.call_history) > self.max_history_size:
                 self.call_history = self.call_history[-self.max_history_size:]
             
-            window_start = current_time - timedelta(seconds=self.rate_limit_window)
-            recent_calls = [
-                call for call in self.call_history
-                if call["timestamp"] >= window_start
-            ]
+            recent_calls = self._recent_calls(current_time)
             
             remaining_calls = self.max_calls_per_window - len(recent_calls)
             usage_percent = (len(recent_calls) / self.max_calls_per_window) * 100
@@ -211,11 +213,7 @@ class APIRateLimiter:
         try:
             current_time = datetime.now()
             
-            window_start = current_time - timedelta(seconds=self.rate_limit_window)
-            recent_calls = [
-                call for call in self.call_history
-                if call["timestamp"] >= window_start
-            ]
+            recent_calls = self._recent_calls(current_time)
             
             remaining_calls = self.max_calls_per_window - len(recent_calls)
             usage_percent = (len(recent_calls) / self.max_calls_per_window) * 100

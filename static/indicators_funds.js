@@ -1,7 +1,7 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   let rows = [];
-  let range = 0;
+  let range = 250;
   let fundChart;
   let forcedChart;
 
@@ -44,9 +44,12 @@
     return a[key] - b[key];
   }
 
-  function tile(label, value, sub) {
-    return `<div class="ind-fund-tile">
-      <div class="lbl">${esc(label)}</div>
+  function tile(label, date, value, sub, tone) {
+    return `<div class="ind-fund-tile tone-${tone}">
+      <div class="ind-fund-tile-head">
+        <div class="lbl">${esc(label)}</div>
+        <div class="ind-fund-date">${esc(date || '—')}</div>
+      </div>
       <div class="val">${value}</div>
       <div class="chg">${sub}</div>
     </div>`;
@@ -66,24 +69,32 @@
     const u = jo(diff('uncollected'));
     $('fundTiles').innerHTML = [
       tile(
-        `투자자예탁금 · ${dep ? dep.date : '—'}`,
+        '투자자예탁금',
+        dep?.date,
         `${fmt(jo(dep?.deposit), 2)}조`,
         `전일 대비 ${delta(d, 2, '조')}`,
+        'deposit',
       ),
       tile(
-        `신용융자 잔고 · ${cr ? cr.date : '—'}`,
+        '신용융자 잔고',
+        cr?.date,
         `${fmt(jo(cr?.credit), 2)}조`,
         `${delta(c, 2, '조')} · 코스피 ${fmt(jo(cr?.credit_kospi), 1)} / 코스닥 ${fmt(jo(cr?.credit_kosdaq), 1)}`,
+        'credit',
       ),
       tile(
         '위탁매매 미수금',
+        unc?.date,
         `${fmt(jo(unc?.uncollected), 2)}조`,
         `전일 대비 ${delta(u, 2, '조')}`,
+        'uncollected',
       ),
       tile(
         '반대매매 비중',
+        fs?.date,
         `${fmt(fs?.forced_sale_pct, 1)}%`,
         `반대매매 ${fmt(eok(fs?.forced_sale), 0)}억원`,
+        'forced',
       ),
     ].join('');
   }
@@ -92,12 +103,20 @@
     return range > 0 ? rows.slice(-range) : rows;
   }
 
-  const axisTicks = { color: '#94a3b8' };
-  const gridColor = 'rgba(255,255,255,0.06)';
+  function chartColor(name, fallback) {
+    return getComputedStyle(document.body).getPropertyValue(name).trim() || fallback;
+  }
 
   function renderCharts() {
     const view = visibleRows();
     const labels = view.map((r) => r.date.slice(2));
+    const axisTicks = { color: chartColor('--ind-chart-label', '#94a3b8'), font: { size: 10 } };
+    const gridColor = chartColor('--ind-chart-grid', 'rgba(255,255,255,0.06)');
+    const depositColor = chartColor('--ind-deposit', '#38bdf8');
+    const creditColor = chartColor('--ind-credit', '#f472b6');
+    const forcedColor = chartColor('--ind-forced', '#f87171');
+    const forcedFill = chartColor('--ind-forced-fill', 'rgba(248,113,113,.42)');
+    const uncollectedColor = chartColor('--ind-uncollected', '#fbbf24');
 
     if (fundChart) fundChart.destroy();
     fundChart = new Chart($('fundChart').getContext('2d'), {
@@ -105,18 +124,26 @@
       data: {
         labels,
         datasets: [
-          { label: '투자자예탁금(조)', data: view.map((r) => jo(r.deposit)), borderColor: '#38bdf8', yAxisID: 'y', tension: 0.2, pointRadius: 0, spanGaps: true },
-          { label: '신용융자(조)', data: view.map((r) => jo(r.credit)), borderColor: '#f472b6', yAxisID: 'y1', tension: 0.2, pointRadius: 0, spanGaps: true },
+          { label: '투자자예탁금(조)', data: view.map((r) => jo(r.deposit)), borderColor: depositColor, yAxisID: 'y', tension: 0.28, borderWidth: 2.5, pointRadius: 0, pointHoverRadius: 3, spanGaps: true },
+          { label: '신용융자(조)', data: view.map((r) => jo(r.credit)), borderColor: creditColor, yAxisID: 'y1', tension: 0.28, borderWidth: 2.5, pointRadius: 0, pointHoverRadius: 3, spanGaps: true },
         ],
       },
       options: {
         responsive: true,
+        maintainAspectRatio: false,
         interaction: { mode: 'index', intersect: false },
-        plugins: { legend: { labels: { color: '#cbd5e1' } } },
+        plugins: {
+          legend: {
+            position: 'top',
+            align: 'start',
+            labels: { color: chartColor('--text-secondary', '#cbd5e1'), usePointStyle: true, pointStyle: 'line', boxWidth: 22, boxHeight: 8, padding: 16, font: { size: 10, weight: '600' } },
+          },
+          tooltip: { backgroundColor: chartColor('--ind-tooltip-bg', '#131720'), titleColor: chartColor('--text', '#e8edf5'), bodyColor: chartColor('--text-secondary', '#b4bcc9'), borderColor: chartColor('--border', '#252b38'), borderWidth: 1, padding: 10, displayColors: true, usePointStyle: true },
+        },
         scales: {
-          x: { ticks: { ...axisTicks, maxRotation: 0, autoSkip: true, maxTicksLimit: 8 }, grid: { color: gridColor } },
-          y: { position: 'left', ticks: axisTicks, grid: { color: gridColor }, title: { display: true, text: '예탁금', color: '#38bdf8' } },
-          y1: { position: 'right', ticks: axisTicks, grid: { drawOnChartArea: false }, title: { display: true, text: '신용융자', color: '#f472b6' } },
+          x: { border: { display: false }, ticks: { ...axisTicks, maxRotation: 0, autoSkip: true, maxTicksLimit: 8 }, grid: { display: false } },
+          y: { position: 'left', border: { display: false }, ticks: axisTicks, grid: { color: gridColor }, title: { display: true, text: '예탁금', color: depositColor, font: { size: 10, weight: '600' } } },
+          y1: { position: 'right', border: { display: false }, ticks: axisTicks, grid: { drawOnChartArea: false }, title: { display: true, text: '신용융자', color: creditColor, font: { size: 10, weight: '600' } } },
         },
       },
     });
@@ -126,18 +153,26 @@
       data: {
         labels,
         datasets: [
-          { type: 'bar', label: '반대매매(억원)', data: view.map((r) => eok(r.forced_sale)), backgroundColor: 'rgba(248,113,113,0.55)', yAxisID: 'y' },
-          { type: 'line', label: '비중(%)', data: view.map((r) => r.forced_sale_pct), borderColor: '#fbbf24', yAxisID: 'y1', tension: 0.2, pointRadius: 0, spanGaps: true },
+          { type: 'bar', label: '반대매매(억원)', data: view.map((r) => eok(r.forced_sale)), backgroundColor: forcedFill, hoverBackgroundColor: forcedColor, borderRadius: 3, borderSkipped: false, maxBarThickness: 9, yAxisID: 'y' },
+          { type: 'line', label: '비중(%)', data: view.map((r) => r.forced_sale_pct), borderColor: uncollectedColor, yAxisID: 'y1', tension: 0.28, borderWidth: 2.5, pointRadius: 0, pointHoverRadius: 3, spanGaps: true },
         ],
       },
       options: {
         responsive: true,
+        maintainAspectRatio: false,
         interaction: { mode: 'index', intersect: false },
-        plugins: { legend: { labels: { color: '#cbd5e1' } } },
+        plugins: {
+          legend: {
+            position: 'top',
+            align: 'start',
+            labels: { color: chartColor('--text-secondary', '#cbd5e1'), usePointStyle: true, pointStyle: 'line', boxWidth: 22, boxHeight: 8, padding: 16, font: { size: 10, weight: '600' } },
+          },
+          tooltip: { backgroundColor: chartColor('--ind-tooltip-bg', '#131720'), titleColor: chartColor('--text', '#e8edf5'), bodyColor: chartColor('--text-secondary', '#b4bcc9'), borderColor: chartColor('--border', '#252b38'), borderWidth: 1, padding: 10, displayColors: true, usePointStyle: true },
+        },
         scales: {
-          x: { ticks: { ...axisTicks, maxRotation: 0, autoSkip: true, maxTicksLimit: 6 }, grid: { color: gridColor } },
-          y: { position: 'left', ticks: axisTicks, grid: { color: gridColor } },
-          y1: { position: 'right', ticks: axisTicks, grid: { drawOnChartArea: false } },
+          x: { border: { display: false }, ticks: { ...axisTicks, maxRotation: 0, autoSkip: true, maxTicksLimit: 6 }, grid: { display: false } },
+          y: { position: 'left', border: { display: false }, ticks: axisTicks, grid: { color: gridColor } },
+          y1: { position: 'right', border: { display: false }, ticks: axisTicks, grid: { drawOnChartArea: false } },
         },
       },
     });
@@ -172,5 +207,13 @@
     btn.addEventListener('click', () => setRange(Number(btn.getAttribute('data-range'))));
   });
   $('btnRefresh')?.addEventListener('click', load);
+  let chartTheme = document.body.classList.contains('mode-real') ? 'real' : 'dark';
+  new MutationObserver(() => {
+    const nextTheme = document.body.classList.contains('mode-real') ? 'real' : 'dark';
+    if (nextTheme !== chartTheme) {
+      chartTheme = nextTheme;
+      if (rows.length) renderCharts();
+    }
+  }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
   load();
 })();
