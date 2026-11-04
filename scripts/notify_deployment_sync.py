@@ -23,7 +23,7 @@ def main() -> int:
 
     icon = "✅" if args.status == "success" else "❌"
     message = f"{icon} 실서버 소스 동기화\n{args.message}"
-    return 0 if notifier.send_message(message) else 1
+    return 0 if notifier.send_message(message, notification_key="deployment.sync") else 1
 
 
 if __name__ == "__main__":

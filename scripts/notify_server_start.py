@@ -78,7 +78,7 @@ def main() -> int:
         f"포트: {port} (헬스체크 OK)\n"
         f"대시보드: http://127.0.0.1:{port}/dashboard"
     )
-    ok = notifier.send_message(msg)
+    ok = notifier.send_message(msg, notification_key="server.start")
     return 0 if ok else 1
 
 

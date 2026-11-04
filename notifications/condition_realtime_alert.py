@@ -282,7 +282,7 @@ class ConditionRealtimeAlerter:
         msg = build_entry_message(
             condition_name, stock_code, stock_name=name, values=enriched,
         )
-        ok = self.notifier.send_message(msg)
+        ok = self.notifier.send_message(msg, notification_key="condition.realtime")
         logger.info(
             f"실시간 편입 알림 {'성공' if ok else '실패'}: {condition_name} {name or stock_code}({stock_code})"
         )

@@ -43,7 +43,7 @@ def main() -> int:
     if args.note:
         lines.append(f"참고: {args.note}")
     lines.append("뉴스/테마 KeyBERT 배치 중일 수 있습니다.")
-    ok = notifier.send_message("\n".join(lines))
+    ok = notifier.send_message("\n".join(lines), notification_key="system.cpu")
     print("telegram ok" if ok else "telegram fail")
     return 0 if ok else 1
 

@@ -62,14 +62,34 @@ class TelegramNotifier:
             chunks.append(current)
         return chunks
 
-    def send_message(self, text: str, parse_mode: Optional[str] = None, reply_markup: Optional[dict] = None) -> bool:
+    def send_message(
+        self,
+        text: str,
+        parse_mode: Optional[str] = None,
+        reply_markup: Optional[dict] = None,
+        *,
+        notification_key: Optional[str] = None,
+    ) -> bool:
         """텍스트 메시지를 전송. 길이 제한 초과 시 여러 건으로 나눠 전송."""
-        return self.send_message_id(text, parse_mode=parse_mode, reply_markup=reply_markup) is not None
+        return self.send_message_id(
+            text,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+            notification_key=notification_key,
+        ) is not None
 
-    def send_message_id(self, text: str, parse_mode: Optional[str] = None, reply_markup: Optional[dict] = None) -> Optional[int]:
+    def send_message_id(
+        self,
+        text: str,
+        parse_mode: Optional[str] = None,
+        reply_markup: Optional[dict] = None,
+        *,
+        notification_key: Optional[str] = None,
+    ) -> Optional[int]:
         """전송 후 첫 메시지 id. 실패하면 None."""
         if not self.is_configured():
             logger.error("텔레그램 설정 누락: TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID 를 확인하세요.")
+            self._record_delivery(notification_key, False, "텔레그램 설정 누락")
             return None
 
         prefix = self._mode_prefix()
@@ -92,6 +112,9 @@ class TelegramNotifier:
                 body = resp.json() if resp.content else {}
                 if resp.status_code != 200 or not body.get("ok", False):
                     logger.error(f"텔레그램 전송 실패: status={resp.status_code}, body={resp.text}")
+                    self._record_delivery(
+                        notification_key, False, f"Telegram HTTP {resp.status_code}",
+                    )
                     return None
                 mid = ((body.get("result") or {}).get("message_id"))
                 if first_id is None and mid is not None:
@@ -99,8 +122,29 @@ class TelegramNotifier:
                 logger.info("텔레그램 메시지 전송 성공")
             except Exception as e:
                 logger.error(f"텔레그램 전송 중 오류: {e}")
+                self._record_delivery(
+                    notification_key, False, f"전송 예외: {type(e).__name__}",
+                )
                 return None
+        self._record_delivery(
+            notification_key,
+            first_id is not None,
+            None if first_id is not None else "메시지 ID가 없는 응답",
+        )
         return first_id
+
+    @staticmethod
+    def _record_delivery(
+        notification_key: Optional[str],
+        success: bool,
+        error: Optional[str],
+    ) -> None:
+        try:
+            from utils.notification_registry import record_notification_delivery
+
+            record_notification_delivery(notification_key, success, error)
+        except Exception:
+            logger.exception("텔레그램 발송 이력 DB 기록 실패")
 
     def get_updates(self, offset: Optional[int] = None) -> List[dict]:
         """버튼 응답만 짧게 조회. 대기하지 않는다."""

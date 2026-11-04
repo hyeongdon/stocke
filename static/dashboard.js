@@ -1238,19 +1238,478 @@ async function loadStatus() {
 }
 
 /* ===== 텔레그램 ===== */
+let activeNotificationCategory = 'condition';
+let conditionAlertConfigs = [];
+let conditionCatalog = [];
+let conditionAlertDraftCounter = 0;
+
+function notificationCategory(category) {
+  if (category === 'condition' || category === 'batch' || category === 'system') return category;
+  if (category === 'trade' || category === 'strategy') return 'trade';
+  return 'system';
+}
+
+function notificationTime(value) {
+  if (!value) return '-';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString('ko-KR');
+}
+
+function renderNotificationRegistry(notifications, deliveries, data) {
+  const body = $('notificationRegistryBody');
+  if (!body) return;
+  const categories = [
+    { key: 'condition', label: '조건식 알림' },
+    { key: 'batch', label: '배치 알림' },
+    { key: 'system', label: '시스템 알림' },
+    { key: 'trade', label: '거래내역 알림' },
+  ];
+  const activeCategory = categories.some((item) => item.key === activeNotificationCategory)
+    ? activeNotificationCategory
+    : 'condition';
+  activeNotificationCategory = activeCategory;
+  conditionAlertConfigs = data.condition_alert_configs || [];
+  conditionCatalog = data.available_conditions || [];
+  body.innerHTML = `<div class="notification-category-tabs" role="group" aria-label="알림 카테고리">
+    ${categories.map((item) => `<button type="button" class="notification-category-tab${item.key === activeCategory ? ' active' : ''}" aria-pressed="${item.key === activeCategory}" data-notification-category="${item.key}">${item.label}</button>`).join('')}
+  </div><div id="notificationCategoryContent"></div>`;
+
+  const renderCategory = (category) => {
+    activeNotificationCategory = category;
+    body.querySelectorAll('.notification-category-tab').forEach((tab) => {
+      const selected = tab.dataset.notificationCategory === category;
+      tab.classList.toggle('active', selected);
+      tab.setAttribute('aria-pressed', String(selected));
+    });
+    const content = $('notificationCategoryContent');
+    const categoryLabel = categories.find((item) => item.key === category)?.label || '알림';
+    const historyCategory = $('notificationHistoryCategory');
+    if (historyCategory) historyCategory.textContent = categoryLabel;
+
+    let categoryHtml = '';
+    if (category === 'condition') {
+      categoryHtml = renderConditionAlertConfigs(data.configured);
+    } else {
+      const categoryNotifications = notifications.filter(
+        (item) => notificationCategory(item.category) === category,
+      );
+      if (!categoryNotifications.length) {
+        categoryHtml = emptyRow('이 카테고리에 등록된 알림이 없습니다.', '🔔');
+      } else {
+        const statusNames = { sent: '전송 성공', failed: '전송 실패' };
+        categoryHtml = `<div class="table-wrap"><table class="tbl">
+          <thead><tr><th>알림</th><th>발송 조건/일정</th><th>관리 방식</th><th>최근 전송</th><th>결과</th><th class="num">성공/시도</th></tr></thead>
+          <tbody>${categoryNotifications.map((item) => {
+            const statusClass = item.last_status === 'sent' ? 'up' : (item.last_status === 'failed' ? 'down' : 'flat');
+            return `<tr>
+              <td>${esc(item.name)}</td>
+              <td>${esc(item.schedule)}</td>
+              <td>${esc(item.schedule_source)}</td>
+              <td>${notificationTime(item.last_attempt_at)}</td>
+              <td class="${statusClass}">${statusNames[item.last_status] || '전송 기록 없음'}</td>
+              <td class="num">${num(item.success_count || 0)} / ${num(item.attempt_count || 0)}</td>
+            </tr>`;
+          }).join('')}</tbody></table></div>`;
+      }
+    }
+    if (content) content.innerHTML = categoryHtml;
+    if (category === 'condition') bindConditionAlertControls(content, data.configured);
+
+    const categoryKeys = new Set(
+      notifications
+        .filter((item) => notificationCategory(item.category) === category)
+        .map((item) => item.key),
+    );
+    renderNotificationHistory(deliveries.filter((item) => categoryKeys.has(item.key)));
+  };
+
+  body.querySelectorAll('.notification-category-tab').forEach((tab) => {
+    tab.addEventListener('click', () => renderCategory(tab.dataset.notificationCategory));
+  });
+  renderCategory(activeCategory);
+}
+
+const CONDITION_ALERT_INTERVALS = [
+  [60, '1분'],
+  [300, '5분'],
+  [600, '10분'],
+  [900, '15분'],
+  [1800, '30분'],
+  [3600, '1시간'],
+];
+
+function renderConditionAlertConfigs(configured) {
+  const options = new Map();
+  conditionCatalog.forEach((condition) => {
+    if (condition.condition_name) options.set(condition.condition_name, condition.condition_name);
+  });
+  conditionAlertConfigs.forEach((config) => {
+    (config.condition_names || []).forEach((name) => {
+      if (!options.has(name)) options.set(name, `${name} (목록 확인 필요)`);
+    });
+  });
+
+  const rows = conditionAlertConfigs.map((config) => {
+    const rowKey = config.id ? `saved-${config.id}` : `draft-${config.draft_key}`;
+    const selectedNames = new Set(config.condition_names || []);
+    const isIntraday = Boolean(config.is_intraday);
+    const intervals = isIntraday
+      ? CONDITION_ALERT_INTERVALS.filter(([seconds]) => seconds === 600 || seconds === 3600)
+      : CONDITION_ALERT_INTERVALS;
+    const interval = intervals.some(([seconds]) => seconds === config.interval_seconds)
+      ? config.interval_seconds
+      : 600;
+    const conditionOptions = Array.from(options, ([value, label]) => (
+      `<option value="${esc(value)}"${selectedNames.has(value) ? ' selected' : ''}>${esc(label)}</option>`
+    )).join('');
+    return `<tr class="condition-alert-row" data-config-key="${rowKey}">
+      <td><input class="condition-alert-name" type="text" maxlength="120" value="${esc(config.name || '')}" aria-label="알림 이름"></td>
+      <td><div class="condition-alert-picker">
+        <button type="button" class="condition-alert-picker-trigger" aria-haspopup="dialog" aria-label="조건식 선택">
+          ${conditionAlertPickerSummary(config.condition_names || [])}
+        </button>
+        <select class="condition-alert-conditions" multiple hidden aria-label="선택된 조건식">${conditionOptions}</select>
+      </div></td>
+      <td><select class="condition-alert-interval" aria-label="알림 주기">
+        ${intervals.map(([seconds, label]) => `<option value="${seconds}"${seconds === interval ? ' selected' : ''}>${label}</option>`).join('')}
+      </select></td>
+      <td><label class="condition-alert-enabled"><input class="condition-alert-intraday-input" type="checkbox"${isIntraday ? ' checked' : ''}> 장중만</label></td>
+      <td><label class="condition-alert-enabled"><input class="condition-alert-enabled-input" type="checkbox"${config.is_enabled ? ' checked' : ''}> 사용</label></td>
+      <td>${conditionAlertStatusMarkup(config)}</td>
+      <td class="condition-alert-actions">
+        <button type="button" class="btn sm primary" data-alert-action="save">저장</button>
+        <button type="button" class="btn sm" data-alert-action="run"${configured && config.id ? '' : ' disabled'}>지금 전송</button>
+        <button type="button" class="btn sm danger" data-alert-action="delete">${config.id ? '삭제' : '취소'}</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  const catalogHint = conditionCatalog.length
+    ? `${conditionCatalog.length}개 조건식 사용 가능`
+    : '조건식 목록을 불러오지 못했습니다. 목록을 새로고침한 뒤 설정하세요.';
+  return `<div class="condition-alert-toolbar">
+    <span class="hint">${esc(catalogHint)} · 장중만: 거래일 09:00~20:00 (NXT 포함) · 종목이 있을 때만 메시지를 보냅니다.</span>
+    <span class="hint" id="conditionAlertStatusHint"></span>
+    <div class="condition-alert-toolbar-actions">
+      <button type="button" class="btn sm" data-alert-action="refresh-status">상태 새로고침</button>
+      <button type="button" class="btn sm" data-alert-action="refresh-conditions">조건식 새로고침</button>
+      <button type="button" class="btn sm primary" data-alert-action="add">알림 추가</button>
+    </div>
+  </div>
+  <div class="table-wrap"><table class="tbl condition-alert-table">
+    <thead><tr><th>알림 이름</th><th>조건식 (복수 선택)</th><th>주기</th><th>시간대</th><th>상태</th><th>최근 실행</th><th>관리</th></tr></thead>
+    <tbody>${rows || '<tr><td colspan="7"><div class="empty">설정된 조건식 알림이 없습니다. 알림 추가를 눌러 설정하세요.</div></td></tr>'}</tbody>
+  </table></div>`;
+}
+
+function conditionAlertPickerSummary(names) {
+  const selected = names || [];
+  const chips = selected.slice(0, 2).map((name) => (
+    `<span class="condition-alert-picker-chip">${esc(name)}</span>`
+  )).join('');
+  const remainder = selected.length > 2
+    ? `<span class="condition-alert-picker-more">+${selected.length - 2}</span>`
+    : '';
+  const empty = selected.length
+    ? ''
+    : '<span class="condition-alert-picker-placeholder">조건식 선택</span>';
+  return `<span class="condition-alert-picker-values">${chips}${remainder}${empty}</span>
+    <span class="condition-alert-picker-count">${selected.length}개</span>
+    <span class="condition-alert-picker-chevron" aria-hidden="true">⌄</span>`;
+}
+
+function updateConditionAlertPickerSummary(row) {
+  const select = row.querySelector('.condition-alert-conditions');
+  const button = row.querySelector('.condition-alert-picker-trigger');
+  if (!select || !button) return;
+  const selectedNames = Array.from(select.selectedOptions, (option) => option.value);
+  button.innerHTML = conditionAlertPickerSummary(selectedNames);
+  button.setAttribute(
+    'aria-label',
+    selectedNames.length
+      ? `선택된 조건식 ${selectedNames.join(', ')}. 조건식 선택 변경`
+      : '조건식 선택',
+  );
+}
+
+function openConditionAlertPicker(row) {
+  const select = row.querySelector('.condition-alert-conditions');
+  if (!select) return;
+  const dialog = document.createElement('dialog');
+  dialog.className = 'condition-alert-picker-dialog';
+  dialog.setAttribute('aria-labelledby', 'conditionAlertPickerTitle');
+  const options = Array.from(select.options);
+  const optionMarkup = options.length
+    ? options.map((option) => `<label class="condition-alert-picker-option" data-condition-option>
+        <input type="checkbox" value="${esc(option.value)}"${option.selected ? ' checked' : ''}>
+        <span>${esc(option.textContent)}</span>
+      </label>`).join('')
+    : '<div class="condition-alert-picker-empty">선택할 수 있는 조건식이 없습니다.</div>';
+  dialog.innerHTML = `<div class="condition-alert-picker-heading">
+      <div><h3 id="conditionAlertPickerTitle">조건식 선택</h3><p>알림에 포함할 조건식을 선택하세요.</p></div>
+      <button type="button" class="condition-alert-picker-close" aria-label="닫기">×</button>
+    </div>
+    <div class="condition-alert-picker-search">
+      <span aria-hidden="true">⌕</span>
+      <input type="search" class="condition-alert-picker-query" placeholder="조건식 검색" aria-label="조건식 검색">
+    </div>
+    <div class="condition-alert-picker-tools">
+      <span class="condition-alert-picker-selected-count"></span>
+      <div><button type="button" data-picker-select-visible>검색 결과 선택</button>
+      <button type="button" data-picker-clear>전체 해제</button></div>
+    </div>
+    <div class="condition-alert-picker-options">${optionMarkup}</div>
+    <div class="condition-alert-picker-footer">
+      <button type="button" class="btn sm" data-picker-cancel>취소</button>
+      <button type="button" class="btn sm primary" data-picker-apply>선택 적용</button>
+    </div>`;
+  document.body.appendChild(dialog);
+
+  const checkboxes = Array.from(dialog.querySelectorAll('.condition-alert-picker-option input'));
+  const count = dialog.querySelector('.condition-alert-picker-selected-count');
+  const query = dialog.querySelector('.condition-alert-picker-query');
+  const updateCount = () => {
+    const selectedCount = checkboxes.filter((checkbox) => checkbox.checked).length;
+    count.textContent = `${selectedCount}개 선택됨`;
+  };
+  const close = () => dialog.close();
+
+  checkboxes.forEach((checkbox) => checkbox.addEventListener('change', updateCount));
+  query.addEventListener('input', () => {
+    const keyword = query.value.trim().toLocaleLowerCase('ko-KR');
+    dialog.querySelectorAll('[data-condition-option]').forEach((option) => {
+      option.hidden = !option.textContent.toLocaleLowerCase('ko-KR').includes(keyword);
+    });
+  });
+  dialog.querySelector('[data-picker-select-visible]').addEventListener('click', () => {
+    dialog.querySelectorAll('[data-condition-option]:not([hidden]) input').forEach((checkbox) => {
+      checkbox.checked = true;
+    });
+    updateCount();
+  });
+  dialog.querySelector('[data-picker-clear]').addEventListener('click', () => {
+    checkboxes.forEach((checkbox) => { checkbox.checked = false; });
+    updateCount();
+  });
+  dialog.querySelector('[data-picker-cancel]').addEventListener('click', close);
+  dialog.querySelector('.condition-alert-picker-close').addEventListener('click', close);
+  dialog.querySelector('[data-picker-apply]').addEventListener('click', () => {
+    const selected = new Set(checkboxes.filter((checkbox) => checkbox.checked).map((checkbox) => checkbox.value));
+    Array.from(select.options).forEach((option) => { option.selected = selected.has(option.value); });
+    updateConditionAlertPickerSummary(row);
+    close();
+  });
+  dialog.addEventListener('click', (event) => {
+    if (event.target === dialog) close();
+  });
+  dialog.addEventListener('close', () => dialog.remove(), { once: true });
+
+  updateCount();
+  dialog.showModal();
+  query.focus();
+}
+
+function conditionAlertStatusMarkup(config) {
+  const statusNames = {
+    running: '조회 중',
+    sent: '전송 완료',
+    skipped: '발송 건너뜀',
+    failed: '실행 오류',
+  };
+  const state = config.last_result || 'idle';
+  const statusClass = state === 'sent' ? 'up' : (state === 'failed' ? 'down' : 'flat');
+  return `<span class="${statusClass}">${esc(statusNames[state] || '미실행')}</span>
+    <div class="condition-alert-last">최근 ${notificationTime(config.last_run_at)}</div>
+    <div class="condition-alert-last">${config.is_enabled ? `다음 ${config.next_run_at ? notificationTime(config.next_run_at) : '곧 실행'}` : '비활성'}</div>
+    ${config.last_message ? `<div class="condition-alert-last">${esc(config.last_message)}</div>` : ''}
+    ${config.last_error ? `<div class="down">${esc(config.last_error)}</div>` : ''}`;
+}
+
+async function refreshConditionAlertStatuses() {
+  const body = $('notificationRegistryBody');
+  if (!body || !body.querySelector('.condition-alert-row')) return;
+  const hint = $('conditionAlertStatusHint');
+  try {
+    const response = await fetchJSON('/telegram/condition-alerts');
+    const byId = new Map((response.items || []).map((config) => [String(config.id), config]));
+    body.querySelectorAll('.condition-alert-row').forEach((row) => {
+      const [kind, id] = row.dataset.configKey.split('-');
+      const config = kind === 'saved' ? byId.get(id) : null;
+      if (config) row.cells[4].innerHTML = conditionAlertStatusMarkup(config);
+    });
+    if (hint) hint.textContent = `상태 갱신 ${new Date().toLocaleTimeString('ko-KR')}`;
+  } catch (error) {
+    if (hint) hint.textContent = `상태 갱신 실패: ${error.message}`;
+  }
+}
+
+function bindConditionAlertControls(container, configured) {
+  if (!container) return;
+  container.querySelectorAll('.condition-alert-picker-trigger').forEach((button) => {
+    button.addEventListener('click', () => {
+      openConditionAlertPicker(button.closest('.condition-alert-row'));
+    });
+  });
+  container.querySelectorAll('.condition-alert-intraday-input').forEach((input) => {
+    input.addEventListener('change', () => {
+      const row = input.closest('.condition-alert-row');
+      const select = row?.querySelector('.condition-alert-interval');
+      if (!select) return;
+      const selected = Number(select.value);
+      const options = input.checked
+        ? CONDITION_ALERT_INTERVALS.filter(([seconds]) => seconds === 600 || seconds === 3600)
+        : CONDITION_ALERT_INTERVALS;
+      select.innerHTML = options.map(([seconds, label]) => (
+        `<option value="${seconds}">${label}</option>`
+      )).join('');
+      select.value = options.some(([seconds]) => seconds === selected) ? String(selected) : '600';
+    });
+  });
+  container.querySelectorAll('[data-alert-action]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const action = button.dataset.alertAction;
+      if (action === 'refresh-status') {
+        await refreshConditionAlertStatuses();
+        return;
+      }
+      if (action === 'refresh-conditions') {
+        try {
+          _conditionsListPromise = null;
+          _conditionsListAt = 0;
+          conditionCatalog = await fetchConditionsList();
+          const content = $('notificationCategoryContent');
+          if (content) {
+            content.innerHTML = renderConditionAlertConfigs(configured);
+            bindConditionAlertControls(content, configured);
+          }
+        } catch (error) {
+          toast(error.message || '조건식 목록을 불러오지 못했습니다.', true);
+        }
+        return;
+      }
+      if (action === 'add') {
+        conditionAlertConfigs.push({
+          draft_key: ++conditionAlertDraftCounter,
+          name: `조건식 알림 ${conditionAlertConfigs.length + 1}`,
+          condition_names: conditionCatalog[0]?.condition_name
+            ? [conditionCatalog[0].condition_name]
+            : [],
+          interval_seconds: 600,
+          is_intraday: true,
+          is_enabled: false,
+        });
+        const content = $('notificationCategoryContent');
+        if (content) {
+          content.innerHTML = renderConditionAlertConfigs(configured);
+          bindConditionAlertControls(content, configured);
+        }
+        return;
+      }
+
+      const row = button.closest('.condition-alert-row');
+      if (!row) return;
+      const [, configId] = row.dataset.configKey.split('-');
+      const isDraft = row.dataset.configKey.startsWith('draft-');
+
+      try {
+        if (action === 'save') {
+          const payload = {
+            name: row.querySelector('.condition-alert-name').value.trim(),
+            condition_names: Array.from(
+              row.querySelector('.condition-alert-conditions').selectedOptions,
+              (option) => option.value,
+            ),
+            interval_seconds: Number(row.querySelector('.condition-alert-interval').value),
+            is_intraday: row.querySelector('.condition-alert-intraday-input').checked,
+            is_enabled: row.querySelector('.condition-alert-enabled-input').checked,
+          };
+          if (!payload.condition_names.length) {
+            toast('조건식을 하나 이상 선택하세요.', true);
+            return;
+          }
+          const url = isDraft
+            ? '/telegram/condition-alerts'
+            : `/telegram/condition-alerts/${configId}`;
+          const response = await fetchJSON(url, {
+            method: isDraft ? 'POST' : 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          toast(payload.is_enabled ? '조건식 알림을 저장하고 활성화했습니다.' : '조건식 알림을 저장했습니다.');
+          await loadTelegram();
+          return response;
+        }
+        if (action === 'delete') {
+          if (isDraft) {
+            conditionAlertConfigs = conditionAlertConfigs.filter(
+              (config) => `draft-${config.draft_key}` !== row.dataset.configKey,
+            );
+            const content = $('notificationCategoryContent');
+            if (content) {
+              content.innerHTML = renderConditionAlertConfigs(configured);
+              bindConditionAlertControls(content, configured);
+            }
+            return;
+          }
+          if (!window.confirm('이 조건식 알림 설정을 삭제할까요?')) return;
+          await fetchJSON(`/telegram/condition-alerts/${configId}`, { method: 'DELETE' });
+          toast('조건식 알림을 삭제했습니다.');
+          await loadTelegram();
+          return;
+        }
+        if (action === 'run') {
+          button.disabled = true;
+          const result = await postJSON(`/telegram/condition-alerts/${configId}/run`);
+          toast(result.message || (result.success ? '알림을 전송했습니다.' : '알림 전송에 실패했습니다.'), !result.success);
+          await loadTelegram();
+        }
+      } catch (error) {
+        toast(error.message || '조건식 알림 설정을 처리하지 못했습니다.', true);
+      } finally {
+        button.disabled = action === 'run' && !configured;
+      }
+    });
+  });
+}
+
+function renderNotificationHistory(deliveries) {
+  const body = $('notificationHistoryBody');
+  if (!body) return;
+  if (!deliveries.length) {
+    body.innerHTML = emptyRow('아직 텔레그램 발송 시도가 없습니다.', '📨');
+    return;
+  }
+  body.innerHTML = `<div class="table-wrap"><table class="tbl">
+    <thead><tr><th>시각</th><th>알림</th><th>결과</th><th>오류</th></tr></thead>
+    <tbody>${deliveries.map((item) => `<tr>
+      <td>${notificationTime(item.attempted_at)}</td>
+      <td>${esc(item.name)}</td>
+      <td class="${item.status === 'sent' ? 'up' : 'down'}">${item.status === 'sent' ? '성공' : '실패'}</td>
+      <td>${esc(item.error || '-')}</td>
+    </tr>`).join('')}</tbody></table></div>`;
+}
+
 async function loadTelegram() {
   try {
-    const d = await fetchJSON('/telegram/status');
-    const filter = (d.condition_filter && d.condition_filter.length) ? d.condition_filter.join(', ') : '전체 조건식';
+    const [d, conditions] = await Promise.all([
+      fetchJSON('/telegram/status'),
+      fetchConditionsList().catch(() => []),
+    ]);
+    d.available_conditions = conditions;
     let html = '';
     html += `<div class="kv"><span class="k">설정 상태</span><span class="v ${d.configured ? 'up' : 'flat'}">${d.configured ? '✅ 설정됨' : '❌ 미설정'}</span></div>`;
     html += `<div class="kv"><span class="k">채팅 ID</span><span class="v">${esc(d.chat_id_masked || '-')}</span></div>`;
-    html += `<div class="kv"><span class="k">대상 조건식</span><span class="v">${esc(filter)}</span></div>`;
-    html += `<div class="kv"><span class="k">정시 알림 주기</span><span class="v">${num(d.interval)}초</span></div>`;
-    html += `<div style="margin-top:12px;"><button class="btn primary" id="tgSendBtn" ${d.configured ? '' : 'disabled'} style="width:100%;">지금 텔레그램으로 전송</button></div>`;
     $('telegramBody').innerHTML = html;
-    const btn = $('tgSendBtn'); if (btn) btn.onclick = sendTelegramNow;
-  } catch (e) { $('telegramBody').innerHTML = emptyRow('텔레그램 상태를 불러오지 못했습니다.', '⚠️'); }
+    renderNotificationRegistry(
+      d.notifications || [],
+      d.recent_deliveries || [],
+      d,
+    );
+  } catch (e) {
+    $('telegramBody').innerHTML = emptyRow('텔레그램 상태를 불러오지 못했습니다.', '⚠️');
+    if ($('notificationRegistryBody')) $('notificationRegistryBody').innerHTML = emptyRow('등록된 알림을 불러오지 못했습니다.', '⚠️');
+    if ($('notificationHistoryBody')) $('notificationHistoryBody').innerHTML = emptyRow('알림 전송 이력을 불러오지 못했습니다.', '⚠️');
+  }
 }
 
 async function loadTodayKeywords() {
@@ -1414,17 +1873,6 @@ async function loadThemeBatchStatus() {
     body.innerHTML = emptyRow('배치 상태를 불러오지 못했습니다.', '⚠️');
   }
 }
-async function sendTelegramNow() {
-  const btn = $('tgSendBtn'); btn.disabled = true; const orig = btn.innerHTML;
-  btn.innerHTML = '<span class="spin"></span> 전송 중...';
-  try {
-    const r = await postJSON('/telegram/send-now');
-    if (r.success) toast(`텔레그램 전송 완료 (조건식 ${r.condition_count}개 / ${r.stock_count}종목)`);
-    else toast(r.message || '전송 실패', true);
-  } catch (e) { toast('전송 중 오류가 발생했습니다.', true); }
-  finally { btn.disabled = false; btn.innerHTML = orig; }
-}
-
 function holdingEvalAmount(h) {
   if (!h) return 0;
   if (h.evalAmt > 0) return h.evalAmt;
@@ -5361,6 +5809,7 @@ function setupAutoRefresh() {
         loadThemeBatchStatus();
         loadPositions(true, { silent: true });
         loadSells(); loadOrders(); loadLog();
+        if ($('pane-alert')?.classList.contains('active')) refreshConditionAlertStatuses();
         $('lastUpdated').textContent = new Date().toLocaleTimeString('ko-KR');
       }, AUTO_REFRESH_MS);
     }

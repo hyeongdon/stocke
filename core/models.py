@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Generator, Optional
 
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, create_engine, UniqueConstraint, Date, text, JSON, Float, Index, Text, inspect, event
@@ -49,6 +49,10 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, futu
 Base = declarative_base()
 
 
+def _utc_now_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 class PendingBuySignal(Base):
     __tablename__ = "pending_buy_signals"
 
@@ -87,6 +91,73 @@ class AutoTradeCondition(Base):
     __table_args__ = (
         UniqueConstraint("condition_name", name="uq_autotrade_condition_name"),
     )
+
+
+class NotificationJobStatus(Base):
+    __tablename__ = "notification_job_status"
+
+    job_key = Column(String(80), primary_key=True)
+    display_name = Column(String(120), nullable=False)
+    mode = Column(String(20), nullable=False)
+    is_continuous = Column(Boolean, nullable=False, default=False)
+    interval_seconds = Column(Integer, nullable=True)
+    condition_names = Column(JSON, nullable=False, default=list)
+    status = Column(String(20), nullable=False, default="stopped")
+    process_id = Column(Integer, nullable=True)
+    last_started_at = Column(DateTime, nullable=True)
+    last_heartbeat_at = Column(DateTime, nullable=True)
+    last_finished_at = Column(DateTime, nullable=True)
+    last_success_at = Column(DateTime, nullable=True)
+    last_result = Column(String(20), nullable=True)
+    last_message = Column(Text, nullable=True)
+    last_error = Column(Text, nullable=True)
+    updated_at = Column(DateTime, nullable=False, default=_utc_now_naive, onupdate=_utc_now_naive)
+
+
+class ConditionAlertConfig(Base):
+    __tablename__ = "condition_alert_configs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(120), nullable=False, default="조건식 알림")
+    condition_names = Column(JSON, nullable=False, default=list)
+    interval_seconds = Column(Integer, nullable=False, default=600)
+    is_intraday = Column(Boolean, nullable=False, default=False)
+    is_enabled = Column(Boolean, nullable=False, default=False)
+    last_run_at = Column(DateTime, nullable=True)
+    last_result = Column(String(20), nullable=True)
+    last_message = Column(Text, nullable=True)
+    last_error = Column(Text, nullable=True)
+    updated_at = Column(DateTime, nullable=False, default=_utc_now_naive, onupdate=_utc_now_naive)
+
+
+class NotificationDefinition(Base):
+    __tablename__ = "notification_definitions"
+
+    notification_key = Column(String(100), primary_key=True)
+    display_name = Column(String(160), nullable=False)
+    category = Column(String(40), nullable=False, default="system")
+    trigger_type = Column(String(30), nullable=False, default="event")
+    schedule_description = Column(String(255), nullable=False, default="이벤트 발생 시")
+    schedule_source = Column(String(80), nullable=False, default="Stocke")
+    is_enabled = Column(Boolean, nullable=False, default=True)
+    last_attempt_at = Column(DateTime, nullable=True)
+    last_sent_at = Column(DateTime, nullable=True)
+    last_status = Column(String(20), nullable=True)
+    last_error = Column(String(255), nullable=True)
+    attempt_count = Column(Integer, nullable=False, default=0)
+    success_count = Column(Integer, nullable=False, default=0)
+    updated_at = Column(DateTime, nullable=False, default=_utc_now_naive, onupdate=_utc_now_naive)
+
+
+class NotificationDeliveryLog(Base):
+    __tablename__ = "notification_delivery_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    notification_key = Column(String(100), nullable=False, index=True)
+    attempted_at = Column(DateTime, nullable=False, default=_utc_now_naive, index=True)
+    status = Column(String(20), nullable=False)
+    process_id = Column(Integer, nullable=True)
+    error = Column(String(255), nullable=True)
 
 
 class AutoTradeSettings(Base):
@@ -1064,6 +1135,15 @@ def ensure_technical_snapshot_columns() -> None:
 
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
+    condition_alert_columns = {
+        column["name"] for column in inspect(engine).get_columns("condition_alert_configs")
+    }
+    if "is_intraday" not in condition_alert_columns:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "ALTER TABLE condition_alert_configs "
+                "ADD COLUMN is_intraday BOOLEAN NOT NULL DEFAULT FALSE"
+            ))
     try:
         from utils.krx_holiday_store import seed_default_holidays
         seed_default_holidays()
@@ -1753,5 +1833,3 @@ def _migrate_auto_trade_settings_account_mode() -> None:
 
 # 모듈 import 시점에 테이블 보장
 init_db()
-
-

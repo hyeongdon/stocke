@@ -95,7 +95,9 @@ async def _send_telegram(text: str) -> None:
         tg = TelegramNotifier()
         if not tg.is_configured():
             return
-        await asyncio.to_thread(tg.send_message, text, "HTML")
+        await asyncio.to_thread(
+            tg.send_message, text, "HTML", notification_key="rsi_ladder",
+        )
     except Exception as e:
         logger.debug(f"[LADDER] 텔레그램 전송 실패: {e}")
 
@@ -638,7 +640,13 @@ class RsiLadderScheduler:
             tg = TelegramNotifier()
             if not tg.is_configured():
                 return
-            mid = await asyncio.to_thread(tg.send_message_id, text, "HTML", markup)
+            mid = await asyncio.to_thread(
+                tg.send_message_id,
+                text,
+                "HTML",
+                markup,
+                notification_key="rsi_ladder",
+            )
         except Exception as e:
             logger.debug(f"[LADDER] 익절 확인 알림 실패: {e}")
             return

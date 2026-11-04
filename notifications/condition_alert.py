@@ -5,7 +5,6 @@
 웹 대시보드(core/main.py의 /telegram/send-now)에서 동일하게 재사용한다.
 """
 import logging
-from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from core.config import Config
@@ -133,6 +132,8 @@ async def send_condition_alert(
     max_stocks: Optional[int] = None,
     *,
     skip_market_hours_check: bool = False,
+    notification_key: str = "condition.polling",
+    alert_name: Optional[str] = None,
 ) -> Dict:
     """조건식 조회 → 텔레그램 전송. 결과 요약 dict 반환."""
     block = _market_hours_gate(skip_market_hours_check)
@@ -181,7 +182,9 @@ async def send_condition_alert(
         }
 
     message = build_message(results, max_stocks)
-    ok = notifier.send_message(message)
+    if alert_name:
+        message = f"🔔 {alert_name}\n\n{message}"
+    ok = notifier.send_message(message, notification_key=notification_key)
     return {
         "sent": ok,
         "condition_count": len(results),

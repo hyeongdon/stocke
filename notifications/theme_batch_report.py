@@ -528,7 +528,7 @@ def send_theme_batch_report(
 
     stats = collect_theme_batch_report_stats(session, result, duration_sec=duration_sec)
     msg = format_theme_batch_report_html(stats)
-    ok = notifier.send_message(msg, parse_mode="HTML")
+    ok = notifier.send_message(msg, parse_mode="HTML", notification_key="theme.report")
     if ok:
         logger.info(
             "테마 배치 텔레그램 리포트 전송 완료 biz_date=%s ok=%s",

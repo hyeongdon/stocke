@@ -216,7 +216,7 @@ def notify_daily_trade_journal(journal: Dict[str, Any]) -> bool:
     if not notifier.is_configured():
         logger.warning("텔레그램 미설정 — 매매 일지 알림 스킵")
         return False
-    ok = notifier.send_message(msg, parse_mode="HTML")
+    ok = notifier.send_message(msg, parse_mode="HTML", notification_key="daily_trade_journal")
     if ok:
         logger.info("매매 일지 텔레그램 전송 완료 day=%s", journal.get("day"))
     else:

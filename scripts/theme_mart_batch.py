@@ -147,7 +147,7 @@ def _send_start(
             f"시각: {now}\n"
             "\n로그: <code>logs/theme_mart_batch.log</code>"
         )
-        ok = notifier.send_message(msg, parse_mode="HTML")
+        ok = notifier.send_message(msg, parse_mode="HTML", notification_key="theme_mart.start")
         log.info("테마 배치 시작 알림: %s", "OK" if ok else "FAIL")
     except Exception as e:
         log.exception("테마 배치 시작 알림 오류: %s", e)
@@ -302,6 +302,7 @@ def main() -> int:
                 notifier.send_message(
                     "<b>📊 테마/키워드 배치 오류</b>\n오류: <code>DB 세션을 열지 못했습니다.</code>",
                     parse_mode="HTML",
+                    notification_key="theme_mart.error",
                 )
         except Exception:
             pass

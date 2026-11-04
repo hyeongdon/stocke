@@ -70,7 +70,11 @@ def main() -> int:
     print(msg)
 
     if report.get("action") == "reset" and not args.no_telegram:
-        if not send_trade_alert(msg, skip_market_hours_check=True):
+        if not send_trade_alert(
+            msg,
+            skip_market_hours_check=True,
+            notification_key="system.mock_reset",
+        ):
             log.warning("텔레그램 전송 실패 또는 미설정 (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)")
     return 0
 

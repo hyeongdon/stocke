@@ -76,7 +76,9 @@ async def _send_telegram(text: str) -> None:
         tg = TelegramNotifier()
         if not tg.is_configured():
             return
-        await asyncio.to_thread(tg.send_message, text, "HTML")
+        await asyncio.to_thread(
+            tg.send_message, text, "HTML", notification_key="rwm_bowl",
+        )
     except Exception as e:
         logger.debug(f"[RWM] 텔레그램 전송 실패: {e}")
 

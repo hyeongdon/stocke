@@ -169,7 +169,12 @@ def build_sell_message(
     return "\n".join(lines)
 
 
-def send_trade_alert(text: str, *, skip_market_hours_check: bool = False) -> bool:
+def send_trade_alert(
+    text: str,
+    *,
+    skip_market_hours_check: bool = False,
+    notification_key: str = "trade.event",
+) -> bool:
     """텔레그램 설정이 있을 때만 매매 알림 전송."""
     if Config.TELEGRAM_ALERT_MARKET_HOURS_ONLY and not skip_market_hours_check:
         from utils.market_hours import telegram_market_alert_block_reason
@@ -180,7 +185,7 @@ def send_trade_alert(text: str, *, skip_market_hours_check: bool = False) -> boo
     notifier = TelegramNotifier()
     if not notifier.is_configured():
         return False
-    return notifier.send_message(text)
+    return notifier.send_message(text, notification_key=notification_key)
 
 
 async def send_trade_alert_async(text: str) -> bool:
@@ -220,7 +225,7 @@ def notify_buy(
             order_id=order_id,
             strategy=strategy,
         )
-        ok = send_trade_alert(msg)
+        ok = send_trade_alert(msg, notification_key="trade.buy")
         if ok:
             logger.info(f"매수 텔레그램 알림 전송 — {stock_name}({stock_code})")
         return ok
@@ -270,7 +275,7 @@ def notify_buy_slot_blocked(
             reason=(reason or "").strip() or "슬롯 부족",
             strategy=strategy,
         )
-        ok = send_trade_alert(msg)
+        ok = send_trade_alert(msg, notification_key="trade.slot_blocked")
         if ok:
             logger.info(
                 f"슬롯 부족 텔레그램 알림 전송 — {stock_name}({stock_code}): {reason}"
@@ -374,7 +379,7 @@ def notify_sell_filled_from_snapshot(snap: dict, *, remaining_qty: Optional[int]
             profit_loss=snap["profit_loss"],
             remaining_qty=remaining_qty,
         )
-        ok = send_trade_alert(msg)
+        ok = send_trade_alert(msg, notification_key="trade.sell")
         if ok:
             logger.info(f"매도 텔레그램 알림 전송 — {snap['stock_name']}")
         return ok

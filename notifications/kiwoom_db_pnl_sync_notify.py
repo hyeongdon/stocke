@@ -107,7 +107,7 @@ def notify_kiwoom_db_pnl_sync(report: Dict[str, Any]) -> bool:
     if not notifier.is_configured():
         logger.warning("텔레그램 미설정 — 손익 싱크 알림 스킵")
         return False
-    ok = notifier.send_message(msg, parse_mode="HTML")
+    ok = notifier.send_message(msg, parse_mode="HTML", notification_key="kiwoom.pnl_sync")
     if ok:
         logger.info("손익 싱크 텔레그램 전송 완료 %s", summarize_report(report).replace("\n", " / "))
     else:

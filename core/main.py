@@ -394,11 +394,29 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(rsi_ladder_scheduler.start_scheduler())
     except Exception as e:
         logger.error(f"🪜 [STARTUP] 분할매수 스케줄러 시작 실패: {e}")
+
+    condition_alert_scheduler = None
+    condition_alert_task = None
+    try:
+        from utils.condition_alert_scheduler import ConditionAlertScheduler
+
+        condition_alert_scheduler = ConditionAlertScheduler(kiwoom_api)
+        app.state.condition_alert_scheduler = condition_alert_scheduler
+        condition_alert_task = asyncio.create_task(condition_alert_scheduler.run())
+    except Exception as e:
+        logger.exception("🔔 [STARTUP] 조건식 알림 스케줄러 시작 실패: %s", e)
     
     yield
     
     # Shutdown
     logger.info("모니터링 시스템 종료")
+    if condition_alert_scheduler:
+        condition_alert_scheduler.stop()
+    if condition_alert_task:
+        try:
+            await condition_alert_task
+        except Exception as e:
+            logger.error("🔔 [SHUTDOWN] 조건식 알림 스케줄러 종료 실패: %s", e)
     
     # 개선된 시스템들 종료
     try:
@@ -1532,6 +1550,10 @@ async def get_verification_intraday_chart(
 async def telegram_status():
     """텔레그램 알림 설정 상태 조회"""
     from notifications.telegram_notifier import TelegramNotifier
+    from utils.notification_registry import (
+        list_recent_notification_deliveries,
+        list_registered_notifications,
+    )
     from utils.market_hours import telegram_market_alert_block_reason, telegram_market_alert_allowed
     notifier = TelegramNotifier()
     chat_id = Config.TELEGRAM_CHAT_ID or ""
@@ -1545,7 +1567,84 @@ async def telegram_status():
         "market_hours_only": Config.TELEGRAM_ALERT_MARKET_HOURS_ONLY,
         "alert_allowed_now": telegram_market_alert_allowed(),
         "alert_block_reason": telegram_market_alert_block_reason(),
+        "notifications": list_registered_notifications(),
+        "recent_deliveries": list_recent_notification_deliveries(50),
+        "condition_alert_configs": _list_condition_alert_configs(),
     }
+
+
+def _list_condition_alert_configs():
+    from utils.condition_alert_scheduler import list_condition_alert_configs
+
+    return list_condition_alert_configs()
+
+
+class ConditionAlertConfigRequest(BaseModel):
+    name: str
+    condition_names: List[str]
+    interval_seconds: int
+    is_intraday: bool = True
+    is_enabled: bool = False
+
+
+def _save_condition_alert_config(config_id, request: ConditionAlertConfigRequest):
+    from utils.condition_alert_scheduler import save_condition_alert_config
+
+    try:
+        return save_condition_alert_config(
+            config_id,
+            request.name,
+            request.condition_names,
+            request.interval_seconds,
+            request.is_enabled,
+            request.is_intraday,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/telegram/condition-alerts")
+async def get_condition_alert_configs():
+    return {"items": _list_condition_alert_configs()}
+
+
+@app.post("/telegram/condition-alerts")
+async def create_condition_alert_config(request: ConditionAlertConfigRequest):
+    return _save_condition_alert_config(None, request)
+
+
+@app.put("/telegram/condition-alerts/{config_id}")
+async def update_condition_alert_config(
+    config_id: int,
+    request: ConditionAlertConfigRequest,
+):
+    return _save_condition_alert_config(config_id, request)
+
+
+@app.delete("/telegram/condition-alerts/{config_id}")
+async def remove_condition_alert_config(config_id: int):
+    from utils.condition_alert_scheduler import delete_condition_alert_config
+
+    if not delete_condition_alert_config(config_id):
+        raise HTTPException(status_code=404, detail="조건식 알림 설정을 찾을 수 없습니다.")
+    return {"success": True}
+
+
+@app.post("/telegram/condition-alerts/{config_id}/run")
+async def run_condition_alert_config_now(config_id: int):
+    scheduler = getattr(app.state, "condition_alert_scheduler", None)
+    if scheduler is None:
+        raise HTTPException(status_code=503, detail="조건식 알림 스케줄러가 준비되지 않았습니다.")
+    try:
+        return await scheduler.run_config(config_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("조건식 알림 즉시 실행 실패 (config_id=%s)", config_id)
+        raise HTTPException(status_code=500, detail="조건식 알림 실행 중 오류가 발생했습니다.") from exc
+
 
 @app.post("/telegram/send-now")
 async def telegram_send_now():
@@ -1560,7 +1659,11 @@ async def telegram_send_now():
 
         names = Config.TELEGRAM_ALERT_CONDITION_NAMES or None
         result = await send_condition_alert(
-            kiwoom_api, notifier, names=names, skip_market_hours_check=True
+            kiwoom_api,
+            notifier,
+            names=names,
+            skip_market_hours_check=True,
+            notification_key="condition.manual",
         )
         return {
             "success": bool(result.get("sent")),

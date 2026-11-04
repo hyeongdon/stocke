@@ -91,7 +91,7 @@ def notify_failed_buy_signals(report: Dict[str, Any]) -> bool:
     if not notifier.is_configured():
         logger.warning("텔레그램 미설정 — 매수 실패 알림 스킵")
         return False
-    ok = notifier.send_message(msg, parse_mode="HTML")
+    ok = notifier.send_message(msg, parse_mode="HTML", notification_key="failed_buy_signals")
     if ok:
         logger.info(
             "매수 실패 텔레그램 전송 완료 day=%s count=%s",

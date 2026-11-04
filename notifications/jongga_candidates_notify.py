@@ -108,7 +108,7 @@ def notify_jongga_candidates(state: Dict[str, Any]) -> bool:
     if not notifier.is_configured():
         logger.warning("텔레그램 미설정 — 종가배팅 후보 알림 스킵")
         return False
-    ok = notifier.send_message(msg, parse_mode="HTML")
+    ok = notifier.send_message(msg, parse_mode="HTML", notification_key="jongga.candidates")
     if ok:
         logger.info(
             "종가배팅 후보 텔레그램 전송 완료 day=%s theme=%s n=%s",

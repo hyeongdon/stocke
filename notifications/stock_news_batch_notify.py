@@ -133,7 +133,7 @@ def _send_html(msg: str, *, label: str) -> bool:
     if not notifier.is_configured():
         logger.warning("텔레그램 미설정 — 종목 뉴스 배치 알림 스킵 (%s)", label)
         return False
-    ok = notifier.send_message(msg, parse_mode="HTML")
+    ok = notifier.send_message(msg, parse_mode="HTML", notification_key=f"stock_news.{label}")
     if ok:
         logger.info("종목 뉴스 배치 텔레그램 알림 전송 완료 (%s)", label)
     else:
