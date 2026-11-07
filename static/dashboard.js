@@ -298,8 +298,8 @@ function renderInvestorFlow(items, updatedAt) {
     .filter(it => ['kospi', 'kosdaq'].includes(String(it.key || '').toLowerCase()))
     .map(renderInvestorFlowCard)
     .filter(Boolean);
-  if (!cards.length) { panel.style.display = 'none'; return; }
   panel.style.display = '';
+  body.style.display = cards.length ? '' : 'none';
   const sub = panel.querySelector('.if-sub');
   if (sub) {
     const when = updatedAt ? ` · ${esc(fmtInvestorBatchTime(updatedAt))} 배치` : '';

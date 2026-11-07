@@ -13,7 +13,7 @@
   <meta name="apple-mobile-web-app-title" content="Stocke">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="theme-color" content="#131720">
-  <link rel="stylesheet" href="/static/dashboard.css?v=129">
+  <link rel="stylesheet" href="/static/dashboard.css?v=130">
   <script src="/static/theme-sync.js?v=2"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
@@ -86,12 +86,24 @@
         <div class="auto-row-2 auto-row-top">
 
           <!-- 수급 흐름 (좌측) -->
-          <div class="investor-flow" id="investorFlow" style="display:none;">
+          <div class="investor-flow" id="investorFlow">
             <div class="if-head">
               <span class="if-title">당일 수급 흐름 <span class="if-sub">시간대별 누적 순매수 (억원, 잠정) · 선이 내려가면 매도 누적</span></span>
               <button type="button" class="btn sm if-toggle" id="investorFlowToggle" aria-expanded="true">접기</button>
             </div>
-            <div class="if-body" id="investorFlowBody"></div>
+            <div class="if-body" id="investorFlowBody" style="display:none;"></div>
+            <section class="if-stock-lookup" aria-labelledby="stockInvestorTitle">
+              <div class="if-stock-title">
+                <strong id="stockInvestorTitle">종목별 일별 순매수</strong>
+                <span>최근 20거래일 · 단위: 주</span>
+              </div>
+              <form class="if-stock-form" data-stock-investor-form>
+                <label for="stockInvestorCode">종목코드</label>
+                <input id="stockInvestorCode" data-stock-investor-code type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="종목코드 (예: 005930)" autocomplete="off" required>
+                <button class="btn primary sm" type="submit">조회</button>
+              </form>
+              <div class="if-stock-result" data-stock-investor-result aria-live="polite">종목코드 6자리를 입력하면 외국인·기관의 일별 순매수 내역을 조회합니다.</div>
+            </section>
           </div>
 
           <!-- 후보 (우측) -->
@@ -408,6 +420,7 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/static/dashboard.js?v=188"></script>
+  <script src="/static/investor-history.js?v=2"></script>
+  <script src="/static/dashboard.js?v=189"></script>
 </body>
 </html>

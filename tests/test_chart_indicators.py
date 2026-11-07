@@ -9,7 +9,9 @@ from utils.chart_indicators import (
     chart_params,
     detect_signals,
     is_week_partial,
+    ma_periods_for_interval,
     mark_daily_partial,
+    mark_monthly_partial,
     merge_weekly_rows,
     resample_weekly_ohlcv,
     warmup_warning,
@@ -116,6 +118,17 @@ class ResampleWeeklyTests(unittest.TestCase):
         self.assertTrue(mark_daily_partial(rows, datetime(2026, 10, 26, 11, 0))[-1]["partial"])
         self.assertFalse(mark_daily_partial(rows, datetime(2026, 10, 26, 15, 40))[-1]["partial"])
 
+    def test_monthly_partial_until_next_month(self):
+        rows = [
+            {"timestamp": "2026-10-30", "open": 1, "high": 2, "low": 1, "close": 2},
+            {"timestamp": "2026-11-06", "open": 2, "high": 3, "low": 2, "close": 3},
+        ]
+        marked = mark_monthly_partial(rows, datetime(2026, 11, 6, 16, 0))
+        self.assertFalse(marked[0]["partial"])
+        self.assertTrue(marked[1]["partial"])
+        mark_monthly_partial(rows, datetime(2026, 12, 1, 9, 0))
+        self.assertFalse(rows[-1]["partial"])
+
 
 class SignalTests(unittest.TestCase):
     def test_rsi_os_only_first_bar_below(self):
@@ -165,6 +178,20 @@ class IndicatorTests(unittest.TestCase):
         self.assertIsNotNone(rows[92]["wr"])
         self.assertNotIn("ma120", rows[118])
         self.assertIn("ma120", rows[119])
+
+    def test_weekly_ma240(self):
+        periods = ma_periods_for_interval("1W")
+        self.assertIn(240, periods)
+        self.assertNotIn(240, ma_periods_for_interval("1D"))
+        rows = annotate_indicators(
+            self._rows(343), CP, ma_periods=periods,
+        )
+        self.assertNotIn("ma240", rows[238])
+        self.assertEqual(rows[239]["ma240"], round(sum(r["close"] for r in rows[:240]) / 240))
+        self.assertNotIn("ma240", annotate_indicators(self._rows(343), CP)[-1])
+        self.assertEqual(warmup_warning(rows[-104:], "주", periods), "")
+        short = annotate_indicators(self._rows(200), CP, ma_periods=periods)
+        self.assertIn("MA240주", warmup_warning(short[-104:], "주", periods))
 
     def test_warmup_warning(self):
         short = annotate_indicators(self._rows(100), CP)

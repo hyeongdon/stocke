@@ -3,7 +3,7 @@
 const $ = (id) => document.getElementById(id);
 
 const SORT_COLS = [
-  'stock_code', 'stock_name', 'market', 'current_price', 'market_cap',
+  'stock_name', 'market', 'current_price', 'market_cap',
   'per', 'pbr', 'roe', 'eps', 'dividend_per_share',
   'revenue', 'operating_profit', 'foreign_ratio', 'weekly_rsi14', 'daily_rsi14', 'as_of_date',
 ];
@@ -37,13 +37,93 @@ let state = {
   sortBy: 'market_cap',
   sortDesc: true,
   selectedCode: null,
+  selectedName: null,
   loading: false,
   lastItems: null,
   lastSummary: null,
   lastListMeta: null,
+  favorites: new Map(),
+  reloadAfterLoad: false,
 };
 
 let toastTimer = null;
+const FAVORITES_KEY = 'analysisFavorites';
+
+function normalizeStockCode(value) {
+  const raw = String(value == null ? '' : value).trim().replace(/^A/i, '');
+  return /^\d{1,6}$/.test(raw) ? raw.padStart(6, '0') : '';
+}
+
+function loadFavorites() {
+  try {
+    const raw = localStorage.getItem(FAVORITES_KEY);
+    if (!raw) return new Map();
+    const saved = JSON.parse(raw);
+    if (!Array.isArray(saved)) throw new Error('즐겨찾기 저장 형식이 올바르지 않습니다.');
+    const favorites = new Map();
+    saved.forEach((item) => {
+      const code = normalizeStockCode(item && typeof item === 'object' ? item.code : item);
+      if (code) favorites.set(code, String((item && item.name) || ''));
+    });
+    return favorites;
+  } catch (e) {
+    toast('즐겨찾기 정보를 불러오지 못했습니다. 브라우저 저장 공간을 확인하세요.', true);
+    return new Map();
+  }
+}
+
+function saveFavorites(favorites) {
+  try {
+    localStorage.setItem(FAVORITES_KEY, JSON.stringify(
+      [...favorites].map(([code, name]) => ({ code, name })),
+    ));
+    return true;
+  } catch (e) {
+    toast('즐겨찾기를 저장하지 못했습니다. 브라우저 저장 공간을 확인하세요.', true);
+    return false;
+  }
+}
+
+function favoriteButtonHtml(row) {
+  const code = normalizeStockCode(row.stock_code);
+  const saved = state.favorites.has(code);
+  const label = saved ? '즐겨찾기 삭제' : '즐겨찾기 추가';
+  return `<button type="button" class="analysis-favorite-toggle${saved ? ' is-favorite' : ''}" data-code="${esc(code)}" title="${label}" aria-label="${esc(row.stock_name || code)} ${label}" aria-pressed="${saved}">${saved ? '★' : '☆'}</button>`;
+}
+
+function syncDetailFavoriteButton() {
+  const btn = $('btnToggleFavorite');
+  if (!btn) return;
+  const code = normalizeStockCode(state.selectedCode);
+  if (!code) {
+    btn.hidden = true;
+    return;
+  }
+  const saved = state.favorites.has(code);
+  btn.hidden = false;
+  btn.textContent = saved ? '★ 즐겨찾기 삭제' : '☆ 즐겨찾기 추가';
+  btn.classList.toggle('is-favorite', saved);
+  btn.setAttribute('aria-pressed', saved ? 'true' : 'false');
+}
+
+function toggleFavorite(stockCode, stockName) {
+  const code = normalizeStockCode(stockCode);
+  if (!code) return;
+  const next = new Map(state.favorites);
+  const removing = next.has(code);
+  if (removing) next.delete(code);
+  else next.set(code, String(stockName || ''));
+  if (!saveFavorites(next)) return;
+  state.favorites = next;
+  syncDetailFavoriteButton();
+  updateFilterSummary();
+  if ($('fltFavoritesOnly').checked) {
+    if (state.loading) state.reloadAfterLoad = true;
+    else loadList({ autoSelect: false });
+  }
+  else if (state.lastItems) renderTable(state.lastItems);
+  toast(removing ? '즐겨찾기에서 삭제했습니다.' : '즐겨찾기에 추가했습니다.', false);
+}
 
 function toast(msg, isErr) {
   const el = $('toast');
@@ -169,6 +249,7 @@ function hasActiveFilters() {
     || $('fltBowlOnly').checked
     || $('fltMa2060Only').checked
     || $('fltExcludeBelowMa60').checked
+    || $('fltFavoritesOnly').checked
     || ($('fltSortBy').value || 'market_cap') !== 'market_cap'
     || ($('fltLimit').value || DEFAULT_LIMIT) !== DEFAULT_LIMIT
   );
@@ -183,7 +264,7 @@ function updateFilterSummary() {
   const maxPbr = $('fltMaxPbr').value.trim();
   const minRoe = $('fltMinRoe').value.trim();
   const minCap = minCapInput();
-  if (minCap) parts.push(`시총≥${fmtCapThreshold(minCap)}`);
+  if (minCap && !$('fltFavoritesOnly').checked) parts.push(`시총≥${fmtCapThreshold(minCap)}`);
   if (maxPer) parts.push(`PER≤${maxPer}`);
   if (maxPbr) parts.push(`PBR≤${maxPbr}`);
   if (minRoe) parts.push(`ROE≥${minRoe}`);
@@ -194,6 +275,7 @@ function updateFilterSummary() {
   if ($('fltBowlOnly').checked) parts.push('밥그릇');
   if ($('fltMa2060Only').checked) parts.push('2060');
   if ($('fltExcludeBelowMa60').checked) parts.push('추세이탈제외');
+  if ($('fltFavoritesOnly').checked) parts.push(`즐겨찾기 ${state.favorites.size}종목`);
   if (($('fltLimit').value || DEFAULT_LIMIT) !== DEFAULT_LIMIT) parts.push(`${$('fltLimit').value}건`);
   el.textContent = parts.join(' · ');
 }
@@ -233,14 +315,18 @@ function buildQuery() {
   const p = new URLSearchParams();
   const market = $('fltMarket').value;
   if (market) p.set('market', market);
-  p.set('limit', $('fltLimit').value || DEFAULT_LIMIT);
+  const favoritesOnly = $('fltFavoritesOnly').checked;
+  p.set('limit', favoritesOnly ? '2000' : ($('fltLimit').value || DEFAULT_LIMIT));
   p.set('sort_by', state.sortBy);
   p.set('sort_desc', state.sortDesc ? 'true' : 'false');
   const maxPer = $('fltMaxPer').value.trim();
   const maxPbr = $('fltMaxPbr').value.trim();
   const minRoe = $('fltMinRoe').value.trim();
   const minCap = minCapInput();
-  if (minCap) p.set('min_market_cap', minCap);
+  if (!favoritesOnly && minCap) p.set('min_market_cap', minCap);
+  if (favoritesOnly && state.favorites.size) {
+    p.set('stock_codes', [...state.favorites.keys()].join(','));
+  }
   if (maxPer) p.set('max_per', maxPer);
   if (maxPbr) p.set('max_pbr', maxPbr);
   if (minRoe) p.set('min_roe', minRoe);
@@ -347,19 +433,22 @@ function renderMobileList(items) {
       ['PBR', fmtFloat(row.pbr, 2)],
       ['ROE', fmtFloat(row.roe, 2)],
     ].map(([k, v]) => `<span><em>${k}</em>${v}</span>`).join('');
-    return `<button type="button" class="analysis-row${sel}" data-code="${esc(row.stock_code)}">
-      <span class="analysis-row-body">
-        <span class="analysis-row-top">
-          <span class="analysis-row-name">${esc(row.stock_name ?? '-')}${badgeHtml(row)}</span>
-          <span class="analysis-row-price">${fmtWon(row.current_price)}</span>
+    return `<div class="analysis-row-item">
+      ${favoriteButtonHtml(row)}
+      <button type="button" class="analysis-row${sel}" data-code="${esc(row.stock_code)}">
+        <span class="analysis-row-body">
+          <span class="analysis-row-top">
+            <span class="analysis-row-name">${esc(row.stock_name ?? '-')}${badgeHtml(row)}</span>
+            <span class="analysis-row-price">${fmtWon(row.current_price)}</span>
+          </span>
+          <span class="analysis-row-sub">
+            <span class="analysis-row-meta">${esc(row.market || '-')}</span>
+            <span class="analysis-row-cap">${fmtEok(row.market_cap)}</span>
+          </span>
+          <span class="analysis-row-metrics">${metrics}</span>
         </span>
-        <span class="analysis-row-sub">
-          <span class="analysis-row-meta">${esc(row.stock_code)} · ${esc(row.market || '-')}</span>
-          <span class="analysis-row-cap">${fmtEok(row.market_cap)}</span>
-        </span>
-        <span class="analysis-row-metrics">${metrics}</span>
-      </span>
-    </button>`;
+      </button>
+    </div>`;
   }).join('');
   wrap.innerHTML = `<div class="analysis-list">${cards}</div>`;
   const selected = wrap.querySelector('.analysis-row.selected');
@@ -373,19 +462,37 @@ function renderMobileList(items) {
 function renderTable(items) {
   state.lastItems = items;
   const wrap = $('tableWrap');
-  if (!items.length) {
-    wrap.innerHTML = '<div class="empty"><span class="ico">📭</span>조건에 맞는 종목이 없습니다.</div>';
+  const visibleItems = $('fltFavoritesOnly').checked
+    ? items.filter((row) => state.favorites.has(normalizeStockCode(row.stock_code)))
+    : items;
+  const orderedItems = visibleItems.slice().sort((a, b) => {
+    const aFavorite = state.favorites.has(normalizeStockCode(a.stock_code));
+    const bFavorite = state.favorites.has(normalizeStockCode(b.stock_code));
+    return Number(bFavorite) - Number(aFavorite);
+  });
+  const listCount = state.lastListMeta && state.lastListMeta.count != null
+    ? state.lastListMeta.count
+    : visibleItems.length;
+  $('statShown').textContent = `${fmtNum(visibleItems.length)} / ${fmtNum(listCount)}`;
+  if (!visibleItems.length) {
+    const message = $('fltFavoritesOnly').checked && state.favorites.size
+      ? '즐겨찾기 종목이 현재 필터 조건에 없습니다.'
+      : $('fltFavoritesOnly').checked
+        ? '즐겨찾기에 등록된 종목이 없습니다. 목록의 ☆ 버튼으로 추가하세요.'
+        : '조건에 맞는 종목이 없습니다.';
+    wrap.innerHTML = `<div class="empty"><span class="ico">📭</span>${message}</div>`;
     $('tableHint').textContent = '';
     syncSortDirButton();
     return;
   }
   if (phoneLayout()) {
-    renderMobileList(items);
+    renderMobileList(orderedItems);
     $('tableHint').textContent = '';
     syncSortDirButton();
     wrap.querySelectorAll('button.analysis-row').forEach((btn) => {
       btn.onclick = () => selectStock(btn.dataset.code, { scrollDetail: true });
     });
+    bindFavoriteButtons(wrap);
     return;
   }
   const head = SORT_COLS.map((col) => {
@@ -393,15 +500,15 @@ function renderTable(items) {
     if (NUM_COLS.includes(col)) cls.push('num');
     return `<th class="${cls.join(' ')}" data-sort="${col}">${COL_LABELS[col]}<span class="sort-mark">${sortMark(col)}</span></th>`;
   }).join('');
-  const rows = items.map((row) => {
+  const rows = orderedItems.map((row) => {
     const sel = row.stock_code === state.selectedCode ? ' selected' : '';
     const cells = SORT_COLS.map((col) => {
       const numCls = NUM_COLS.includes(col) ? ' class="num"' : '';
       return `<td${numCls}>${cellValue(col, row)}</td>`;
     }).join('');
-    return `<tr class="data-row${sel}" data-code="${esc(row.stock_code)}">${cells}</tr>`;
+    return `<tr class="data-row${sel}" data-code="${esc(row.stock_code)}"><td class="analysis-favorite-cell">${favoriteButtonHtml(row)}</td>${cells}</tr>`;
   }).join('');
-  wrap.innerHTML = `<table class="tbl"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>`;
+  wrap.innerHTML = `<table class="tbl"><thead><tr><th class="analysis-favorite-cell">즐겨찾기</th>${head}</tr></thead><tbody>${rows}</tbody></table>`;
   $('tableHint').textContent = `정렬: ${COL_LABELS[state.sortBy] || state.sortBy} ${state.sortDesc ? '내림차순' : '오름차순'}`;
 
   wrap.querySelectorAll('th.sortable').forEach((th) => {
@@ -416,7 +523,18 @@ function renderTable(items) {
   wrap.querySelectorAll('tr.data-row').forEach((tr) => {
     tr.onclick = () => selectStock(tr.dataset.code, { scrollDetail: true });
   });
+  bindFavoriteButtons(wrap);
   syncSortDirButton();
+}
+
+function bindFavoriteButtons(container) {
+  container.querySelectorAll('.analysis-favorite-toggle').forEach((btn) => {
+    btn.onclick = (event) => {
+      event.stopPropagation();
+      const row = (state.lastItems || []).find((item) => normalizeStockCode(item.stock_code) === btn.dataset.code);
+      toggleFavorite(btn.dataset.code, row && row.stock_name);
+    };
+  });
 }
 
 function detailField(label, value) {
@@ -465,13 +583,20 @@ async function loadCompanyProfile(code) {
 function renderDetail(row) {
   if (!row) {
     $('detailTitle').textContent = '종목 상세';
+    $('detailThemes').textContent = '';
+    $('detailThemes').dataset.stockCode = '';
     $('detailHint').textContent = '행을 클릭하거나 종목코드를 검색하세요';
     $('detailBody').innerHTML = '<div class="empty"><span class="ico">📊</span>목록에서 종목을 선택하면 상세 지표가 표시됩니다.</div>';
+    state.selectedName = null;
+    syncDetailFavoriteButton();
     resetChartState();
     return;
   }
+  state.selectedName = row.stock_name || '';
+  syncDetailFavoriteButton();
   $('detailTitle').textContent = `${row.stock_name || ''} (${row.stock_code})`;
   $('detailHint').textContent = `기준일 ${row.as_of_date || '-'} · ${row.market || '-'}`;
+  loadAnalysisThemes(row.stock_code);
   const priceBlock = [
     detailField('현재가', fmtWon(row.current_price)),
     detailField('시가총액', fmtEok(row.market_cap)),
@@ -507,19 +632,85 @@ function renderDetail(row) {
     <div class="detail-grid">${priceBlock}</div>
     <div class="detail-section"><div class="detail-section-title">밸류에이션</div><div class="detail-grid">${valBlock}</div></div>
     <div class="detail-section"><div class="detail-section-title">재무</div><div class="detail-grid">${finBlock}</div></div>
-    <div class="detail-section"><div class="detail-section-title">메타</div><div class="detail-grid">${metaBlock}</div></div>`;
+    <div class="detail-section"><div class="detail-section-title">메타</div><div class="detail-grid">${metaBlock}</div></div>
+    ${stockInvestorHistoryHtml(row.stock_code)}`;
   applyChartDrawMode();
   loadCompanyProfile(row.stock_code);
-  loadAnalysisCharts(row.stock_code);
+  loadAnalysisCharts(row.stock_code).then(() => {
+    loadStockInvestorHistoryForDetail(row.stock_code);
+  });
+}
+
+function stockInvestorHistoryHtml(stockCode) {
+  return `<section class="if-stock-lookup analysis-investor-lookup" data-stock-investor-stock-code="${esc(stockCode)}" aria-label="종목별 일별 순매수">
+    <div class="if-stock-title"><strong>종목별 일별 순매수</strong><span>최근 20거래일 · 단위: 주</span></div>
+    <div class="if-stock-result" data-stock-investor-result aria-live="polite">차트 조회 후 수급 내역을 불러옵니다.</div>
+  </section>`;
+}
+
+function loadStockInvestorHistoryForDetail(stockCode) {
+  const code = String(stockCode || '').trim().replace(/^A/i, '').replace(/\D/g, '').padStart(6, '0');
+  if (!code || code === '000000' || state.selectedCode !== code) return;
+  const section = $('detailBody').querySelector(
+    `[data-stock-investor-stock-code="${code}"]`
+  );
+  const result = section && section.querySelector('[data-stock-investor-result]');
+  if (result && window.loadStockInvestorHistory) {
+    window.loadStockInvestorHistory(result, code);
+  }
+}
+
+async function loadAnalysisThemes(stockCode) {
+  const el = $('detailThemes');
+  const code = String(stockCode || '').trim().replace(/^A/i, '').replace(/\D/g, '').padStart(6, '0');
+  if (!el || !code || code === '000000') {
+    if (el) {
+      el.textContent = '';
+      el.dataset.stockCode = '';
+    }
+    return;
+  }
+  if (state.selectedCode && state.selectedCode !== code) return;
+  el.dataset.stockCode = code;
+  el.innerHTML = '<span class="analysis-detail-themes-label">테마 조회 중…</span>';
+  try {
+    const result = await fetchJSON(`/theme-map/stocks/${encodeURIComponent(code)}/tags?limit=100`);
+    if (el.dataset.stockCode !== code) return;
+    const themes = [];
+    const seen = new Set();
+    (result.items || []).forEach((item) => {
+      const name = String(item.tag_name || '').trim();
+      if (item.tag_type !== 'theme' || !name || seen.has(name)) return;
+      seen.add(name);
+      themes.push(name);
+    });
+    if (!themes.length) {
+      el.textContent = '';
+      return;
+    }
+    const visibleThemes = themes.slice(0, 3)
+      .map((name) => `<span class="analysis-detail-theme" title="${esc(name)}">${esc(name)}</span>`);
+    if (themes.length > visibleThemes.length) {
+      visibleThemes.push(`<span class="analysis-detail-theme-more">외 ${themes.length - 3}개</span>`);
+    }
+    el.innerHTML = `<span class="analysis-detail-themes-label">테마</span>${visibleThemes.join('')}`;
+  } catch (_) {
+    if (el.dataset.stockCode === code) {
+      el.innerHTML = '<span class="analysis-detail-themes-label">테마 정보를 불러오지 못했습니다</span>';
+    }
+  }
 }
 
 const MA_PERIODS = [5, 10, 20, 60, 120];
+const WEEKLY_MA_PERIODS = [...MA_PERIODS, 240];
+const ALL_MA_PERIODS = WEEKLY_MA_PERIODS;
 const MA_COLORS = {
   5: '#ff1a1a',
   10: '#ff4fa3',
   20: '#ffd400',
   60: '#2563eb',
   120: '#9ca3af',
+  240: '#a855f7',
 };
 const MA_WIDTHS = {
   5: 1.2,
@@ -527,14 +718,15 @@ const MA_WIDTHS = {
   20: 2.4,
   60: 2.4,
   120: 3.6,
+  240: 2.4,
 };
 const MA_VISIBLE_KEY = 'analysis.maVisible';
-const MA_VISIBLE_DEFAULT = [20, 60];
+const MA_VISIBLE_DEFAULT = [20, 60, 240];
 
 function loadMaVisible() {
   try {
     const saved = JSON.parse(localStorage.getItem(MA_VISIBLE_KEY));
-    if (Array.isArray(saved)) return new Set(saved.filter((n) => MA_PERIODS.includes(n)));
+    if (Array.isArray(saved)) return new Set(saved.filter((n) => ALL_MA_PERIODS.includes(n)));
   } catch (e) { /* 저장값 손상 시 기본값 */ }
   return new Set(MA_VISIBLE_DEFAULT);
 }
@@ -548,26 +740,27 @@ function toggleMaVisible(n) {
   CHART_ORDER.forEach((k) => { if (chartPayloads[k]) renderChart(k); });
 }
 
-const CHART_ORDER = ['1D', '1W'];
+const CHART_ORDER = ['1D', '1W', '1MO'];
 const CHART_SPECS = {
-  '1W': { title: '주봉 차트', hint: '최근 104주 · MA5/10/20/60/120주', bars: 104, unit: '주' },
-  '1D': { title: '일봉 차트', hint: '최근 1년(250일) · MA5/10/20/60/120일', bars: 250, unit: '일' },
+  '1MO': { title: '월봉 차트', hint: '최근 2년(24개월) · MA5/10/20개월', bars: 24, unit: '월' },
+  '1W': { title: '주봉 차트', hint: '최근 104주 · MA5/10/20/60/120/240주', bars: 104, unit: '주' },
+  '1D': { title: '일봉 차트', hint: '최근 9개월(약 189거래일) · MA5/10/20/60/120일', bars: 189, unit: '일' },
 };
-const CHART_HEIGHT = 400;
+const CHART_HEIGHT = 340;
 
 function chartPixelHeight() {
   if (!phoneLayout()) return CHART_HEIGHT;
-  if (window.matchMedia('(max-height: 500px)').matches) return 240;
-  return 300;
+  if (window.matchMedia('(max-height: 500px)').matches) return 210;
+  return 260;
 }
-const PRICE_MARKER_ROOM = 38;
+const PRICE_MARKER_ROOM = 26;
 
 const SIGNAL_META = {
   RSI_OS: { label: 'RSI 과매도 진입', short: 'RSI과매도', shape: 'triangle', color: 'rsi', pane: 'rsi', key: 'rsi', order: 0 },
   WR_BUY: { label: 'Williams 매수', short: 'W매수', shape: 'triangle', color: 'wr', pane: 'wr', key: 'wr', order: 1 },
 };
 
-const chartPayloads = { '1W': null, '1D': null };
+const chartPayloads = { '1MO': null, '1W': null, '1D': null };
 let chartLoadSeq = 0;
 let chartResizeTimer = null;
 
@@ -575,6 +768,9 @@ const chartPriceLines = {};
 // 추세선 끝점은 픽셀이 아니라 (봉 인덱스, 가격)으로 저장해야 리사이즈·MA 토글 후에도 같은 캔들에 붙어 있다
 const chartTrendLines = {};
 const chartTrendDrafts = {};
+const chartDrawingEditVersions = {};
+const chartDrawingSaveTimers = {};
+const chartDrawingSaveQueues = {};
 const TREND_DRAG_MIN_PX = 5;
 const LINE_HIT_PX = 5;
 const COARSE_DRAG_MIN_PX = 12;
@@ -604,7 +800,7 @@ function chartToolsHtml() {
     const on = id === chartDrawMode;
     return `<button type="button" class="analysis-chart-tool${on ? ' on' : ''}" data-mode="${id}" aria-pressed="${on ? 'true' : 'false'}">${label}</button>`;
   }).join('');
-  return `<div class="analysis-chart-tools" role="group" aria-label="차트 그리기">${buttons}<span class="analysis-chart-tool-hint">${CHART_DRAW_HINTS[chartDrawMode]}</span></div>`;
+  return `<div class="analysis-chart-tools" role="group" aria-label="차트 그리기">${buttons}<span class="analysis-chart-tool-hint">${CHART_DRAW_HINTS[chartDrawMode]} · 선은 자동 저장됩니다</span></div>`;
 }
 
 function applyChartDrawMode() {
@@ -614,7 +810,7 @@ function applyChartDrawMode() {
     btn.setAttribute('aria-pressed', on ? 'true' : 'false');
   });
   document.querySelectorAll('.analysis-chart-tool-hint').forEach((el) => {
-    el.textContent = CHART_DRAW_HINTS[chartDrawMode] || '';
+    el.textContent = `${CHART_DRAW_HINTS[chartDrawMode] || ''} · 선은 자동 저장됩니다`;
   });
   const coarse = coarsePointer();
   CHART_ORDER.forEach((k) => {
@@ -642,6 +838,60 @@ function resetChartState() {
   });
 }
 
+function saveChartDrawings(key, stockCode) {
+  const code = String(stockCode || state.selectedCode || '');
+  if (!code) return;
+  const saveKey = `${code}:${key}`;
+  chartDrawingEditVersions[saveKey] = (chartDrawingEditVersions[saveKey] || 0) + 1;
+  const payload = {
+    price_lines: [...(chartPriceLines[key] || [])],
+    trend_lines: (chartTrendLines[key] || []).map((line) => ({ ...line })),
+  };
+  if (chartDrawingSaveTimers[saveKey]) clearTimeout(chartDrawingSaveTimers[saveKey]);
+  const timer = setTimeout(() => {
+    delete chartDrawingSaveTimers[saveKey];
+    const previous = chartDrawingSaveQueues[saveKey] || Promise.resolve();
+    const savePromise = previous
+      .catch(() => {})
+      .then(() => fetchJSON(`/fundamentals/${encodeURIComponent(code)}/drawings/${key}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }))
+      .catch((error) => {
+        console.error('차트 선 저장 오류:', error);
+        if (state.selectedCode === code) toast('차트 선을 저장하지 못했습니다.', true);
+      });
+    chartDrawingSaveQueues[saveKey] = savePromise;
+    savePromise.then(() => {
+      if (chartDrawingSaveQueues[saveKey] === savePromise) delete chartDrawingSaveQueues[saveKey];
+    });
+  }, 250);
+  chartDrawingSaveTimers[saveKey] = timer;
+}
+
+async function loadChartDrawings(stockCode, seq) {
+  const versionsAtRequest = Object.fromEntries(
+    CHART_ORDER.map((key) => [`${stockCode}:${key}`, chartDrawingEditVersions[`${stockCode}:${key}`] || 0]),
+  );
+  try {
+    const data = await fetchJSON(`/fundamentals/${encodeURIComponent(stockCode)}/drawings`);
+    if (seq !== chartLoadSeq) return;
+    CHART_ORDER.forEach((key) => {
+      const saveKey = `${stockCode}:${key}`;
+      if ((chartDrawingEditVersions[saveKey] || 0) !== versionsAtRequest[saveKey]) return;
+      const saved = (data.drawings && data.drawings[key]) || {};
+      chartPriceLines[key] = Array.isArray(saved.price_lines) ? saved.price_lines : [];
+      chartTrendLines[key] = Array.isArray(saved.trend_lines) ? saved.trend_lines : [];
+      if (chartPayloads[key]) renderChart(key);
+    });
+  } catch (error) {
+    if (seq !== chartLoadSeq) return;
+    console.error('차트 선 불러오기 오류:', error);
+    toast('저장된 차트 선을 불러오지 못했습니다.', true);
+  }
+}
+
 function indicatorFieldsHtml() {
   return [
     ...MA_PERIODS.map((n) => detailField(`MA${n}`, `<span id="detailMa${n}">-</span>`)),
@@ -649,6 +899,8 @@ function indicatorFieldsHtml() {
     detailField('주봉 %R', '<span id="detailWr1W">-</span>'),
     detailField('일봉 RSI', '<span id="detailRsi1D">-</span>'),
     detailField('일봉 %R', '<span id="detailWr1D">-</span>'),
+    detailField('월봉 RSI', '<span id="detailRsi1MO">-</span>'),
+    detailField('월봉 %R', '<span id="detailWr1MO">-</span>'),
   ].join('');
 }
 
@@ -682,7 +934,7 @@ function barDate(ts) {
 function barTimeLabel(ts, interval) {
   const s = barDate(ts);
   if (s.length < 10) return s;
-  return interval === '1W' ? `${s.slice(2, 4)}.${s.slice(5, 7)}` : s.slice(5, 10);
+  return interval === '1W' || interval === '1MO' ? `${s.slice(2, 4)}.${s.slice(5, 7)}` : s.slice(5, 10);
 }
 
 function signalDateLabel(d) {
@@ -741,18 +993,17 @@ function layoutPanes(W, H, n) {
   const padL = W < 480 ? 58 : 48;
   const padR = W < 480 ? 6 : 8;
   const padT = 14;
-  const padB = 22;
-  const gap = 10;
-  const avail = H - padT - padB - gap * 2;
-  const priceH = Math.round(avail * 0.55);
-  const rsiH = Math.round(avail * 0.22);
+  const padB = 6;
+  const gap = 6;
+  const avail = H - padT - padB - gap;
+  const rsiH = Math.max(40, Math.round(avail * 0.14));
+  const priceH = avail - rsiH;
   const plotW = W - padL - padR;
   const slotW = plotW / Math.max(n, 1);
   const price = { top: padT, h: priceH };
   const rsi = { top: price.top + priceH + gap, h: rsiH };
-  const wr = { top: rsi.top + rsiH + gap, h: avail - priceH - rsiH };
   return {
-    W, H, padL, padR, padT, padB, plotW, slotW, price, rsi, wr,
+    W, H, padL, padR, padT, padB, plotW, slotW, price, rsi,
     xOf: (i) => padL + i * slotW + slotW / 2,
     idxOf: (x) => (x - padL - slotW / 2) / slotW,
   };
@@ -807,13 +1058,14 @@ function legendHitAt(geo, mx, my) {
 
 function drawPricePane(ctx, geo, payload, theme) {
   const bars = payload.bars;
+  const maPeriods = String(payload.interval || '').toUpperCase() === '1W' ? WEEKLY_MA_PERIODS : MA_PERIODS;
   const pane = geo.price;
   let lo = Infinity;
   let hi = -Infinity;
   bars.forEach((b) => {
     lo = Math.min(lo, b.low, b.open, b.close);
     hi = Math.max(hi, b.high, b.open, b.close);
-    MA_PERIODS.forEach((n) => {
+    maPeriods.forEach((n) => {
       if (!maVisible.has(n)) return;
       const v = b[`ma${n}`];
       if (v != null) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
@@ -864,11 +1116,11 @@ function drawPricePane(ctx, geo, payload, theme) {
   });
   ctx.globalAlpha = 1;
 
-  MA_PERIODS.slice().reverse().forEach((n) => {
+  maPeriods.slice().reverse().forEach((n) => {
     if (!maVisible.has(n)) return;
     drawMaLine(ctx, bars, `ma${n}`, MA_COLORS[n], MA_WIDTHS[n], geo, yOf);
   });
-  geo.legendHits = drawChartLegend(ctx, MA_PERIODS.map((n) => ({
+  geo.legendHits = drawChartLegend(ctx, maPeriods.map((n) => ({
     id: n, label: `MA${n}`, color: MA_COLORS[n], width: MA_WIDTHS[n], off: !maVisible.has(n),
   })), geo.W, pane.top);
 }
@@ -876,15 +1128,10 @@ function drawPricePane(ctx, geo, payload, theme) {
 function oscSpecs(payload, theme) {
   const p = payload.params || {};
   const rsiOs = parseNum(p.rsi_os) ?? 30;
-  const wrOs = parseNum(p.wr_os) ?? -80;
   return {
     rsi: {
       key: 'rsi', min: 0, max: 100, levels: [70, rsiOs], zone: rsiOs,
       label: `RSI(${p.rsi_period || 14})`, color: theme.sig.rsi,
-    },
-    wr: {
-      key: 'wr', min: -100, max: 0, levels: [-20, wrOs], zone: wrOs,
-      label: `%R(${p.wr_period || 93})`, color: theme.sig.wr,
     },
   };
 }
@@ -1006,7 +1253,7 @@ function drawSignalMarkers(ctx, geo, payload, theme) {
       drawMarker(ctx, meta.shape, x, lastY, r, color, s.partial, theme.bg);
       y += step;
       const v = b[meta.key] ?? s.value;
-      if (v != null && Number.isFinite(v)) {
+      if (geo[meta.pane] && geo[meta.pane].yOf && v != null && Number.isFinite(v)) {
         drawMarker(ctx, meta.shape, x, geo[meta.pane].yOf(v), r, color, s.partial, theme.bg);
       }
     });
@@ -1092,6 +1339,7 @@ function removeTrendAt(key, geo, mx, my) {
   const near = trends.findIndex((t) => segmentDistance(mx, my, trendLinePx(geo, t)) <= chartLineHitPx());
   if (near < 0) return false;
   trends.splice(near, 1);
+  saveChartDrawings(key);
   renderChart(key);
   return true;
 }
@@ -1102,6 +1350,7 @@ function togglePriceLineAt(key, geo, my) {
   const near = lines.findIndex((p) => Math.abs(pane.yOf(p) - my) <= chartLineHitPx());
   if (near >= 0) lines.splice(near, 1);
   else lines.push(pane.priceOf(my));
+  saveChartDrawings(key);
   renderChart(key);
 }
 
@@ -1128,7 +1377,8 @@ function drawTimeAxis(ctx, geo, bars, interval, theme) {
 function tooltipHtml(payload, i) {
   const b = payload.bars[i];
   const p = payload.params || {};
-  const ma = MA_PERIODS
+  const maPeriods = String(payload.interval || '').toUpperCase() === '1W' ? WEEKLY_MA_PERIODS : MA_PERIODS;
+  const ma = maPeriods
     .filter((n) => b[`ma${n}`] != null)
     .map((n) => `MA${n} ${fmtNum(b[`ma${n}`])}`)
     .join(' · ');
@@ -1240,7 +1490,10 @@ function bindChartTooltip(key) {
     const origin = { mx: press.mx, my: press.my };
     if (dragged) {
       suppressClick = true;
-      if (commit && draft) (chartTrendLines[key] || (chartTrendLines[key] = [])).push(draft);
+      if (commit && draft) {
+        (chartTrendLines[key] || (chartTrendLines[key] = [])).push(draft);
+        saveChartDrawings(key);
+      }
     } else if (commit && coarsePointer() && chartDrawMode === 'trend') {
       suppressClick = true;
       const geo = canvas._geo;
@@ -1396,7 +1649,6 @@ function renderChart(key) {
   const osc = oscSpecs(payload, theme);
   drawPricePane(ctx, geo, payload, theme);
   drawOscPane(ctx, geo, geo.rsi, bars, osc.rsi, theme);
-  drawOscPane(ctx, geo, geo.wr, bars, osc.wr, theme);
   drawSignalMarkers(ctx, geo, payload, theme);
   drawPriceLines(ctx, geo, chartPriceLines[key] || [], theme);
   const draft = chartTrendDrafts[key];
@@ -1452,7 +1704,10 @@ function loadAnalysisCharts(stockCode) {
   resetChartState();
   const seq = chartLoadSeq;
   updateIndicatorFields();
-  return Promise.all(CHART_ORDER.map((key) => loadOneChart(key, stockCode, seq)));
+  return Promise.all([
+    ...CHART_ORDER.map((key) => loadOneChart(key, stockCode, seq)),
+    loadChartDrawings(stockCode, seq),
+  ]);
 }
 
 function onChartResize() {
@@ -1466,8 +1721,11 @@ function onChartResize() {
 
 async function renderDetailFallback(code, name) {
   const c = String(code || '').trim().replace(/^A/i, '').padStart(6, '0');
+  state.selectedName = name || state.selectedName || '';
+  syncDetailFavoriteButton();
   $('detailTitle').textContent = name ? `${name} (${c})` : `종목 (${c})`;
-  $('detailHint').textContent = '기본적분석 마트에 없음 · 주봉·일봉 차트만 표시';
+  $('detailHint').textContent = '기본적분석 마트에 없음 · 일봉·주봉·월봉 차트만 표시';
+  loadAnalysisThemes(c);
   $('detailBody').innerHTML = `
     ${chartSectionsHtml()}
     <div class="detail-section">
@@ -1475,20 +1733,27 @@ async function renderDetailFallback(code, name) {
       ${companyProfilePlaceholderHtml()}
     </div>
     <div class="detail-grid">${indicatorFieldsHtml()}</div>
-    <div class="empty" style="margin-top:12px;"><span class="ico">ℹ️</span>재무 지표는 <code>run_fundamental_batch.bat</code> 적재 후 표시됩니다.</div>`;
+    <div class="empty" style="margin-top:12px;"><span class="ico">ℹ️</span>재무 지표는 <code>run_fundamental_batch.bat</code> 적재 후 표시됩니다.</div>
+    ${stockInvestorHistoryHtml(c)}`;
   applyChartDrawMode();
   loadCompanyProfile(c);
   await loadAnalysisCharts(c);
+  loadStockInvestorHistoryForDetail(c);
 }
 
 async function selectStock(code, options) {
   const c = String(code || '').trim().replace(/^A/i, '').replace(/\D/g, '').padStart(6, '0');
   if (!c || c === '000000') return;
   state.selectedCode = c;
+  const selectedRow = (state.lastItems || []).find((row) => normalizeStockCode(row.stock_code) === c);
+  state.selectedName = selectedRow ? selectedRow.stock_name : '';
+  syncDetailFavoriteButton();
   syncUrlCode(c);
   const search = $('codeSearch');
   if (search) search.value = c;
   markSelectedCode(c);
+  $('detailThemes').dataset.stockCode = c;
+  $('detailThemes').innerHTML = '<span class="analysis-detail-themes-label">테마 조회 중…</span>';
   $('detailBody').innerHTML = '<div class="skeleton">상세 불러오는 중…</div>';
   if (options && options.scrollDetail) scrollAnalysisTarget('detailCard');
   try {
@@ -1514,15 +1779,25 @@ async function loadSummary() {
 
 async function loadList(options) {
   const autoSelect = !options || options.autoSelect !== false;
-  if (state.loading) return;
+  if (state.loading) {
+    state.reloadAfterLoad = true;
+    return;
+  }
   state.loading = true;
   const wrap = $('tableWrap');
   if (wrap && !wrap.querySelector('.tbl, .analysis-list')) wrap.innerHTML = '<div class="skeleton">데이터 불러오는 중…</div>';
   try {
-    const [summary, list] = await Promise.all([
-      loadSummary(),
-      fetchJSON(`/fundamentals?${buildQuery()}`, { timeoutMs: 60000 }),
-    ]);
+    let summary;
+    let list;
+    if ($('fltFavoritesOnly').checked && !state.favorites.size) {
+      summary = await loadSummary();
+      list = { items: [], count: 0, condition_sets: [] };
+    } else {
+      [summary, list] = await Promise.all([
+        loadSummary(),
+        fetchJSON(`/fundamentals?${buildQuery()}`, { timeoutMs: 60000 }),
+      ]);
+    }
     const empty = !summary.as_of_date && (!list.items || !list.items.length);
     showEmptyBanner(empty);
     renderSummary(summary, list);
@@ -1538,6 +1813,10 @@ async function loadList(options) {
   } finally {
     state.loading = false;
     applyFilterPanel();
+    if (state.reloadAfterLoad) {
+      state.reloadAfterLoad = false;
+      loadList({ autoSelect: false });
+    }
   }
 }
 
@@ -1556,6 +1835,7 @@ function resetFilters() {
   $('fltBowlOnly').checked = false;
   $('fltMa2060Only').checked = false;
   $('fltExcludeBelowMa60').checked = false;
+  $('fltFavoritesOnly').checked = false;
   state.sortBy = 'market_cap';
   state.sortDesc = true;
   if (phoneLayout()) filterUserOpen = false;
@@ -1583,8 +1863,10 @@ function syncUrlCode(code) {
 function initFromUrl() {
   const p = new URLSearchParams(window.location.search);
   if (p.get('market')) $('fltMarket').value = p.get('market');
-  if (p.get('sort_by')) {
-    state.sortBy = p.get('sort_by');
+  if (p.get('favorites') === '1') $('fltFavoritesOnly').checked = true;
+  const sortBy = p.get('sort_by');
+  if (SORT_COLS.includes(sortBy)) {
+    state.sortBy = sortBy;
     $('fltSortBy').value = state.sortBy;
   }
   const code = codeFromUrl();
@@ -1604,6 +1886,7 @@ function onPhoneLayoutChange() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  state.favorites = loadFavorites();
   initFromUrl();
   if (phoneLayout() && hasActiveFilters()) filterUserOpen = true;
   applyFilterPanel();
@@ -1630,6 +1913,10 @@ document.addEventListener('DOMContentLoaded', () => {
     loadList();
   };
   $('btnReset').onclick = resetFilters;
+  $('fltFavoritesOnly').onchange = () => {
+    applyFilterPanel();
+    loadList({ autoSelect: false });
+  };
   $('fltSortBy').onchange = () => {
     state.sortBy = $('fltSortBy').value;
     updateFilterSummary();

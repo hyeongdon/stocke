@@ -10,11 +10,18 @@ docs/PRD_RSI_LADDER.md 기준.
 from __future__ import annotations
 
 import json
+import hashlib
+import inspect
+import logging
+import os
+import sys
 import threading
+import time
 import uuid
+from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Iterator, List, Optional, Sequence
 
 from utils.rwm_bowl import (
     is_week_closed,
@@ -28,6 +35,8 @@ STRATEGY_LABEL = "분할매수"
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _STATE_PATH = _PROJECT_ROOT / "logs" / "_rsi_ladder_state.json"
+_AUDIT_LOG_PATH = _PROJECT_ROOT / "logs" / "_rsi_ladder_audit.jsonl"
+logger = logging.getLogger(__name__)
 
 PLAN_STATUSES = ("RSI_WAIT", "ACTIVE", "FULL", "EXITING", "PAUSED", "DONE")
 OPEN_STATUSES = ("RSI_WAIT", "ACTIVE", "FULL", "EXITING", "PAUSED")
@@ -553,6 +562,88 @@ def _now_iso() -> str:
         return datetime.now().replace(microsecond=0).isoformat()
 
 
+@contextmanager
+def _state_file_lock(path: Path) -> Iterator[None]:
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as lock_file:
+        if os.name == "nt":
+            import msvcrt
+
+            lock_file.seek(0)
+            if not lock_file.read(1):
+                lock_file.seek(0)
+                lock_file.write(b"\0")
+                lock_file.flush()
+            lock_file.seek(0)
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _state_digest(raw: Optional[bytes]) -> Optional[str]:
+    return hashlib.sha256(raw).hexdigest() if raw is not None else None
+
+
+def _plan_summary(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    plans = data.get("plans") or {}
+    return [
+        {
+            "id": plan_id,
+            "code": plan.get("code"),
+            "name": plan.get("name"),
+            "status": plan.get("status"),
+            "fills": len(plan.get("fills") or []),
+        }
+        for plan_id, plan in sorted(plans.items())
+    ]
+
+
+def _audit_state(action: str, *, audit_path: Path = _AUDIT_LOG_PATH, **details: Any) -> None:
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
+    frame = next(
+        (f for f in inspect.stack(context=0)[2:] if Path(f.filename).resolve() != Path(__file__).resolve()),
+        None,
+    )
+    entry = {
+        "at": datetime.now().astimezone().isoformat(timespec="milliseconds"),
+        "time_ns": time.time_ns(),
+        "action": action,
+        "pid": os.getpid(),
+        "ppid": os.getppid(),
+        "executable": sys.executable,
+        "argv": sys.argv,
+        "caller": (
+            {"file": str(Path(frame.filename).resolve()), "line": frame.lineno, "function": frame.function}
+            if frame
+            else None
+        ),
+        **details,
+    }
+    encoded = (json.dumps(entry, ensure_ascii=False, default=str) + "\n").encode("utf-8")
+    fd = os.open(str(audit_path), os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+    try:
+        os.write(fd, encoded)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+class LadderStateConflictError(RuntimeError):
+    pass
+
+
 class LadderStore:
     """logs/_rsi_ladder_state.json — enabled · plans · events · last_judge."""
 
@@ -560,8 +651,13 @@ class LadderStore:
 
     def __init__(self, path: Optional[Path] = None):
         self.path = path or _STATE_PATH
+        self.audit_path = _AUDIT_LOG_PATH if path is None else path.with_name(path.stem + "_audit.jsonl")
         self.lock = threading.RLock()
         self.data: Dict[str, Any] = {}
+        self._persisted_digest: Optional[str] = None
+        self._observed_external_digest: Optional[str] = None
+        self._instance_id = uuid.uuid4().hex
+        self._loaded_at_ns = 0
         self.load()
 
     @staticmethod
@@ -570,24 +666,201 @@ class LadderStore:
 
     def load(self) -> None:
         data = self._empty()
-        try:
-            if self.path.exists():
-                raw = json.loads(self.path.read_text(encoding="utf-8"))
-                if isinstance(raw, dict):
-                    data.update(raw)
-        except Exception:
-            pass
+        with _state_file_lock(self.path):
+            raw_bytes = self.path.read_bytes() if self.path.exists() else None
+        if raw_bytes is not None:
+            try:
+                raw = json.loads(raw_bytes.decode("utf-8"))
+                if not isinstance(raw, dict):
+                    raise ValueError("state root is not an object")
+                data.update(raw)
+            except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+                backup = self.path.with_name(
+                    f"{self.path.stem}_corrupt_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}{self.path.suffix}"
+                )
+                backup.write_bytes(raw_bytes)
+                _audit_state(
+                    "LOAD_ERROR",
+                    audit_path=self.audit_path,
+                    store_instance=self._instance_id,
+                    state_path=str(self.path.resolve()),
+                    digest=_state_digest(raw_bytes),
+                    backup_path=str(backup.resolve()),
+                    error=str(exc),
+                )
+                raise RuntimeError(
+                    f"분할매수 상태 파일이 손상되어 빈 상태로 초기화하지 않았습니다: {self.path}"
+                ) from exc
         self.data = data
+        self._persisted_digest = _state_digest(raw_bytes)
+        self._loaded_at_ns = time.time_ns()
+        _audit_state(
+            "LOAD",
+            audit_path=self.audit_path,
+            store_instance=self._instance_id,
+            state_path=str(self.path.resolve()),
+            digest=self._persisted_digest,
+            plans=_plan_summary(data),
+        )
 
     def save(self) -> None:
         with self.lock:
-            try:
-                self.path.parent.mkdir(parents=True, exist_ok=True)
-                tmp = self.path.with_suffix(".tmp")
-                tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-                tmp.replace(self.path)
-            except Exception:
-                pass
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            payload = json.dumps(self.data, ensure_ascii=False, indent=2, default=str).encode("utf-8")
+            new_digest = _state_digest(payload)
+            tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+            with _state_file_lock(self.path):
+                current = self.path.read_bytes() if self.path.exists() else None
+                current_digest = _state_digest(current)
+                if current_digest != self._persisted_digest:
+                    backup = None
+                    if current is not None:
+                        backup_path = self.path.with_name(
+                            f"{self.path.stem}_conflict_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{os.getpid()}{self.path.suffix}"
+                        )
+                        backup_path.write_bytes(current)
+                        backup = str(backup_path.resolve())
+                    try:
+                        disk_data = json.loads(current.decode("utf-8")) if current else self._empty()
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        disk_data = self._empty()
+                    if not isinstance(disk_data, dict):
+                        disk_data = self._empty()
+                    _audit_state(
+                        "SAVE_CONFLICT",
+                        audit_path=self.audit_path,
+                        store_instance=self._instance_id,
+                        state_path=str(self.path.resolve()),
+                        expected_digest=self._persisted_digest,
+                        actual_digest=current_digest,
+                        attempted_digest=new_digest,
+                        disk_plans=_plan_summary(disk_data),
+                        attempted_plans=_plan_summary(self.data),
+                        backup_path=backup,
+                    )
+                    self.data = disk_data
+                    self._persisted_digest = current_digest
+                    logger.error(
+                        "[LADDER] 상태 파일이 다른 프로세스에서 변경되어 저장을 차단했습니다: %s",
+                        self.path,
+                    )
+                    raise LadderStateConflictError(
+                        "분할매수 상태 파일이 다른 프로세스에서 변경되었습니다. "
+                        "덮어쓰기를 막았으며 감사 로그와 충돌 백업을 확인하세요."
+                    )
+
+                caller = next(
+                    (
+                        f
+                        for f in inspect.stack(context=0)[1:]
+                        if Path(f.filename).resolve() != Path(__file__).resolve()
+                    ),
+                    None,
+                )
+                try:
+                    previous_data = json.loads(current.decode("utf-8")) if current else self._empty()
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    previous_data = self._empty()
+                if not isinstance(previous_data, dict):
+                    previous_data = self._empty()
+                audit = {
+                    "store_instance": self._instance_id,
+                    "state_path": str(self.path.resolve()),
+                    "previous_digest": current_digest,
+                    "new_digest": new_digest,
+                    "previous_plans": _plan_summary(previous_data),
+                    "new_plans": _plan_summary(self.data),
+                    "caller": (
+                        {
+                            "file": str(Path(caller.filename).resolve()),
+                            "line": caller.lineno,
+                            "function": caller.function,
+                        }
+                        if caller
+                        else None
+                    ),
+                }
+                _audit_state("SAVE_BEGIN", audit_path=self.audit_path, **audit)
+                try:
+                    with tmp.open("wb") as stream:
+                        stream.write(payload)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    tmp.replace(self.path)
+                except Exception as exc:
+                    _audit_state("SAVE_ERROR", audit_path=self.audit_path, error=str(exc), **audit)
+                    raise
+                self._persisted_digest = new_digest
+                _audit_state("SAVE_COMMIT", audit_path=self.audit_path, **audit)
+
+    def verify_disk_state(self) -> bool:
+        with self.lock, _state_file_lock(self.path):
+            current = self.path.read_bytes() if self.path.exists() else None
+            current_digest = _state_digest(current)
+            if current_digest == self._persisted_digest:
+                self._observed_external_digest = None
+                return False
+            if current_digest == self._observed_external_digest:
+                return True
+
+            backup = None
+            disk_data = self._empty()
+            if current is not None:
+                backup_path = self.path.with_name(
+                    f"{self.path.stem}_external_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{os.getpid()}{self.path.suffix}"
+                )
+                backup_path.write_bytes(current)
+                backup = str(backup_path.resolve())
+                try:
+                    parsed = json.loads(current.decode("utf-8"))
+                    if isinstance(parsed, dict):
+                        disk_data.update(parsed)
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    pass
+
+            matching_commit = None
+            if self.audit_path.exists():
+                for line in reversed(self.audit_path.read_text(encoding="utf-8").splitlines()[-1000:]):
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if (
+                        entry.get("action") == "SAVE_COMMIT"
+                        and entry.get("state_path") == str(self.path.resolve())
+                        and entry.get("new_digest") == current_digest
+                        and entry.get("store_instance") != self._instance_id
+                        and int(entry.get("time_ns") or 0) > self._loaded_at_ns
+                    ):
+                        matching_commit = {
+                            "at": entry.get("at"),
+                            "pid": entry.get("pid"),
+                            "ppid": entry.get("ppid"),
+                            "argv": entry.get("argv"),
+                            "caller": entry.get("caller"),
+                        }
+                        break
+
+            _audit_state(
+                "EXTERNAL_CHANGE",
+                audit_path=self.audit_path,
+                store_instance=self._instance_id,
+                state_path=str(self.path.resolve()),
+                expected_digest=self._persisted_digest,
+                actual_digest=current_digest,
+                in_memory_plans=_plan_summary(self.data),
+                disk_plans=_plan_summary(disk_data),
+                matching_commit=matching_commit,
+                attribution="audited_writer" if matching_commit else "unattributed_external_writer",
+                backup_path=backup,
+            )
+            logger.error(
+                "[LADDER] 상태 파일의 미반영 변경을 감지했습니다 (기록된 저장 주체: %s): %s",
+                "확인됨" if matching_commit else "확인 불가",
+                self.path,
+            )
+            self._observed_external_digest = current_digest
+            return True
 
     # enabled
     @property

@@ -574,7 +574,14 @@
       html += '</tbody></table>';
     }
     if (p.memo) html += '<div class="hint">메모: ' + esc(p.memo) + '</div>';
+    html += '<section class="if-stock-lookup ld-investor-lookup" aria-label="종목별 일별 순매수">' +
+      '<div class="if-stock-title"><strong>종목별 일별 순매수</strong><span>최근 20거래일 · 단위: 주</span></div>' +
+      '<div class="if-stock-result" data-stock-investor-result aria-live="polite">최근 20거래일 수급 내역 조회 중...</div></section>';
     body.innerHTML = html;
+    window.loadStockInvestorHistory(
+      body.querySelector('[data-stock-investor-result]'),
+      p.code
+    );
   }
 
   const EVENT_KIND = {

@@ -1060,6 +1060,16 @@ class TradeIndustryMonthly(Base):
     )
 
 
+class ChartDrawing(Base):
+    __tablename__ = "chart_drawings"
+
+    stock_code = Column(String(6), primary_key=True)
+    interval = Column(String(3), primary_key=True)
+    price_lines = Column(JSON, nullable=False, default=list)
+    trend_lines = Column(JSON, nullable=False, default=list)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 def get_db() -> Generator[Session, None, None]:
     db: Session = SessionLocal()
     try:

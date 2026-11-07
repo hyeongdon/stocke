@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Dict, List, Optional
 
 from api.kiwoom_api_shared import _parse_kiwoom_int, logger
@@ -404,6 +405,102 @@ class _StockAnalyticsMixin:
         )
         return {"success": False, "error": err, "stock_code": code}
 
+    async def get_stock_institution_foreign_history(
+        self, stock_code: str, days: int = 20
+    ) -> Dict:
+        """종목별 최근 거래일 기관·외국인 순매매 수량."""
+        code = self.normalize_stock_code(stock_code)
+        if not code:
+            return {"success": False, "error": "종목코드가 비어 있습니다."}
+
+        from utils.datetime_kst import kst_today
+
+        end_date = kst_today()
+        start_date = end_date - timedelta(days=40)
+        response = await self._request_stockinfo_tr(
+            "ka10045",
+            {
+                "stk_cd": code,
+                "strt_dt": start_date.strftime("%Y%m%d"),
+                "end_dt": end_date.strftime("%Y%m%d"),
+                "orgn_prsm_unp_tp": "1",
+                "for_prsm_unp_tp": "1",
+            },
+        )
+        if not response.get("success"):
+            return {
+                "success": False,
+                "error": response.get("error") or "종목별 수급 조회에 실패했습니다.",
+                "stock_code": code,
+            }
+
+        data = response.get("data") or {}
+        rows = (
+            data.get("stk_orgn_trde_trnsn")
+            or data.get("output")
+            or data.get("data")
+            or []
+        )
+        if isinstance(rows, dict):
+            rows = [rows]
+
+        def to_int(value: object) -> Optional[int]:
+            text = str(value if value is not None else "").replace(",", "").replace("+", "").strip()
+            if not text or text in ("-", "--"):
+                return None
+            try:
+                return int(float(text))
+            except (TypeError, ValueError):
+                return None
+
+        def first_value(row: Dict, keys: List[str]):
+            return next(
+                (row[key] for key in keys if row.get(key) not in (None, "")),
+                None,
+            )
+
+        history = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            date = self._pick_str(row, ["dt", "date"], "")
+            foreign = to_int(
+                first_value(
+                    row,
+                    ["for_daly_nettrde_qty", "frgnr_daly_nettrde", "for_dt_acc"],
+                )
+            )
+            institution = to_int(
+                first_value(
+                    row,
+                    ["orgn_daly_nettrde_qty", "orgn_daly_nettrde", "orgn_dt_acc"],
+                )
+            )
+            if date and (foreign is not None or institution is not None):
+                history.append(
+                    {
+                        "date": date,
+                        "foreign_net": foreign,
+                        "institution_net": institution,
+                    }
+                )
+
+        history.sort(key=lambda row: row["date"])
+        if not history:
+            return {
+                "success": False,
+                "error": "조회 가능한 일별 수급 내역이 없습니다.",
+                "stock_code": code,
+            }
+
+        return {
+            "success": True,
+            "stock_code": code,
+            "unit": "주",
+            "source": "ka10045",
+            "rows": history[-max(1, days):],
+        }
+
     async def get_stock_program_net(self, stock_code: str) -> Dict:
         """종목별 프로그램 순매수 (장중 가능).
 
@@ -593,10 +690,11 @@ class _StockAnalyticsMixin:
         try:
             # 분봉 데이터 (ka10080)
             minute_chart_list = api_response.get('stk_min_pole_chart_qry', [])
-            # 일봉 데이터 (ka10081) · 주봉 데이터 (ka10082, dt = 그 주 기준일) — 행 형식 동일
+            # 일봉(ka10081) · 주봉(ka10082) · 월봉(ka10083) 데이터 — 행 형식 동일
             daily_chart_list = (
                 api_response.get('stk_dt_pole_chart_qry')
                 or api_response.get('stk_stk_pole_chart_qry')
+                or api_response.get('stk_mth_pole_chart_qry')
                 or []
             )
             if not minute_chart_list and not daily_chart_list:

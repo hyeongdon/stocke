@@ -23,6 +23,16 @@ def env(tmp_path, monkeypatch):
     rwm = logs / "_rwm_bowl_state.json"
     rwm.write_text(json.dumps({"watch": {"005930": {}}, "exits": {"1": {"x": 1}}}), encoding="utf-8")
     monkeypatch.setattr(mar, "_RWM_STATE_PATH", rwm)
+    ladder_state = logs / "_rsi_ladder_state.json"
+    ladder_state.write_text(json.dumps({
+        "enabled": True,
+        "plans": {
+            "mock-plan": {"account_mode": "mock", "code": "005930", "name": "모의"},
+            "real-plan": {"account_mode": "real", "code": "000660", "name": "실전"},
+        },
+        "events": [],
+    }), encoding="utf-8")
+    monkeypatch.setattr(mar, "_LADDER_STATE_PATH", ladder_state)
 
     monkeypatch.setattr(Config, "KIWOOM_USE_MOCK_ACCOUNT", True)
     monkeypatch.setattr(Config, "KIWOOM_MOCK_APP_KEY", "old-key")
@@ -96,6 +106,12 @@ def test_key_change_resets_only_mock_data(env, monkeypatch):
     assert state["fingerprint"] == mar.current_identity()["fingerprint"]
     assert len(state["resets"]) == 1
     assert mar.check_and_reset(db)["action"] == "unchanged"
+    ladder_backup = json.loads(
+        (Path(report["backup_dir"]) / "_rsi_ladder_state.json").read_text(encoding="utf-8")
+    )
+    assert set(ladder_backup["plans"]) == {"mock-plan", "real-plan"}
+    current = json.loads((tmp_path / "logs" / "_rsi_ladder_state.json").read_text(encoding="utf-8"))
+    assert set(current["plans"]) == {"real-plan"}
 
 
 def test_dry_run_deletes_nothing(env, monkeypatch):

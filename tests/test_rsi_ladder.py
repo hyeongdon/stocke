@@ -532,6 +532,131 @@ def test_screen_state_does_not_wait_on_kiwoom():
     assert "불러오는 중" in data["plans"][0]["market"]["error"]
 
 
+def test_screen_state_reuses_reconciled_holdings(monkeypatch):
+    import asyncio
+
+    from managers.rsi_ladder_scheduler import RsiLadderScheduler
+
+    sched = RsiLadderScheduler()
+    sched._bar_disk_loaded = True
+    plan = _plan()
+    sched.my_plans = lambda open_only=False: [plan]
+    sched._holdings = lambda: (_ for _ in ()).throw(AssertionError("중복 보유 조회"))
+    sched._bar_entry = lambda _code, _now: ([{"date": date.today(), "close": 1000}], True)
+    sched._schedule_quotes = lambda _codes, _now: None
+    seen = {}
+
+    async def _plan_view(p, mine, **_kwargs):
+        seen["holdings"] = mine
+        return p
+
+    sched.plan_view = _plan_view
+    monkeypatch.setattr("managers.rsi_ladder_scheduler._load_settings", lambda: None)
+    monkeypatch.setattr("managers.rsi_ladder_scheduler._account_mode", lambda: "mock")
+    holdings = {"005930": {"qty": 2, "avg": 1000}}
+
+    data = asyncio.run(sched.state(holdings=holdings))
+
+    assert data["plans"] == [plan]
+    assert seen["holdings"] is holdings
+
+
+def test_ladder_store_audits_plan_changes(tmp_path):
+    import json
+
+    from utils.rsi_ladder import LadderStore
+
+    store = LadderStore(tmp_path / "ladder.json")
+    plan = store.create_plan(code="005930", name="삼성전자", budget=1_000_000, profile={})
+
+    entries = [json.loads(line) for line in store.audit_path.read_text(encoding="utf-8").splitlines()]
+    commits = [entry for entry in entries if entry["action"] == "SAVE_COMMIT"]
+
+    assert commits
+    assert commits[-1]["pid"] > 0
+    assert commits[-1]["caller"]["function"] == "test_ladder_store_audits_plan_changes"
+    assert commits[-1]["new_plans"] == [{
+        "id": plan["id"], "code": "005930", "name": "삼성전자", "status": "RSI_WAIT", "fills": 0,
+    }]
+
+
+def test_ladder_store_does_not_overwrite_unexpected_state(tmp_path):
+    import json
+    from pathlib import Path
+    import pytest
+
+    from utils.rsi_ladder import LadderStateConflictError, LadderStore
+
+    path = tmp_path / "ladder.json"
+    store = LadderStore(path)
+    plan = store.create_plan(code="005930", name="삼성전자", budget=1_000_000, profile={})
+    external_state = json.dumps({"enabled": False, "plans": {}, "events": []})
+    path.write_text(external_state, encoding="utf-8")
+
+    with pytest.raises(LadderStateConflictError):
+        store.delete_plan(plan["id"])
+
+    assert path.read_text(encoding="utf-8") == external_state
+    entries = [json.loads(line) for line in store.audit_path.read_text(encoding="utf-8").splitlines()]
+    conflict = next(entry for entry in entries if entry["action"] == "SAVE_CONFLICT")
+    assert conflict["attempted_plans"] == []
+    assert conflict["disk_plans"] == []
+    assert Path(conflict["backup_path"]).exists()
+
+
+def test_ladder_store_detects_and_attributes_another_writer(tmp_path):
+    import json
+
+    from utils.rsi_ladder import LadderStore
+
+    path = tmp_path / "ladder.json"
+    server_store = LadderStore(path)
+    batch_store = LadderStore(path)
+    batch_store.create_plan(code="005930", name="삼성전자", budget=1_000_000, profile={})
+
+    assert server_store.verify_disk_state() is True
+    entries = [json.loads(line) for line in server_store.audit_path.read_text(encoding="utf-8").splitlines()]
+    changes = [entry for entry in entries if entry["action"] == "EXTERNAL_CHANGE"]
+    assert len(changes) == 1
+    assert changes[0]["attribution"] == "audited_writer"
+    assert changes[0]["matching_commit"]["caller"]["function"] == "test_ladder_store_detects_and_attributes_another_writer"
+    assert server_store.verify_disk_state() is True
+    refreshed = [json.loads(line) for line in server_store.audit_path.read_text(encoding="utf-8").splitlines()]
+    assert len([entry for entry in refreshed if entry["action"] == "EXTERNAL_CHANGE"]) == 1
+
+
+def test_ladder_store_logs_unattributed_external_change(tmp_path):
+    import json
+    from pathlib import Path
+
+    from utils.rsi_ladder import LadderStore
+
+    path = tmp_path / "ladder.json"
+    store = LadderStore(path)
+    path.write_text('{"enabled":false,"plans":{},"events":[]}', encoding="utf-8")
+
+    assert store.verify_disk_state() is True
+    entries = [json.loads(line) for line in store.audit_path.read_text(encoding="utf-8").splitlines()]
+    change = next(entry for entry in entries if entry["action"] == "EXTERNAL_CHANGE")
+    assert change["attribution"] == "unattributed_external_writer"
+    assert Path(change["backup_path"]).exists()
+
+
+def test_ladder_store_preserves_corrupt_state_instead_of_starting_empty(tmp_path):
+    import pytest
+
+    from utils.rsi_ladder import LadderStore
+
+    path = tmp_path / "ladder.json"
+    path.write_text("{broken", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="손상"):
+        LadderStore(path)
+
+    assert list(tmp_path.glob("ladder_corrupt_*.json"))
+    assert '"action": "LOAD_ERROR"' in (tmp_path / "ladder_audit.jsonl").read_text(encoding="utf-8")
+
+
 def test_store_roundtrip(tmp_path):
     s = LadderStore(tmp_path / "st.json")
     plan = s.create_plan(code="005930", name="삼성전자", budget=1_000_000, profile={"step_pct": 4})

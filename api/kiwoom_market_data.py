@@ -32,7 +32,7 @@ class _MarketDataMixin:
         """종목 차트 데이터 조회 - 실제 키움 API 사용.
 
         max_bars: 파싱 후 최근 N봉만 유지 (ATR 등 — API는 전체 일봉을 주므로 슬라이스).
-        allow_off_hours: True면 일봉 조회 시 장외에도 API 호출 (검증·ATR 표시용).
+        allow_off_hours: True면 일·주·월봉도 장외에 API 호출 (검증·ATR 표시용).
         """
         import time
         from utils.market_hours import is_krx_session
@@ -42,6 +42,9 @@ class _MarketDataMixin:
         is_weekly = normalized in {"1W", "W", "WEEK", "WEEKLY"}
         if is_weekly:
             normalized = "1W"
+        is_monthly = normalized in {"1MO", "MO", "MONTH", "MONTHLY"}
+        if is_monthly:
+            normalized = "1MO"
         is_daily = normalized in {"1D", "D", "DAY", "DAILY"}
         is_minute_chart = normalized in {
             "5M", "5MIN", "M5", "5MINUTE", "5",
@@ -53,7 +56,7 @@ class _MarketDataMixin:
         cache_key = (
             f"{stock_code}:AL:{normalized}" if is_minute_chart else f"{stock_code}:{normalized}"
         )
-        ttl = self._daily_chart_cache_ttl if (is_daily or is_weekly) else self._chart_cache_ttl
+        ttl = self._daily_chart_cache_ttl if (is_daily or is_weekly or is_monthly) else self._chart_cache_ttl
         if cache_ttl_sec is not None:
             try:
                 ttl = max(1.0, float(cache_ttl_sec))
@@ -67,7 +70,9 @@ class _MarketDataMixin:
                 return data[-max_bars:] if max_bars and data else data
 
         # 분봉도 검증·시뮬용 allow_off_hours 허용
-        if not is_krx_session() and not (allow_off_hours and (is_daily or is_weekly or is_minute_chart)):
+        if not is_krx_session() and not (
+            allow_off_hours and (is_daily or is_weekly or is_monthly or is_minute_chart)
+        ):
             if cached:
                 logger.debug(f"장외 시간 — 차트 캐시 사용: {cache_key}")
                 data = cached[0]
@@ -116,7 +121,7 @@ class _MarketDataMixin:
                     "upd_stkpc_tp": "1",
                 }
             else:
-                api_id = 'ka10082' if is_weekly else 'ka10081'
+                api_id = 'ka10083' if is_monthly else ('ka10082' if is_weekly else 'ka10081')
                 today = now_kst()
                 if today.weekday() == 5:
                     base_dt = (today - timedelta(days=1)).strftime('%Y%m%d')

@@ -19,12 +19,17 @@ from utils.rwm_bowl import (
 )
 
 MA_PERIODS: Tuple[int, ...] = (5, 10, 20, 60, 120)
+WEEKLY_MA_PERIODS: Tuple[int, ...] = (*MA_PERIODS, 240)
 SESSION_CLOSE_MIN = 15 * 60 + 30
 
 SIGNAL_RSI_OS = "RSI_OS"
 SIGNAL_WR_BUY = "WR_BUY"
 
 TradingDayFn = Callable[[date], bool]
+
+
+def ma_periods_for_interval(interval: str) -> Tuple[int, ...]:
+    return WEEKLY_MA_PERIODS if str(interval).upper() == "1W" else MA_PERIODS
 
 
 def chart_params(interval: str, p: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -164,6 +169,17 @@ def mark_daily_partial(rows: List[Dict[str, Any]], now: datetime) -> List[Dict[s
     if rows:
         d = row_date(rows[-1])
         if d is not None and d >= now.date() and not _after_close(d, now):
+            rows[-1]["partial"] = True
+    return rows
+
+
+def mark_monthly_partial(rows: List[Dict[str, Any]], now: datetime) -> List[Dict[str, Any]]:
+    """월봉 partial — 현재 월 봉은 월말이 될 때까지 진행 중으로 표시한다."""
+    for row in rows:
+        row["partial"] = False
+    if rows:
+        d = row_date(rows[-1])
+        if d is not None and (d.year, d.month) == (now.year, now.month):
             rows[-1]["partial"] = True
     return rows
 

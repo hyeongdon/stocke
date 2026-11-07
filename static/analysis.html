@@ -13,8 +13,8 @@
   <meta name="apple-mobile-web-app-title" content="Stocke">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="theme-color" content="#131720">
-  <link rel="stylesheet" href="/static/dashboard.css?v=126">
-  <link rel="stylesheet" href="/static/analysis.css?v=16">
+  <link rel="stylesheet" href="/static/dashboard.css?v=130">
+  <link rel="stylesheet" href="/static/analysis.css?v=23">
   <script src="/static/theme-sync.js?v=2"></script>
 </head>
 <body>
@@ -75,7 +75,6 @@
             <option value="revenue">매출</option>
             <option value="operating_profit">영업이익</option>
             <option value="foreign_ratio">외국인비율</option>
-            <option value="stock_code">종목코드</option>
             <option value="stock_name">종목명</option>
           </select>
         </label>
@@ -99,6 +98,7 @@
         <label class="analysis-check" title="키움 조건식(밥그릇) 결과 종목만 (해제 시 마지막 조회 결과를 '밥그릇' 배지로 표시)"><input type="checkbox" id="fltBowlOnly">밥그릇</label>
         <label class="analysis-check" title="키움 조건식(2060돌파) 결과 종목만 — 20일·60일 이평 골든크로스 (해제 시 마지막 조회 결과를 '2060' 배지로 표시)"><input type="checkbox" id="fltMa2060Only">2060돌파</label>
         <label class="analysis-check" title="키움 조건식(코스피추세이탈·코스닥추세이탈) 결과 종목 제외 (해제 시 마지막 조회 결과를 '추세이탈' 배지로 표시)"><input type="checkbox" id="fltExcludeBelowMa60">추세이탈 제외</label>
+        <label class="analysis-check" title="즐겨찾기에 등록한 종목만 표시"><input type="checkbox" id="fltFavoritesOnly">즐겨찾기만</label>
         <span class="hint" id="conditionSetInfo"></span>
         <div class="analysis-toolbar-actions">
           <button class="btn sm" id="btnApply" type="button">필터 적용</button>
@@ -121,7 +121,10 @@
       </div>
       <div class="card analysis-detail-card" id="detailCard">
         <div class="card-head">
-          <h3 id="detailTitle">종목 상세</h3>
+          <div class="analysis-detail-title">
+            <h3 id="detailTitle">종목 상세</h3>
+            <div class="analysis-detail-themes" id="detailThemes" aria-live="polite"></div>
+          </div>
           <div class="analysis-detail-head-side">
             <span class="hint" id="detailHint">목록에서 종목을 고르거나 코드를 검색하세요</span>
             <button class="btn sm analysis-back-list" id="btnBackList" type="button">목록</button>
@@ -135,6 +138,7 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/static/analysis.js?v=25"></script>
+  <script src="/static/investor-history.js?v=2"></script>
+  <script src="/static/analysis.js?v=32"></script>
 </body>
 </html>

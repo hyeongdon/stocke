@@ -31,46 +31,6 @@ def filter_conditions(conditions: List[Dict], names: Optional[List[str]]) -> Lis
     ]
 
 
-def format_price(stock: Dict) -> str:
-    """현재가: 천단위 콤마. 예: 71,000원"""
-    try:
-        return f"{int(float(stock.get('current_price', ''))):,}원"
-    except (ValueError, TypeError):
-        return "N/A"
-
-
-def format_diff(stock: Dict) -> str:
-    """전일대비: 부호 + 콤마. 예: ▲1,500 / ▼500"""
-    try:
-        num = int(float(stock.get("price_diff", "")))
-    except (ValueError, TypeError):
-        return "N/A"
-    if num > 0:
-        return f"▲{num:,}"
-    if num < 0:
-        return f"▼{abs(num):,}"
-    return "0"
-
-
-def format_rate(stock: Dict) -> str:
-    try:
-        num = float(stock.get("change_rate", ""))
-        sign = "+" if num > 0 else ""
-        return f"{sign}{num:.2f}%"
-    except (ValueError, TypeError):
-        return "N/A"
-
-
-def format_volume(stock: Dict) -> str:
-    try:
-        num = float(stock.get("volume", ""))
-        if num >= 1_000_000:
-            return f"{num / 1_000_000:.1f}M"
-        return f"{int(num):,}"
-    except (ValueError, TypeError):
-        return "N/A"
-
-
 def build_message(condition_results: List[Tuple[Dict, List[Dict]]], max_stocks: int) -> str:
     """조건식별 종목 결과를 텔레그램 메시지 텍스트로 조립."""
     now = now_kst().strftime("%Y-%m-%d %H:%M:%S")
@@ -87,10 +47,7 @@ def build_message(condition_results: List[Tuple[Dict, List[Dict]]], max_stocks: 
             for s in stocks[:max_stocks]:
                 stock_name = s.get("stock_name", "이름없음")
                 code = s.get("stock_code", "")
-                lines.append(
-                    f"  - {stock_name}({code}) | {format_price(s)} | "
-                    f"{format_diff(s)} ({format_rate(s)}) | {format_volume(s)}"
-                )
+                lines.append(f"  - {stock_name}({code})")
             if len(stocks) > max_stocks:
                 lines.append(f"  - ... 외 {len(stocks) - max_stocks}개")
             stock_text = "\n".join(lines)

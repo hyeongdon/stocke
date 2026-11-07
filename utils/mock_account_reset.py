@@ -129,15 +129,15 @@ def _cleanup_files(backup_dir: Path, apply: bool) -> List[str]:
         touched.append(f"{_LADDER_STATE_PATH.name}(모의 계획 {len(mock_ids)}건)")
         if apply:
             shutil.copy2(_LADDER_STATE_PATH, backup_dir / _LADDER_STATE_PATH.name)
-            for pid in mock_ids:
-                plans.pop(pid, None)
-            _LADDER_STATE_PATH.write_text(json.dumps(ladder, ensure_ascii=False, indent=2), encoding="utf-8")
-            try:
-                from utils.rsi_ladder import reset_ladder_store
+            from utils.rsi_ladder import LadderStore, reset_ladder_store
 
-                reset_ladder_store()
-            except Exception:
-                pass
+            store = LadderStore(_LADDER_STATE_PATH)
+            for pid, plan in list(store.plans().items()):
+                if (plan or {}).get("account_mode") == "mock":
+                    store.plans().pop(pid)
+            store.add_event(None, "SYSTEM", "모의계좌 변경으로 기존 모의 분할매수 계획 초기화", save=False)
+            store.save()
+            reset_ladder_store()
     return touched
 
 

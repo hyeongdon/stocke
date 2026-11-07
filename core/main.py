@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -45,10 +45,11 @@ from core.models import (
     Position,
     PositionBuyFill,
     AccountBalanceSnapshot,
+    ChartDrawing,
     get_auto_trade_settings_row,
 )
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from managers.condition_monitor import condition_monitor
 from api.kiwoom_api import KiwoomAPI, invalidate_account_balance_cache
 from core.config import Config, get_account_mode
@@ -1105,6 +1106,19 @@ class WatchlistAddRequest(BaseModel):
 class WatchlistToggleRequest(BaseModel):
     stock_code: str
     is_active: bool
+
+
+class ChartTrendLineRequest(BaseModel):
+    i1: float
+    p1: float
+    i2: float
+    p2: float
+
+
+class ChartDrawingsRequest(BaseModel):
+    price_lines: List[float] = Field(default_factory=list)
+    trend_lines: List[ChartTrendLineRequest] = Field(default_factory=list)
+
 
 class StrategyConfigureRequest(BaseModel):
     strategy_type: str  # MOMENTUM, DISPARITY, BOLLINGER, RSI
@@ -2225,9 +2239,9 @@ async def get_fundamentals(
     bowl_only: bool = False,
     ma2060_only: bool = False,
     exclude_below_ma60: bool = False,
+    stock_codes: Optional[str] = None,
 ):
-    """기본적분석 마트 최신 스냅샷 목록 (배치 적재 데이터) + 기술적 마트 주봉/일봉 RSI
-    + 키움 조건식 필터(주봉RSI·일봉RSI·주봉윌리암·일봉윌리암·밥그릇·2060돌파 해당 종목만, 추세이탈 제외)."""
+    """기본적분석 최신 스냅샷 목록. stock_codes로 지정한 종목 및 기술적·키움 조건식 필터를 지원한다."""
     try:
         from utils.fundamental_mart_store import list_latest
         from utils.technical_mart_store import get_latest_map_by_codes
@@ -2250,7 +2264,18 @@ async def get_fundamentals(
             (MA2060, ma2060_only),
         ):
             cond_sets[cs.key] = await cs.get_codes() if active else cs.cached_codes()
-        stock_codes = None
+        requested_stock_codes = None
+        if stock_codes is not None:
+            requested_stock_codes = []
+            for raw_code in stock_codes.split(","):
+                code = raw_code.strip().upper()
+                if code.startswith("A"):
+                    code = code[1:]
+                if not code.isdigit() or not 1 <= len(code) <= 6:
+                    raise HTTPException(status_code=400, detail="stock_codes는 쉼표로 구분한 1~6자리 종목코드여야 합니다")
+                requested_stock_codes.append(code.zfill(6))
+            requested_stock_codes = sorted(set(requested_stock_codes))
+        condition_stock_codes = None
         for key, active in (
             ("weekly_rsi", weekly_rsi_only),
             ("daily_rsi", daily_rsi_only),
@@ -2261,9 +2286,18 @@ async def get_fundamentals(
         ):
             if active:
                 codes = cond_sets[key]["codes"]
-                stock_codes = codes if stock_codes is None else stock_codes & codes
-        if stock_codes is not None:
-            stock_codes = sorted(stock_codes)
+                condition_stock_codes = (
+                    codes if condition_stock_codes is None else condition_stock_codes & codes
+                )
+        if condition_stock_codes is not None:
+            condition_stock_codes = sorted(condition_stock_codes)
+        if requested_stock_codes is not None:
+            favorite_code_set = set(requested_stock_codes)
+            condition_stock_codes = (
+                requested_stock_codes
+                if condition_stock_codes is None
+                else sorted(favorite_code_set.intersection(condition_stock_codes))
+            )
         trend_break = cond_sets["trend_break"]
         break_codes = trend_break["codes"]
         exclude_codes = sorted(break_codes) if exclude_below_ma60 else None
@@ -2278,7 +2312,7 @@ async def get_fundamentals(
             max_pbr=max_pbr,
             min_roe=min_roe,
             min_market_cap=min_market_cap,
-            stock_codes=stock_codes,
+            stock_codes=condition_stock_codes,
             exclude_codes=exclude_codes,
         )
         items = result.get("items") or []
@@ -2297,6 +2331,8 @@ async def get_fundamentals(
             for cs in cond_sets.values()
         ]
         return result
+    except HTTPException:
+        raise
     except ValueError:
         raise HTTPException(status_code=400, detail="as_of 형식은 YYYY-MM-DD")
     except Exception as e:
@@ -2361,6 +2397,63 @@ async def get_fundamental_company_profile(stock_code: str):
         raise HTTPException(status_code=500, detail="회사 개요 조회 실패")
 
 
+@app.get("/fundamentals/{stock_code}/drawings")
+def get_chart_drawings(stock_code: str, db: Session = Depends(get_db)):
+    code = stock_code.strip().upper()
+    if code.startswith("A"):
+        code = code[1:]
+    if not re.fullmatch(r"\d{6}", code):
+        raise HTTPException(status_code=400, detail="종목코드 형식이 올바르지 않습니다")
+
+    try:
+        rows = db.query(ChartDrawing).filter(ChartDrawing.stock_code == code).all()
+        return {
+            "drawings": {
+                row.interval: {"price_lines": row.price_lines, "trend_lines": row.trend_lines}
+                for row in rows
+            }
+        }
+    except Exception as e:
+        logger.error(f"차트 선 조회 오류 ({code}): {e}")
+        raise HTTPException(status_code=500, detail="차트 선 조회에 실패했습니다")
+
+
+@app.put("/fundamentals/{stock_code}/drawings/{interval}")
+def save_chart_drawings(
+    stock_code: str,
+    interval: str,
+    request: ChartDrawingsRequest,
+    db: Session = Depends(get_db),
+):
+    code = stock_code.strip().upper()
+    if code.startswith("A"):
+        code = code[1:]
+    if not re.fullmatch(r"\d{6}", code):
+        raise HTTPException(status_code=400, detail="종목코드 형식이 올바르지 않습니다")
+    if interval not in {"1D", "1W", "1MO"}:
+        raise HTTPException(status_code=400, detail="차트 주기가 올바르지 않습니다")
+    if len(request.price_lines) > 500 or len(request.trend_lines) > 500:
+        raise HTTPException(status_code=400, detail="차트 선은 주기별 최대 500개까지 저장할 수 있습니다")
+
+    try:
+        row = (
+            db.query(ChartDrawing)
+            .filter(ChartDrawing.stock_code == code, ChartDrawing.interval == interval)
+            .one_or_none()
+        )
+        if row is None:
+            row = ChartDrawing(stock_code=code, interval=interval)
+            db.add(row)
+        row.price_lines = request.price_lines
+        row.trend_lines = [line.dict() for line in request.trend_lines]
+        db.commit()
+        return {"saved": True}
+    except Exception as e:
+        db.rollback()
+        logger.error(f"차트 선 저장 오류 ({code}, {interval}): {e}")
+        raise HTTPException(status_code=500, detail="차트 선 저장에 실패했습니다")
+
+
 def _recent_trading_days(count: int) -> List[str]:
     """최근 N개 KRX 거래일 (YYYY-MM-DD, 오늘 포함·주말 제외)."""
     from datetime import timedelta
@@ -2377,6 +2470,8 @@ def _recent_trading_days(count: int) -> List[str]:
 
 def _normalize_chart_interval(interval: str) -> str:
     raw = (interval or "5M").strip().upper()
+    if raw in {"1MO", "MO", "MONTH", "MONTHLY"}:
+        return "1MO"
     if raw in {"1W", "W", "WEEK", "WEEKLY"}:
         return "1W"
     if raw in {"1D", "D", "DAY", "DAILY"}:
@@ -2387,7 +2482,7 @@ def _normalize_chart_interval(interval: str) -> str:
 
 
 def _parse_chart_rows(chart_data: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
-    """키움 일봉·주봉 dict → 정수 OHLCV 행 (종가 0 제외)."""
+    """키움 일·주·월봉 dict → 정수 OHLCV 행 (종가 0 제외)."""
     rows: List[Dict[str, Any]] = []
     for item in chart_data or []:
         try:
@@ -2430,15 +2525,16 @@ def _indicator_chart_payload(
 ) -> Dict[str, Any]:
     """MA·RSI·%R 계산 → 표시 구간 자르기 → 신호·최신값·설정값 응답."""
     from utils.chart_indicators import (
-        MA_PERIODS,
         annotate_indicators,
         chart_params,
         detect_signals,
+        ma_periods_for_interval,
         warmup_warning,
     )
 
+    ma_periods = ma_periods_for_interval(interval)
     cp = chart_params(interval, _rwm_chart_settings())
-    annotate_indicators(rows, cp)
+    annotate_indicators(rows, cp, ma_periods=ma_periods)
     start = max(0, len(rows) - display_bars)
     shown = rows[start:]
     last = shown[-1] if shown else {}
@@ -2447,11 +2543,11 @@ def _indicator_chart_payload(
         "interval": interval,
         "bars": shown,
         "display_bars": len(shown),
-        "ma_latest": {f"ma{n}": last.get(f"ma{n}") for n in MA_PERIODS},
+        "ma_latest": {f"ma{n}": last.get(f"ma{n}") for n in ma_periods},
         "signals": detect_signals(rows, cp, start=start),
         "indicator_latest": {"rsi": last.get("rsi"), "wr": last.get("wr")},
         "params": cp,
-        "warning": warmup_warning(shown, unit),
+        "warning": warmup_warning(shown, unit, ma_periods=ma_periods),
         **extra,
     }
 
@@ -2469,18 +2565,40 @@ async def get_fundamental_chart(
     interval: str = "1D",
     bars: Optional[int] = None,
 ):
-    """분석 화면용 차트 — 일봉(250일) · 주봉(104주) + MA10/20/60/120 · RSI · Williams %R · 신호.
+    """분석 화면용 차트 — 월봉(24개월) · 일봉(최대 189일) · 주봉(104주) + 지표·신호.
 
-    일봉·주봉 모두 같은 일봉 캐시(전체 봉)를 쓰고, 주봉 과거 구간만 키움 주봉(ka10082)으로 채운다.
+    월봉은 키움 ka10083, 주봉은 ka10082, 일봉은 ka10081 응답을 사용한다.
+    월봉은 최근 24개월, 일봉은 최근 최대 189거래일(약 9개월), 주봉은 최근 104주를 표시한다.
     """
     try:
         norm_interval = _normalize_chart_interval(interval)
 
-        if norm_interval in ("1D", "1W"):
-            from utils.chart_indicators import mark_daily_partial, merge_weekly_rows, resample_weekly_ohlcv
+        if norm_interval in ("1D", "1W", "1MO"):
+            from utils.chart_indicators import (
+                mark_daily_partial,
+                mark_monthly_partial,
+                merge_weekly_rows,
+                resample_weekly_ohlcv,
+            )
             from utils.datetime_kst import now_kst
 
             now = now_kst().replace(tzinfo=None)
+            if norm_interval == "1MO":
+                monthly_rows = _parse_chart_rows(
+                    await kiwoom_api.get_stock_chart_data(stock_code, "1MO", allow_off_hours=True)
+                )
+                if not monthly_rows:
+                    raise HTTPException(
+                        status_code=404,
+                        detail="월봉 데이터를 찾지 못했습니다 (키움 API 빈 응답)",
+                    )
+                mark_monthly_partial(monthly_rows, now)
+                return _indicator_chart_payload(
+                    stock_code, "1MO", monthly_rows,
+                    _clamp_display_bars(bars, 24, 24, 24), "월",
+                    source_monthly_bars=len(monthly_rows),
+                )
+
             daily_rows = _parse_chart_rows(
                 await kiwoom_api.get_stock_chart_data(stock_code, "1D", allow_off_hours=True)
             )
@@ -2494,7 +2612,7 @@ async def get_fundamental_chart(
                 mark_daily_partial(daily_rows, now)
                 return _indicator_chart_payload(
                     stock_code, "1D", daily_rows,
-                    _clamp_display_bars(bars, 250, 30, 400), "일",
+                    _clamp_display_bars(bars, 189, 30, 400), "일",
                     source_daily_bars=len(daily_rows),
                 )
 
@@ -3955,6 +4073,31 @@ async def get_stock_snapshot(stock_code: str, include_debug: bool = False):
             "stock_code": stock_code,
             "timestamp": kst_now_iso(),
         }
+
+@app.get("/stocks/{stock_code}/investor-history")
+async def get_stock_investor_history(stock_code: str, days: int = 20):
+    """종목별 최근 거래일 외국인·기관 순매매 내역."""
+    if days < 1 or days > 60:
+        raise HTTPException(status_code=400, detail="days는 1~60 사이여야 합니다.")
+    try:
+        result = await kiwoom_api.get_stock_institution_foreign_history(
+            stock_code, days=days
+        )
+        if not result.get("success"):
+            logger.warning(
+                f"종목별 수급 조회 실패 - stock_code={stock_code}, "
+                f"reason={result.get('error')}"
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=result.get("error") or "종목별 수급 조회 실패",
+            )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"종목별 수급 조회 오류 - stock_code={stock_code}: {e}")
+        raise HTTPException(status_code=500, detail="종목별 수급 조회 오류")
 
 @app.get("/api/status")
 async def get_status():
@@ -6509,8 +6652,15 @@ async def _ladder_acall(coro):
 @app.get("/api/ladder/state")
 async def ladder_state(force: bool = False, plan_id: Optional[str] = None):
     """분할매수 전체 상태 (계획 + 지표 스냅샷 + 이벤트)."""
-    rsi_ladder_scheduler.reconcile()
-    return await rsi_ladder_scheduler.state(force=force, plan_id=plan_id)
+    from utils.rsi_ladder import get_ladder_store
+
+    if get_ladder_store().verify_disk_state():
+        raise HTTPException(
+            status_code=409,
+            detail="분할매수 상태 파일이 실행 중 변경되어 안전을 위해 화면·자동 감시를 중지했습니다. 감사 로그를 확인하세요.",
+        )
+    holdings = rsi_ladder_scheduler.reconcile()
+    return await rsi_ladder_scheduler.state(force=force, plan_id=plan_id, holdings=holdings)
 
 
 @app.post("/api/ladder/enabled")

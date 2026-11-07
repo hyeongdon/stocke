@@ -13,7 +13,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.config import Config
-from notifications.condition_alert import filter_conditions, format_diff, format_price, format_rate
+from notifications.condition_alert import filter_conditions
 from notifications.telegram_notifier import TelegramNotifier
 from utils.datetime_kst import now_kst
 
@@ -92,21 +92,11 @@ def build_entry_message(
 ) -> str:
     values = values or {}
     name = stock_name or str(values.get("302") or "").strip() or stock_code
-    # REAL에는 시세 필드가 빈약한 경우가 많음
-    stub = {
-        "current_price": values.get("10") or "",
-        "price_diff": values.get("11") or "",
-        "change_rate": values.get("12") or "",
-    }
-    price = format_price(stub) if stub["current_price"] not in ("", None) else "-"
-    diff = format_diff(stub) if stub["price_diff"] not in ("", None) else "-"
-    rate = format_rate(stub) if stub["change_rate"] not in ("", None) else "-"
     ts = now_kst().strftime("%Y-%m-%d %H:%M:%S")
     return (
         f"🔔 조건식 편입\n"
         f"조건: {condition_name}\n"
         f"종목: {name}({stock_code})\n"
-        f"시세: {price} | {diff} ({rate})\n"
         f"시각: {ts}"
     )
 
@@ -203,37 +193,32 @@ class ConditionRealtimeAlerter:
         """Deprecated: 조건식 이탈로 장부를 빼지 않음."""
         return False
 
-    async def _resolve_name_and_quote(
+    async def _resolve_stock_name(
         self,
         stock_code: str,
         values: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, Dict[str, Any]]:
-        """REAL에는 302(종목명)·시세가 비는 경우가 많아 ka10001로 보강.
+    ) -> str:
+        """REAL에 종목명이 없을 때 ka10001에서 종목명을 보강."""
 
-        참고: ka10006(mrkcond flat)에는 stk_nm이 없어 종목명 보강에 쓸 수 없음.
-        """
-        values = dict(values or {})
+        values = values or {}
         name = (
             self._code_names.get(stock_code, "")
             or str(values.get("302") or "").strip()
         )
         if name == stock_code:
             name = ""
-        need_name = not name
-        need_px = values.get("10") in ("", None)
-        if not need_name and not need_px:
-            return name, values
+        if name:
+            return name
 
         try:
             code = self.api.normalize_stock_code(stock_code)
-            # 종목정보는 기본 코드(venue suffix 없이)로 조회
             resp = await self.api._request_stockinfo_tr("ka10001", {"stk_cd": code})
             if not resp.get("success"):
                 logger.info(
                     f"종목명 보강 실패({stock_code}): "
                     f"{resp.get('error') or resp.get('return_msg') or 'unknown'}"
                 )
-                return name, values
+                return name
             raw = resp.get("data") if isinstance(resp.get("data"), dict) else {}
             sn = str(
                 raw.get("stk_nm")
@@ -245,25 +230,11 @@ class ConditionRealtimeAlerter:
                 name = sn
                 self._code_names[stock_code] = sn
                 self._code_names[code] = sn
-                values["302"] = sn
             else:
                 logger.info(f"종목명 보강 응답에 이름 없음({stock_code}): keys={list(raw.keys())[:12]}")
-            if need_px:
-                # ka10001: cur_prc / flu_rt (부호 포함 문자열일 수 있음)
-                px_raw = raw.get("cur_prc") or raw.get("close_pric") or raw.get("lst_pric")
-                if px_raw not in ("", None):
-                    try:
-                        values["10"] = abs(int(float(str(px_raw).replace(",", "").replace("+", "").replace("-", "") or "0")))
-                        # 부호는 별도 유지하지 않고 절대가; 등락은 flu_rt로
-                    except (TypeError, ValueError):
-                        pass
-                rate = raw.get("flu_rt")
-                if rate not in ("", None):
-                    values["12"] = rate
-                # 전일대비는 없으면 생략 (N/A 허용)
         except Exception as e:
-            logger.warning(f"종목명/시세 보강 예외({stock_code}): {e}")
-        return name, values
+            logger.warning(f"종목명 보강 예외({stock_code}): {e}")
+        return name
 
     async def _notify_entry(
         self,
@@ -278,9 +249,9 @@ class ConditionRealtimeAlerter:
         if not self._should_send(condition_name, stock_code):
             logger.debug(f"실시간 편입 중복 스킵: {condition_name} {stock_code}")
             return
-        name, enriched = await self._resolve_name_and_quote(stock_code, values)
+        name = await self._resolve_stock_name(stock_code, values)
         msg = build_entry_message(
-            condition_name, stock_code, stock_name=name, values=enriched,
+            condition_name, stock_code, stock_name=name, values=values,
         )
         ok = self.notifier.send_message(msg, notification_key="condition.realtime")
         logger.info(

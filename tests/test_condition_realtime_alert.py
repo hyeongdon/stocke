@@ -41,11 +41,19 @@ def test_parse_real_items_nested():
 
 
 def test_build_entry_message():
-    text = build_entry_message("1592매매", "001720", stock_name="신영증권")
+    text = build_entry_message(
+        "1592매매",
+        "001720",
+        stock_name="신영증권",
+        values={"10": "10000", "11": "500", "12": "5.2"},
+    )
     assert "1592매매" in text
     assert "신영증권" in text
     assert "001720" in text
     assert "조건식 편입" in text
+    assert "시세" not in text
+    assert "10000" not in text
+    assert "5.2%" not in text
 
 
 def test_build_entry_message_falls_back_to_code():
@@ -53,7 +61,7 @@ def test_build_entry_message_falls_back_to_code():
     assert "종목: 382800(382800)" in text
 
 
-def test_resolve_name_and_quote_from_ka10001():
+def test_resolve_stock_name_from_ka10001():
     api = SimpleNamespace(
         normalize_stock_code=lambda c: c,
         _request_stockinfo_tr=AsyncMock(
@@ -69,13 +77,20 @@ def test_resolve_name_and_quote_from_ka10001():
         ),
     )
     alerter = ConditionRealtimeAlerter(api, notifier=SimpleNamespace(), names=["1592매매"])
-    name, enriched = asyncio.run(alerter._resolve_name_and_quote("264850", {}))
+    name = asyncio.run(alerter._resolve_stock_name("264850", {}))
     assert name == "메디톡스"
     assert alerter._code_names["264850"] == "메디톡스"
-    assert enriched["10"] == 5840
-    assert enriched["302"] == "메디톡스"
-    assert enriched["12"] == "-1.85"
     api._request_stockinfo_tr.assert_awaited_once_with("ka10001", {"stk_cd": "264850"})
+
+
+def test_resolve_stock_name_does_not_fetch_quote_when_name_is_present():
+    api = SimpleNamespace(_request_stockinfo_tr=AsyncMock())
+    alerter = ConditionRealtimeAlerter(api, notifier=SimpleNamespace(), names=[])
+
+    name = asyncio.run(alerter._resolve_stock_name("264850", {"302": "메디톡스"}))
+
+    assert name == "메디톡스"
+    api._request_stockinfo_tr.assert_not_awaited()
 
 
 def test_is_ma1592_condition_matches_1592_and_legacy():

@@ -170,6 +170,9 @@ class RsiLadderScheduler:
         while self.is_running:
             try:
                 if time.time() >= self._fail_until:
+                    if get_ladder_store().verify_disk_state():
+                        await asyncio.sleep(_LOOP_SEC)
+                        continue
                     await self._tick()
             except asyncio.CancelledError:
                 raise
@@ -437,11 +440,13 @@ class RsiLadderScheduler:
     # ───────────────────────── 판정 ─────────────────────────
 
     async def run_judge(self, *, trigger: str = "manual", dry_run: bool = False) -> Dict[str, Any]:
+        self._assert_state_consistent()
         async with self._lock:
             return await self._run_judge(trigger, dry_run)
 
     async def run_price_watch(self) -> List[Dict[str, Any]]:
         """장중 가격 감시 — ACTIVE 계획의 추가 매수 트리거만 현재가로 확인 (일봉·매도 판정 없음)."""
+        self._assert_state_consistent()
         async with self._lock:
             today = now_kst().date()
             results: List[Dict[str, Any]] = []
@@ -802,14 +807,14 @@ class RsiLadderScheduler:
 
     # ───────────────────────── 체결 대조 ─────────────────────────
 
-    def reconcile(self) -> None:
+    def reconcile(self) -> Optional[Dict[str, Dict[str, Any]]]:
         """PositionBuyFill · SellOrder · Position 으로 계획 상태 갱신 (동기 DB, 가벼움)."""
         from core.models import PendingBuySignal, Position, PositionBuyFill, SellOrder, get_db
 
         store = get_ladder_store()
         plans = self.my_plans(open_only=True)
         if not plans:
-            return
+            return None
         mine, _ = self._holdings()
         changed = False
         notes: List[str] = []
@@ -902,6 +907,7 @@ class RsiLadderScheduler:
             self._snap_cache.clear()
         for n in notes:
             _log(f"분할매수 {n}")
+        return mine
 
     def _apply_fill(self, plan: Dict[str, Any], pb: Dict[str, Any], fill, notes: List[str]) -> None:
         store = get_ladder_store()
@@ -1008,10 +1014,18 @@ class RsiLadderScheduler:
             raise LadderError("계획을 찾을 수 없습니다")
         return plan
 
+    @staticmethod
+    def _assert_state_consistent() -> None:
+        if get_ladder_store().verify_disk_state():
+            raise LadderError(
+                "분할매수 상태 파일이 실행 중 변경되어 안전을 위해 주문을 중지했습니다. 감사 로그를 확인하세요."
+            )
+
     async def create_plan(self, *, code: str, name: str, budget: int, profile: Dict[str, Any],
                           memo: str = "", buy_now: bool = False) -> Dict[str, Any]:
         from utils.rwm_bowl import normalize_code
 
+        self._assert_state_consistent()
         store = get_ladder_store()
         code = normalize_code(code)
         if not code:
@@ -1098,6 +1112,7 @@ class RsiLadderScheduler:
     async def manual_buy(self, plan_id: str) -> Dict[str, Any]:
         from utils.market_hours import is_krx_session
 
+        self._assert_state_consistent()
         plan = self._get_plan(plan_id)
         if plan["status"] in ("DONE", "PAUSED", "EXITING"):
             raise LadderError(f"{plan['status']} 상태에서는 매수할 수 없습니다")
@@ -1119,6 +1134,7 @@ class RsiLadderScheduler:
         return {"step": step, "qty": qty, "price": price, "message": msg}
 
     async def manual_sell(self, plan_id: str, mode: str) -> Dict[str, Any]:
+        self._assert_state_consistent()
         from utils.market_hours import is_krx_session
 
         plan = self._get_plan(plan_id)
@@ -1225,10 +1241,11 @@ class RsiLadderScheduler:
             },
         }
 
-    async def state(self, *, force: bool = False, plan_id: Optional[str] = None) -> Dict[str, Any]:
+    async def state(self, *, force: bool = False, plan_id: Optional[str] = None,
+                    holdings: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
         """화면용 상태. 키움 호출은 하지 않고, 없는 일봉·장중 현재가는 뒤에서 채운다."""
         store = get_ladder_store()
-        mine, _ = self._holdings()
+        mine = holdings if holdings is not None else self._holdings()[0]
         plans = self.my_plans()
         now = now_kst()
         if force:
