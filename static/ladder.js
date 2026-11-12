@@ -33,6 +33,14 @@
     editingId: null,
     warmTries: 0,
     reloadTimer: null,
+    fundamentals: new Map(),
+    analysisMemos: new Map(),
+    analysisMemoDrafts: new Map(),
+    analysisMemoSaving: new Set(),
+    analysisMemoAttempted: false,
+    analysisMemoPromise: null,
+    analysisMemoMobile: window.innerWidth <= 600,
+    analysisMemoCollapsed: window.innerWidth <= 600,
   };
 
   // ---------- 공통 ----------
@@ -449,7 +457,7 @@
     if (ap) all.push(ap);
     const lo = Math.min.apply(null, all) * 0.98;
     const hi = Math.max.apply(null, all) * 1.02;
-    const W = 640, H = 250, padL = 8, padR = 70, padT = 10, padB = 16;
+    const W = 640, H = 250, padL = 8, padR = 70, padT = 10, padB = 30;
     const x = (i) => padL + (i / (len - 1)) * (W - padL - padR);
     const y = (v) => padT + (1 - (v - lo) / (hi - lo)) * (H - padT - padB);
     const hline = (v, color, dash, label, left) => {
@@ -486,6 +494,16 @@
       svg += '<text x="' + (x(i) - 6) + '" y="' + (y(s.price) - 14) + '" style="fill:var(--up)">' + esc((s.rules || []).join('+')) + '</text>';
     });
     svg += '<circle cx="' + x(len - 1) + '" cy="' + y(prices[len - 1]) + '" r="3.5" fill="var(--text)"/>';
+    const axisY = H - padB;
+    svg += '<line x1="' + padL + '" x2="' + (W - padR) + '" y1="' + axisY + '" y2="' + axisY + '" stroke="var(--border)" stroke-width="1"/>';
+    const tickCount = Math.min(5, len);
+    Array.from({ length: tickCount }, (_, k) => Math.round((k * (len - 1)) / (tickCount - 1))).forEach((i) => {
+      const tickX = x(i);
+      const date = String(dates[i] || '');
+      const label = date.length >= 10 ? date.slice(2, 4) + '.' + date.slice(5, 7) + '.' + date.slice(8, 10) : date;
+      svg += '<line x1="' + tickX + '" x2="' + tickX + '" y1="' + axisY + '" y2="' + (axisY + 4) + '" stroke="var(--muted)" stroke-width="1"/>';
+      if (label) svg += '<text x="' + tickX + '" y="' + (H - 6) + '" text-anchor="middle">' + esc(label) + '</text>';
+    });
     return svg + '</svg>';
   }
 
@@ -498,6 +516,7 @@
       title.textContent = '종목을 선택하세요';
       body.innerHTML = '<div class="hint">왼쪽 목록에서 종목을 클릭하면 상세가 표시됩니다.</div>';
       actions.innerHTML = '';
+      renderAnalysisMemoFloat(null);
       return;
     }
     const ladder = buildLadder(p);
@@ -535,6 +554,7 @@
       { k: '금액 분할', v: allocText(p) },
     ];
     let html = '<div class="ld-detail-meta">' + meta.map((x) => '<div><div class="k">' + x.k + '</div><div class="v">' + x.v + '</div></div>').join('') + '</div>';
+    html += '<section class="ld-financial" data-financial-panel data-code="' + esc(p.code) + '" aria-label="재무 요약"></section>';
     if (p.status === 'DONE') {
       html += '<div class="ld-verdict manual">종료된 사이클' + (p.closed_at ? ' · ' + hm(p.closed_at) : '') + '</div>';
     } else {
@@ -574,14 +594,173 @@
       html += '</tbody></table>';
     }
     if (p.memo) html += '<div class="hint">메모: ' + esc(p.memo) + '</div>';
-    html += '<section class="if-stock-lookup ld-investor-lookup" aria-label="종목별 일별 순매수">' +
-      '<div class="if-stock-title"><strong>종목별 일별 순매수</strong><span>최근 20거래일 · 단위: 주</span></div>' +
+    html += '<section class="if-stock-lookup ld-investor-lookup" data-stock-code="' + esc(p.code) + '" aria-label="종목별 외국인·기관 순매수">' +
+      '<div class="if-stock-title"><strong>외국인·기관 순매수</strong><label>기간 <select data-investor-days aria-label="수급 조회 기간"><option value="20" selected>20일</option><option value="60">60일</option></select></label></div>' +
       '<div class="if-stock-result" data-stock-investor-result aria-live="polite">최근 20거래일 수급 내역 조회 중...</div></section>';
     body.innerHTML = html;
+    renderAnalysisMemoFloat(p);
+    loadFundamentalPanel(p.code);
     window.loadStockInvestorHistory(
       body.querySelector('[data-stock-investor-result]'),
       p.code
     );
+  }
+
+  function renderAnalysisMemoFloat(plan) {
+    const panel = document.getElementById('analysisMemoFloat');
+    if (!panel) return;
+    const code = String(plan && plan.code || '').replace(/^A/i, '').padStart(6, '0');
+    if (!plan) {
+      panel.hidden = true;
+      panel.innerHTML = '';
+      return;
+    }
+    const savedMemo = state.analysisMemos.get(code) || '';
+    const memo = state.analysisMemoDrafts.has(code) ? state.analysisMemoDrafts.get(code) : savedMemo;
+    const hasMemo = !!memo.trim();
+    const memoStateLabel = hasMemo ? '메모 있음' : '메모 없음';
+    const isSaving = state.analysisMemoSaving.has(code);
+    const status = isSaving ? '저장 중…' : memo === savedMemo ? '메모는 이 종목에 저장됩니다.' : '수정된 내용이 있습니다.';
+    panel.hidden = false;
+    panel.classList.toggle('is-collapsed', state.analysisMemoCollapsed);
+    panel.innerHTML = '<div class="ld-analysis-memo-head">' +
+      '<div><strong>종목 메모</strong><span>' + esc(plan.name) + ' · ' + code + '</span></div>' +
+      '<button type="button" class="btn sm ld-analysis-memo-toggle' + (hasMemo ? ' has-memo' : '') +
+      '" data-toggle-analysis-memo aria-label="' +
+      (state.analysisMemoCollapsed ? memoStateLabel + ', 메모 펼치기' : '메모 접기') + '" title="' +
+      (state.analysisMemoCollapsed ? memoStateLabel + ', 메모 펼치기' : '메모 접기') + '" aria-expanded="' +
+      (!state.analysisMemoCollapsed) + '">' + (state.analysisMemoCollapsed ? '✎ ' + (hasMemo ? '있음' : '없음') : '접기') + '</button></div>' +
+      '<div class="ld-analysis-memo-content"' + (state.analysisMemoCollapsed ? ' hidden' : '') + '>' +
+      '<textarea class="ld-analysis-memo-input" data-analysis-memo-input="' + code + '" maxlength="5000" ' +
+      'aria-label="' + esc(plan.name) + ' 메모" placeholder="이 종목의 메모를 입력하세요.">' + esc(memo) + '</textarea>' +
+      '<div class="ld-analysis-memo-footer"><span data-analysis-memo-status>' + status + '</span>' +
+      '<span>' + memo.length.toLocaleString('ko-KR') + ' / 5,000</span></div>' +
+      '<div class="ld-analysis-memo-actions"><button type="button" class="btn sm primary" data-save-analysis-memo="' +
+      code + '"' + (isSaving ? ' disabled' : '') + '>저장</button>' +
+      '<a class="ld-analysis-memo-link" href="/analysis?code=' + encodeURIComponent(code) + '">분석에서 보기 ↗</a></div></div>';
+  }
+
+  async function saveAnalysisMemo(code, button) {
+    const panel = document.getElementById('analysisMemoFloat');
+    const input = panel && panel.querySelector('[data-analysis-memo-input="' + code + '"]');
+    if (!input || state.analysisMemoSaving.has(code)) return;
+    const content = input.value;
+    state.analysisMemoDrafts.set(code, content);
+    state.analysisMemoSaving.add(code);
+    button.disabled = true;
+    const status = panel.querySelector('[data-analysis-memo-status]');
+    if (status) status.textContent = '저장 중…';
+    try {
+      if (content) {
+        await api('PUT', '/api/analysis/memos/' + encodeURIComponent(code), { content });
+        state.analysisMemos.set(code, content);
+      } else {
+        await api('DELETE', '/api/analysis/memos/' + encodeURIComponent(code));
+        state.analysisMemos.delete(code);
+      }
+      state.analysisMemoDrafts.delete(code);
+      toast('종목 메모를 저장했습니다.', 'ok');
+    } catch (e) {
+      toast('종목 메모를 저장하지 못했습니다: ' + e.message, 'err');
+    } finally {
+      state.analysisMemoSaving.delete(code);
+      const selected = plans().find((p) => p.id === state.selectedId);
+      if (selected && String(selected.code).replace(/^A/i, '').padStart(6, '0') === code) {
+        renderAnalysisMemoFloat(selected);
+      }
+    }
+  }
+
+  async function loadAnalysisMemos() {
+    if (state.analysisMemoPromise) return state.analysisMemoPromise;
+    state.analysisMemoAttempted = true;
+    state.analysisMemoPromise = api('GET', '/api/analysis/preferences')
+      .then((saved) => {
+        const memos = new Map();
+        Object.entries(saved.memos || {}).forEach(([key, text]) => {
+          const code = String(key || '').replace(/^A/i, '').trim();
+          if (/^\d{1,6}$/.test(code) && typeof text === 'string') {
+            memos.set(code.padStart(6, '0'), text.slice(0, 5000));
+          }
+        });
+        state.analysisMemos = memos;
+        const plan = plans().find((x) => x.id === state.selectedId);
+        renderAnalysisMemoFloat(plan);
+      })
+      .catch((e) => {
+        toast('분석 메모를 불러오지 못했습니다: ' + e.message, 'err');
+      })
+      .finally(() => {
+        state.analysisMemoPromise = null;
+      });
+    return state.analysisMemoPromise;
+  }
+
+  function fmtFinancialValue(value, digits) {
+    const n = Number(value);
+    return value == null || value === '' || !isFinite(n)
+      ? '—'
+      : n.toLocaleString('ko-KR', { maximumFractionDigits: digits == null ? 1 : digits });
+  }
+
+  function fmtFinancialAmount(value) {
+    const n = Number(value);
+    if (value == null || value === '' || !isFinite(n)) return '—';
+    if (Math.abs(n) >= 10000) {
+      return (n / 10000).toLocaleString('ko-KR', { maximumFractionDigits: 2 }) + '조';
+    }
+    return n.toLocaleString('ko-KR', { maximumFractionDigits: 1 }) + '억';
+  }
+
+  function financialPanelHtml(code, record) {
+    if (!record || record.status === 'loading') {
+      return '<div class="ld-financial-head"><strong>재무 요약</strong></div><div class="hint">재무정보 조회 중...</div>';
+    }
+    if (record.status === 'error') {
+      return '<div class="ld-financial-head"><strong>재무 요약</strong></div><div class="hint">재무정보를 불러오지 못했습니다: ' +
+        esc(record.error) + ' <button type="button" class="btn sm" data-financial-retry="' + esc(code) + '">다시 조회</button></div>';
+    }
+    const row = record.data || {};
+    const values = [
+      { label: 'ROE', value: row.roe == null ? '—' : fmtFinancialValue(row.roe, 2) + '%' },
+      { label: 'PER · PBR', value: fmtFinancialValue(row.per, 2) + ' · ' + fmtFinancialValue(row.pbr, 2) },
+      { label: 'EPS', value: row.eps == null ? '—' : fmtFinancialValue(row.eps, 0) + '원' },
+      { label: '매출액', value: fmtFinancialAmount(row.revenue) },
+      { label: '영업이익', value: fmtFinancialAmount(row.operating_profit) },
+    ];
+    const source = row.source ? ' · ' + esc(row.source) : '';
+    return '<div class="ld-financial-head"><strong>재무 요약</strong><span>기준일 ' +
+      esc(row.as_of_date || '—') + source + '</span></div><div class="ld-financial-grid">' +
+      values.map((item) => '<div><span class="k">' + item.label + '</span><strong class="v">' + item.value + '</strong></div>').join('') +
+      '</div><div class="ld-financial-note">최근 연간 재무정보입니다. 매출·영업이익 성장률과 컨센서스 추이는 현재 수집 데이터에 없어 표시하지 않습니다.</div>';
+  }
+
+  async function loadFundamentalPanel(code, force) {
+    let record = force ? null : state.fundamentals.get(code);
+    if (!record || (record.status !== 'loading' && Date.now() - record.loadedAt > 10 * 60 * 1000)) {
+      record = { status: 'loading', loadedAt: Date.now() };
+      state.fundamentals.set(code, record);
+      record.promise = api('GET', '/fundamentals/' + encodeURIComponent(code))
+        .then((data) => {
+          record.status = 'loaded';
+          record.data = data;
+          record.loadedAt = Date.now();
+        })
+        .catch((error) => {
+          record.status = 'error';
+          record.error = error.message;
+          record.loadedAt = Date.now();
+        });
+    }
+    const panel = document.querySelector('#detailBody [data-financial-panel]');
+    if (!panel || panel.dataset.code !== code) return;
+    panel.innerHTML = financialPanelHtml(code, record);
+    if (record.status === 'loading') {
+      await record.promise;
+      const currentPanel = document.querySelector('#detailBody [data-financial-panel]');
+      if (!currentPanel || currentPanel.dataset.code !== code) return;
+      currentPanel.innerHTML = financialPanelHtml(code, record);
+    }
   }
 
   const EVENT_KIND = {
@@ -624,6 +803,7 @@
         state.selectedId = first ? first.id : null;
       }
       renderAll();
+      if (force || !state.analysisMemoAttempted) loadAnalysisMemos();
       if (state.data && state.data.warming && state.warmTries < 15) {
         state.warmTries += 1;
         scheduleReload(2000);
@@ -1041,6 +1221,13 @@
   }
 
   function bind() {
+    window.addEventListener('resize', () => {
+      const isMobile = window.innerWidth <= 600;
+      if (isMobile === state.analysisMemoMobile) return;
+      state.analysisMemoMobile = isMobile;
+      state.analysisMemoCollapsed = isMobile;
+      renderAnalysisMemoFloat(plans().find((p) => p.id === state.selectedId));
+    });
     document.querySelector('#planTable tbody').addEventListener('click', (e) => {
       const editBtn = e.target.closest('[data-edit]');
       const tr = e.target.closest('tr[data-id]');
@@ -1063,6 +1250,31 @@
     document.getElementById('detailActions').addEventListener('click', (e) => {
       const b = e.target.closest('button[data-act]');
       if (b && !b.disabled) onAction(b.dataset.act);
+    });
+    document.getElementById('detailBody').addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-financial-retry]');
+      if (b) loadFundamentalPanel(b.dataset.financialRetry, true);
+    });
+    document.getElementById('analysisMemoFloat').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-toggle-analysis-memo]');
+      if (b) {
+        state.analysisMemoCollapsed = !state.analysisMemoCollapsed;
+        renderAnalysisMemoFloat(plans().find((p) => p.id === state.selectedId));
+        return;
+      }
+      const saveButton = e.target.closest('[data-save-analysis-memo]');
+      if (saveButton) saveAnalysisMemo(saveButton.dataset.saveAnalysisMemo, saveButton);
+    });
+    document.getElementById('analysisMemoFloat').addEventListener('input', (e) => {
+      const input = e.target.closest('[data-analysis-memo-input]');
+      if (!input) return;
+      const code = input.dataset.analysisMemoInput;
+      state.analysisMemoDrafts.set(code, input.value);
+      const status = input.closest('.ld-analysis-memo-content').querySelector('[data-analysis-memo-status]');
+      const count = input.closest('.ld-analysis-memo-content').querySelector('.ld-analysis-memo-footer span:last-child');
+      const savedMemo = state.analysisMemos.get(code) || '';
+      if (status) status.textContent = input.value === savedMemo ? '메모는 이 종목에 저장됩니다.' : '수정된 내용이 있습니다.';
+      if (count) count.textContent = input.value.length.toLocaleString('ko-KR') + ' / 5,000';
     });
     document.getElementById('btnJudge').addEventListener('click', runPreview);
     document.getElementById('btnRefresh').addEventListener('click', () => load(true));

@@ -416,7 +416,7 @@ class _StockAnalyticsMixin:
         from utils.datetime_kst import kst_today
 
         end_date = kst_today()
-        start_date = end_date - timedelta(days=40)
+        start_date = end_date - timedelta(days=max(40, days * 2 + 5))
         response = await self._request_stockinfo_tr(
             "ka10045",
             {
@@ -476,12 +476,30 @@ class _StockAnalyticsMixin:
                     ["orgn_daly_nettrde_qty", "orgn_daly_nettrde", "orgn_dt_acc"],
                 )
             )
+            close_price = to_int(first_value(row, ["cur_prc", "close_pric", "close_price"]))
+            volume = to_int(first_value(row, ["trde_qty", "trde_vol", "volume"]))
+            close_price = abs(close_price) if close_price is not None else None
+            volume = abs(volume) if volume is not None else None
             if date and (foreign is not None or institution is not None):
                 history.append(
                     {
                         "date": date,
                         "foreign_net": foreign,
                         "institution_net": institution,
+                        "close_price": close_price,
+                        "trade_volume": volume,
+                        "foreign_net_estimated_amount": (
+                            foreign * close_price
+                            if foreign is not None and close_price is not None else None
+                        ),
+                        "institution_net_estimated_amount": (
+                            institution * close_price
+                            if institution is not None and close_price is not None else None
+                        ),
+                        "trade_value_estimated": (
+                            volume * close_price
+                            if volume is not None and close_price is not None else None
+                        ),
                     }
                 )
 
@@ -492,6 +510,50 @@ class _StockAnalyticsMixin:
                 "error": "조회 가능한 일별 수급 내역이 없습니다.",
                 "stock_code": code,
             }
+
+        if any(row["close_price"] is None or row["trade_volume"] is None for row in history):
+            try:
+                chart_rows = await self.get_stock_chart_data(
+                    code, "1D", max_bars=days + 5, allow_off_hours=True
+                )
+            except Exception as exc:
+                logger.warning(
+                    "종목별 수급 금액 근사용 일봉 조회 실패 - stock_code=%s: %s",
+                    code,
+                    exc,
+                )
+                chart_rows = []
+
+            chart_by_date = {}
+            for bar in chart_rows or []:
+                timestamp = str(bar.get("timestamp") or "")
+                chart_date = "".join(char for char in timestamp[:10] if char.isdigit())
+                if len(chart_date) != 8:
+                    continue
+                chart_by_date[chart_date] = bar
+
+            for row in history:
+                bar = chart_by_date.get(row["date"])
+                if not bar:
+                    continue
+                chart_close = to_int(bar.get("close"))
+                chart_volume = to_int(bar.get("volume"))
+                if row["close_price"] is None and chart_close is not None:
+                    row["close_price"] = abs(chart_close)
+                if row["trade_volume"] is None and chart_volume is not None:
+                    row["trade_volume"] = abs(chart_volume)
+                row["foreign_net_estimated_amount"] = (
+                    row["foreign_net"] * row["close_price"]
+                    if row["foreign_net"] is not None and row["close_price"] is not None else None
+                )
+                row["institution_net_estimated_amount"] = (
+                    row["institution_net"] * row["close_price"]
+                    if row["institution_net"] is not None and row["close_price"] is not None else None
+                )
+                row["trade_value_estimated"] = (
+                    row["trade_volume"] * row["close_price"]
+                    if row["trade_volume"] is not None and row["close_price"] is not None else None
+                )
 
         return {
             "success": True,

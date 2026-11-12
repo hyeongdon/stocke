@@ -8,12 +8,16 @@ import time
 from datetime import datetime, timezone
 from typing import Optional
 
+from itsdangerous import BadSignature, URLSafeTimedSerializer
+
 from core.config import Config
 
 logger = logging.getLogger(__name__)
 
 SESSION_USER_KEY = "auth_user"
 SESSION_AT_KEY = "auth_at"
+TRUSTED_DEVICE_COOKIE = "stocke_trusted_device"
+TRUSTED_DEVICE_MAX_AGE_SECONDS = 365 * 24 * 60 * 60
 
 _PBKDF2_ITERATIONS = 120_000
 _PBKDF2_DKLEN = 32
@@ -68,6 +72,36 @@ def mark_session_login(session: dict, username: str) -> None:
 
 def clear_session(session: dict) -> None:
     session.clear()
+
+
+def create_trusted_device_token(username: str) -> str:
+    serializer = URLSafeTimedSerializer(
+        Config.AUTH_SESSION_SECRET,
+        salt="stocke-trusted-device",
+    )
+    return serializer.dumps({"username": username.strip(), "purpose": "trusted-device"})
+
+
+def trusted_device_username(token: Optional[str]) -> Optional[str]:
+    if not token:
+        return None
+    serializer = URLSafeTimedSerializer(
+        Config.AUTH_SESSION_SECRET,
+        salt="stocke-trusted-device",
+    )
+    try:
+        payload = serializer.loads(token, max_age=TRUSTED_DEVICE_MAX_AGE_SECONDS)
+    except BadSignature:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    username = payload.get("username")
+    if (
+        payload.get("purpose") != "trusted-device"
+        or username != Config.AUTH_USERNAME
+    ):
+        return None
+    return str(username)
 
 
 def session_username(session: dict) -> Optional[str]:

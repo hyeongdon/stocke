@@ -43,11 +43,16 @@ let state = {
   lastSummary: null,
   lastListMeta: null,
   favorites: new Map(),
+  memos: new Map(),
   reloadAfterLoad: false,
 };
 
 let toastTimer = null;
 const FAVORITES_KEY = 'analysisFavorites';
+const MEMOS_KEY = 'analysisMemos';
+const PREFERENCES_MIGRATED_KEY = 'analysisPreferencesMigrated';
+const MAX_MEMO_LENGTH = 5000;
+const DEFAULT_STOCK_CODE = '005930';
 
 function normalizeStockCode(value) {
   const raw = String(value == null ? '' : value).trim().replace(/^A/i, '');
@@ -84,6 +89,144 @@ function saveFavorites(favorites) {
   }
 }
 
+function saveMemos(memos) {
+  try {
+    localStorage.setItem(MEMOS_KEY, JSON.stringify(Object.fromEntries(memos)));
+  } catch (e) {
+    toast('분석 메모 브라우저 백업을 저장하지 못했습니다.', true);
+  }
+}
+
+function preferenceRequest(method, body) {
+  return {
+    method,
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  };
+}
+
+async function loadServerPreferences() {
+  const localFavorites = state.favorites;
+  const localMemos = state.memos;
+  let saved;
+  try {
+    saved = await fetchJSON('/api/analysis/preferences');
+  } catch (e) {
+    toast('서버 저장 정보를 불러오지 못했습니다. 브라우저에 남아 있는 저장값을 표시합니다.', true);
+    return;
+  }
+
+  const favorites = new Map();
+  (saved.favorites || []).forEach((item) => {
+    const code = normalizeStockCode(item && item.code);
+    if (code) favorites.set(code, String((item && item.name) || ''));
+  });
+  const memos = new Map();
+  Object.entries(saved.memos || {}).forEach(([key, text]) => {
+    const code = normalizeStockCode(key);
+    if (code && typeof text === 'string') memos.set(code, text.slice(0, MAX_MEMO_LENGTH));
+  });
+  const migrationFailures = [];
+  let shouldMigrate = true;
+  try {
+    shouldMigrate = localStorage.getItem(PREFERENCES_MIGRATED_KEY) !== '1';
+  } catch (e) {
+    toast('기존 저장값 이전 상태를 확인하지 못했습니다.', true);
+  }
+  const shouldRestoreLocalFavorites = favorites.size === 0 && localFavorites.size > 0;
+  if (shouldMigrate || shouldRestoreLocalFavorites) {
+    for (const [code, name] of localFavorites) {
+      if (favorites.has(code)) continue;
+      try {
+        await fetchJSON(`/api/analysis/favorites/${encodeURIComponent(code)}`, preferenceRequest('PUT', { stock_name: name }));
+        favorites.set(code, name);
+      } catch (e) {
+        favorites.set(code, name);
+        migrationFailures.push(`즐겨찾기 ${code}`);
+      }
+    }
+    for (const [code, content] of localMemos) {
+      if (memos.has(code)) continue;
+      try {
+        await fetchJSON(`/api/analysis/memos/${encodeURIComponent(code)}`, preferenceRequest('PUT', { content }));
+        memos.set(code, content);
+      } catch (e) {
+        memos.set(code, content);
+        migrationFailures.push(`메모 ${code}`);
+      }
+    }
+  }
+  state.favorites = favorites;
+  state.memos = memos;
+  saveFavorites(favorites);
+  saveMemos(memos);
+  if (migrationFailures.length) {
+    toast(`기존 브라우저 저장값 일부를 서버로 옮기지 못했습니다: ${migrationFailures.join(', ')}`, true);
+  } else {
+    try { localStorage.setItem(PREFERENCES_MIGRATED_KEY, '1'); } catch (e) {
+      toast('기존 저장값 이전 상태를 기억하지 못했습니다.', true);
+    }
+  }
+}
+
+function loadMemos() {
+  try {
+    const raw = localStorage.getItem(MEMOS_KEY);
+    if (!raw) return new Map();
+    const saved = JSON.parse(raw);
+    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) {
+      throw new Error('메모 저장 형식이 올바르지 않습니다.');
+    }
+    const memos = new Map();
+    Object.entries(saved).forEach(([key, text]) => {
+      const code = normalizeStockCode(key);
+      if (code && typeof text === 'string') memos.set(code, text.slice(0, MAX_MEMO_LENGTH));
+    });
+    return memos;
+  } catch (e) {
+    toast('분석 메모를 불러오지 못했습니다. 브라우저 저장 공간을 확인하세요.', true);
+    return new Map();
+  }
+}
+
+async function persistMemo(stockCode, text) {
+  const code = normalizeStockCode(stockCode);
+  if (!code) return false;
+  try {
+    await fetchJSON(
+      `/api/analysis/memos/${encodeURIComponent(code)}`,
+      text ? preferenceRequest('PUT', { content: text }) : preferenceRequest('DELETE'),
+    );
+  } catch (e) {
+    toast('분석 메모를 서버에 저장하지 못했습니다. 로그인과 서버 연결을 확인하세요.', true);
+    return false;
+  }
+  const next = new Map(state.memos);
+  if (text) next.set(code, text);
+  else next.delete(code);
+  state.memos = next;
+  saveMemos(next);
+  return true;
+}
+
+function stockMemoHtml(stockCode) {
+  const code = normalizeStockCode(stockCode);
+  const text = state.memos.get(code) || '';
+  return `<section class="detail-section analysis-memo" data-analysis-memo="${esc(code)}">
+    <div class="detail-section-title">분석 메모 <span class="hint">이 종목에 대한 투자 아이디어와 체크 포인트</span></div>
+    <label class="analysis-memo-label" for="analysisMemoInput">메모</label>
+    <textarea id="analysisMemoInput" class="analysis-memo-input" maxlength="${MAX_MEMO_LENGTH}" placeholder="분석 내용이나 매매 전 확인할 점을 기록하세요.">${esc(text)}</textarea>
+    <div class="analysis-memo-footer">
+      <span class="analysis-memo-status" data-memo-status aria-live="polite">서버에 종목별로 저장됩니다.</span>
+      <span class="analysis-memo-count" data-memo-count>${text.length.toLocaleString('ko-KR')} / ${MAX_MEMO_LENGTH.toLocaleString('ko-KR')}</span>
+    </div>
+    <div class="analysis-memo-actions">
+      <button type="button" class="btn sm primary" data-memo-save>메모 저장</button>
+      <button type="button" class="btn sm" data-memo-delete${text ? '' : ' disabled'}>메모 삭제</button>
+    </div>
+  </section>`;
+}
+
 function favoriteButtonHtml(row) {
   const code = normalizeStockCode(row.stock_code);
   const saved = state.favorites.has(code);
@@ -106,15 +249,26 @@ function syncDetailFavoriteButton() {
   btn.setAttribute('aria-pressed', saved ? 'true' : 'false');
 }
 
-function toggleFavorite(stockCode, stockName) {
+async function toggleFavorite(stockCode, stockName) {
   const code = normalizeStockCode(stockCode);
   if (!code) return;
   const next = new Map(state.favorites);
   const removing = next.has(code);
+  try {
+    await fetchJSON(
+      `/api/analysis/favorites/${encodeURIComponent(code)}`,
+      removing
+        ? preferenceRequest('DELETE')
+        : preferenceRequest('PUT', { stock_name: String(stockName || '') }),
+    );
+  } catch (e) {
+    toast('즐겨찾기를 서버에 저장하지 못했습니다. 로그인과 서버 연결을 확인하세요.', true);
+    return;
+  }
   if (removing) next.delete(code);
   else next.set(code, String(stockName || ''));
-  if (!saveFavorites(next)) return;
   state.favorites = next;
+  saveFavorites(next);
   syncDetailFavoriteButton();
   updateFilterSummary();
   if ($('fltFavoritesOnly').checked) {
@@ -625,6 +779,7 @@ function renderDetail(row) {
   ].join('');
   $('detailBody').innerHTML = `
     ${chartSectionsHtml()}
+    ${stockMemoHtml(row.stock_code)}
     <div class="detail-section">
       <div class="detail-section-title">회사 정보</div>
       ${companyProfilePlaceholderHtml()}
@@ -642,8 +797,8 @@ function renderDetail(row) {
 }
 
 function stockInvestorHistoryHtml(stockCode) {
-  return `<section class="if-stock-lookup analysis-investor-lookup" data-stock-investor-stock-code="${esc(stockCode)}" aria-label="종목별 일별 순매수">
-    <div class="if-stock-title"><strong>종목별 일별 순매수</strong><span>최근 20거래일 · 단위: 주</span></div>
+  return `<section class="if-stock-lookup analysis-investor-lookup" data-stock-investor-stock-code="${esc(stockCode)}" aria-label="종목별 외국인·기관 순매수">
+    <div class="if-stock-title"><strong>외국인·기관 순매수</strong><label>기간 <select data-investor-days aria-label="수급 조회 기간"><option value="20" selected>20일</option><option value="60">60일</option></select></label></div>
     <div class="if-stock-result" data-stock-investor-result aria-live="polite">차트 조회 후 수급 내역을 불러옵니다.</div>
   </section>`;
 }
@@ -1869,12 +2024,10 @@ function initFromUrl() {
     state.sortBy = sortBy;
     $('fltSortBy').value = state.sortBy;
   }
-  const code = codeFromUrl();
-  if (code) {
-    state.selectedCode = code;
-    const search = $('codeSearch');
-    if (search) search.value = code;
-  }
+  const code = codeFromUrl() || DEFAULT_STOCK_CODE;
+  state.selectedCode = code;
+  const search = $('codeSearch');
+  if (search) search.value = code;
 }
 
 function onPhoneLayoutChange() {
@@ -1885,8 +2038,11 @@ function onPhoneLayoutChange() {
   if (state.lastItems) renderTable(state.lastItems);
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   state.favorites = loadFavorites();
+  state.memos = loadMemos();
+  await loadServerPreferences();
+  if (state.lastItems) renderTable(state.lastItems);
   initFromUrl();
   if (phoneLayout() && hasActiveFilters()) filterUserOpen = true;
   applyFilterPanel();
@@ -1935,6 +2091,42 @@ document.addEventListener('DOMContentLoaded', () => {
     const btn = e.target.closest('.analysis-chart-tool');
     if (!btn) return;
     setChartDrawMode(btn.dataset.mode);
+  });
+  document.addEventListener('input', (e) => {
+    const textarea = e.target.closest('.analysis-memo-input');
+    if (!textarea) return;
+    const section = textarea.closest('[data-analysis-memo]');
+    const count = section && section.querySelector('[data-memo-count]');
+    const status = section && section.querySelector('[data-memo-status]');
+    if (count) count.textContent = `${textarea.value.length.toLocaleString('ko-KR')} / ${MAX_MEMO_LENGTH.toLocaleString('ko-KR')}`;
+    if (status) status.textContent = '수정된 내용이 있습니다. 저장 버튼을 눌러주세요.';
+  });
+  document.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-memo-save], [data-memo-delete]');
+    if (!btn) return;
+    const section = btn.closest('[data-analysis-memo]');
+    const textarea = section && section.querySelector('.analysis-memo-input');
+    const status = section && section.querySelector('[data-memo-status]');
+    const code = section && section.dataset.analysisMemo;
+    if (!textarea || !code) return;
+    if (btn.matches('[data-memo-save]')) {
+      if (!textarea.value.trim()) {
+        toast('저장할 메모를 입력하세요. 기존 메모를 지우려면 메모 삭제를 눌러주세요.', true);
+        return;
+      }
+      if (!await persistMemo(code, textarea.value)) return;
+      section.querySelector('[data-memo-delete]').disabled = false;
+      if (status) status.textContent = '메모를 저장했습니다.';
+      toast('분석 메모를 저장했습니다.', false);
+      return;
+    }
+    if (!state.memos.has(normalizeStockCode(code))) return;
+    if (!await persistMemo(code, '')) return;
+    textarea.value = '';
+    section.querySelector('[data-memo-count]').textContent = `0 / ${MAX_MEMO_LENGTH.toLocaleString('ko-KR')}`;
+    btn.disabled = true;
+    if (status) status.textContent = '메모를 삭제했습니다.';
+    toast('분석 메모를 삭제했습니다.', false);
   });
   window.addEventListener('resize', onChartResize);
   if (PHONE_MQ.addEventListener) PHONE_MQ.addEventListener('change', onPhoneLayoutChange);

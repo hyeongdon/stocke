@@ -78,6 +78,47 @@
 .ld-chip.fire { background: var(--down-soft); border-color: var(--down); color: var(--down); }
 
 .ld-detail-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.ld-analysis-memo-float {
+  position: fixed; right: 18px; bottom: 90px; z-index: 90;
+  width: min(360px, calc(100vw - 36px)); max-height: 46vh; overflow-y: auto;
+  border: 1px solid var(--amber); border-radius: 10px;
+  background: var(--bg-elevated); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+}
+.ld-analysis-memo-float[hidden] { display: none; }
+.ld-analysis-memo-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 9px 11px; background: var(--amber-soft); border-bottom: 1px solid var(--border);
+}
+.ld-analysis-memo-float.is-collapsed { width: 64px; max-height: 40px; overflow: hidden; }
+.ld-analysis-memo-float.is-collapsed .ld-analysis-memo-head {
+  justify-content: center; padding: 2px; border-bottom: 0;
+}
+.ld-analysis-memo-float.is-collapsed .ld-analysis-memo-head > div { display: none; }
+.ld-analysis-memo-float.is-collapsed .ld-analysis-memo-head button {
+  width: 100%; height: 34px; padding: 0 2px; font-size: 11px; line-height: 1; white-space: nowrap;
+}
+.ld-analysis-memo-head > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ld-analysis-memo-head strong { font-size: 12px; color: var(--amber); }
+.ld-analysis-memo-head span { overflow: hidden; color: var(--text-secondary); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.ld-analysis-memo-float.is-collapsed .ld-analysis-memo-toggle.has-memo { color: var(--amber); }
+.ld-analysis-memo-float.is-collapsed .ld-analysis-memo-toggle:not(.has-memo) { color: var(--muted); }
+.ld-analysis-memo-content { padding: 10px 12px 11px; }
+.ld-analysis-memo-content[hidden] { display: none; }
+.ld-analysis-memo-input {
+  display: block; width: 100%; min-height: 86px; max-height: 24vh; resize: vertical;
+  padding: 8px 9px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg); color: var(--text); font: inherit; font-size: 12px; line-height: 1.5;
+  box-sizing: border-box;
+}
+.ld-analysis-memo-input:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+.ld-analysis-memo-footer {
+  display: flex; justify-content: space-between; gap: 8px; margin-top: 5px;
+  color: var(--muted); font-size: 10px;
+}
+.ld-analysis-memo-actions {
+  display: flex; align-items: center; gap: 10px; margin-top: 8px;
+}
+.ld-analysis-memo-link { display: inline-block; color: var(--accent-bright); font-size: 10.5px; }
 .ld-investor-lookup {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -89,6 +130,14 @@
 .ld-detail-meta div { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
 .ld-detail-meta .k { font-size: 10.5px; color: var(--muted); }
 .ld-detail-meta .v { font-size: 13px; font-weight: 800; margin-top: 2px; word-break: keep-all; }
+.ld-financial { border: 1px solid var(--border); border-radius: 8px; padding: 9px 10px; margin: 0 0 12px; background: var(--bg-elevated); }
+.ld-financial-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; font-size: 11.5px; margin-bottom: 7px; }
+.ld-financial-head span, .ld-financial-note { color: var(--muted); font-size: 10.5px; }
+.ld-financial-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 7px; }
+.ld-financial-grid > div { display: flex; flex-direction: column; gap: 2px; }
+.ld-financial-grid .k { color: var(--muted); font-size: 10px; }
+.ld-financial-grid .v { font-size: 12px; font-variant-numeric: tabular-nums; }
+.ld-financial-note { margin-top: 7px; line-height: 1.5; }
 
 .ld-panels { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
 .ld-panel { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
@@ -175,4 +224,9 @@
   .ld-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ld-modal-body { grid-template-columns: 1fr; }
   .ld-panels { grid-template-columns: 1fr; }
+  .ld-financial-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 600px) {
+  .ld-analysis-memo-float { right: 10px; bottom: 90px; width: min(340px, calc(100vw - 20px)); }
 }

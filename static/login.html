@@ -83,6 +83,28 @@
       border-color: var(--accent);
       box-shadow: 0 0 0 3px rgba(124, 108, 240, 0.18);
     }
+    .device-option {
+      display: flex;
+      align-items: flex-start;
+      gap: 9px;
+      margin: 0 0 12px;
+      color: var(--text);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .device-option input {
+      width: 16px;
+      height: 16px;
+      flex: 0 0 auto;
+      margin: 1px 0 0;
+      accent-color: var(--accent);
+    }
+    .device-option small {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 11px;
+    }
     button {
       width: 100%;
       margin-top: 6px;
@@ -118,6 +140,10 @@
     <input id="username" name="username" type="text" autocomplete="username" required autofocus>
     <label for="password">비밀번호</label>
     <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <label class="device-option">
+      <input id="registerDevice" type="checkbox" checked>
+      <span>이 기기 등록하기<small>등록한 브라우저에서는 1년간 로그인 없이 접속합니다. 공용 기기에서는 선택하지 마세요.</small></span>
+    </label>
     <button type="submit" id="submitBtn">로그인</button>
   </form>
   <script>
@@ -140,6 +166,7 @@
           body: JSON.stringify({
             username: document.getElementById("username").value,
             password: document.getElementById("password").value,
+            register_device: document.getElementById("registerDevice").checked,
           }),
         });
         const data = await res.json().catch(() => ({}));

@@ -98,22 +98,6 @@ function renderMarketIndexMiniChart(it) {
   const [lx, ly] = xy[xy.length - 1];
   return `<svg class="mi-mini-chart ${dir}" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(tip)}"><title>${esc(tip)}</title><polygon points="${area}"></polygon><polyline points="${pts}"></polyline><circle cx="${lx.toFixed(1)}" cy="${ly.toFixed(1)}" r="1.7"></circle></svg>`;
 }
-function fmtEok(v) {
-  if (v == null || Number.isNaN(Number(v))) return '-';
-  const n = Number(v);
-  const sign = n > 0 ? '+' : '';
-  return sign + n.toLocaleString('ko-KR') + '억';
-}
-function renderInvestorBadges(it) {
-  const inv = it && it.investor;
-  if (!inv || (inv.foreign == null && inv.institution == null)) return '';
-  const chip = (label, val) => (val == null ? '' : `<span class="mi-inv ${signClass(val)}">${label} ${fmtEok(val)}</span>`);
-  const tip = [
-    inv.bizdate ? `기준 ${inv.bizdate}` : '',
-    inv.personal != null ? `개인 ${fmtEok(inv.personal)}` : '',
-  ].filter(Boolean).join(' · ');
-  return `<span class="mi-investor" title="${esc(tip)}">${chip('외', inv.foreign)}${chip('기', inv.institution)}</span>`;
-}
 function fearMood(it) {
   const key = String((it && it.key) || '').toLowerCase();
   if (key !== 'vix') return null;
@@ -153,7 +137,7 @@ function renderMarketIndexItem(it) {
   const moodCls = mood ? ` mood-${mood.key}` : '';
   const chart = renderMarketIndexMiniChart(it);
   const yearCls = chart ? ' has-year' : '';
-  return `<span class="market-index-item ${dir}${moodCls}${yearCls}"${title}><span class="mi-head"><span class="mi-label">${esc(it.label)}</span>${moodHtml}</span>${chart}<span class="mi-value">${fmtIndexValue(it.value)}</span><span class="mi-delta">${deltaParts.join(' ') || '-'}</span>${renderInvestorBadges(it)}</span>`;
+  return `<span class="market-index-item ${dir}${moodCls}${yearCls}"${title}><span class="mi-head"><span class="mi-label">${esc(it.label)}</span>${moodHtml}</span>${chart}<span class="mi-value">${fmtIndexValue(it.value)}</span><span class="mi-delta">${deltaParts.join(' ') || '-'}</span></span>`;
 }
 const MARKET_INDEX_GROUPS = [
   { id: 'kr', label: '한국', keys: ['kospi', 'kosdaq', 'fut'] },
@@ -183,153 +167,7 @@ function renderMarketIndexStrip(items) {
     `</section>`
   )).join('');
 }
-function hmMinutes(t) {
-  const m = /^(\d{1,2}):(\d{2})$/.exec(String(t || '').trim());
-  if (!m) return null;
-  return Number(m[1]) * 60 + Number(m[2]);
-}
-function fmtEokAxis(v) {
-  const n = Number(v);
-  if (!Number.isFinite(n) || n === 0) return '0';
-  const sign = n > 0 ? '+' : '';
-  const abs = Math.abs(n);
-  if (abs >= 100) return sign + Math.round(n).toLocaleString('ko-KR');
-  if (abs >= 10) return sign + n.toFixed(0);
-  return sign + n.toFixed(1);
-}
-let _ifPlotSeq = 0;
-function renderInvestorFlowRow(label, series, key) {
-  const W = 280, H = 92;
-  const padL = 38, padR = 8, padT = 10, padB = 18;
-  const plotW = W - padL - padR;
-  const plotH = H - padT - padB;
-  const ptsData = (series || []).map(h => ({
-    t: String(h.time || ''),
-    v: Number(h[key] ?? 0) || 0,
-    min: hmMinutes(h.time),
-  })).filter(p => p.min != null);
-  if (ptsData.length < 2) return '';
-  const vals = ptsData.map(p => p.v);
-  const mins = ptsData.map(p => p.min);
-  const t0 = Math.min(9 * 60, ...mins);
-  const t1 = Math.max(15 * 60 + 30, ...mins);
-  const tSpan = Math.max(t1 - t0, 1);
-  const cMax = Math.max(0, ...vals);
-  const cMin = Math.min(0, ...vals);
-  const cSpan = Math.max(cMax - cMin, 1);
-  const cx = min => padL + ((min - t0) / tSpan) * plotW;
-  const cy = v => padT + ((cMax - v) / cSpan) * plotH;
-  const last = vals[vals.length - 1];
-  const dir = last >= 0 ? 'up' : 'down';
-  const zeroY = cy(0);
-  const plotBottom = padT + plotH;
-  const uid = `if${++_ifPlotSeq}`;
-
-  const yTicks = [cMax, 0, cMin];
-  const yGrid = yTicks.map((v, i) => {
-    const y = cy(v);
-    if (i > 0 && Math.abs(y - cy(yTicks[i - 1])) < 11) return '';
-    const isZero = v === 0;
-    return `<line class="${isZero ? 'if-zero' : 'if-grid'}" x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}"></line>`
-      + `<text class="if-axis${isZero ? ' if-axis-zero' : ''}" x="${padL - 4}" y="${y.toFixed(1)}" text-anchor="end" dominant-baseline="middle">${fmtEokAxis(v)}</text>`;
-  }).join('');
-
-  const xMins = [9 * 60, 12 * 60, 15 * 60, 15 * 60 + 30].filter(m => m >= t0 - 1 && m <= t1 + 1);
-  const xGrid = xMins.map(m => {
-    const x = cx(m);
-    const hh = String(Math.floor(m / 60)).padStart(2, '0');
-    const mm = String(m % 60).padStart(2, '0');
-    return `<line class="if-grid-v" x1="${x.toFixed(1)}" y1="${padT}" x2="${x.toFixed(1)}" y2="${plotBottom}"></line>`
-      + `<text class="if-axis if-axis-x" x="${x.toFixed(1)}" y="${H - 4}" text-anchor="middle">${hh}:${mm}</text>`;
-  }).join('');
-
-  const pts = ptsData.map(p => `${cx(p.min).toFixed(1)},${cy(p.v).toFixed(1)}`).join(' ');
-  const firstX = cx(ptsData[0].min).toFixed(1);
-  const lastX = cx(ptsData[ptsData.length - 1].min).toFixed(1);
-  const areaD = `M ${firstX},${zeroY.toFixed(1)} L ${pts} L ${lastX},${zeroY.toFixed(1)} Z`;
-  const posH = Math.max(0, zeroY - padT);
-  const negH = Math.max(0, plotBottom - zeroY);
-  const hoverEvery = Math.max(1, Math.ceil(ptsData.length / 24));
-  const dots = ptsData.map((p, i) => {
-    if (i !== 0 && i !== ptsData.length - 1 && i % hoverEvery !== 0) return '';
-    const tip = `${p.t} ${label} ${fmtEok(p.v)}`;
-    return `<circle class="if-cum-dot" cx="${cx(p.min).toFixed(1)}" cy="${cy(p.v).toFixed(1)}" r="6"><title>${esc(tip)}</title></circle>`;
-  }).join('');
-
-  return `<div class="if-row"><span class="if-rlabel">${label}</span><svg class="if-bars ${dir}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
-    <defs>
-      <clipPath id="${uid}-pos"><rect x="${padL}" y="${padT}" width="${plotW}" height="${posH.toFixed(1)}"></rect></clipPath>
-      <clipPath id="${uid}-neg"><rect x="${padL}" y="${zeroY.toFixed(1)}" width="${plotW}" height="${negH.toFixed(1)}"></rect></clipPath>
-    </defs>
-    ${yGrid}${xGrid}
-    <path class="if-fill if-fill-pos" d="${areaD}" clip-path="url(#${uid}-pos)"></path>
-    <path class="if-fill if-fill-neg" d="${areaD}" clip-path="url(#${uid}-neg)"></path>
-    <polyline class="if-cum" points="${pts}"></polyline>${dots}
-  </svg></div>`;
-}
-function renderInvestorFlowCard(it) {
-  const series = it.investor_intraday || [];
-  if (series.length < 2) return '';
-  const inv = it.investor || {};
-  const last = series[series.length - 1] || {};
-  const chips = [
-    inv.foreign != null ? `<span class="mi-inv ${signClass(inv.foreign)}">외 ${fmtEok(inv.foreign)}</span>` : '',
-    inv.institution != null ? `<span class="mi-inv ${signClass(inv.institution)}">기 ${fmtEok(inv.institution)}</span>` : '',
-  ].join('');
-  const t0 = series[0].time || '';
-  const t1 = last.time || '';
-  const lastF = last.foreign != null ? last.foreign : inv.foreign;
-  const lastI = last.institution != null ? last.institution : inv.institution;
-  const foot = `<div class="if-foot">${esc(t0)}~${esc(t1)} 누적
-    <span class="mi-inv ${signClass(lastF)}">외 ${fmtEok(lastF)}</span>
-    <span class="mi-inv ${signClass(lastI)}">기 ${fmtEok(lastI)}</span></div>`;
-  return `<div class="if-card">
-    <div class="if-card-head"><span class="if-market">${esc(it.label)}</span><span class="mi-investor">${chips}</span></div>
-    ${renderInvestorFlowRow('외국인', series, 'foreign')}
-    ${renderInvestorFlowRow('기관', series, 'institution')}
-    ${foot}
-  </div>`;
-}
-function renderInvestorFlow(items, updatedAt) {
-  const panel = $('investorFlow');
-  const body = $('investorFlowBody');
-  if (!panel || !body) return;
-  const cards = (items || [])
-    .filter(it => ['kospi', 'kosdaq'].includes(String(it.key || '').toLowerCase()))
-    .map(renderInvestorFlowCard)
-    .filter(Boolean);
-  panel.style.display = '';
-  body.style.display = cards.length ? '' : 'none';
-  const sub = panel.querySelector('.if-sub');
-  if (sub) {
-    const when = updatedAt ? ` · ${esc(fmtInvestorBatchTime(updatedAt))} 배치` : '';
-    sub.textContent = `시간대별 누적 순매수 (억원, 잠정${when}) · 선이 내려가면 매도 누적`;
-  }
-  body.innerHTML = cards.join('');
-}
-function fmtInvestorBatchTime(s) {
-  const raw = String(s || '').trim();
-  const m = raw.match(/T(\d{2}:\d{2})/);
-  if (m) return m[1];
-  return raw.slice(11, 16) || raw;
-}
-function setupInvestorFlowToggle() {
-  const btn = $('investorFlowToggle');
-  const panel = $('investorFlow');
-  if (!btn || !panel) return;
-  const apply = (collapsed) => {
-    panel.classList.toggle('collapsed', collapsed);
-    btn.textContent = collapsed ? '펼치기' : '접기';
-    btn.setAttribute('aria-expanded', String(!collapsed));
-  };
-  apply(localStorage.getItem('investorFlowCollapsed') === '1');
-  btn.onclick = () => {
-    const next = !panel.classList.contains('collapsed');
-    localStorage.setItem('investorFlowCollapsed', next ? '1' : '0');
-    apply(next);
-  };
-}
-async function loadMarketIndices(opts) {
+async function loadMarketIndices() {
   const el = $('marketIndices');
   if (!el) return;
   try {
@@ -338,11 +176,6 @@ async function loadMarketIndices(opts) {
     el.innerHTML = items.length
       ? renderMarketIndexStrip(items)
       : '<span class="market-index-skeleton">지수 데이터 없음</span>';
-    renderInvestorFlow(items, d.investor_updated_at);
-    const hasFlow = items.some(it => (it.investor_intraday || []).length >= 2);
-    if (!hasFlow && !(opts && opts.noRetry)) {
-      setTimeout(() => loadMarketIndices({ silent: true, noRetry: true }), 8000);
-    }
   } catch (e) {
     el.innerHTML = '<span class="market-index-skeleton">지수 로드 실패 (서버 재시작 후 새로고침)</span>';
   }
@@ -5761,7 +5594,7 @@ function switchHistorySubTab(name) {
 /* ===== Refresh orchestration ===== */
 function refreshAll() {
   $('lastUpdated').textContent = new Date().toLocaleTimeString('ko-KR');
-  loadMarketIndices({ silent: true });
+  loadMarketIndices();
   loadPerformance(true);
   loadAccount(); loadStatus(); loadTelegram();
   loadTodayKeywords();
@@ -5804,7 +5637,7 @@ function setupAutoRefresh() {
     if (cb.checked) {
       autoTimer = setInterval(() => {
         loadAccount(); loadStatus();
-        loadMarketIndices({ silent: true });
+        loadMarketIndices();
         loadTodayKeywords();
         loadThemeBatchStatus();
         loadPositions(true, { silent: true });
@@ -5876,7 +5709,6 @@ document.addEventListener('DOMContentLoaded', () => {
   if ($('rwmBatchRun')) $('rwmBatchRun').onclick = rwmRunBatch;
   document.querySelectorAll('[data-refresh]').forEach(btn => { btn.onclick = () => { $('lastUpdated').textContent = new Date().toLocaleTimeString('ko-KR'); (refreshMap[btn.dataset.refresh] || (() => {}))(); }; });
   setupAutoRefresh();
-  setupInvestorFlowToggle();
   startActivityPolling();
   startPositionsLivePolling();
   bindAutoTradeToggle();

@@ -13,7 +13,7 @@
   <meta name="apple-mobile-web-app-title" content="Stocke">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="theme-color" content="#131720">
-  <link rel="stylesheet" href="/static/dashboard.css?v=130">
+  <link rel="stylesheet" href="/static/dashboard.css?v=135">
   <script src="/static/theme-sync.js?v=2"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
@@ -30,6 +30,7 @@
       </div>
       <nav class="tabs tabs-scroll" aria-label="메인 메뉴">
         <a href="#" class="tab active" data-tab="auto">자동매매</a>
+        <a href="#" class="tab" data-tab="trading">트레이딩</a>
         <a href="#" class="tab" data-tab="board">대시보드</a>
         <a href="#" class="tab" data-tab="trades">거래내역</a>
         <a href="/ladder" class="tab-link">분할매수 ↗</a>
@@ -81,137 +82,6 @@
           </div>
           <div class="card-body scroll positions-card-body" id="autoPositionsBody"><div class="empty"><span class="ico">💼</span>로딩 중...</div></div>
         </div>
-
-        <!-- 2행: 수급 흐름(왼쪽) + 후보(오른쪽) -->
-        <div class="auto-row-2 auto-row-top">
-
-          <!-- 수급 흐름 (좌측) -->
-          <div class="investor-flow" id="investorFlow">
-            <div class="if-head">
-              <span class="if-title">당일 수급 흐름 <span class="if-sub">시간대별 누적 순매수 (억원, 잠정) · 선이 내려가면 매도 누적</span></span>
-              <button type="button" class="btn sm if-toggle" id="investorFlowToggle" aria-expanded="true">접기</button>
-            </div>
-            <div class="if-body" id="investorFlowBody" style="display:none;"></div>
-            <section class="if-stock-lookup" aria-labelledby="stockInvestorTitle">
-              <div class="if-stock-title">
-                <strong id="stockInvestorTitle">종목별 일별 순매수</strong>
-                <span>최근 20거래일 · 단위: 주</span>
-              </div>
-              <form class="if-stock-form" data-stock-investor-form>
-                <label for="stockInvestorCode">종목코드</label>
-                <input id="stockInvestorCode" data-stock-investor-code type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="종목코드 (예: 005930)" autocomplete="off" required>
-                <button class="btn primary sm" type="submit">조회</button>
-              </form>
-              <div class="if-stock-result" data-stock-investor-result aria-live="polite">종목코드 6자리를 입력하면 외국인·기관의 일별 순매수 내역을 조회합니다.</div>
-            </section>
-          </div>
-
-          <!-- 후보 (우측) -->
-          <div class="card compact-card screener-card cand-tabs-card">
-            <div class="card-head cand-tabs-head">
-              <div class="cand-tabs-title">
-                <h3>후보</h3>
-                <nav class="cand-tabs" aria-label="후보 종류">
-                  <button type="button" class="cand-tab active" data-cand="rwm">RWM 밥그릇</button>
-                  <button type="button" class="cand-tab" data-cand="screener">스크리너</button>
-                  <button type="button" class="cand-tab" data-cand="sangtta">상따</button>
-                  <button type="button" class="cand-tab" data-cand="breakout">수급 돌파</button>
-                  <button type="button" class="cand-tab" data-cand="fractal">스캘핑</button>
-                  <button type="button" class="cand-tab" data-cand="jongga">종가배팅</button>
-                  <button type="button" class="cand-tab" data-cand="ma1592">1592매매</button>
-                </nav>
-              </div>
-            </div>
-
-            <div class="cand-pane" data-cand-pane="screener">
-              <div class="cand-pane-bar">
-                <div class="hint">거래대금순(등락 3.3%~&lt;12%) · 개별주만 · ETF·ETN·파생·등락미달·과열 제외 <span id="screenerCount"></span></div>
-                <div class="cand-pane-actions">
-                  <select id="scrMarket" class="select-dark">
-                    <option value="000">전체</option><option value="001">코스피</option><option value="101">코스닥</option></select>
-                  <button class="btn primary sm" id="scrRefresh">조회</button>
-                </div>
-              </div>
-              <div class="card-body scroll auto-screener-body" id="screenerBody">
-                <div class="empty"><span class="ico">🧭</span>조회 버튼을 누르면 거래대금순 후보를 불러옵니다. (장중에만 데이터가 정확합니다)</div>
-              </div>
-            </div>
-
-            <div class="cand-pane" data-cand-pane="sangtta">
-              <div class="cand-pane-bar">
-                <div class="hint">등락≥13% 풀 → 거래대금순 상위 20 · 천원↑·대금10억↑·관리/ETF제외 <span id="sangttaCount"></span></div>
-                <div class="cand-pane-actions">
-                  <button class="btn primary sm" id="sangRefresh">조회</button>
-                </div>
-              </div>
-              <div class="card-body scroll auto-screener-body" id="sangttaBody">
-                <div class="empty"><span class="ico">🔎</span>조회 버튼을 누르면 등락률상위 풀 중 거래대금순 상위 후보를 불러옵니다.</div>
-              </div>
-            </div>
-
-            <div class="cand-pane" data-cand-pane="breakout">
-              <div class="cand-pane-bar">
-                <div class="hint">조건식 후보 · 가격/거래량/HARD·SOFT·HOLD(전봉 RSI교차·양봉) 조건별 충족 여부 <span id="breakoutCount"></span></div>
-                <div class="cand-pane-actions">
-                  <button class="btn primary sm" id="breakoutRefresh">조회</button>
-                </div>
-              </div>
-              <div class="card-body scroll auto-screener-body" id="breakoutBody">
-                <div class="empty"><span class="ico">📈</span>조회 버튼을 누르면 수급 돌파 조건식 후보를 평가합니다.</div>
-              </div>
-            </div>
-
-            <div class="cand-pane" data-cand-pane="fractal">
-              <div class="cand-pane-bar">
-                <div class="hint">조건식 유니버스 · 1분 EMA 정배열 · 20EMA 눌림 · 확정 프랙탈 · 종가 재돌파 <span id="fractalCount"></span></div>
-                <div class="cand-pane-actions">
-                  <button class="btn primary sm" id="fractalRefresh">조회</button>
-                </div>
-              </div>
-              <div class="card-body scroll auto-screener-body" id="fractalBody">
-                <div class="empty"><span class="ico">⚡</span>조회 버튼을 누르면 프랙탈 스캘핑 조건식 후보를 평가합니다.</div>
-              </div>
-            </div>
-
-            <div class="cand-pane" data-cand-pane="jongga">
-              <div class="cand-pane-bar">
-                <div class="hint">거래대금순 → 최강테마 · 눌림=15분봉 고가 대비 · 14:30~40 선택 · 미선택 시 자동매수 <span id="jonggaCount"></span></div>
-                <div class="cand-pane-actions">
-                  <button class="btn primary sm" id="jonggaRefresh">조회</button>
-                </div>
-              </div>
-              <div class="card-body scroll auto-screener-body" id="jonggaBody">
-                <div class="empty"><span class="ico">🕐</span>조회 버튼을 누르면 종가배팅 후보를 불러옵니다.</div>
-              </div>
-            </div>
-
-            <div class="cand-pane" data-cand-pane="ma1592">
-              <div class="cand-pane-bar">
-                <div class="hint">장부(스티키) + 조건편입 관측 · 편입 시 EMA15/92 스냅샷 · 게이트 상태 <span id="ma1592Count"></span></div>
-                <div class="cand-pane-actions">
-                  <button class="btn primary sm" id="ma1592Refresh">조회</button>
-                </div>
-              </div>
-              <div class="card-body scroll auto-screener-body" id="ma1592Body">
-                <div class="empty"><span class="ico">📐</span>조회 버튼을 누르면 15/92 장부 종목만 불러옵니다.</div>
-              </div>
-            </div>
-
-            <div class="cand-pane active" data-cand-pane="rwm">
-              <div class="cand-pane-bar">
-                <div class="hint">RWM 밥그릇 · 장후(15:40) 일봉 판정(R·W·M=MACD 골든크로스) → 다음 거래일 3분봉 눌림 매수 <span id="rwmCount"></span></div>
-                <div class="cand-pane-actions">
-                  <button class="btn sm" id="rwmBatchRun" title="확정 일봉 기준으로 장후 배치를 지금 실행">배치 실행</button>
-                  <button class="btn primary sm" id="rwmRefresh">조회</button>
-                </div>
-              </div>
-              <div class="card-body scroll auto-screener-body" id="rwmBody">
-                <div class="empty"><span class="ico">🥣</span>조회 버튼을 누르면 RWM 밥그릇 감시·보유·수동 종목을 불러옵니다.</div>
-              </div>
-            </div>
-          </div><!-- /.cand-tabs-card -->
-
-        </div><!-- /.auto-row-2 (수급+후보) -->
 
         <!-- 3행: 체결 로그 + 실시간 활동 로그 -->
         <div class="auto-row-2 auto-row-logs">
@@ -274,6 +144,115 @@
         </div>
         <div class="card-body settings-card-body" id="settingsForm"><div class="skeleton">불러오는 중...</div></div>
       </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 트레이딩 탭 ============ -->
+    <section class="pane" id="pane-trading">
+      <div class="auto-layout trading-layout">
+        <div class="card compact-card screener-card cand-tabs-card">
+          <div class="card-head cand-tabs-head">
+            <div class="cand-tabs-title">
+              <h3>후보</h3>
+              <nav class="cand-tabs" aria-label="후보 종류">
+                <button type="button" class="cand-tab active" data-cand="rwm">RWM 밥그릇</button>
+                <button type="button" class="cand-tab" data-cand="screener">스크리너</button>
+                <button type="button" class="cand-tab" data-cand="sangtta">상따</button>
+                <button type="button" class="cand-tab" data-cand="breakout">수급 돌파</button>
+                <button type="button" class="cand-tab" data-cand="fractal">스캘핑</button>
+                <button type="button" class="cand-tab" data-cand="jongga">종가배팅</button>
+                <button type="button" class="cand-tab" data-cand="ma1592">1592매매</button>
+              </nav>
+            </div>
+          </div>
+
+          <div class="cand-pane" data-cand-pane="screener">
+            <div class="cand-pane-bar">
+              <div class="hint">거래대금순(등락 3.3%~&lt;12%) · 개별주만 · ETF·ETN·파생·등락미달·과열 제외 <span id="screenerCount"></span></div>
+              <div class="cand-pane-actions">
+                <select id="scrMarket" class="select-dark">
+                  <option value="000">전체</option><option value="001">코스피</option><option value="101">코스닥</option></select>
+                <button class="btn primary sm" id="scrRefresh">조회</button>
+              </div>
+            </div>
+            <div class="card-body scroll auto-screener-body" id="screenerBody">
+              <div class="empty"><span class="ico">🧭</span>조회 버튼을 누르면 거래대금순 후보를 불러옵니다. (장중에만 데이터가 정확합니다)</div>
+            </div>
+          </div>
+
+          <div class="cand-pane" data-cand-pane="sangtta">
+            <div class="cand-pane-bar">
+              <div class="hint">등락≥13% 풀 → 거래대금순 상위 20 · 천원↑·대금10억↑·관리/ETF제외 <span id="sangttaCount"></span></div>
+              <div class="cand-pane-actions">
+                <button class="btn primary sm" id="sangRefresh">조회</button>
+              </div>
+            </div>
+            <div class="card-body scroll auto-screener-body" id="sangttaBody">
+              <div class="empty"><span class="ico">🔎</span>조회 버튼을 누르면 등락률상위 풀 중 거래대금순 상위 후보를 불러옵니다.</div>
+            </div>
+          </div>
+
+          <div class="cand-pane" data-cand-pane="breakout">
+            <div class="cand-pane-bar">
+              <div class="hint">조건식 후보 · 가격/거래량/HARD·SOFT·HOLD(전봉 RSI교차·양봉) 조건별 충족 여부 <span id="breakoutCount"></span></div>
+              <div class="cand-pane-actions">
+                <button class="btn primary sm" id="breakoutRefresh">조회</button>
+              </div>
+            </div>
+            <div class="card-body scroll auto-screener-body" id="breakoutBody">
+              <div class="empty"><span class="ico">📈</span>조회 버튼을 누르면 수급 돌파 조건식 후보를 평가합니다.</div>
+            </div>
+          </div>
+
+          <div class="cand-pane" data-cand-pane="fractal">
+            <div class="cand-pane-bar">
+              <div class="hint">조건식 유니버스 · 1분 EMA 정배열 · 20EMA 눌림 · 확정 프랙탈 · 종가 재돌파 <span id="fractalCount"></span></div>
+              <div class="cand-pane-actions">
+                <button class="btn primary sm" id="fractalRefresh">조회</button>
+              </div>
+            </div>
+            <div class="card-body scroll auto-screener-body" id="fractalBody">
+              <div class="empty"><span class="ico">⚡</span>조회 버튼을 누르면 프랙탈 스캘핑 조건식 후보를 평가합니다.</div>
+            </div>
+          </div>
+
+          <div class="cand-pane" data-cand-pane="jongga">
+            <div class="cand-pane-bar">
+              <div class="hint">거래대금순 → 최강테마 · 눌림=15분봉 고가 대비 · 14:30~40 선택 · 미선택 시 자동매수 <span id="jonggaCount"></span></div>
+              <div class="cand-pane-actions">
+                <button class="btn primary sm" id="jonggaRefresh">조회</button>
+              </div>
+            </div>
+            <div class="card-body scroll auto-screener-body" id="jonggaBody">
+              <div class="empty"><span class="ico">🕐</span>조회 버튼을 누르면 종가배팅 후보를 불러옵니다.</div>
+            </div>
+          </div>
+
+          <div class="cand-pane" data-cand-pane="ma1592">
+            <div class="cand-pane-bar">
+              <div class="hint">장부(스티키) + 조건편입 관측 · 편입 시 EMA15/92 스냅샷 · 게이트 상태 <span id="ma1592Count"></span></div>
+              <div class="cand-pane-actions">
+                <button class="btn primary sm" id="ma1592Refresh">조회</button>
+              </div>
+            </div>
+            <div class="card-body scroll auto-screener-body" id="ma1592Body">
+              <div class="empty"><span class="ico">📐</span>조회 버튼을 누르면 15/92 장부 종목만 불러옵니다.</div>
+            </div>
+          </div>
+
+          <div class="cand-pane active" data-cand-pane="rwm">
+            <div class="cand-pane-bar">
+              <div class="hint">RWM 밥그릇 · 장후(15:40) 일봉 판정(R·W·M=MACD 골든크로스) → 다음 거래일 3분봉 눌림 매수 <span id="rwmCount"></span></div>
+              <div class="cand-pane-actions">
+                <button class="btn sm" id="rwmBatchRun" title="확정 일봉 기준으로 장후 배치를 지금 실행">배치 실행</button>
+                <button class="btn primary sm" id="rwmRefresh">조회</button>
+              </div>
+            </div>
+            <div class="card-body scroll auto-screener-body" id="rwmBody">
+              <div class="empty"><span class="ico">🥣</span>조회 버튼을 누르면 RWM 밥그릇 감시·보유·수동 종목을 불러옵니다.</div>
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -420,7 +399,7 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/static/investor-history.js?v=2"></script>
-  <script src="/static/dashboard.js?v=189"></script>
+  <script src="/static/dashboard.js?v=190"></script>
+  <script src="/static/telegram-price-alert.js?v=2"></script>
 </body>
 </html>

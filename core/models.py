@@ -130,6 +130,52 @@ class ConditionAlertConfig(Base):
     updated_at = Column(DateTime, nullable=False, default=_utc_now_naive, onupdate=_utc_now_naive)
 
 
+class TelegramPriceAlert(Base):
+    __tablename__ = "telegram_price_alerts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    stock_code = Column(String(6), nullable=False, index=True)
+    target_price = Column(Integer, nullable=False)
+    status = Column(String(20), nullable=False, default="active", index=True)
+    created_at = Column(DateTime, nullable=False, default=_utc_now_naive)
+    last_checked_at = Column(DateTime, nullable=True)
+    last_price = Column(Integer, nullable=True)
+    last_error = Column(String(255), nullable=True)
+    triggered_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("idx_telegram_price_alert_status_code", "status", "stock_code"),
+    )
+
+
+class AnalysisFavorite(Base):
+    __tablename__ = "analysis_favorites"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(120), nullable=False, index=True)
+    stock_code = Column(String(6), nullable=False)
+    stock_name = Column(String(100), nullable=False, default="")
+    created_at = Column(DateTime, nullable=False, default=_utc_now_naive)
+
+    __table_args__ = (
+        UniqueConstraint("username", "stock_code", name="uq_analysis_favorite_user_code"),
+    )
+
+
+class AnalysisMemo(Base):
+    __tablename__ = "analysis_memos"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(120), nullable=False, index=True)
+    stock_code = Column(String(6), nullable=False)
+    content = Column(Text, nullable=False)
+    updated_at = Column(DateTime, nullable=False, default=_utc_now_naive, onupdate=_utc_now_naive)
+
+    __table_args__ = (
+        UniqueConstraint("username", "stock_code", name="uq_analysis_memo_user_code"),
+    )
+
+
 class NotificationDefinition(Base):
     __tablename__ = "notification_definitions"
 

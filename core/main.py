@@ -37,6 +37,8 @@ warnings.filterwarnings('ignore', category=FutureWarning, module='pandas')
 from core.models import (
     get_db,
     AutoTradeCondition,
+    AnalysisFavorite,
+    AnalysisMemo,
     PendingBuySignal,
     AutoTradeSettings,
     WatchlistStock,
@@ -102,6 +104,10 @@ from utils.web_auth import (
     record_login_failure,
     session_max_age_seconds,
     session_username,
+    create_trusted_device_token,
+    trusted_device_username,
+    TRUSTED_DEVICE_COOKIE,
+    TRUSTED_DEVICE_MAX_AGE_SECONDS,
     verify_credentials,
 )
 from utils.theme_map_store import (
@@ -406,6 +412,17 @@ async def lifespan(app: FastAPI):
         condition_alert_task = asyncio.create_task(condition_alert_scheduler.run())
     except Exception as e:
         logger.exception("🔔 [STARTUP] 조건식 알림 스케줄러 시작 실패: %s", e)
+
+    price_alert_scheduler = None
+    price_alert_task = None
+    try:
+        from utils.telegram_price_alerts import TelegramPriceAlertScheduler
+
+        price_alert_scheduler = TelegramPriceAlertScheduler(kiwoom_api)
+        app.state.telegram_price_alert_scheduler = price_alert_scheduler
+        price_alert_task = asyncio.create_task(price_alert_scheduler.run())
+    except Exception as e:
+        logger.exception("🔔 [STARTUP] 텔레그램 가격 알림 스케줄러 시작 실패: %s", e)
     
     yield
     
@@ -418,6 +435,13 @@ async def lifespan(app: FastAPI):
             await condition_alert_task
         except Exception as e:
             logger.error("🔔 [SHUTDOWN] 조건식 알림 스케줄러 종료 실패: %s", e)
+    if price_alert_scheduler:
+        price_alert_scheduler.stop()
+    if price_alert_task:
+        try:
+            await price_alert_task
+        except Exception as e:
+            logger.error("🔔 [SHUTDOWN] 텔레그램 가격 알림 스케줄러 종료 실패: %s", e)
     
     # 개선된 시스템들 종료
     try:
@@ -499,9 +523,15 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
         if not Config.AUTH_ENABLED:
             return await call_next(request)
         path = request.url.path
-        if is_public_path(path):
-            return await call_next(request)
         if session_username(request.session):
+            return await call_next(request)
+        trusted_username = trusted_device_username(
+            request.cookies.get(TRUSTED_DEVICE_COOKIE)
+        )
+        if trusted_username:
+            mark_session_login(request.session, trusted_username)
+            return await call_next(request)
+        if is_public_path(path):
             return await call_next(request)
 
         accept = (request.headers.get("accept") or "").lower()
@@ -1162,6 +1192,7 @@ async def health_check():
 class LoginRequest(BaseModel):
     username: str
     password: str
+    register_device: bool = False
 
 
 @app.get("/login")
@@ -1193,19 +1224,37 @@ async def auth_login(body: LoginRequest, request: Request):
         raise HTTPException(status_code=401, detail="아이디 또는 비밀번호가 올바르지 않습니다.")
     clear_login_failures(client_ip)
     mark_session_login(request.session, body.username.strip())
-    return {"ok": True, "username": body.username.strip()}
+    response = JSONResponse({"ok": True, "username": body.username.strip()})
+    if body.register_device:
+        forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
+        response.set_cookie(
+            TRUSTED_DEVICE_COOKIE,
+            create_trusted_device_token(body.username),
+            max_age=TRUSTED_DEVICE_MAX_AGE_SECONDS,
+            httponly=True,
+            secure=request.url.scheme == "https" or forwarded_proto == "https",
+            samesite="lax",
+            path="/",
+        )
+    else:
+        response.delete_cookie(TRUSTED_DEVICE_COOKIE, path="/")
+    return response
 
 
 @app.post("/auth/logout")
 async def auth_logout_post(request: Request):
     clear_session(request.session)
-    return {"ok": True}
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(TRUSTED_DEVICE_COOKIE, path="/")
+    return response
 
 
 @app.get("/auth/logout")
 async def auth_logout_get(request: Request):
     clear_session(request.session)
-    return RedirectResponse(url="/login", status_code=302)
+    response = RedirectResponse(url="/login", status_code=302)
+    response.delete_cookie(TRUSTED_DEVICE_COOKIE, path="/")
+    return response
 
 
 @app.get("/")
@@ -1688,6 +1737,44 @@ async def telegram_send_now():
     except Exception as e:
         logger.error(f"텔레그램 즉시 전송 오류: {e}")
         raise HTTPException(status_code=500, detail="텔레그램 전송 중 오류가 발생했습니다.")
+
+
+class TelegramPriceAlertRequest(BaseModel):
+    stock_code: str
+    target_price: int = Field(ge=1, le=2_000_000_000)
+
+
+@app.get("/telegram/price-alerts")
+async def get_telegram_price_alerts():
+    from utils.telegram_price_alerts import list_price_alerts
+
+    return {"items": list_price_alerts()}
+
+
+@app.post("/telegram/price-alerts")
+async def create_telegram_price_alert(request: TelegramPriceAlertRequest):
+    from notifications.telegram_notifier import TelegramNotifier
+    from utils.telegram_price_alerts import create_price_alert
+
+    if not TelegramNotifier().is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="텔레그램 설정이 없습니다. TELEGRAM_BOT_TOKEN/CHAT_ID를 확인하세요.",
+        )
+    try:
+        return create_price_alert(request.stock_code, request.target_price)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.delete("/telegram/price-alerts/{alert_id}")
+async def delete_telegram_price_alert(alert_id: int):
+    from utils.telegram_price_alerts import delete_price_alert
+
+    if not delete_price_alert(alert_id):
+        raise HTTPException(status_code=404, detail="가격 알림을 찾을 수 없습니다.")
+    return {"success": True}
+
 
 @app.get("/api")
 async def api_info():
@@ -2176,6 +2263,116 @@ class KrxHolidayRequest(BaseModel):
     holiday_date: str  # YYYY-MM-DD
     name: str
     is_closed: Optional[bool] = True
+
+
+class AnalysisFavoriteRequest(BaseModel):
+    stock_name: str = Field(default="", max_length=100)
+
+
+class AnalysisMemoRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=5000)
+
+
+def _analysis_username(request: Request) -> str:
+    return (session_username(request.session) or "default")[:120]
+
+
+def _analysis_stock_code(stock_code: str) -> str:
+    code = stock_code.strip().upper()
+    if code.startswith("A"):
+        code = code[1:]
+    if not re.fullmatch(r"\d{6}", code):
+        raise HTTPException(status_code=400, detail="종목코드 형식이 올바르지 않습니다")
+    return code
+
+
+@app.get("/api/analysis/preferences")
+def get_analysis_preferences(request: Request, db: Session = Depends(get_db)):
+    username = _analysis_username(request)
+    favorites = db.query(AnalysisFavorite).filter(
+        AnalysisFavorite.username == username
+    ).all()
+    memos = db.query(AnalysisMemo).filter(AnalysisMemo.username == username).all()
+    return {
+        "favorites": [
+            {"code": row.stock_code, "name": row.stock_name}
+            for row in favorites
+        ],
+        "memos": {row.stock_code: row.content for row in memos},
+    }
+
+
+@app.put("/api/analysis/favorites/{stock_code}")
+def save_analysis_favorite(
+    stock_code: str,
+    body: AnalysisFavoriteRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    code = _analysis_stock_code(stock_code)
+    username = _analysis_username(request)
+    row = db.query(AnalysisFavorite).filter(
+        AnalysisFavorite.username == username,
+        AnalysisFavorite.stock_code == code,
+    ).one_or_none()
+    if row is None:
+        row = AnalysisFavorite(username=username, stock_code=code)
+        db.add(row)
+    row.stock_name = body.stock_name.strip()
+    db.commit()
+    return {"code": code, "name": row.stock_name}
+
+
+@app.delete("/api/analysis/favorites/{stock_code}")
+def delete_analysis_favorite(
+    stock_code: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    code = _analysis_stock_code(stock_code)
+    deleted = db.query(AnalysisFavorite).filter(
+        AnalysisFavorite.username == _analysis_username(request),
+        AnalysisFavorite.stock_code == code,
+    ).delete(synchronize_session=False)
+    db.commit()
+    return {"success": True, "deleted": deleted > 0}
+
+
+@app.put("/api/analysis/memos/{stock_code}")
+def save_analysis_memo(
+    stock_code: str,
+    body: AnalysisMemoRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    code = _analysis_stock_code(stock_code)
+    username = _analysis_username(request)
+    row = db.query(AnalysisMemo).filter(
+        AnalysisMemo.username == username,
+        AnalysisMemo.stock_code == code,
+    ).one_or_none()
+    if row is None:
+        row = AnalysisMemo(username=username, stock_code=code, content=body.content)
+        db.add(row)
+    else:
+        row.content = body.content
+    db.commit()
+    return {"code": code, "content": row.content}
+
+
+@app.delete("/api/analysis/memos/{stock_code}")
+def delete_analysis_memo(
+    stock_code: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    code = _analysis_stock_code(stock_code)
+    deleted = db.query(AnalysisMemo).filter(
+        AnalysisMemo.username == _analysis_username(request),
+        AnalysisMemo.stock_code == code,
+    ).delete(synchronize_session=False)
+    db.commit()
+    return {"success": True, "deleted": deleted > 0}
 
 
 @app.get("/trading/holidays")
