@@ -204,7 +204,7 @@ body.mode-real .auto-screener-body .tbl tr.screener-out td {
 body.mode-real .settings-card .cond-picker {
   background: rgba(148, 163, 184, 0.08);
 }
-body.mode-real #auto-sub-settings .settings-card .form-actions {
+body.mode-real #trading-sub-settings .settings-card .form-actions {
   background: rgba(255, 255, 255, 0.96);
 }
 body.mode-real .settings-card .form-section,
@@ -283,6 +283,7 @@ a:hover { color: var(--accent-bright); }
   min-width: 0;
 }
 .brand { display: flex; align-items: baseline; gap: 6px; min-width: 0; flex: 1 1 auto; }
+.brand-home { color: inherit; text-decoration: none; }
 .brand h1 {
   font-size: 13px; font-weight: 800; margin: 0; letter-spacing: -.2px;
   background: linear-gradient(135deg, #fff 0%, #a5b4fc 100%);
@@ -301,7 +302,7 @@ a:hover { color: var(--accent-bright); }
   flex-wrap: wrap;
   min-width: 0;
 }
-.topbar .btn.auto-toggle-top {
+.trading-auto-control .auto-toggle-top {
   font-weight: 700;
   font-size: 11px;
   min-width: 96px;
@@ -385,6 +386,7 @@ a:hover { color: var(--accent-bright); }
   border: 1px solid transparent;
 }
 .topbar .tab-link:hover { color: var(--accent-bright); background: var(--accent-soft); border-color: var(--accent); }
+.topbar .tab-link.active { color: var(--accent-bright); background: var(--accent-soft); border-color: var(--accent); }
 .tabs { display: flex; gap: 2px; background: var(--card); padding: 3px; border-radius: 8px; border: 1px solid var(--border); }
 .tab {
   font-size: 12px; font-weight: 700; color: var(--muted);
@@ -1459,6 +1461,16 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
+.trading-subpane { display: none; width: 100%; min-height: 0; }
+.trading-subpane.active { display: block; }
+.trading-ladder-frame {
+  display: block;
+  width: 100%;
+  height: calc(100vh - var(--dash-topbar-h) - var(--dash-wrap-pad) - 48px);
+  min-height: 580px;
+  border: 0;
+  background: var(--bg);
+}
 
 .auto-layout {
   display: flex;
@@ -1474,6 +1486,15 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
   flex-wrap: wrap;
   align-items: flex-start;
   gap: 8px;
+}
+.trading-auto-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.trading-auto-control .auto-toggle-top {
+  white-space: nowrap;
 }
 .cand-tabs-title {
   display: flex;
@@ -1793,7 +1814,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 
 /* 설정 폼 — 포지션 카드(pk 9px / pv 10.5px) 톤 */
 .settings-card-body { padding: 8px 10px; max-height: none; overflow: visible; }
-#auto-sub-settings .settings-card .card-head {
+#trading-sub-settings .settings-card .card-head {
   position: sticky;
   top: 0;
   z-index: 2;
@@ -1801,7 +1822,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
   border-bottom: 1px solid var(--border);
   margin-bottom: 0;
 }
-#auto-sub-settings .settings-card .form-actions {
+#trading-sub-settings .settings-card .form-actions {
   position: sticky;
   bottom: 0;
   z-index: 2;
@@ -2034,9 +2055,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 }
 .board-layout .board-block { width: 100%; }
 
-/* Compact / side-by-side layout for wider screens:
-   - board blocks will flow into multiple columns to reduce vertical space
-   - keeps existing stacking behaviour on small screens */
+/* Compact / side-by-side layout for settings panels on wider screens. */
 @media (min-width: 1100px) {
   .board-layout {
     display: grid;
@@ -2045,6 +2064,10 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
     align-items: start;
   }
   .board-layout .board-block { width: auto; }
+}
+#pane-board .board-layout {
+  display: flex;
+  flex-direction: column;
 }
 .board-layout .section-title {
   margin: 0 2px 6px;
@@ -2325,9 +2348,8 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
   .topbar-inner { padding: 6px 4px; gap: 5px; }
   .topbar-head { gap: 6px; }
   .brand h1 { font-size: 14px; }
-  .topbar .btn.auto-toggle-top {
+  .trading-auto-control .auto-toggle-top {
     min-width: 0;
-    max-width: 46%;
     padding: 7px 10px;
     font-size: 10px;
   }
@@ -2452,8 +2474,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 }
 
 @media (max-width: 400px) {
-  .topbar .btn.auto-toggle-top {
-    max-width: 52%;
+  .trading-auto-control .auto-toggle-top {
     font-size: 9px;
     padding: 6px 8px;
   }

@@ -24,15 +24,18 @@
         <h1>기본적분석</h1>
         <span class="sub">네이버 시가총액 마트 · PER · PBR · ROE</span>
       </div>
-      <nav class="tabs">
-        <a href="/dashboard" class="tab">대시보드</a>
-        <a href="/ladder" class="tab-link">분할매수 ↗</a>
-        <a href="/analysis" class="tab active">분석</a>
+      <nav class="tabs tabs-scroll" aria-label="메인 메뉴">
+        <a href="/static/dashboard.html?tab=trading" class="tab-link">트레이딩</a>
+        <a href="/static/dashboard.html?tab=board" class="tab-link">대시보드</a>
+        <a href="/static/dashboard.html?tab=trades" class="tab-link">거래내역</a>
+        <a href="/analysis" class="tab-link active" aria-current="page">분석 ↗</a>
         <a href="/theme-map" class="tab-link">테마맵 ↗</a>
+        <a href="/indicators" class="tab-link">지표 ↗</a>
         <a href="/verify" class="tab-link">검증 ↗</a>
         <a href="/api-explorer" class="tab-link">API ↗</a>
-        <a href="/exit-replay" class="tab-link">청산 시뮬 ↗</a>
         <a href="/static/glossary.html" class="tab-link">용어정리 ↗</a>
+        <a href="/static/dashboard.html?tab=settings" class="tab-link">설정</a>
+        <a href="/static/dashboard.html?tab=alert" class="tab-link">알림</a>
       </nav>
       <div class="topbar-actions analysis-filters">
         <input type="search" id="codeSearch" class="analysis-search" placeholder="종목코드" maxlength="6" inputmode="numeric" autocomplete="off" enterkeyhint="search">

@@ -496,6 +496,15 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+@app.middleware("http")
+async def prevent_html_page_caching(request: Request, call_next):
+    response = await call_next(request)
+    if request.method in {"GET", "HEAD"} and request.url.path.endswith(".html"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
 # 정적 파일 서빙 설정
 static_dir = os.path.join(os.path.dirname(__file__), "..", "static")
 logger.info(f"🌐 [STATIC] 정적 파일 디렉토리: {static_dir}")

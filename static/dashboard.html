@@ -13,7 +13,7 @@
   <meta name="apple-mobile-web-app-title" content="Stocke">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="theme-color" content="#131720">
-  <link rel="stylesheet" href="/static/dashboard.css?v=135">
+  <link rel="stylesheet" href="/static/dashboard.css?v=141">
   <script src="/static/theme-sync.js?v=2"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
@@ -23,25 +23,21 @@
     <div class="topbar-inner">
       <div class="topbar-head">
         <div class="brand">
-          <h1>stock.daily</h1>
-          <span class="sub">자동매매 · 전략 · 모니터링 · 알림</span>
+          <a class="brand-home" href="/" aria-label="인덱스 페이지"><h1>stock.daily</h1></a>
         </div>
-        <button class="btn auto-toggle-top is-off" id="btnToggleAutoTop" type="button" data-on="0">자동매매 시작</button>
       </div>
       <nav class="tabs tabs-scroll" aria-label="메인 메뉴">
-        <a href="#" class="tab active" data-tab="auto">자동매매</a>
-        <a href="#" class="tab" data-tab="trading">트레이딩</a>
-        <a href="#" class="tab" data-tab="board">대시보드</a>
-        <a href="#" class="tab" data-tab="trades">거래내역</a>
-        <a href="/ladder" class="tab-link">분할매수 ↗</a>
+        <a href="#" class="tab tab-link" data-tab="trading">트레이딩</a>
+        <a href="#" class="tab tab-link" data-tab="board">대시보드</a>
+        <a href="#" class="tab tab-link" data-tab="trades">거래내역</a>
         <a href="/analysis" class="tab-link">분석 ↗</a>
         <a href="/theme-map" class="tab-link">테마맵 ↗</a>
         <a href="/indicators" class="tab-link">지표 ↗</a>
         <a href="/verify" class="tab-link">검증 ↗</a>
         <a href="/api-explorer" class="tab-link">API ↗</a>
         <a href="/static/glossary.html" class="tab-link">용어정리 ↗</a>
-        <a href="#" class="tab" data-tab="settings">설정</a>
-        <a href="#" class="tab" data-tab="alert">알림</a>
+        <a href="#" class="tab tab-link" data-tab="settings">설정</a>
+        <a href="#" class="tab tab-link" data-tab="alert">알림</a>
       </nav>
       <div class="topbar-actions">
         <span id="connBadge" class="conn-badge warn"><span class="dot"></span><span id="connText">확인 중</span></span>
@@ -62,10 +58,6 @@
     <!-- ============ 자동매매 탭 ============ -->
     <section class="pane active" id="pane-auto">
       <div class="auto-subtabs-bar">
-        <nav class="auto-subtabs" aria-label="자동매매 하위 메뉴">
-          <button type="button" class="auto-subtab active" data-auto-sub="monitor">모니터링</button>
-          <button type="button" class="auto-subtab" data-auto-sub="settings">설정</button>
-        </nav>
         <div class="market-indices" id="marketIndices" aria-live="polite">
           <span class="market-index-skeleton">지수 불러오는 중…</span>
         </div>
@@ -135,21 +127,26 @@
         </div><!-- /.auto-layout -->
       </div>
 
-      <div class="auto-subpane" id="auto-sub-settings">
-        <div class="auto-layout">
-      <div class="card compact-card settings-card">
-        <div class="card-head">
-          <div><h3>자동매매 설정</h3><div class="hint" style="margin-top:2px;">종목선정(고정) · 매수·청산 · 사이징</div></div>
-          <span id="autoStateBadge" class="pill off">중지</span>
-        </div>
-        <div class="card-body settings-card-body" id="settingsForm"><div class="skeleton">불러오는 중...</div></div>
-      </div>
-        </div>
-      </div>
     </section>
 
     <!-- ============ 트레이딩 탭 ============ -->
     <section class="pane" id="pane-trading">
+      <div class="auto-subtabs-bar trading-subtabs-bar">
+        <nav class="auto-subtabs" aria-label="트레이딩 하위 메뉴">
+          <button type="button" class="auto-subtab trading-subtab active" data-trading-sub="ladder">분할매매</button>
+          <button type="button" class="auto-subtab trading-subtab" data-trading-sub="candidates">자동매매</button>
+          <button type="button" class="auto-subtab trading-subtab" data-trading-sub="settings">설정</button>
+        </nav>
+      </div>
+      <div class="trading-subpane active" id="trading-sub-ladder">
+        <iframe
+          id="tradingLadderFrame"
+          class="trading-ladder-frame"
+          title="분할매수 감시"
+          data-src="/static/ladder.html?embed=1"
+        ></iframe>
+      </div>
+      <div class="trading-subpane" id="trading-sub-candidates">
       <div class="auto-layout trading-layout">
         <div class="card compact-card screener-card cand-tabs-card">
           <div class="card-head cand-tabs-head">
@@ -164,6 +161,10 @@
                 <button type="button" class="cand-tab" data-cand="jongga">종가배팅</button>
                 <button type="button" class="cand-tab" data-cand="ma1592">1592매매</button>
               </nav>
+            </div>
+            <div class="trading-auto-control">
+              <span id="autoStateBadge" class="pill off" aria-live="polite">중지</span>
+              <button class="btn auto-toggle-top is-off" id="btnToggleAuto" type="button" data-on="0" aria-pressed="false">자동매매 시작</button>
             </div>
           </div>
 
@@ -255,6 +256,17 @@
           </div>
         </div>
       </div>
+      </div>
+      <div class="trading-subpane" id="trading-sub-settings">
+        <div class="auto-layout trading-settings-layout">
+          <div class="card compact-card settings-card">
+            <div class="card-head">
+              <div><h3>자동매매 설정</h3><div class="hint" style="margin-top:2px;">종목선정(고정) · 매수·청산 · 사이징</div></div>
+            </div>
+            <div class="card-body settings-card-body" id="settingsForm"><div class="skeleton">불러오는 중...</div></div>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- ============ 대시보드 탭 ============ -->
@@ -304,17 +316,6 @@
             <div class="card-head"><h3>일별 손익</h3><span class="hint">청산일(KST) 기준 · 포지션 단위</span></div>
             <div class="card-body scroll board-perf-scroll board-perf-daily" id="dailyBody"><div class="skeleton">불러오는 중...</div></div>
           </div>
-        </div>
-      </div>
-
-      <div class="board-block">
-        <div class="section-title">테마/키워드</div>
-        <div class="card compact-card">
-          <div class="card-head">
-            <h3>오늘의 키워드 <span class="hint" id="todayKeywordHint"></span></h3>
-            <a class="btn sm" href="/theme-map">테마맵 열기</a>
-          </div>
-          <div class="card-body scroll board-scroll-body" id="todayKeywordBody"><div class="skeleton">불러오는 중...</div></div>
         </div>
       </div>
 
@@ -399,7 +400,7 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/static/dashboard.js?v=190"></script>
-  <script src="/static/telegram-price-alert.js?v=2"></script>
+  <script src="/static/dashboard.js?v=195"></script>
+  <script src="/static/telegram-price-alert.js?v=3"></script>
 </body>
 </html>

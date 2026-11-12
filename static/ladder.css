@@ -1,3 +1,10 @@
+.ld-embedded .topbar nav { display: none; }
+.ld-embedded .topbar-inner { flex-direction: row; align-items: center; gap: 8px; }
+.ld-embedded .brand { flex: 0 0 auto; }
+.ld-embedded .brand .sub { display: none; }
+.ld-embedded .ladder-top-actions { flex: 1 1 540px; justify-content: flex-end; flex-wrap: wrap; }
+.ld-embedded .ladder-wrap { padding: 10px 8px; }
+
 .ladder-top-actions { display: flex; align-items: center; gap: 8px; }
 .ld-mock-badge {
   font-size: 10px; font-weight: 700; color: var(--green);
@@ -229,4 +236,9 @@
 
 @media (max-width: 600px) {
   .ld-analysis-memo-float { right: 10px; bottom: 90px; width: min(340px, calc(100vw - 20px)); }
+}
+
+@media (max-width: 768px) {
+  .ld-embedded .topbar-inner { flex-direction: column; align-items: stretch; }
+  .ld-embedded .ladder-top-actions { justify-content: flex-start; }
 }

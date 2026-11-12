@@ -1169,7 +1169,11 @@ const CONDITION_ALERT_INTERVALS = [
   [900, '15분'],
   [1800, '30분'],
   [3600, '1시간'],
+  [7200, '2시간'],
+  [10800, '3시간'],
+  [18000, '5시간'],
 ];
+const CONDITION_ALERT_INTRADAY_INTERVALS = new Set([600, 3600, 7200, 10800, 18000]);
 
 function renderConditionAlertConfigs(configured) {
   const options = new Map();
@@ -1187,7 +1191,7 @@ function renderConditionAlertConfigs(configured) {
     const selectedNames = new Set(config.condition_names || []);
     const isIntraday = Boolean(config.is_intraday);
     const intervals = isIntraday
-      ? CONDITION_ALERT_INTERVALS.filter(([seconds]) => seconds === 600 || seconds === 3600)
+      ? CONDITION_ALERT_INTERVALS.filter(([seconds]) => CONDITION_ALERT_INTRADAY_INTERVALS.has(seconds))
       : CONDITION_ALERT_INTERVALS;
     const interval = intervals.some(([seconds]) => seconds === config.interval_seconds)
       ? config.interval_seconds
@@ -1390,7 +1394,7 @@ function bindConditionAlertControls(container, configured) {
       if (!select) return;
       const selected = Number(select.value);
       const options = input.checked
-        ? CONDITION_ALERT_INTERVALS.filter(([seconds]) => seconds === 600 || seconds === 3600)
+        ? CONDITION_ALERT_INTERVALS.filter(([seconds]) => CONDITION_ALERT_INTRADAY_INTERVALS.has(seconds))
         : CONDITION_ALERT_INTERVALS;
       select.innerHTML = options.map(([seconds, label]) => (
         `<option value="${seconds}">${label}</option>`
@@ -1542,37 +1546,6 @@ async function loadTelegram() {
     $('telegramBody').innerHTML = emptyRow('텔레그램 상태를 불러오지 못했습니다.', '⚠️');
     if ($('notificationRegistryBody')) $('notificationRegistryBody').innerHTML = emptyRow('등록된 알림을 불러오지 못했습니다.', '⚠️');
     if ($('notificationHistoryBody')) $('notificationHistoryBody').innerHTML = emptyRow('알림 전송 이력을 불러오지 못했습니다.', '⚠️');
-  }
-}
-
-async function loadTodayKeywords() {
-  const body = $('todayKeywordBody');
-  if (!body) return;
-  try {
-    const d = await fetchJSON('/keywords/today?limit=12', { timeoutMs: 12000 });
-    const items = d.items || [];
-    const hint = $('todayKeywordHint');
-    if (hint) hint.textContent = `${items.length}개`;
-    if (!items.length) {
-      body.innerHTML = emptyRow('키워드 데이터가 없습니다. 테마맵에서 스냅샷 갱신을 먼저 실행하세요.', '🧩');
-      return;
-    }
-    body.innerHTML = `<table class="tbl"><thead><tr><th>키워드</th><th class="num">언급</th><th class="num">종목</th><th>변화</th></tr></thead><tbody>${
-      items.map((r) => {
-        const delta = parseNum(r.delta_vs_prev || 0);
-        const deltaTxt = delta > 0 ? `+${delta}` : `${delta}`;
-        const trend = String(r.trend_label || 'flat').toLowerCase();
-        const cls = trend === 'up' || trend === 'new' ? 'up' : (trend === 'down' ? 'down' : 'flat');
-        return `<tr>
-          <td>${esc(r.keyword || '-')}</td>
-          <td class="num">${num(r.mention_count || 0)}</td>
-          <td class="num">${num(r.stock_count || 0)}</td>
-          <td class="num ${cls}">${esc(r.trend_label || 'flat')} (${deltaTxt})</td>
-        </tr>`;
-      }).join('')
-    }</tbody></table>`;
-  } catch (_) {
-    body.innerHTML = `<div class="activity-line error"><span class="msg">오늘의 키워드를 불러오지 못했습니다.</span></div>`;
   }
 }
 
@@ -4400,26 +4373,20 @@ function bindSizingModeToggle() {
 }
 
 function getAutoTradeEnabled() {
-  const top = $('btnToggleAutoTop');
-  if (top) return top.dataset.on === '1';
-  const bottom = $('btnToggleAuto');
-  return bottom ? bottom.dataset.on === '1' : false;
+  const toggle = $('btnToggleAuto');
+  return toggle ? toggle.dataset.on === '1' : false;
 }
 
 function updateAutoTradeButtons(on) {
   const label = on ? '자동매매 중지' : '자동매매 시작';
-  const onStyle = 'background:var(--down);border-color:var(--down);color:#fff;';
-  const offStyle = 'background:var(--green);border-color:var(--green);color:#fff;';
-  const style = on ? onStyle : offStyle;
-  ['btnToggleAutoTop', 'btnToggleAuto'].forEach((id) => {
-    const el = $(id);
-    if (!el) return;
-    el.textContent = label;
-    el.dataset.on = on ? '1' : '0';
-    el.style.cssText = style;
-    el.classList.toggle('is-on', on);
-    el.classList.toggle('is-off', !on);
-  });
+  const toggle = $('btnToggleAuto');
+  if (toggle) {
+    toggle.textContent = label;
+    toggle.dataset.on = on ? '1' : '0';
+    toggle.setAttribute('aria-pressed', on ? 'true' : 'false');
+    toggle.classList.toggle('is-on', on);
+    toggle.classList.toggle('is-off', !on);
+  }
   const badge = $('autoStateBadge');
   if (badge) {
     badge.className = 'pill ' + (on ? 'on' : 'off');
@@ -4429,10 +4396,8 @@ function updateAutoTradeButtons(on) {
 
 function bindAutoTradeToggle() {
   const click = () => saveSettings(!getAutoTradeEnabled());
-  const top = $('btnToggleAutoTop');
-  if (top) top.onclick = click;
-  const bottom = $('btnToggleAuto');
-  if (bottom) bottom.onclick = click;
+  const toggle = $('btnToggleAuto');
+  if (toggle) toggle.onclick = click;
 }
 
 function renderSettingsForm(s) {
@@ -4975,9 +4940,8 @@ function renderSettingsForm(s) {
   </div>`;
 
   h += `<div class="form-actions">
-    <button class="btn auto-toggle-top ${on ? 'is-on' : 'is-off'}" id="btnToggleAuto" data-on="${on ? '1' : '0'}" style="${on ? 'background:var(--down);border-color:var(--down);color:#fff;' : 'background:var(--green);border-color:var(--green);color:#fff;'}">${on ? '자동매매 중지' : '자동매매 시작'}</button>
     <button class="btn primary" id="btnSaveSettings">설정만 저장</button>
-    <span class="hint">상단 바에서도 시작/중지 가능 · 주문: <b>${s.order_method === 'LIMIT' ? '지정가' : '시장가'}</b></span>
+    <span class="hint">시작/중지는 트레이딩 탭에서 제어 · 주문: <b>${s.order_method === 'LIMIT' ? '지정가' : '시장가'}</b></span>
   </div>`;
 
   $('settingsForm').innerHTML = h;
@@ -5543,6 +5507,20 @@ function switchCandTab(name) {
   });
 }
 
+function switchTradingSubTab(name) {
+  document.querySelectorAll('.trading-subtab').forEach((t) => {
+    t.classList.toggle('active', t.dataset.tradingSub === name);
+  });
+  document.querySelectorAll('.trading-subpane').forEach((p) => {
+    p.classList.toggle('active', p.id === `trading-sub-${name}`);
+  });
+  if (name === 'ladder') {
+    const frame = $('tradingLadderFrame');
+    if (frame && !frame.hasAttribute('src')) frame.src = frame.dataset.src;
+  }
+  if (name === 'settings') loadSettings();
+}
+
 function switchAutoSubTab(name) {
   document.querySelectorAll('.auto-subtab[data-auto-sub]').forEach((t) => {
     t.classList.toggle('active', t.dataset.autoSub === name);
@@ -5555,8 +5533,6 @@ function switchAutoSubTab(name) {
     loadPositions(true, { silent: true });
     loadLog();
     loadActivity();
-  } else if (name === 'settings') {
-    loadSettings();
   }
 }
 
@@ -5578,6 +5554,7 @@ function switchTab(name) {
     const sub = document.querySelector('.history-subtab.active')?.dataset.historySub || 'fills';
     switchHistorySubTab(sub);
   }
+  if (name === 'trading') switchTradingSubTab('ladder');
 }
 
 function switchHistorySubTab(name) {
@@ -5597,7 +5574,6 @@ function refreshAll() {
   loadMarketIndices();
   loadPerformance(true);
   loadAccount(); loadStatus(); loadTelegram();
-  loadTodayKeywords();
   loadThemeBatchStatus();
   // 재시작·NXT 직후: DB로 먼저 그린 뒤 live 갱신 (동기화 대기로 목록이 비지 않게)
   loadPositions(false, { silent: true }).finally(() => {
@@ -5638,7 +5614,6 @@ function setupAutoRefresh() {
       autoTimer = setInterval(() => {
         loadAccount(); loadStatus();
         loadMarketIndices();
-        loadTodayKeywords();
         loadThemeBatchStatus();
         loadPositions(true, { silent: true });
         loadSells(); loadOrders(); loadLog();
@@ -5688,6 +5663,9 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.cand-tab').forEach((t) => {
     t.onclick = () => switchCandTab(t.dataset.cand);
   });
+  document.querySelectorAll('.trading-subtab[data-trading-sub]').forEach((t) => {
+    t.onclick = () => switchTradingSubTab(t.dataset.tradingSub);
+  });
   document.querySelectorAll('.history-subtab').forEach((t) => {
     t.onclick = () => switchHistorySubTab(t.dataset.historySub);
   });
@@ -5713,6 +5691,10 @@ document.addEventListener('DOMContentLoaded', () => {
   startPositionsLivePolling();
   bindAutoTradeToggle();
   bindPositionSellButtons();
+  const requestedTab = new URLSearchParams(window.location.search).get('tab');
+  if (['trading', 'board', 'trades', 'settings', 'alert'].includes(requestedTab)) {
+    switchTab(requestedTab);
+  }
   refreshAll();
   if (document.querySelector('.cand-tab.active')?.dataset.cand === 'rwm') loadRwm();
 });

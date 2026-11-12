@@ -51,6 +51,22 @@ def test_condition_alert_config_persists_selected_conditions_and_schedule(condit
     assert updated["is_enabled"] is False
 
 
+@pytest.mark.parametrize("interval", [7200, 10800, 18000])
+def test_intraday_condition_alert_accepts_extended_intervals(condition_alert_db, interval):
+    saved = condition_alert_scheduler.save_condition_alert_config(
+        None,
+        "장중 알림",
+        ["돌파"],
+        interval,
+        True,
+        True,
+    )
+
+    assert saved["interval_seconds"] == interval
+    assert saved["is_intraday"] is True
+    assert saved["is_enabled"] is True
+
+
 def test_condition_alert_config_rejects_empty_conditions_and_unknown_interval(condition_alert_db):
     with pytest.raises(ValueError, match="조건식을 하나 이상"):
         condition_alert_scheduler.save_condition_alert_config(

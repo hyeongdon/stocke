@@ -1,6 +1,8 @@
 'use strict';
 
 (function () {
+  if (document.documentElement.classList.contains('ld-embedded')) return;
+
   const search = { items: [], active: -1, timer: null, seq: 0 };
 
   function esc(value) {

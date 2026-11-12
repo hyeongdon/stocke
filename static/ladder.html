@@ -12,8 +12,13 @@
   <meta name="apple-mobile-web-app-title" content="Stocke">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="theme-color" content="#131720">
-  <link rel="stylesheet" href="/static/dashboard.css?v=134">
-  <link rel="stylesheet" href="/static/ladder.css?v=18">
+  <script>
+    if (new URLSearchParams(location.search).get('embed') === '1') {
+      document.documentElement.classList.add('ld-embedded');
+    }
+  </script>
+  <link rel="stylesheet" href="/static/dashboard.css?v=141">
+  <link rel="stylesheet" href="/static/ladder.css?v=20">
   <script src="/static/theme-sync.js?v=2"></script>
 </head>
 <body>
@@ -23,12 +28,18 @@
         <h1>분할매수 감시</h1>
         <span class="sub">RSI 저점 + 20/60 GC · 장중 10분 감시 −5% 추가매수 · 최대 10차 · 이평 단계 익절</span>
       </div>
-      <nav class="tabs">
-        <a href="/dashboard" class="tab">대시보드</a>
-        <a href="/ladder" class="tab active">분할매수</a>
+      <nav class="tabs tabs-scroll" aria-label="메인 메뉴">
+        <a href="/static/dashboard.html?tab=trading" class="tab-link">트레이딩</a>
+        <a href="/static/dashboard.html?tab=board" class="tab-link">대시보드</a>
+        <a href="/static/dashboard.html?tab=trades" class="tab-link">거래내역</a>
         <a href="/analysis" class="tab-link">분석 ↗</a>
+        <a href="/theme-map" class="tab-link">테마맵 ↗</a>
+        <a href="/indicators" class="tab-link">지표 ↗</a>
         <a href="/verify" class="tab-link">검증 ↗</a>
-        <a href="/exit-replay" class="tab-link">전략 시뮬 ↗</a>
+        <a href="/api-explorer" class="tab-link">API ↗</a>
+        <a href="/static/glossary.html" class="tab-link">용어정리 ↗</a>
+        <a href="/static/dashboard.html?tab=settings" class="tab-link">설정</a>
+        <a href="/static/dashboard.html?tab=alert" class="tab-link">알림</a>
       </nav>
       <div class="topbar-actions ladder-top-actions">
         <span class="ld-mock-badge" id="modeBadge" title="계좌 모드 · 자동매매 상태">계좌 확인 중</span>
@@ -203,6 +214,6 @@
 
   <script src="/static/investor-history.js?v=5"></script>
   <script src="/static/ladder.js?v=28"></script>
-  <script src="/static/telegram-price-alert.js?v=2"></script>
+  <script src="/static/telegram-price-alert.js?v=3"></script>
 </body>
 </html>

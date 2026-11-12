@@ -23,13 +23,18 @@
         <h1>용어정리</h1>
         <span class="sub">ATR · PCT · 청산 · 스캐너 · 검증</span>
       </div>
-      <nav class="tabs">
-        <a href="/dashboard" class="tab">대시보드</a>
-        <a href="/ladder" class="tab-link">분할매수 ↗</a>
+      <nav class="tabs tabs-scroll" aria-label="메인 메뉴">
+        <a href="/static/dashboard.html?tab=trading" class="tab-link">트레이딩</a>
+        <a href="/static/dashboard.html?tab=board" class="tab-link">대시보드</a>
+        <a href="/static/dashboard.html?tab=trades" class="tab-link">거래내역</a>
         <a href="/analysis" class="tab-link">분석 ↗</a>
+        <a href="/theme-map" class="tab-link">테마맵 ↗</a>
+        <a href="/indicators" class="tab-link">지표 ↗</a>
         <a href="/verify" class="tab-link">검증 ↗</a>
         <a href="/api-explorer" class="tab-link">API ↗</a>
-        <a href="/static/glossary.html" class="tab-link active">용어정리</a>
+        <a href="/static/glossary.html" class="tab-link">용어정리 ↗</a>
+        <a href="/static/dashboard.html?tab=settings" class="tab-link">설정</a>
+        <a href="/static/dashboard.html?tab=alert" class="tab-link">알림</a>
       </nav>
       <div class="topbar-actions">
         <a class="btn sm" href="/dashboard">← 자동매매</a>
