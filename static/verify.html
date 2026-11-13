@@ -12,29 +12,28 @@
   <meta name="apple-mobile-web-app-title" content="Stocke">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="theme-color" content="#131720">
-  <link rel="stylesheet" href="/static/dashboard.css?v=127">
-  <link rel="stylesheet" href="/static/verify.css?v=22">
-  <script src="/static/theme-sync.js?v=2"></script>
+  <script>
+    if (new URLSearchParams(location.search).get('embed') === '1') {
+      document.documentElement.classList.add('vf-embedded');
+    }
+  </script>
+  <link rel="stylesheet" href="/static/dashboard.css?v=148">
+  <link rel="stylesheet" href="/static/verify.css?v=23">
+  <script src="/static/theme-sync.js?v=3"></script>
 </head>
 <body>
   <header class="topbar">
     <div class="topbar-inner">
-      <div class="brand">
-        <h1>매매 검증</h1>
-        <span class="sub">매수·매도 시각 · 진입조건 · 계산식</span>
+      <div class="topbar-head">
+        <div class="brand">
+          <a class="brand-home" href="/" aria-label="인덱스 페이지"><h1>stock</h1></a>
+        </div>
       </div>
       <nav class="tabs tabs-scroll" aria-label="메인 메뉴">
         <a href="/static/dashboard.html?tab=trading" class="tab-link">트레이딩</a>
         <a href="/static/dashboard.html?tab=board" class="tab-link">대시보드</a>
-        <a href="/static/dashboard.html?tab=trades" class="tab-link">거래내역</a>
         <a href="/analysis" class="tab-link">분석 ↗</a>
-        <a href="/theme-map" class="tab-link">테마맵 ↗</a>
-        <a href="/indicators" class="tab-link">지표 ↗</a>
-        <a href="/verify" class="tab-link active" aria-current="page">검증</a>
-        <a href="/api-explorer" class="tab-link">API ↗</a>
-        <a href="/static/glossary.html" class="tab-link">용어정리 ↗</a>
         <a href="/static/dashboard.html?tab=settings" class="tab-link">설정</a>
-        <a href="/static/dashboard.html?tab=alert" class="tab-link">알림</a>
       </nav>
       <div class="topbar-actions verify-filters">
         <label class="verify-date-label" for="tradeDate">거래일</label>

@@ -13,29 +13,23 @@
   <meta name="apple-mobile-web-app-title" content="Stocke">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="theme-color" content="#131720">
-  <link rel="stylesheet" href="/static/dashboard.css?v=134">
-  <link rel="stylesheet" href="/static/analysis.css?v=24">
-  <script src="/static/theme-sync.js?v=2"></script>
+  <link rel="stylesheet" href="/static/dashboard.css?v=148">
+  <link rel="stylesheet" href="/static/analysis.css?v=26">
+  <script src="/static/theme-sync.js?v=3"></script>
 </head>
 <body>
   <header class="topbar">
     <div class="topbar-inner">
-      <div class="brand">
-        <h1>기본적분석</h1>
-        <span class="sub">네이버 시가총액 마트 · PER · PBR · ROE</span>
+      <div class="topbar-head">
+        <div class="brand">
+          <a class="brand-home" href="/" aria-label="인덱스 페이지"><h1>stock</h1></a>
+        </div>
       </div>
       <nav class="tabs tabs-scroll" aria-label="메인 메뉴">
         <a href="/static/dashboard.html?tab=trading" class="tab-link">트레이딩</a>
         <a href="/static/dashboard.html?tab=board" class="tab-link">대시보드</a>
-        <a href="/static/dashboard.html?tab=trades" class="tab-link">거래내역</a>
         <a href="/analysis" class="tab-link active" aria-current="page">분석 ↗</a>
-        <a href="/theme-map" class="tab-link">테마맵 ↗</a>
-        <a href="/indicators" class="tab-link">지표 ↗</a>
-        <a href="/verify" class="tab-link">검증 ↗</a>
-        <a href="/api-explorer" class="tab-link">API ↗</a>
-        <a href="/static/glossary.html" class="tab-link">용어정리 ↗</a>
         <a href="/static/dashboard.html?tab=settings" class="tab-link">설정</a>
-        <a href="/static/dashboard.html?tab=alert" class="tab-link">알림</a>
       </nav>
       <div class="topbar-actions analysis-filters">
         <input type="search" id="codeSearch" class="analysis-search" placeholder="종목코드" maxlength="6" inputmode="numeric" autocomplete="off" enterkeyhint="search">
@@ -45,7 +39,22 @@
     </div>
   </header>
 
-  <div class="wrap analysis-wrap">
+  <div class="auto-subtabs-bar analysis-view-bar">
+    <nav class="auto-subtabs" aria-label="분석 하위 메뉴">
+      <button type="button" class="auto-subtab analysis-view-tab active" data-view="fundamental">기본적분석</button>
+      <button type="button" class="auto-subtab analysis-view-tab" data-view="theme">테마</button>
+      <button type="button" class="auto-subtab analysis-view-tab" data-view="indicators">지표</button>
+    </nav>
+  </div>
+
+  <div class="analysis-view" id="analysis-view-theme" hidden>
+    <iframe class="analysis-embed-frame" title="테마" data-src="/static/theme_map.html?embed=1"></iframe>
+  </div>
+  <div class="analysis-view" id="analysis-view-indicators" hidden>
+    <iframe class="analysis-embed-frame" title="지표" data-src="/static/indicators.html?embed=1"></iframe>
+  </div>
+
+  <div class="wrap analysis-wrap analysis-view" id="analysis-view-fundamental">
     <section class="analysis-summary" id="summaryCards">
       <div class="v-stat"><div class="k">총 종목</div><div class="v" id="statTotal">-</div></div>
       <div class="v-stat"><div class="k">기준일</div><div class="v" id="statDate">-</div></div>
@@ -141,8 +150,33 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/static/investor-history.js?v=5"></script>
-  <script src="/static/analysis.js?v=37"></script>
+  <script src="/static/investor-history.js?v=8"></script>
+  <script src="/static/analysis.js?v=38"></script>
   <script src="/static/telegram-price-alert.js?v=2"></script>
+  <script>
+    (function () {
+      const filters = document.querySelector('.analysis-filters');
+      function showView(name) {
+        document.querySelectorAll('.analysis-view-tab').forEach((t) => {
+          t.classList.toggle('active', t.dataset.view === name);
+        });
+        document.querySelectorAll('.analysis-view').forEach((v) => {
+          v.hidden = v.id !== 'analysis-view-' + name;
+        });
+        if (filters) filters.hidden = name !== 'fundamental';
+        const frame = document.querySelector('#analysis-view-' + name + ' iframe');
+        if (frame && !frame.hasAttribute('src')) frame.src = frame.dataset.src;
+        const url = new URL(location.href);
+        if (name === 'fundamental') url.searchParams.delete('view');
+        else url.searchParams.set('view', name);
+        history.replaceState(null, '', url);
+      }
+      document.querySelectorAll('.analysis-view-tab').forEach((t) => {
+        t.addEventListener('click', () => showView(t.dataset.view));
+      });
+      const initial = new URLSearchParams(location.search).get('view');
+      if (initial === 'theme' || initial === 'indicators') showView(initial);
+    })();
+  </script>
 </body>
 </html>

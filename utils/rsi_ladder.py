@@ -2,6 +2,7 @@
 
 docs/PRD_RSI_LADDER.md 기준.
 - 1차 진입: (주봉 RSI 저점 OR 일봉 RSI 저점 에피소드 N회) AND 20/60 GC
+  또는 가격 도달 모드(현재가 ≤ 매수 목표가, 장중 10분 감시)
 - 추가 매수: 장중 10분마다 현재가 ≤ 직전 체결가 × (1 - step%) 호가 내림, 하루 1단계, max_steps 까지
   (주문은 항상 시장가, 직전 체결가는 ka10076 실제 체결가로 보정)
 - 매도: 무장 전에는 매도 없음. 무장(peak ≥ +15%) 후 S1 MA10 50% / S2 MA15 25% / S3 MA20 잔량
@@ -42,7 +43,8 @@ PLAN_STATUSES = ("RSI_WAIT", "ACTIVE", "FULL", "EXITING", "PAUSED", "DONE")
 OPEN_STATUSES = ("RSI_WAIT", "ACTIVE", "FULL", "EXITING", "PAUSED")
 
 DEFAULT_PROFILE: Dict[str, Any] = {
-    "entry_mode": "auto",          # auto | manual
+    "entry_mode": "auto",          # auto | manual | price
+    "entry_price": 0,              # price 모드: 현재가 ≤ 이 가격이면 1차 매수
     "rsi_period": 14,
     "rsi_weekly_th": 30.0,
     "rsi_daily_th": 30.0,
@@ -195,8 +197,9 @@ def merge_profile(overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     p["first_boost_pct"] = round(max(5.0, min(80.0, float(p["first_boost_pct"]))), 1)
     if p["alloc_mode"] not in ("equal", "grow"):
         p["alloc_mode"] = "equal"
-    if p["entry_mode"] not in ("auto", "manual"):
+    if p["entry_mode"] not in ("auto", "manual", "price"):
         p["entry_mode"] = "auto"
+    p["entry_price"] = max(0, int(p["entry_price"]))
     return p
 
 
@@ -500,7 +503,11 @@ def judge_plan(plan: Dict[str, Any], *, price: float, bars: Sequence[Dict[str, A
     if status == "RSI_WAIT":
         ent = evaluate_entry(bars, prof, weekly_bars=weekly_bars)
         out["entry"] = ent
-        if prof["entry_mode"] == "auto" and ent["ok"] and not plan.get("pending_buy"):
+        if prof["entry_mode"] == "price":
+            pe = evaluate_price_entry(plan, price=price)
+            out["buy"] = pe["buy"]
+            out["notes"].extend(pe["notes"])
+        elif prof["entry_mode"] == "auto" and ent["ok"] and not plan.get("pending_buy"):
             qty = step_qty(plan, price, step=1)
             if qty > 0:
                 out["buy"] = {"step": 1, "qty": qty, "price": int(price), "reason": "1차 자동 진입"}
@@ -519,6 +526,31 @@ def judge_plan(plan: Dict[str, Any], *, price: float, bars: Sequence[Dict[str, A
     out["trigger"] = add["trigger"]
     out["buy"] = add["buy"]
     out["notes"].extend(add["notes"])
+    return out
+
+
+def evaluate_price_entry(plan: Dict[str, Any], *, price: float) -> Dict[str, Any]:
+    """가격 도달 1차 진입 판정 — 현재가 ≤ entry_price 이면 1차 매수 (장중 감시 · 15:05 판정 공용).
+
+    반환: {"buy": {...} | None, "target": int | None, "notes": [..]}
+    """
+    out: Dict[str, Any] = {"buy": None, "target": None, "notes": []}
+    prof = merge_profile(plan.get("profile"))
+    if prof["entry_mode"] != "price" or plan.get("status") != "RSI_WAIT":
+        return out
+    target = int(prof["entry_price"])
+    if target <= 0:
+        out["notes"].append("매수 목표가 미설정")
+        return out
+    out["target"] = target
+    if plan.get("pending_buy") or not price or price <= 0 or price > target:
+        return out
+    qty = step_qty(plan, price, step=1)
+    if qty > 0:
+        out["buy"] = {"step": 1, "qty": qty, "price": int(price),
+                      "reason": f"1차 가격 도달 (현재가 {int(price):,} ≤ 목표가 {target:,})"}
+    else:
+        out["notes"].append("1차 수량 0 (예산 부족)")
     return out
 
 

@@ -2,6 +2,28 @@
   --sig-rsi: #ef4444;
   --sig-wr: #ffffff;
   --osc-line: #cbd5e1;
+  --vp-bar: #94a3b8;
+  --vp-poc: #f59e0b;
+}
+html.mode-real {
+  --vp-bar: #475569;
+  --vp-poc: #b45309;
+}
+
+.analysis-view-bar {
+  max-width: 1600px;
+  margin: 10px auto 0;
+  padding: 0 max(16px, env(safe-area-inset-right, 0px)) 0 max(16px, env(safe-area-inset-left, 0px));
+}
+.analysis-view[hidden],
+.analysis-filters[hidden] { display: none !important; }
+.analysis-embed-frame {
+  display: block;
+  width: 100%;
+  height: calc(100vh - 110px);
+  min-height: 600px;
+  border: 0;
+  background: var(--bg);
 }
 
 .analysis-wrap {

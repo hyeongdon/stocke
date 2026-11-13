@@ -228,14 +228,16 @@
     const steps = maxSteps(p);
     const stepPct = prof(p).step_pct || 5;
     const amounts = planAmounts(p);
-    const first = auto[0] ? auto[0].price : (p.price || 0);
+    const pr = prof(p);
+    const entryPx = pr.entry_mode === 'price' && pr.entry_price > 0 ? pr.entry_price : (p.price || 0);
+    const first = auto[0] ? auto[0].price : entryPx;
     const rows = [];
     let cumQty = 0, cumAmt = 0, prev = null;
     for (let n = 1; n <= steps; n++) {
       const f = auto[n - 1];
       let price;
       if (f) price = f.price;
-      else if (n === 1) price = p.price || 0;
+      else if (n === 1) price = entryPx;
       else price = tickFloor(prev * (1 - stepPct / 100));
       const qty = f ? f.qty : (price ? Math.floor((amounts[n - 1] || 0) / price) : 0);
       cumQty += qty;
@@ -244,6 +246,7 @@
         step: n, price, qty, amount: qty * price, cumAmt,
         fromFirst: first ? (price / first - 1) * 100 : 0,
         avgAfter: cumQty ? cumAmt / cumQty : 0,
+        fromAvg: cumQty && cumAmt ? (price / (cumAmt / cumQty) - 1) * 100 : null,
         state: f ? 'filled' : n === auto.length + 1 ? 'next' : 'pending',
         date: f ? md(f.at) : '',
       });
@@ -255,7 +258,9 @@
       cumAmt += amount;
       rows.push({ step: steps + i + 1, price: f.price, qty: f.qty, amount, cumAmt,
         fromFirst: first ? (f.price / first - 1) * 100 : 0,
-        avgAfter: cumQty ? cumAmt / cumQty : 0, state: 'manual', date: md(f.at) });
+        avgAfter: cumQty ? cumAmt / cumQty : 0,
+        fromAvg: cumQty && cumAmt ? (f.price / (cumAmt / cumQty) - 1) * 100 : null,
+        state: 'manual', date: md(f.at) });
     });
     return rows;
   }
@@ -348,9 +353,19 @@
       const e = (p.market || {}).entry;
       let nextCell = '—', distCell = '—';
       if (p.status === 'RSI_WAIT') {
-        if (prof(p).entry_mode === 'manual') nextCell = '수동 대기';
-        else if (e) nextCell = 'RSI ' + (e.r1 || e.r2 ? '✓' : '✗') + ' · GC ' + (e.g ? '✓' : e.gc && e.gc.state === 'near' ? '임박' : '✗');
-        distCell = e && e.ok && prof(p).entry_mode !== 'manual' ? '<span class="ld-near">충족</span>' : '<span class="hint">대기</span>';
+        const mode = prof(p).entry_mode;
+        const target = prof(p).entry_price;
+        if (mode === 'price' && target) {
+          const dist = p.price ? (target / p.price - 1) * 100 : null;
+          nextCell = '목표 ' + fmt(target) + ' <span class="sub">1차</span>';
+          distCell = p.price && p.price <= target
+            ? '<span class="ld-near">도달</span>'
+            : '<span class="' + (dist != null && Math.abs(dist) <= NEAR_PCT ? 'ld-near' : '') + '">' + fmtPct(dist) + '</span>';
+        } else {
+          if (mode === 'manual') nextCell = '수동 대기';
+          else if (e) nextCell = 'RSI ' + (e.r1 || e.r2 ? '✓' : '✗') + ' · GC ' + (e.g ? '✓' : e.gc && e.gc.state === 'near' ? '임박' : '✗');
+          distCell = e && e.ok && mode === 'auto' ? '<span class="ld-near">충족</span>' : '<span class="hint">대기</span>';
+        }
       } else if (p.status === 'ACTIVE' && p.next_trigger) {
         const dist = p.price ? (p.next_trigger / p.price - 1) * 100 : null;
         nextCell = fmt(p.next_trigger) + ' <span class="sub">' + (p.auto_steps + 1) + '차</span>';
@@ -385,7 +400,23 @@
     const pr = prof(p);
     const e = (p.market || {}).entry;
     const line = (ok, label, val, near) => '<div class="ld-cond ' + (ok ? 'ok' : near ? 'near' : 'no') + '"><span class="mark">' + (ok ? '✓' : near ? '…' : '✗') + '</span>' + label + '<span class="val">' + val + '</span></div>';
-    let h = '<div class="ld-panel"><div class="ld-panel-head">1차 진입 조건 <span class="hint">' + (pr.entry_mode === 'manual' ? '수동 진입' : '자동') + '</span></div>';
+    const modeLabel = pr.entry_mode === 'manual' ? '수동 진입' : pr.entry_mode === 'price' ? '가격 도달' : '자동';
+    let h = '<div class="ld-panel"><div class="ld-panel-head">1차 진입 조건 <span class="hint">' + modeLabel + '</span></div>';
+    if (pr.entry_mode === 'price') {
+      const target = pr.entry_price || 0;
+      const reached = !!(p.price && target && p.price <= target);
+      const dist = p.price && target ? (target / p.price - 1) * 100 : null;
+      h += line(reached, '현재가 ≤ 매수 목표가 ' + fmt(target), '현재 ' + fmt(p.price) + ' · ' + fmtPct(dist), dist != null && Math.abs(dist) <= NEAR_PCT);
+      if (p.status === 'RSI_WAIT') {
+        h += reached
+          ? '<div class="ld-verdict ok">목표가 도달 → 장중 감시(10분)에서 1차 매수</div>'
+          : '<div class="ld-verdict wait">대기 — 장중 10분마다 현재가 확인 · 수동 매수 가능</div>';
+      } else {
+        const f0 = (p.fills || [])[0];
+        if (f0) h += '<div class="ld-verdict ok">1차 ' + md(f0.at) + ' ' + fmt(f0.price) + ' × ' + fmt(f0.qty) + '주</div>';
+      }
+      return h + '</div>';
+    }
     if (!e) {
       h += '<div class="hint">' + esc((p.market || {}).error || '지표 계산 불가 (일봉 61개 미만)') + '</div>';
       return h + '</div>';
@@ -566,7 +597,7 @@
         '<span style="color:var(--cyan)">평단</span><span style="color:var(--amber)">다음 매수가</span> ▲매수 ▼매도 · 최근 ' + CHART_LEN + '거래일</div>';
     }
 
-    html += '<table class="ld-table ld-steps"><thead><tr><th>차수</th><th>상태</th><th class="r">매수가</th><th class="r">1차 대비</th><th class="r">수량</th><th class="r">금액</th><th class="r">누적 금액</th><th class="r">누적 평단</th><th>체결일</th></tr></thead><tbody>';
+    html += '<table class="ld-table ld-steps"><thead><tr><th>차수</th><th>상태</th><th class="r">매수가</th><th class="r">1차 대비</th><th class="r">수량</th><th class="r">금액</th><th class="r">누적 금액</th><th class="r">누적 평단</th><th class="r">평단 대비</th><th>체결일</th></tr></thead><tbody>';
     html += ladder.map((r) => {
       let label;
       if (r.state === 'filled') label = '체결';
@@ -581,6 +612,7 @@
         '<td class="r">' + fmt(r.amount) + '</td>' +
         '<td class="r">' + fmt(r.cumAmt) + '</td>' +
         '<td class="r">' + (r.avgAfter ? fmt(r.avgAfter) : '—') + '</td>' +
+        '<td class="r ' + cls(r.fromAvg) + '">' + (r.step === 1 ? '—' : fmtPct(r.fromAvg)) + '</td>' +
         '<td>' + r.date + '</td></tr>';
     }).join('');
     html += '</tbody></table>';
@@ -895,6 +927,7 @@
       memo: v('memo').trim(),
       profile: {
         entry_mode: v('entry'),
+        entry_price: v('entry') === 'price' ? parseMoney(v('entryPrice')) : 0,
         rsi_weekly_th: Number(v('rsiW')) || 30,
         rsi_daily_th: Number(v('rsiD')) || 30,
         daily_lookback: parseInt(v('lookback'), 10) || 120,
@@ -973,16 +1006,20 @@
     const e = q.entry;
     head.innerHTML =
       '<b>' + esc(q.name || q.code) + '</b> 현재가 ' + fmt(base) +
-      (e ? ' · 진입조건 ' + (e.ok ? '<span class="ld-near">충족</span>' : '미충족') + ' (주봉 RSI 최저 ' + (e.weekly_rsi_min != null ? e.weekly_rsi_min.toFixed(1) : '—') +
+      (e && pr.entry_mode === 'auto' ? ' · 진입조건 ' + (e.ok ? '<span class="ld-near">충족</span>' : '미충족') + ' (주봉 RSI 최저 ' + (e.weekly_rsi_min != null ? e.weekly_rsi_min.toFixed(1) : '—') +
         ', 일봉 저점 ' + e.low_count + '회, GC ' + ((e.gc || {}).state || '—') + ')' : '') + '<br>' +
       allocSummary(o) + ' · ' + pr.max_steps + '차 매수가 <b>' + fmt(last.price) + '</b> (1차 대비 ' + fmtPct(last.fromFirst) + ')<br>' +
       '전부 체결 시 투입 ' + fmt(total) + '원, 평단 ' + fmt(last.avgAfter) + ' → +' + pr.tp_arm_pct + '% 무장가 ' + fmt(last.avgAfter * (1 + pr.tp_arm_pct / 100)) + '<br>' +
       '1차 진입: ' + (pr.entry_mode === 'auto'
         ? '(주봉 RSI ≤ ' + pr.rsi_weekly_th + ' 또는 일봉 ' + pr.daily_lookback + '일 RSI ≤ ' + pr.rsi_daily_th + ' 저점 ' + pr.daily_low_count + '회) + 20/60 GC → 15:05 매수'
-        : (state.editingId ? '수동 진입 — 저장 후 [1차 수동 매수]로 매수' : '등록 즉시 시장가 1차 매수 (정규장)'));
+        : pr.entry_mode === 'price'
+          ? (pr.entry_price > 0 ? '현재가 ≤ ' + fmt(pr.entry_price) + '원 도달 시 시장가 매수 (장중 10분 감시)' : '매수 목표가를 입력하세요')
+          : (state.editingId ? '수동 진입 — 저장 후 [1차 수동 매수]로 매수' : '등록 즉시 시장가 1차 매수 (정규장)'));
+    syncEntryPriceHint();
     tbody.innerHTML = rows.map((r) =>
       '<tr><td>' + r.step + '차</td><td class="r">' + fmt(r.price) + '</td><td class="r">' + (r.step === 1 ? '—' : fmtPct(r.fromFirst)) +
       '</td><td class="r">' + fmt(r.qty) + '</td><td class="r">' + fmt(r.amount) + '</td><td class="r">' + fmt(r.cumAmt) + '</td><td class="r">' + fmt(r.avgAfter) +
+      '</td><td class="r ' + cls(r.fromAvg) + '">' + (r.step === 1 ? '—' : fmtPct(r.fromAvg)) +
       '</td><td class="r">' + fmt(r.avgAfter * (1 + pr.tp_arm_pct / 100)) + '</td></tr>'
     ).join('');
   }
@@ -1091,9 +1128,24 @@
 
   function syncEntryFields() {
     const f = document.getElementById('newPlanForm');
-    const manual = f.elements.entry.value === 'manual';
-    RSI_FIELDS.forEach((name) => { f.elements[name].disabled = manual; });
-    document.querySelectorAll('.ld-entry-rsi').forEach((el) => el.classList.toggle('is-off', manual));
+    const mode = f.elements.entry.value;
+    const rsiOff = mode !== 'auto';
+    RSI_FIELDS.forEach((name) => { f.elements[name].disabled = rsiOff; });
+    document.querySelectorAll('.ld-entry-rsi').forEach((el) => el.classList.toggle('is-off', rsiOff));
+    const priceRow = f.querySelector('.ld-entry-price');
+    if (priceRow) priceRow.hidden = mode !== 'price';
+    syncEntryPriceHint();
+  }
+
+  function syncEntryPriceHint() {
+    const f = document.getElementById('newPlanForm');
+    const hint = f.querySelector('.ld-entry-price-hint');
+    if (!hint) return;
+    const target = parseMoney(f.elements.entryPrice.value);
+    const cur = state.quote && state.quote.price ? state.quote.price : 0;
+    if (!target || !cur) { hint.textContent = cur ? '현재가 ' + fmt(cur) : ''; return; }
+    hint.textContent = '현재가 ' + fmt(cur) + ' 대비 ' + fmtPct((target / cur - 1) * 100) +
+      (cur <= target ? ' · 이미 도달 — 다음 장중 감시에서 매수' : '');
   }
 
   function setFormLocked(editing) {
@@ -1121,7 +1173,9 @@
     f.elements.firstBoost.checked = !!pr.first_boost;
     f.elements.firstBoostPct.value = pr.first_boost_pct != null ? pr.first_boost_pct : 20;
     f.elements.memo.value = p.memo || '';
-    f.elements.entry.value = pr.entry_mode === 'manual' ? 'manual' : 'auto';
+    f.elements.entry.value = ['manual', 'price'].includes(pr.entry_mode) ? pr.entry_mode : 'auto';
+    f.elements.entryPrice.value = pr.entry_price ? String(pr.entry_price) : '';
+    formatMoneyInput(f.elements.entryPrice);
     f.elements.rsiW.value = pr.rsi_weekly_th != null ? pr.rsi_weekly_th : 30;
     f.elements.rsiD.value = pr.rsi_daily_th != null ? pr.rsi_daily_th : 30;
     f.elements.lookback.value = pr.daily_lookback != null ? pr.daily_lookback : 120;
@@ -1176,6 +1230,7 @@
     const o = readForm();
     if (!/^\d{6}$/.test(o.code)) return toast('종목코드 6자리를 입력하세요', 'err');
     if (o.budget <= 0) return toast('총 투자금을 입력하세요', 'err');
+    if (o.profile.entry_mode === 'price' && !(o.profile.entry_price > 0)) return toast('매수 목표가를 입력하세요', 'err');
     if (editingId) {
       if (state.busy) return toast('저장 중입니다', 'err');
       const cur = plans().find((x) => x.id === editingId);
@@ -1290,6 +1345,10 @@
     });
     const form = document.getElementById('newPlanForm');
     form.elements.budget.addEventListener('input', () => formatMoneyInput(form.elements.budget));
+    form.elements.entryPrice.addEventListener('input', () => {
+      formatMoneyInput(form.elements.entryPrice);
+      syncEntryPriceHint();
+    });
     formatMoneyInput(form.elements.budget);
     form.elements.code.addEventListener('input', onCodeInput);
     form.elements.search.addEventListener('input', onSearchInput);

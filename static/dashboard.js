@@ -421,11 +421,11 @@ function applySiteSwitchLink(isMock) {
   const mockUrl = window._mockSiteUrl || 'https://hyungdon.store/login?next=/dashboard';
   if (isMock) {
     a.href = realUrl;
-    a.textContent = '실전으로';
+    a.textContent = '💰 실전';
     a.title = '실전투자 사이트로 이동';
   } else {
     a.href = mockUrl;
-    a.textContent = '모의로';
+    a.textContent = '🧪 모의';
     a.title = '모의투자 사이트로 이동';
   }
 }
@@ -5514,8 +5514,9 @@ function switchTradingSubTab(name) {
   document.querySelectorAll('.trading-subpane').forEach((p) => {
     p.classList.toggle('active', p.id === `trading-sub-${name}`);
   });
-  if (name === 'ladder') {
-    const frame = $('tradingLadderFrame');
+  const frameId = { ladder: 'tradingLadderFrame', verify: 'tradingVerifyFrame' }[name];
+  if (frameId) {
+    const frame = $(frameId);
     if (frame && !frame.hasAttribute('src')) frame.src = frame.dataset.src;
   }
   if (name === 'settings') loadSettings();
@@ -5537,6 +5538,16 @@ function switchAutoSubTab(name) {
 }
 
 function switchTab(name) {
+  if (name === 'trades') {
+    switchTab('board');
+    switchHistorySubTab('fills');
+    return;
+  }
+  if (name === 'alert') {
+    switchTab('settings');
+    switchSettingsSubTab('alert');
+    return;
+  }
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.pane').forEach(p => p.classList.toggle('active', p.id === 'pane-' + name));
   if (name === 'auto') requestAnimationFrame(syncDashStickyOffsets);
@@ -5544,15 +5555,12 @@ function switchTab(name) {
     loadPositions(true, { silent: true });
   }
   if (name === 'board') {
-    requestAnimationFrame(() => loadPerformance(true));
+    const sub = document.querySelector('.history-subtab.active')?.dataset.historySub || 'summary';
+    switchHistorySubTab(sub);
   }
   if (name === 'settings') {
     loadStatus();
     loadThemeBatchStatus();
-  }
-  if (name === 'trades') {
-    const sub = document.querySelector('.history-subtab.active')?.dataset.historySub || 'fills';
-    switchHistorySubTab(sub);
   }
   if (name === 'trading') switchTradingSubTab('ladder');
 }
@@ -5564,8 +5572,22 @@ function switchHistorySubTab(name) {
   document.querySelectorAll('.history-subpane').forEach((p) => {
     p.classList.toggle('active', p.id === `history-sub-${name}`);
   });
-  if (name === 'fills') loadSells();
+  $('pane-board')?.classList.toggle('board-history-mode', name !== 'summary');
+  if (name === 'summary') requestAnimationFrame(() => loadPerformance(true));
+  else if (name === 'fills') loadSells();
   else if (name === 'orders') loadOrders();
+}
+
+function switchSettingsSubTab(name) {
+  document.querySelectorAll('.settings-subtab').forEach((t) => {
+    t.classList.toggle('active', t.dataset.settingsSub === name);
+  });
+  $('settings-sub-status')?.classList.toggle('active', name === 'status');
+  $('pane-alert')?.classList.toggle('active', name === 'alert');
+  if (name === 'alert') {
+    loadTelegram();
+    refreshConditionAlertStatuses();
+  }
 }
 
 /* ===== Refresh orchestration ===== */
@@ -5617,7 +5639,7 @@ function setupAutoRefresh() {
         loadThemeBatchStatus();
         loadPositions(true, { silent: true });
         loadSells(); loadOrders(); loadLog();
-        if ($('pane-alert')?.classList.contains('active')) refreshConditionAlertStatuses();
+        if ($('pane-settings')?.classList.contains('active') && $('pane-alert')?.classList.contains('active')) refreshConditionAlertStatuses();
         $('lastUpdated').textContent = new Date().toLocaleTimeString('ko-KR');
       }, AUTO_REFRESH_MS);
     }
@@ -5668,6 +5690,9 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.querySelectorAll('.history-subtab').forEach((t) => {
     t.onclick = () => switchHistorySubTab(t.dataset.historySub);
+  });
+  document.querySelectorAll('.settings-subtab').forEach((t) => {
+    t.onclick = () => switchSettingsSubTab(t.dataset.settingsSub);
   });
   $('refreshAll').onclick = refreshAll;
   $('pfRefresh').onclick = () => loadPerformance(true);

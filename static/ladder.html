@@ -17,29 +17,23 @@
       document.documentElement.classList.add('ld-embedded');
     }
   </script>
-  <link rel="stylesheet" href="/static/dashboard.css?v=141">
-  <link rel="stylesheet" href="/static/ladder.css?v=20">
-  <script src="/static/theme-sync.js?v=2"></script>
+  <link rel="stylesheet" href="/static/dashboard.css?v=148">
+  <link rel="stylesheet" href="/static/ladder.css?v=22">
+  <script src="/static/theme-sync.js?v=3"></script>
 </head>
 <body>
   <header class="topbar">
     <div class="topbar-inner">
-      <div class="brand">
-        <h1>분할매수 감시</h1>
-        <span class="sub">RSI 저점 + 20/60 GC · 장중 10분 감시 −5% 추가매수 · 최대 10차 · 이평 단계 익절</span>
+      <div class="topbar-head">
+        <div class="brand">
+          <a class="brand-home" href="/" aria-label="인덱스 페이지"><h1>stock</h1></a>
+        </div>
       </div>
       <nav class="tabs tabs-scroll" aria-label="메인 메뉴">
         <a href="/static/dashboard.html?tab=trading" class="tab-link">트레이딩</a>
         <a href="/static/dashboard.html?tab=board" class="tab-link">대시보드</a>
-        <a href="/static/dashboard.html?tab=trades" class="tab-link">거래내역</a>
         <a href="/analysis" class="tab-link">분석 ↗</a>
-        <a href="/theme-map" class="tab-link">테마맵 ↗</a>
-        <a href="/indicators" class="tab-link">지표 ↗</a>
-        <a href="/verify" class="tab-link">검증 ↗</a>
-        <a href="/api-explorer" class="tab-link">API ↗</a>
-        <a href="/static/glossary.html" class="tab-link">용어정리 ↗</a>
         <a href="/static/dashboard.html?tab=settings" class="tab-link">설정</a>
-        <a href="/static/dashboard.html?tab=alert" class="tab-link">알림</a>
       </nav>
       <div class="topbar-actions ladder-top-actions">
         <span class="ld-mock-badge" id="modeBadge" title="계좌 모드 · 자동매매 상태">계좌 확인 중</span>
@@ -162,8 +156,15 @@
             <select name="entry">
               <option value="auto">자동: (주봉 RSI 저점 or 일봉 RSI 저점 N회) + 20/60 GC</option>
               <option value="manual">수동: 등록 즉시 1차 시장가 매수 (정규장)</option>
+              <option value="price">가격 도달: 현재가 ≤ 목표가이면 1차 시장가 매수 (장중 10분 감시)</option>
             </select>
           </label>
+          <div class="ld-form-row ld-entry-price" hidden>
+            <label>매수 목표가(원)
+              <input type="text" name="entryPrice" inputmode="numeric" placeholder="예: 52,000" autocomplete="off">
+            </label>
+            <span class="hint ld-entry-price-hint"></span>
+          </div>
           <div class="ld-form-row ld-entry-rsi">
             <label>주봉 RSI ≤
               <input type="number" name="rsiW" value="30" min="5" max="50">
@@ -204,7 +205,7 @@
           <div class="ld-preview-head">사다리 미리보기</div>
           <div id="previewSummary" class="hint"></div>
           <table class="ld-table ld-steps" id="previewTable">
-            <thead><tr><th>차수</th><th class="r">매수가</th><th class="r">1차 대비</th><th class="r">수량</th><th class="r">금액</th><th class="r">누적 금액</th><th class="r">누적 평단</th><th class="r">+15% 무장가</th></tr></thead>
+            <thead><tr><th>차수</th><th class="r">매수가</th><th class="r">1차 대비</th><th class="r">수량</th><th class="r">금액</th><th class="r">누적 금액</th><th class="r">누적 평단</th><th class="r">평단 대비</th><th class="r">+15% 무장가</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -212,8 +213,8 @@
     </div>
   </div>
 
-  <script src="/static/investor-history.js?v=5"></script>
-  <script src="/static/ladder.js?v=28"></script>
+  <script src="/static/investor-history.js?v=8"></script>
+  <script src="/static/ladder.js?v=30"></script>
   <script src="/static/telegram-price-alert.js?v=3"></script>
 </body>
 </html>

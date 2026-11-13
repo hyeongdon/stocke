@@ -44,7 +44,7 @@
   function renderChart(rows) {
     const width = 960;
     const height = 220;
-    const pad = { left: 28, right: 8, top: 12, bottom: 28 };
+    const pad = { left: 28, right: 52, top: 12, bottom: 28 };
     const plotHeight = height - pad.top - pad.bottom;
     const plotWidth = width - pad.left - pad.right;
     const series = [
@@ -94,6 +94,29 @@
       });
       renderSegment();
     });
+    const prices = rows.map((row) => {
+      const price = Number(row.close_price);
+      return row.close_price != null && Number.isFinite(price) && price > 0 ? price : null;
+    });
+    const validPrices = prices.filter((price) => price != null);
+    if (validPrices.length) {
+      const minPrice = Math.min(...validPrices);
+      const maxPrice = Math.max(...validPrices);
+      const span = maxPrice - minPrice || maxPrice * 0.01 || 1;
+      const priceY = (price) => pad.top + ((maxPrice - price) / span) * plotHeight;
+      const path = prices.reduce((acc, price, index) => {
+        if (price == null) return { d: acc.d, open: false };
+        return { d: `${acc.d} ${acc.open ? 'L' : 'M'} ${x(index)} ${priceY(price)}`, open: true };
+      }, { d: '', open: false }).d;
+      if (path) svg += `<path d="${path}" class="if-stock-line price"/>`;
+      prices.forEach((price, index) => {
+        if (price == null) return;
+        svg += `<circle cx="${x(index)}" cy="${priceY(price)}" r="2" class="if-stock-point price"><title>${escapeHtml(formatDate(rows[index].date))} 종가 ${price.toLocaleString('ko-KR')}원</title></circle>`;
+      });
+      const priceLabelX = width - pad.right + 4;
+      svg += `<text x="${priceLabelX}" y="${pad.top + 4}" class="if-stock-price-label">${maxPrice.toLocaleString('ko-KR')}</text>`;
+      svg += `<text x="${priceLabelX}" y="${height - pad.bottom + 2}" class="if-stock-price-label">${minPrice.toLocaleString('ko-KR')}</text>`;
+    }
     const tickCount = Math.min(6, rows.length);
     Array.from({ length: tickCount }, (_, index) =>
       Math.round(index * (rows.length - 1) / Math.max(1, tickCount - 1))
@@ -140,16 +163,27 @@
     return `${ratio > 0 ? '+' : ''}${ratio.toLocaleString('ko-KR', { maximumFractionDigits: 1 })}%`;
   }
 
+  function renderPriceCell(row, previousRow) {
+    const price = Number(row.close_price);
+    if (row.close_price == null || !Number.isFinite(price) || price <= 0) return '<td>-</td>';
+    const previous = previousRow ? Number(previousRow.close_price) : NaN;
+    if (!Number.isFinite(previous) || previous <= 0) return `<td>${price.toLocaleString('ko-KR')}</td>`;
+    const change = (price / previous - 1) * 100;
+    const changeText = `${change > 0 ? '+' : ''}${change.toFixed(2)}%`;
+    return `<td class="${signClass(change)}">${price.toLocaleString('ko-KR')} <span class="if-stock-price-change">${changeText}</span></td>`;
+  }
+
   function renderHistory(data) {
     const rows = [...(data.rows || [])].reverse();
     if (!rows.length) return '<div class="if-stock-empty">일별 수급 내역이 없습니다.</div>';
     return `${renderSummary(rows)}
-    <div class="if-stock-chart-legend"><span class="foreign">외국인 순매수 추정액</span><span class="institution">기관 순매수 추정액</span><span class="hint">단위: 억원 · 순매수 수량 × 종가 근사 · 0선 아래는 순매도</span></div>
-    ${renderChart(rows)}
+    <div class="if-stock-chart-legend"><span class="foreign">외국인 순매수 추정액</span><span class="institution">기관 순매수 추정액</span><span class="price">주가(종가 · 오른쪽 축)</span><span class="hint">단위: 억원 · 순매수 수량 × 종가 근사 · 0선 아래는 순매도</span></div>
+    ${renderChart([...rows].reverse())}
     <div class="if-stock-table-wrap"><table class="if-stock-table">
-      <thead><tr><th>날짜</th><th>외국인 순매수</th><th>추정액</th><th>기관 순매수</th><th>추정액</th><th>거래대금 근사</th><th>순매수/거래대금</th></tr></thead>
-      <tbody>${rows.map((row) => `<tr>
+      <thead><tr><th>날짜</th><th>주가(종가)</th><th>외국인 순매수</th><th>추정액</th><th>기관 순매수</th><th>추정액</th><th>거래대금 근사</th><th>순매수/거래대금</th></tr></thead>
+      <tbody>${rows.map((row, index) => `<tr>
         <td>${escapeHtml(formatDate(row.date))}</td>
+        ${renderPriceCell(row, rows[index + 1])}
         <td class="${signClass(row.foreign_net)}">${escapeHtml(formatQuantity(row.foreign_net))}</td>
         <td class="${signClass(row.foreign_net_estimated_amount)}">${escapeHtml(formatAmountEok(row.foreign_net_estimated_amount))}</td>
         <td class="${signClass(row.institution_net)}">${escapeHtml(formatQuantity(row.institution_net))}</td>

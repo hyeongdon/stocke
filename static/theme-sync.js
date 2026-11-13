@@ -8,7 +8,7 @@
     const themeColor = document.querySelector('meta[name="theme-color"]');
 
     if (themeColor) {
-      themeColor.setAttribute('content', isRealBool ? '#f3f5f8' : '#131720');
+      themeColor.setAttribute('content', isRealBool ? '#c8ccd2' : '#131720');
     }
     
     if (isRealBool) {

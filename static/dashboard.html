@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-  <title>stock.daily</title>
+  <title>stock</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="manifest" href="/static/manifest.json">
   <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
@@ -13,8 +13,8 @@
   <meta name="apple-mobile-web-app-title" content="Stocke">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="theme-color" content="#131720">
-  <link rel="stylesheet" href="/static/dashboard.css?v=141">
-  <script src="/static/theme-sync.js?v=2"></script>
+  <link rel="stylesheet" href="/static/dashboard.css?v=148">
+  <script src="/static/theme-sync.js?v=3"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -23,21 +23,14 @@
     <div class="topbar-inner">
       <div class="topbar-head">
         <div class="brand">
-          <a class="brand-home" href="/" aria-label="인덱스 페이지"><h1>stock.daily</h1></a>
+          <a class="brand-home" href="/" aria-label="인덱스 페이지"><h1>stock</h1></a>
         </div>
       </div>
       <nav class="tabs tabs-scroll" aria-label="메인 메뉴">
         <a href="#" class="tab tab-link" data-tab="trading">트레이딩</a>
         <a href="#" class="tab tab-link" data-tab="board">대시보드</a>
-        <a href="#" class="tab tab-link" data-tab="trades">거래내역</a>
         <a href="/analysis" class="tab-link">분석 ↗</a>
-        <a href="/theme-map" class="tab-link">테마맵 ↗</a>
-        <a href="/indicators" class="tab-link">지표 ↗</a>
-        <a href="/verify" class="tab-link">검증 ↗</a>
-        <a href="/api-explorer" class="tab-link">API ↗</a>
-        <a href="/static/glossary.html" class="tab-link">용어정리 ↗</a>
         <a href="#" class="tab tab-link" data-tab="settings">설정</a>
-        <a href="#" class="tab tab-link" data-tab="alert">알림</a>
       </nav>
       <div class="topbar-actions">
         <span id="connBadge" class="conn-badge warn"><span class="dot"></span><span id="connText">확인 중</span></span>
@@ -46,8 +39,10 @@
         <label class="updated topbar-auto-refresh">
           <input type="checkbox" id="autoRefresh" checked> 자동(30s)
         </label>
-        <a class="btn sm topbar-site-switch" id="btnSiteSwitch" href="#">모의로</a>
-        <button class="btn primary sm" id="refreshAll">새로고침</button>
+        <button type="button" class="btn sm icon-btn topbar-refresh" id="refreshAll" title="새로고침" aria-label="새로고침">⟳</button>
+        <a class="btn sm topbar-site-switch" id="btnSiteSwitch" href="#">🧪 모의</a>
+        <a class="btn sm topbar-glossary" href="/static/glossary.html" title="용어정리" aria-label="용어정리">📖</a>
+        <a class="btn sm topbar-api" href="/api-explorer" title="API 탐색">API</a>
         <a class="btn sm topbar-logout" href="/auth/logout" title="로그아웃">로그아웃</a>
       </div>
     </div>
@@ -135,6 +130,7 @@
         <nav class="auto-subtabs" aria-label="트레이딩 하위 메뉴">
           <button type="button" class="auto-subtab trading-subtab active" data-trading-sub="ladder">분할매매</button>
           <button type="button" class="auto-subtab trading-subtab" data-trading-sub="candidates">자동매매</button>
+          <button type="button" class="auto-subtab trading-subtab" data-trading-sub="verify">전략검증</button>
           <button type="button" class="auto-subtab trading-subtab" data-trading-sub="settings">설정</button>
         </nav>
       </div>
@@ -144,6 +140,14 @@
           class="trading-ladder-frame"
           title="분할매수 감시"
           data-src="/static/ladder.html?embed=1"
+        ></iframe>
+      </div>
+      <div class="trading-subpane" id="trading-sub-verify">
+        <iframe
+          id="tradingVerifyFrame"
+          class="trading-ladder-frame"
+          title="전략검증"
+          data-src="/static/verify.html?embed=1"
         ></iframe>
       </div>
       <div class="trading-subpane" id="trading-sub-candidates">
@@ -271,6 +275,15 @@
 
     <!-- ============ 대시보드 탭 ============ -->
     <section class="pane" id="pane-board">
+      <div class="auto-subtabs-bar history-subtabs-bar">
+        <nav class="auto-subtabs" aria-label="대시보드 하위 메뉴">
+          <button type="button" class="auto-subtab history-subtab active" data-history-sub="summary">요약</button>
+          <button type="button" class="auto-subtab history-subtab" data-history-sub="fills">거래내역</button>
+          <button type="button" class="auto-subtab history-subtab" data-history-sub="orders">주문</button>
+        </nav>
+      </div>
+
+      <div class="history-subpane active" id="history-sub-summary">
       <div class="board-layout">
 
       <div class="board-block">
@@ -320,18 +333,9 @@
       </div>
 
       </div><!-- /.board-layout -->
-    </section>
-
-    <!-- ============ 거래내역 탭 (거래내역 / 주문) ============ -->
-    <section class="pane" id="pane-trades">
-      <div class="auto-subtabs-bar history-subtabs-bar">
-        <nav class="auto-subtabs" aria-label="거래내역 하위 메뉴">
-          <button type="button" class="auto-subtab history-subtab active" data-history-sub="fills">거래내역</button>
-          <button type="button" class="auto-subtab history-subtab" data-history-sub="orders">주문</button>
-        </nav>
       </div>
 
-      <div class="history-subpane active" id="history-sub-fills">
+      <div class="history-subpane" id="history-sub-fills">
         <div class="history-layout">
           <div class="card compact-card history-card">
             <div class="card-head">
@@ -364,6 +368,13 @@
 
     <!-- ============ 설정 탭 ============ -->
     <section class="pane" id="pane-settings">
+      <div class="auto-subtabs-bar settings-subtabs-bar">
+        <nav class="auto-subtabs" aria-label="설정 하위 메뉴">
+          <button type="button" class="auto-subtab settings-subtab active" data-settings-sub="status">가동·배치</button>
+          <button type="button" class="auto-subtab settings-subtab" data-settings-sub="alert">알림</button>
+        </nav>
+      </div>
+      <div class="settings-subpane active" id="settings-sub-status">
       <div class="board-layout">
         <div class="board-block">
           <div class="section-title">가동 상태</div>
@@ -382,11 +393,9 @@
           </div>
         </div>
       </div>
-    </section>
+      </div>
 
-    <!-- ============ 알림 탭 ============ -->
-    <section class="pane" id="pane-alert">
-      <div class="section-title">알림</div>
+      <div class="settings-subpane" id="pane-alert">
       <div class="grid cols-2">
         <div class="card"><div class="card-head"><h3>텔레그램 연결</h3><span class="hint">발송 설정</span></div>
           <div class="card-body" id="telegramBody"><div class="skeleton">불러오는 중...</div></div></div>
@@ -395,12 +404,13 @@
         <div class="card notification-history-card"><div class="card-head"><h3>최근 알림 전송</h3><span class="hint" id="notificationHistoryCategory">조건식 알림</span></div>
           <div class="card-body" id="notificationHistoryBody"><div class="skeleton">불러오는 중...</div></div></div>
       </div>
+      </div>
     </section>
 
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/static/dashboard.js?v=195"></script>
+  <script src="/static/dashboard.js?v=198"></script>
   <script src="/static/telegram-price-alert.js?v=3"></script>
 </body>
 </html>

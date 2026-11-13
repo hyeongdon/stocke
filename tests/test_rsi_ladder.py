@@ -7,6 +7,7 @@ from utils.rsi_ladder import (
     evaluate_add_buy,
     evaluate_entry,
     evaluate_exit,
+    evaluate_price_entry,
     execution_avg_price,
     gc_state,
     judge_plan,
@@ -207,6 +208,42 @@ def test_intraday_add_buy_uses_price_only():
     assert evaluate_add_buy(p, price=60_000, today=today)["buy"] is None
     assert evaluate_add_buy(_plan(fills=p["fills"], pending_sell={"status": "QUEUED"}),
                             price=60_000, today=today)["buy"] is None
+
+
+def _price_plan(target, **kw):
+    kw.setdefault("status", "RSI_WAIT")
+    return _plan(profile=merge_profile({"entry_mode": "price", "entry_price": target}), **kw)
+
+
+def test_price_entry_buys_when_price_reaches_target():
+    p = _price_plan(50_000)
+    assert evaluate_price_entry(p, price=50_100)["buy"] is None
+    r = evaluate_price_entry(p, price=49_900)
+    assert r["target"] == 50_000
+    assert r["buy"]["step"] == 1 and r["buy"]["qty"] == 1_000_000 // 49_900
+
+
+def test_price_entry_skips_pending_and_other_modes():
+    assert evaluate_price_entry(_price_plan(50_000, pending_buy={"step": 1}), price=40_000)["buy"] is None
+    assert evaluate_price_entry(_plan(status="RSI_WAIT"), price=1)["buy"] is None
+    assert evaluate_price_entry(_price_plan(50_000, status="ACTIVE"), price=40_000)["buy"] is None
+    assert evaluate_price_entry(_price_plan(0), price=40_000)["buy"] is None
+
+
+def test_judge_plan_uses_price_entry_in_price_mode():
+    p = _price_plan(50_000)
+    r = judge_plan(p, price=49_000, bars=_flat_bars(49_000), weekly_bars=None, hold=0, avg=0,
+                   today=date(2025, 6, 2))
+    assert r["buy"]["step"] == 1
+    r = judge_plan(p, price=51_000, bars=_flat_bars(51_000), weekly_bars=None, hold=0, avg=0,
+                   today=date(2025, 6, 2))
+    assert r["buy"] is None
+
+
+def test_merge_profile_keeps_price_mode():
+    p = merge_profile({"entry_mode": "price", "entry_price": "52000"})
+    assert p["entry_mode"] == "price" and p["entry_price"] == 52_000
+    assert merge_profile({"entry_mode": "bogus"})["entry_mode"] == "auto"
 
 
 def test_full_plan_does_not_buy():

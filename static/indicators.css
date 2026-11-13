@@ -14,9 +14,9 @@ body.mode-real {
   --ind-uncollected: #b45309;
   --ind-forced: #dc2626;
   --ind-forced-fill: rgba(220, 38, 38, .36);
-  --ind-chart-label: #64748b;
-  --ind-chart-grid: rgba(100, 116, 139, .2);
-  --ind-tooltip-bg: #ffffff;
+  --ind-chart-label: #535d6b;
+  --ind-chart-grid: rgba(83, 93, 107, .22);
+  --ind-tooltip-bg: #dadde1;
 }
 
 .ind-layout {

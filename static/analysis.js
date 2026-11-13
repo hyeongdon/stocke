@@ -895,6 +895,89 @@ function toggleMaVisible(n) {
   CHART_ORDER.forEach((k) => { if (chartPayloads[k]) renderChart(k); });
 }
 
+const VP_VISIBLE_KEY = 'analysis.vpVisible';
+const VP_BINS = 24;
+const VP_MAX_WIDTH_RATIO = 0.28;
+let vpVisible = (() => {
+  try { return localStorage.getItem(VP_VISIBLE_KEY) !== '0'; } catch (e) { return true; }
+})();
+
+function toggleVolumeProfile() {
+  vpVisible = !vpVisible;
+  try { localStorage.setItem(VP_VISIBLE_KEY, vpVisible ? '1' : '0'); } catch (e) { /* ignore */ }
+  CHART_ORDER.forEach((k) => { if (chartPayloads[k]) renderChart(k); });
+}
+
+/** 매물대: 각 봉의 거래량을 고가~저가 구간에 겹친 비율만큼 가격 구간(bin)에 나눠 담는다. */
+function volumeProfile(payload) {
+  if (payload._vp) return payload._vp;
+  const bars = payload.bars || [];
+  let lo = Infinity;
+  let hi = -Infinity;
+  bars.forEach((b) => {
+    if (!(b.volume > 0)) return;
+    lo = Math.min(lo, b.low);
+    hi = Math.max(hi, b.high);
+  });
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return (payload._vp = null);
+  if (hi === lo) hi = lo + 1;
+  const step = (hi - lo) / VP_BINS;
+  const bins = new Array(VP_BINS).fill(0);
+  bars.forEach((b) => {
+    const vol = Number(b.volume) || 0;
+    if (vol <= 0) return;
+    const bLo = Math.min(b.low, b.high);
+    const bHi = Math.max(b.low, b.high);
+    if (bHi - bLo <= 0) {
+      bins[Math.min(VP_BINS - 1, Math.floor((bLo - lo) / step))] += vol;
+      return;
+    }
+    const first = Math.max(0, Math.floor((bLo - lo) / step));
+    const last = Math.min(VP_BINS - 1, Math.floor((bHi - lo) / step));
+    for (let k = first; k <= last; k++) {
+      const overlap = Math.min(bHi, lo + (k + 1) * step) - Math.max(bLo, lo + k * step);
+      if (overlap > 0) bins[k] += vol * (overlap / (bHi - bLo));
+    }
+  });
+  const max = Math.max(...bins);
+  const poc = bins.indexOf(max);
+  const lastClose = bars.length ? bars[bars.length - 1].close : null;
+  const cur = lastClose == null ? -1 : Math.max(0, Math.min(VP_BINS - 1, Math.floor((lastClose - lo) / step)));
+  return (payload._vp = {
+    lo, step, bins, max, poc, cur,
+    pocPrice: lo + (poc + 0.5) * step,
+  });
+}
+
+function drawVolumeProfile(ctx, geo, payload, yOf, theme) {
+  const vp = volumeProfile(payload);
+  if (!vp || !(vp.max > 0)) return;
+  const right = geo.W - geo.padR;
+  const maxW = geo.plotW * VP_MAX_WIDTH_RATIO;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(geo.padL, geo.price.top, geo.plotW, geo.price.candleH);
+  ctx.clip();
+  vp.bins.forEach((v, k) => {
+    if (v <= 0) return;
+    const yTop = yOf(vp.lo + (k + 1) * vp.step);
+    const yBot = yOf(vp.lo + k * vp.step);
+    const h = Math.max(1, yBot - yTop - 1);
+    const w = (v / vp.max) * maxW;
+    ctx.fillStyle = k === vp.poc ? theme.vpPoc : theme.vp;
+    ctx.globalAlpha = k === vp.poc ? 0.45 : k === vp.cur ? 0.38 : 0.22;
+    ctx.fillRect(right - w, yTop + 0.5, w, h);
+  });
+  ctx.globalAlpha = 1;
+  const label = `매물대 최대 ${Math.round(vp.pocPrice).toLocaleString('ko-KR')}`;
+  const y = Math.round(yOf(vp.pocPrice));
+  ctx.font = '9px system-ui, sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillStyle = theme.vpPoc;
+  ctx.fillText(label, right - 4, Math.max(geo.price.top + 24, y - 4));
+  ctx.restore();
+}
+
 const CHART_ORDER = ['1D', '1W', '1MO'];
 const CHART_SPECS = {
   '1MO': { title: '월봉 차트', hint: '최근 2년(24개월) · MA5/10/20개월', bars: 24, unit: '월' },
@@ -1110,6 +1193,8 @@ function chartTheme() {
     priceLine: v('--price-line', '#fbbf24'),
     trendLine: v('--trend-line', '#22d3ee'),
     sig: { rsi: v('--sig-rsi', '#ef4444'), wr: v('--sig-wr', '#ffffff') },
+    vp: v('--vp-bar', '#94a3b8'),
+    vpPoc: v('--vp-poc', '#f59e0b'),
   };
 }
 
@@ -1254,6 +1339,8 @@ function drawPricePane(ctx, geo, payload, theme) {
     ctx.fillText(Math.round(hi - ((hi - lo) * i) / 3).toLocaleString('ko-KR'), geo.padL - 4, y + 3);
   }
 
+  if (vpVisible) drawVolumeProfile(ctx, geo, payload, yOf, theme);
+
   const bodyW = geo.slotW >= 4 ? geo.slotW * 0.55 : Math.max(1, geo.slotW - 1);
   bars.forEach((b, i) => {
     const x = geo.xOf(i);
@@ -1275,9 +1362,12 @@ function drawPricePane(ctx, geo, payload, theme) {
     if (!maVisible.has(n)) return;
     drawMaLine(ctx, bars, `ma${n}`, MA_COLORS[n], MA_WIDTHS[n], geo, yOf);
   });
-  geo.legendHits = drawChartLegend(ctx, maPeriods.map((n) => ({
-    id: n, label: `MA${n}`, color: MA_COLORS[n], width: MA_WIDTHS[n], off: !maVisible.has(n),
-  })), geo.W, pane.top);
+  geo.legendHits = drawChartLegend(ctx, [
+    ...maPeriods.map((n) => ({
+      id: n, label: `MA${n}`, color: MA_COLORS[n], width: MA_WIDTHS[n], off: !maVisible.has(n),
+    })),
+    { id: 'vp', label: '매물대', color: theme.vpPoc, width: 6, off: !vpVisible },
+  ], geo.W, pane.top);
 }
 
 function oscSpecs(payload, theme) {
@@ -1691,7 +1781,8 @@ function bindChartTooltip(key) {
     const { mx, my } = localPoint(e);
     const hit = legendHitAt(geo, mx, my);
     if (hit) {
-      toggleMaVisible(hit.id);
+      if (hit.id === 'vp') toggleVolumeProfile();
+      else toggleMaVisible(hit.id);
       return;
     }
     if (coarsePointer()) {
@@ -1743,6 +1834,8 @@ function renderChartSummary(key, payload) {
   parts.push(sigParts.length ? `최근 신호: ${sigParts.join(' · ')}` : '최근 신호 없음');
   const il = payload.indicator_latest || {};
   parts.push(`RSI ${fmtInd(il.rsi)} · %R ${fmtInd(il.wr)}`);
+  const vp = volumeProfile(payload);
+  if (vp) parts.push(`매물대 최대 ${Math.round(vp.pocPrice).toLocaleString('ko-KR')}원 부근`);
   if (payload.warning) parts.push(`<span class="warn">${esc(payload.warning)}</span>`);
   el.innerHTML = parts.join(' · ');
   el.style.display = 'block';

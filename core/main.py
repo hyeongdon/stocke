@@ -532,13 +532,17 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
         if not Config.AUTH_ENABLED:
             return await call_next(request)
         path = request.url.path
-        if session_username(request.session):
-            return await call_next(request)
-        trusted_username = trusted_device_username(
-            request.cookies.get(TRUSTED_DEVICE_COOKIE)
-        )
-        if trusted_username:
-            mark_session_login(request.session, trusted_username)
+        authenticated = bool(session_username(request.session))
+        if not authenticated:
+            trusted_username = trusted_device_username(
+                request.cookies.get(TRUSTED_DEVICE_COOKIE)
+            )
+            if trusted_username:
+                mark_session_login(request.session, trusted_username)
+                authenticated = True
+        if authenticated:
+            if request.method in ("GET", "HEAD") and path in {"/login", "/static/login.html"}:
+                return RedirectResponse(url="/", status_code=302)
             return await call_next(request)
         if is_public_path(path):
             return await call_next(request)
@@ -1206,9 +1210,9 @@ class LoginRequest(BaseModel):
 
 @app.get("/login")
 async def login_page(request: Request):
-    """로그인 화면. 이미 세션이 있으면 대시보드로."""
+    """로그인 화면. 이미 세션이 있거나 등록된 기기면 메인으로."""
     if not Config.AUTH_ENABLED or session_username(request.session):
-        return RedirectResponse(url="/dashboard")
+        return RedirectResponse(url="/")
     return FileResponse(os.path.join(static_dir, "login.html"))
 
 
@@ -1297,13 +1301,13 @@ async def analysis_page(request: Request):
 
 @app.get("/theme-map")
 async def theme_map_page():
-    """테마/키워드 ↔ 종목 매핑 스파이크 페이지."""
-    return RedirectResponse(url="/static/theme_map.html")
+    """분석 페이지의 테마 탭."""
+    return RedirectResponse(url="/static/analysis.html?view=theme")
 
 @app.get("/indicators")
 async def indicators_page():
-    """지표(수출입 등) 페이지."""
-    return RedirectResponse(url="/static/indicators.html")
+    """분석 페이지의 지표 탭."""
+    return RedirectResponse(url="/static/analysis.html?view=indicators")
 
 @app.get("/verify")
 async def verify_page(request: Request):

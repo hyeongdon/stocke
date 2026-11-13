@@ -32,6 +32,7 @@ from utils.rsi_ladder import (
     evaluate_add_buy,
     evaluate_entry,
     evaluate_exit,
+    evaluate_price_entry,
     execution_avg_price,
     get_ladder_store,
     judge_plan,
@@ -127,6 +128,12 @@ def _account_mode() -> str:
 
 class LadderError(Exception):
     pass
+
+
+def _require_entry_price(profile: Optional[Dict[str, Any]]) -> None:
+    prof = merge_profile(profile or {})
+    if prof["entry_mode"] == "price" and prof["entry_price"] <= 0:
+        raise LadderError("가격 도달 진입은 매수 목표가를 입력하세요")
 
 
 class RsiLadderScheduler:
@@ -445,18 +452,28 @@ class RsiLadderScheduler:
             return await self._run_judge(trigger, dry_run)
 
     async def run_price_watch(self) -> List[Dict[str, Any]]:
-        """장중 가격 감시 — ACTIVE 계획의 추가 매수 트리거만 현재가로 확인 (일봉·매도 판정 없음)."""
+        """장중 가격 감시 — ACTIVE 추가 매수 트리거와 가격 도달 1차 진입만 현재가로 확인 (일봉·매도 판정 없음)."""
         self._assert_state_consistent()
         async with self._lock:
             today = now_kst().date()
             results: List[Dict[str, Any]] = []
             for plan in self.my_plans(open_only=True):
-                if plan.get("status") != "ACTIVE" or plan.get("pending_buy") or plan.get("pending_sell"):
+                if plan.get("pending_buy") or plan.get("pending_sell"):
+                    continue
+                price_entry = (
+                    plan.get("status") == "RSI_WAIT"
+                    and merge_profile(plan.get("profile"))["entry_mode"] == "price"
+                )
+                if plan.get("status") != "ACTIVE" and not price_entry:
                     continue
                 price = await self._price(plan["code"])
                 if not price:
                     continue
-                add = evaluate_add_buy(plan, price=price, today=today)
+                if price_entry:
+                    pe = evaluate_price_entry(plan, price=price)
+                    add = {"trigger": pe["target"], "buy": pe["buy"]}
+                else:
+                    add = evaluate_add_buy(plan, price=price, today=today)
                 row = {"plan_id": plan["id"], "code": plan["code"], "price": price,
                        "trigger": add["trigger"], "buy": add["buy"]}
                 if add["buy"]:
@@ -1034,6 +1051,7 @@ class RsiLadderScheduler:
             raise LadderError("이미 진행 중인 사다리가 있습니다")
         if int(budget) <= 0:
             raise LadderError("예산을 입력하세요")
+        _require_entry_price(profile)
         _, others = self._holdings()
         if code in others:
             raise LadderError(f"다른 전략({others[code]})이 보유 중인 종목입니다")
@@ -1067,6 +1085,7 @@ class RsiLadderScheduler:
         if profile:
             merged = dict(plan.get("profile") or {})
             merged.update(profile)
+            _require_entry_price(merged)
             plan["profile"] = merge_profile(merged)
         store.add_event(plan_id, "UPDATE", "설정 변경")
         self._snap_cache.pop(plan_id, None)

@@ -1,3 +1,8 @@
+.vf-embedded .topbar nav,
+.vf-embedded .topbar-head { display: none; }
+.vf-embedded .topbar-inner { display: flex; flex-direction: row; align-items: center; }
+.vf-embedded .verify-filters { flex: 1 1 auto; justify-content: flex-end; }
+
 .v-fill-summary {
   font-size: 13px;
   color: var(--accent-bright);
