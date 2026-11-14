@@ -73,6 +73,8 @@ class ConditionCodeSet:
         fetched = _parse_ts(cache.get("fetched_at"))
         if fetched is None or cache.get("condition_name") != self.condition_name:
             return False
+        if "id_source" not in cache:
+            return False
         if is_krx_session(now):
             return (now - fetched).total_seconds() < FRESH_SEC
         if now.time() >= _SESSION_CLOSE:
@@ -85,18 +87,13 @@ class ConditionCodeSet:
         return failed is not None and (now - failed).total_seconds() < RETRY_BACKOFF_SEC
 
     async def _resolve_condition_ids(self, kiwoom_api) -> Dict[str, str]:
-        from utils.screener_targets import _resolve_condition_api_id
+        """키움 조건식 ID는 HTS 목록 순번이라 계좌(실전·모의)·목록 변경마다 달라진다.
 
-        ids: Dict[str, str] = {}
-        for name in self.names:
-            api_id, _ = _resolve_condition_api_id(name)
-            if api_id:
-                ids[name] = api_id
-        if len(ids) < len(self.names):
-            for row in await kiwoom_api.get_condition_list_websocket() or []:
-                name = str(row.get("condition_name", "")).strip()
-                if name in self.names and name not in ids:
-                    ids[name] = str(row.get("condition_id", ""))
+        항상 현재 계좌의 조건식 목록에서 이름으로 찾고, 목록 조회가 실패할 때만 DB 저장값을 쓴다.
+        """
+        from utils.screener_targets import resolve_condition_ids
+
+        ids, self._id_source = await resolve_condition_ids(kiwoom_api, self.names)
         return ids
 
     async def refresh(self, kiwoom_api=None) -> Dict:
@@ -126,6 +123,7 @@ class ConditionCodeSet:
         data = {
             "condition_name": self.condition_name,
             "condition_ids": cond_ids,
+            "id_source": getattr(self, "_id_source", "db"),
             "condition_counts": counts,
             "fetched_at": now_kst().isoformat(timespec="seconds"),
             "count": len(codes),

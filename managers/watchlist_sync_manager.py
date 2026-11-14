@@ -163,30 +163,33 @@ class WatchlistSyncManager:
                             logger.info(f"📋 [WATCHLIST_SYNC] 대상 조건식이 아니므로 스킵: {row.condition_name}")
                             continue
 
-                    api_condition_id = row.api_condition_id
-                    if not api_condition_id:
-                        logger.warning(
-                            f"📋 [WATCHLIST_SYNC] API ID 없음 — 스킵: {row.condition_name} "
-                            "(조건식 목록을 수동으로 한 번 불러와 주세요)"
-                        )
-                        continue
-
-                    try:
-                        condition_id = int(api_condition_id)
-                    except (TypeError, ValueError):
-                        condition_id = api_condition_id
-
                     conditions.append({
-                        "condition_id": condition_id,
+                        "condition_id": row.api_condition_id,
                         "condition_name": row.condition_name,
                     })
-                    logger.info(f"📋 [WATCHLIST_SYNC] 활성 조건식: {row.condition_name} (API ID: {api_condition_id})")
                 
                 break
             except Exception as e:
                 logger.error(f"📋 [WATCHLIST_SYNC] 활성 조건식 조회 오류: {e}")
                 continue
         
+        if conditions:
+            from utils.screener_targets import resolve_condition_ids
+
+            live_ids, _ = await resolve_condition_ids(self.kiwoom_api, [c["condition_name"] for c in conditions])
+            resolved = []
+            for cond in conditions:
+                api_id = live_ids.get(cond["condition_name"])
+                if not api_id:
+                    logger.warning(f"📋 [WATCHLIST_SYNC] 현재 계좌에 없는 조건식 — 스킵: {cond['condition_name']}")
+                    continue
+                try:
+                    cond["condition_id"] = int(api_id)
+                except (TypeError, ValueError):
+                    cond["condition_id"] = api_id
+                resolved.append(cond)
+            conditions = resolved
+
         logger.info(f"📋 [WATCHLIST_SYNC] 동기화 대상 조건식: {len(conditions)}개")
         for cond in conditions:
             logger.info(f"📋 [WATCHLIST_SYNC]   - {cond['condition_name']} (API ID: {cond['condition_id']})")

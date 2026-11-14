@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from api.kiwoom_api import KiwoomAPI, _parse_kiwoom_float, _parse_kiwoom_int
@@ -22,8 +23,56 @@ def parse_condition_names(raw: Optional[str]) -> List[str]:
     return names
 
 
+def sync_stored_condition_ids(ids: Dict[str, str]) -> None:
+    """현재 계좌 목록에서 찾은 ID로 DB 저장값을 맞춘다."""
+    try:
+        for db in get_db():
+            changed = False
+            for name, api_id in ids.items():
+                row = db.query(AutoTradeCondition).filter(AutoTradeCondition.condition_name == name).first()
+                if row and row.api_condition_id != api_id:
+                    logger.info(f"조건식 ID 보정: {name} {row.api_condition_id} → {api_id}")
+                    row.api_condition_id = api_id
+                    row.updated_at = datetime.utcnow()
+                    changed = True
+            if changed:
+                db.commit()
+            break
+    except Exception as e:
+        logger.warning(f"조건식 ID DB 보정 실패: {e}")
+
+
+async def resolve_condition_ids(kiwoom_api, names: List[str]) -> Tuple[Dict[str, str], str]:
+    """조건식 이름 → 현재 계좌의 키움 API ID.
+
+    키움 조건식 ID는 HTS 목록 순번이라 계좌(실전·모의)·목록 변경마다 달라진다.
+    항상 현재 목록에서 이름으로 찾고(DB도 보정), 목록 조회가 실패할 때만 DB 저장값을 쓴다.
+    반환: (ids, "live" | "db")
+    """
+    try:
+        rows = await kiwoom_api.get_condition_list_websocket() or []
+    except Exception as e:
+        logger.warning(f"조건식 목록 조회 실패 — DB 저장 ID 사용: {e}")
+        rows = []
+    ids: Dict[str, str] = {}
+    if rows:
+        wanted = set(names)
+        for row in rows:
+            name = str(row.get("condition_name", "")).strip()
+            if name in wanted and name not in ids:
+                ids[name] = str(row.get("condition_id", ""))
+        if ids:
+            sync_stored_condition_ids(ids)
+        return ids, "live"
+    for name in names:
+        api_id, _ = _resolve_condition_api_id(name)
+        if api_id:
+            ids[name] = api_id
+    return ids, "db"
+
+
 def _resolve_condition_api_id(condition_name: str) -> Tuple[Optional[str], str]:
-    """DB에 저장된 api_condition_id 우선, 없으면 None."""
+    """DB에 저장된 api_condition_id (목록 조회 실패 시 대체용)."""
     for db in get_db():
         row = db.query(AutoTradeCondition).filter(
             AutoTradeCondition.condition_name == condition_name
@@ -94,27 +143,14 @@ async def fetch_condition_target_items(
     errors: List[str] = []
     resolved_queries: List[Tuple[str, str, str]] = []
 
+    ids, _ = await resolve_condition_ids(kiwoom_api, condition_names)
     for name in condition_names:
-        api_id, resolved = _resolve_condition_api_id(name)
+        api_id = ids.get(name)
         if not api_id:
-            try:
-                conditions_data = await kiwoom_api.get_condition_list_websocket()
-            except Exception as e:
-                logger.warning(f"조건식 목록 조회 실패 ({name}): {e}")
-                errors.append(name)
-                continue
-            matched = None
-            for row in conditions_data or []:
-                if str(row.get("condition_name", "")).strip() == name:
-                    matched = row
-                    break
-            if not matched:
-                errors.append(name)
-                logger.warning(f"조건식 API ID 없음 — 스킵: {name}")
-                continue
-            api_id = str(matched.get("condition_id", ""))
-            resolved = str(matched.get("condition_name", name))
-        resolved_queries.append((name, api_id, resolved))
+            errors.append(name)
+            logger.warning(f"조건식 API ID 없음 — 스킵: {name}")
+            continue
+        resolved_queries.append((name, api_id, name))
 
     if not resolved_queries:
         return [], errors

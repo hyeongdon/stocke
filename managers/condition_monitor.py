@@ -139,9 +139,12 @@ class ConditionMonitor:
 
         logger.info(f"🔍 [CONDITION_MONITOR] 활성 조건식 {len(enabled_rows)}개 — 순차 검색 시작")
 
+        from utils.screener_targets import resolve_condition_ids
+
+        live_ids, _ = await resolve_condition_ids(self.kiwoom_api, [r.condition_name for r in enabled_rows])
         for row in enabled_rows:
             condition_name = row.condition_name
-            condition_api_id = row.api_condition_id
+            condition_api_id = live_ids.get(condition_name)
             if not condition_api_id:
                 logger.warning(
                     f"🔍 [CONDITION_MONITOR] API ID 없음 — 스킵: {condition_name} "

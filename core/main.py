@@ -3589,15 +3589,10 @@ async def get_condition_stocks(condition_id: int, condition_name: Optional[str] 
         resolved_name = condition_name
 
         if condition_name:
-            for db in get_db():
-                session: Session = db
-                row = session.query(AutoTradeCondition).filter(
-                    AutoTradeCondition.condition_name == condition_name
-                ).first()
-                if row and row.api_condition_id:
-                    condition_api_id = row.api_condition_id
-                    resolved_name = row.condition_name
-                break
+            from utils.screener_targets import resolve_condition_ids
+
+            live_ids, _ = await resolve_condition_ids(kiwoom_api, [condition_name])
+            condition_api_id = live_ids.get(condition_name)
 
         if not condition_api_id:
             conditions_data = await kiwoom_api.get_condition_list_websocket()
