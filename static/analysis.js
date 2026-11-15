@@ -766,18 +766,13 @@ function renderDetail(row) {
     detailField('보통주배당금', fmtWon(row.dividend_per_share)),
     detailField('외국인비율', fmtPct(row.foreign_ratio)),
   ].join('');
-  const finBlock = [
-    detailField('매출액', fmtEok(row.revenue)),
-    detailField('영업이익', fmtEok(row.operating_profit)),
-    detailField('자산총계', fmtEok(row.total_assets)),
-    detailField('부채총계', fmtEok(row.total_debt)),
-    detailField('상장주식수', row.listed_shares != null ? fmtNum(row.listed_shares) + '주' : '-'),
-  ].join('');
   const metaBlock = [
+    detailField('상장주식수', row.listed_shares != null ? fmtNum(row.listed_shares) + '주' : '-'),
     detailField('데이터 출처', esc(row.source || '-')),
     detailField('수집 시각', esc(row.fetched_at || '-')),
   ].join('');
   $('detailBody').innerHTML = `
+    ${financeStripHtml(row)}
     ${chartSectionsHtml()}
     ${stockMemoHtml(row.stock_code)}
     <div class="detail-section">
@@ -786,7 +781,6 @@ function renderDetail(row) {
     </div>
     <div class="detail-grid">${priceBlock}</div>
     <div class="detail-section"><div class="detail-section-title">밸류에이션</div><div class="detail-grid">${valBlock}</div></div>
-    <div class="detail-section"><div class="detail-section-title">재무</div><div class="detail-grid">${finBlock}</div></div>
     <div class="detail-section"><div class="detail-section-title">메타</div><div class="detail-grid">${metaBlock}</div></div>
     ${stockInvestorHistoryHtml(row.stock_code)}`;
   applyChartDrawMode();
@@ -1140,6 +1134,16 @@ function indicatorFieldsHtml() {
     detailField('월봉 RSI', '<span id="detailRsi1MO">-</span>'),
     detailField('월봉 %R', '<span id="detailWr1MO">-</span>'),
   ].join('');
+}
+
+function financeStripHtml(row) {
+  const items = [
+    ['매출액', fmtEok(row.revenue)],
+    ['영업이익', fmtEok(row.operating_profit)],
+    ['자산총계', fmtEok(row.total_assets)],
+    ['부채총계', fmtEok(row.total_debt)],
+  ].map(([k, v]) => `<div class="analysis-fin-item"><span class="k">${k}</span><span class="v">${v}</span></div>`).join('');
+  return `<div class="analysis-fin-strip" aria-label="재무 요약">${items}</div>`;
 }
 
 function chartSectionsHtml() {

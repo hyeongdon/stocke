@@ -1485,6 +1485,12 @@ html.mode-real, body.mode-real { --if-price-line: #000; }
   border: 0;
   background: var(--bg);
 }
+@media (max-width: 768px) {
+  .trading-ladder-frame {
+    height: calc(100dvh - var(--dash-topbar-h) - var(--dash-wrap-pad) - 56px);
+    min-height: 420px;
+  }
+}
 
 .auto-layout {
   display: flex;

@@ -274,7 +274,9 @@
     const toggle = document.getElementById('btnWatchToggle');
     toggle.classList.toggle('is-on', d.enabled);
     toggle.classList.toggle('is-off', !d.enabled);
-    toggle.textContent = d.enabled ? '● 자동감시 ON' : '○ 자동감시 OFF';
+    toggle.innerHTML = d.enabled
+      ? '<span class="ld-btn-label-full">● 자동감시 ON</span><span class="ld-btn-label-short">● ON</span>'
+      : '<span class="ld-btn-label-full">○ 자동감시 OFF</span><span class="ld-btn-label-short">○ OFF</span>';
     const badge = document.getElementById('modeBadge');
     const warn = !d.auto_trade_on ? ' · 자동매매 OFF(주문 안 됨)' : '';
     badge.textContent = (d.account_mode === 'real' ? '실전' : '모의') + ' 계좌' + warn;
@@ -342,41 +344,49 @@
     return '';
   }
 
+  function planNextCells(p) {
+    const e = (p.market || {}).entry;
+    let nextCell = '—', distCell = '—';
+    if (p.status === 'RSI_WAIT') {
+      const mode = prof(p).entry_mode;
+      const target = prof(p).entry_price;
+      if (mode === 'price' && target) {
+        const dist = p.price ? (target / p.price - 1) * 100 : null;
+        nextCell = '목표 ' + fmt(target) + ' <span class="sub">1차</span>';
+        distCell = p.price && p.price <= target
+          ? '<span class="ld-near">도달</span>'
+          : '<span class="' + (dist != null && Math.abs(dist) <= NEAR_PCT ? 'ld-near' : '') + '">' + fmtPct(dist) + '</span>';
+      } else {
+        if (mode === 'manual') nextCell = '수동 대기';
+        else if (e) nextCell = 'RSI ' + (e.r1 || e.r2 ? '✓' : '✗') + ' · GC ' + (e.g ? '✓' : e.gc && e.gc.state === 'near' ? '임박' : '✗');
+        distCell = e && e.ok && mode === 'auto' ? '<span class="ld-near">충족</span>' : '<span class="hint">대기</span>';
+      }
+    } else if (p.status === 'ACTIVE' && p.next_trigger) {
+      const dist = p.price ? (p.next_trigger / p.price - 1) * 100 : null;
+      nextCell = fmt(p.next_trigger) + ' <span class="sub">' + (p.auto_steps + 1) + '차</span>';
+      distCell = '<span class="' + (dist != null && Math.abs(dist) <= NEAR_PCT ? 'ld-near' : '') + '">' + fmtPct(dist) + '</span>';
+    } else if (p.status === 'FULL') {
+      nextCell = '<span class="down">수동 판단</span>';
+    } else if (p.status === 'EXITING') {
+      nextCell = '<span class="hint">매수 중지</span>';
+    } else if (p.status === 'PAUSED') {
+      nextCell = '<span class="hint">정지</span>';
+    }
+    return { nextCell, distCell };
+  }
+
   function renderTable() {
     const rows = plans().filter((p) => state.filter === 'all' ? p.status !== 'DONE' : p.status === state.filter);
     const tbody = document.querySelector('#planTable tbody');
+    const cards = document.getElementById('planCards');
+    const emptyMsg = plans().length ? '해당 상태의 사다리가 없습니다' : '등록된 사다리가 없습니다 — [+ 새 사다리]로 시작하세요';
     if (!rows.length) {
-      tbody.innerHTML = '<tr><td colspan="9" class="hint">' + (plans().length ? '해당 상태의 사다리가 없습니다' : '등록된 사다리가 없습니다 — [+ 새 사다리]로 시작하세요') + '</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9" class="hint">' + emptyMsg + '</td></tr>';
+      if (cards) cards.innerHTML = '<div class="hint" style="padding:12px">' + emptyMsg + '</div>';
       return;
     }
     tbody.innerHTML = rows.map((p) => {
-      const e = (p.market || {}).entry;
-      let nextCell = '—', distCell = '—';
-      if (p.status === 'RSI_WAIT') {
-        const mode = prof(p).entry_mode;
-        const target = prof(p).entry_price;
-        if (mode === 'price' && target) {
-          const dist = p.price ? (target / p.price - 1) * 100 : null;
-          nextCell = '목표 ' + fmt(target) + ' <span class="sub">1차</span>';
-          distCell = p.price && p.price <= target
-            ? '<span class="ld-near">도달</span>'
-            : '<span class="' + (dist != null && Math.abs(dist) <= NEAR_PCT ? 'ld-near' : '') + '">' + fmtPct(dist) + '</span>';
-        } else {
-          if (mode === 'manual') nextCell = '수동 대기';
-          else if (e) nextCell = 'RSI ' + (e.r1 || e.r2 ? '✓' : '✗') + ' · GC ' + (e.g ? '✓' : e.gc && e.gc.state === 'near' ? '임박' : '✗');
-          distCell = e && e.ok && mode === 'auto' ? '<span class="ld-near">충족</span>' : '<span class="hint">대기</span>';
-        }
-      } else if (p.status === 'ACTIVE' && p.next_trigger) {
-        const dist = p.price ? (p.next_trigger / p.price - 1) * 100 : null;
-        nextCell = fmt(p.next_trigger) + ' <span class="sub">' + (p.auto_steps + 1) + '차</span>';
-        distCell = '<span class="' + (dist != null && Math.abs(dist) <= NEAR_PCT ? 'ld-near' : '') + '">' + fmtPct(dist) + '</span>';
-      } else if (p.status === 'FULL') {
-        nextCell = '<span class="down">수동 판단</span>';
-      } else if (p.status === 'EXITING') {
-        nextCell = '<span class="hint">매수 중지</span>';
-      } else if (p.status === 'PAUSED') {
-        nextCell = '<span class="hint">정지</span>';
-      }
+      const { nextCell, distCell } = planNextCells(p);
       const editable = canEdit(p);
       const nameHtml = editable
         ? '<b class="ld-editable" data-edit="1" title="클릭해서 설정 수정">' + esc(p.name) + '</b>'
@@ -394,6 +404,47 @@
         '<td>' + stageChips(p) + '</td>' +
         '</tr>';
     }).join('');
+    if (cards) {
+      cards.innerHTML = rows.map((p) => {
+        const { nextCell, distCell } = planNextCells(p);
+        const editable = canEdit(p);
+        const pnlHtml = p.hold
+          ? '<span class="' + cls(p.pnl_pct) + '">' + fmtPct(p.pnl_pct) + '</span>'
+          : '<span class="hint">—</span>';
+        const nameHtml = editable
+          ? '<b class="ld-editable" data-edit="1" title="클릭해서 설정 수정">' + esc(p.name) + '</b>'
+          : '<b>' + esc(p.name) + '</b>';
+        return '<article class="ld-plan-card' + (p.id === state.selectedId ? ' selected' : '') + '" data-id="' + p.id + '">' +
+          '<div class="ld-plan-card-top">' +
+            '<div class="ld-plan-card-name">' + nameHtml + '<span class="code">' + p.code + '</span></div>' +
+            '<div class="ld-plan-card-right">' +
+              '<span class="ld-badge ' + p.status + '">' + STATUS_LABEL[p.status] + '</span>' + pendingTag(p) +
+              '<div class="ld-plan-card-pnl">' + pnlHtml + '</div>' +
+            '</div>' +
+          '</div>' +
+          '<div class="ld-plan-card-meta">' +
+            '<div><div class="k">현재가 · 평단</div><div class="v">' + fmt(p.price) + (p.avg ? ' · ' + fmt(p.avg) : '') + '</div></div>' +
+            '<div><div class="k">다음 매수 · 거리</div><div class="v">' + nextCell + ' · ' + distCell + '</div></div>' +
+          '</div>' +
+          '<div class="ld-plan-card-foot">' +
+            '<div>' + dotsHtml(p) + '</div>' +
+            '<div>' + stageChips(p) +
+              (editable ? ' <button type="button" class="btn sm" data-edit="1">수정</button>' : '') +
+            '</div>' +
+          '</div>' +
+        '</article>';
+      }).join('');
+    }
+  }
+
+  function selectPlan(id, opts) {
+    state.selectedId = id;
+    renderTable();
+    renderDetail();
+    if (opts && opts.scrollDetail && window.innerWidth <= 768) {
+      const card = document.getElementById('detailCard');
+      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   }
 
   function entryPanel(p) {
@@ -545,7 +596,7 @@
     const actions = document.getElementById('detailActions');
     if (!p) {
       title.textContent = '종목을 선택하세요';
-      body.innerHTML = '<div class="hint">왼쪽 목록에서 종목을 클릭하면 상세가 표시됩니다.</div>';
+      body.innerHTML = '<div class="hint">목록에서 종목을 선택하면 상세가 표시됩니다.</div>';
       actions.innerHTML = '';
       renderAnalysisMemoFloat(null);
       return;
@@ -597,7 +648,7 @@
         '<span style="color:var(--cyan)">평단</span><span style="color:var(--amber)">다음 매수가</span> ▲매수 ▼매도 · 최근 ' + CHART_LEN + '거래일</div>';
     }
 
-    html += '<table class="ld-table ld-steps"><thead><tr><th>차수</th><th>상태</th><th class="r">매수가</th><th class="r">1차 대비</th><th class="r">수량</th><th class="r">금액</th><th class="r">누적 금액</th><th class="r">누적 평단</th><th class="r">평단 대비</th><th>체결일</th></tr></thead><tbody>';
+    html += '<div class="ld-table-scroll"><table class="ld-table ld-steps"><thead><tr><th>차수</th><th>상태</th><th class="r">매수가</th><th class="r">1차 대비</th><th class="r">수량</th><th class="r">금액</th><th class="r">누적 금액</th><th class="r">누적 평단</th><th class="r">평단 대비</th><th>체결일</th></tr></thead><tbody>';
     html += ladder.map((r) => {
       let label;
       if (r.state === 'filled') label = '체결';
@@ -615,15 +666,15 @@
         '<td class="r ' + cls(r.fromAvg) + '">' + (r.step === 1 ? '—' : fmtPct(r.fromAvg)) + '</td>' +
         '<td>' + r.date + '</td></tr>';
     }).join('');
-    html += '</tbody></table>';
+    html += '</tbody></table></div>';
     html += '<div class="hint">누적 금액은 그 차수까지 투입한 합계입니다. ' +
       (autoFills(p).length ? '체결 전 차수는 예상 금액입니다.' : '1차 가격은 현재가 기준 예상치이고, 실제 체결가로 이후 차수가 다시 계산됩니다.') +
       '</div>';
 
     if ((p.sells || []).length) {
-      html += '<div class="ld-sub-title">매도 내역</div><table class="ld-table ld-steps"><thead><tr><th>규칙</th><th class="r">가격</th><th class="r">수량</th><th class="r">실현손익</th><th>일시</th></tr></thead><tbody>';
+      html += '<div class="ld-sub-title">매도 내역</div><div class="ld-table-scroll"><table class="ld-table ld-steps"><thead><tr><th>규칙</th><th class="r">가격</th><th class="r">수량</th><th class="r">실현손익</th><th>일시</th></tr></thead><tbody>';
       html += p.sells.map((s) => '<tr class="sell"><td>' + esc((s.rules || []).map((r) => RULE_LABEL[r] || r).join(' + ')) + '</td><td class="r">' + fmt(s.price) + '</td><td class="r">' + fmt(s.qty) + '</td><td class="r ' + cls(s.pnl) + '">' + (s.pnl != null ? fmt(s.pnl) : '—') + '</td><td>' + hm(s.at) + '</td></tr>').join('');
-      html += '</tbody></table>';
+      html += '</tbody></table></div>';
     }
     if (p.memo) html += '<div class="hint">메모: ' + esc(p.memo) + '</div>';
     html += '<section class="if-stock-lookup ld-investor-lookup" data-stock-code="' + esc(p.code) + '" aria-label="종목별 외국인·기관 순매수">' +
@@ -1283,18 +1334,19 @@
       state.analysisMemoCollapsed = isMobile;
       renderAnalysisMemoFloat(plans().find((p) => p.id === state.selectedId));
     });
-    document.querySelector('#planTable tbody').addEventListener('click', (e) => {
+    function onPlanPick(e) {
       const editBtn = e.target.closest('[data-edit]');
-      const tr = e.target.closest('tr[data-id]');
-      if (!tr) return;
-      state.selectedId = tr.dataset.id;
-      renderTable();
-      renderDetail();
+      const row = e.target.closest('[data-id]');
+      if (!row) return;
+      selectPlan(row.dataset.id, { scrollDetail: !editBtn && !!e.target.closest('.ld-plan-card') });
       if (editBtn) {
         const p = plans().find((x) => x.id === state.selectedId);
         if (p) openEdit(p);
       }
-    });
+    }
+    document.querySelector('#planTable tbody').addEventListener('click', onPlanPick);
+    const planCards = document.getElementById('planCards');
+    if (planCards) planCards.addEventListener('click', onPlanPick);
     document.getElementById('statusFilter').addEventListener('click', (e) => {
       const b = e.target.closest('button[data-f]');
       if (!b) return;
