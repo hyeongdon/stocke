@@ -226,54 +226,92 @@ body.mode-real .select-dark:focus {
   box-shadow: 0 0 0 2px rgba(154, 52, 18, 0.2);
 }
 
-/* 실전: 밝은 배경에서 파스텔/노란 칩이 흐려지지 않도록 고대비 오버라이드 */
+/* 실전: 시장지수·칩이 밝은 바탕에서도 또렷하게 보이도록 */
+html.mode-real .mi-group,
 body.mode-real .mi-group {
-  background: rgba(255, 255, 255, 0.45);
-  border-color: #9aa3af;
+  background: #f8fafc;
+  border-width: 2px;
+  border-color: #64748b;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
 }
-body.mode-real .mi-group-kr { border-color: #2563eb; }
-body.mode-real .mi-group-kr .mi-group-label {
-  color: #fff;
-  background: #1d4ed8;
+html.mode-real .mi-group-label,
+body.mode-real .mi-group-label {
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0;
+  padding: 4px 8px;
+  color: #fff !important;
 }
-body.mode-real .mi-group-us { border-color: #7c3aed; }
-body.mode-real .mi-group-us .mi-group-label {
-  color: #fff;
-  background: #6d28d9;
+html.mode-real .mi-group-kr,
+body.mode-real .mi-group-kr { border-color: #1e40af; }
+html.mode-real .mi-group-kr .mi-group-label,
+body.mode-real .mi-group-kr .mi-group-label { background: #1e3a8a !important; }
+html.mode-real .mi-group-us,
+body.mode-real .mi-group-us { border-color: #5b21b6; }
+html.mode-real .mi-group-us .mi-group-label,
+body.mode-real .mi-group-us .mi-group-label { background: #5b21b6 !important; }
+html.mode-real .mi-group-fear,
+body.mode-real .mi-group-fear { border-color: #991b1b; }
+html.mode-real .mi-group-fear .mi-group-label,
+body.mode-real .mi-group-fear .mi-group-label { background: #991b1b !important; }
+html.mode-real .mi-group-vol,
+body.mode-real .mi-group-vol { border-color: #0f172a; }
+html.mode-real .mi-group-vol .mi-group-label,
+body.mode-real .mi-group-vol .mi-group-label { background: #0f172a !important; }
+
+html.mode-real .market-index-item,
+body.mode-real .market-index-item {
+  font-size: 11px;
 }
-body.mode-real .mi-group-fear { border-color: #dc2626; }
-body.mode-real .mi-group-fear .mi-group-label {
-  color: #fff;
-  background: #b91c1c;
-}
-body.mode-real .mi-group-vol { border-color: #475569; }
-body.mode-real .mi-group-vol .mi-group-label {
-  color: #fff;
-  background: #334155;
-}
-body.mode-real .market-index-item .mi-label {
-  color: #1f2937;
-  font-weight: 700;
-}
-body.mode-real .market-index-item .mi-value {
-  color: #111827;
+html.mode-real .market-index-item .mi-label,
+body.mode-real .market-index-item .mi-label,
+html.mode-real .market-index-item.up .mi-label,
+body.mode-real .market-index-item.up .mi-label,
+html.mode-real .market-index-item.down .mi-label,
+body.mode-real .market-index-item.down .mi-label,
+html.mode-real .market-index-item.flat .mi-label,
+body.mode-real .market-index-item.flat .mi-label {
+  color: #0f172a !important;
   font-weight: 800;
 }
-body.mode-real .market-index-item.up .mi-label,
+html.mode-real .market-index-item .mi-value,
+body.mode-real .market-index-item .mi-value {
+  color: #0f172a !important;
+  font-weight: 900;
+}
+html.mode-real .market-index-item.up .mi-value,
 body.mode-real .market-index-item.up .mi-value,
-body.mode-real .market-index-item.up .mi-delta { color: #b91c1c; }
-body.mode-real .market-index-item.down .mi-label,
+html.mode-real .market-index-item.up .mi-delta,
+body.mode-real .market-index-item.up .mi-delta {
+  color: #991b1b !important;
+  font-weight: 900;
+}
+html.mode-real .market-index-item.down .mi-value,
 body.mode-real .market-index-item.down .mi-value,
-body.mode-real .market-index-item.down .mi-delta { color: #1d4ed8; }
-body.mode-real .market-index-item.flat .mi-label,
+html.mode-real .market-index-item.down .mi-delta,
+body.mode-real .market-index-item.down .mi-delta {
+  color: #1e3a8a !important;
+  font-weight: 900;
+}
+html.mode-real .market-index-item.flat .mi-value,
 body.mode-real .market-index-item.flat .mi-value,
-body.mode-real .market-index-item.flat .mi-delta { color: #374151; }
-body.mode-real .market-index-item .mi-mini-chart.up polyline { stroke: #b91c1c; }
-body.mode-real .market-index-item .mi-mini-chart.up polygon { fill: rgba(185, 28, 28, 0.2); }
-body.mode-real .market-index-item .mi-mini-chart.up circle { fill: #b91c1c; }
-body.mode-real .market-index-item .mi-mini-chart.down polyline { stroke: #1d4ed8; }
-body.mode-real .market-index-item .mi-mini-chart.down polygon { fill: rgba(29, 78, 216, 0.18); }
-body.mode-real .market-index-item .mi-mini-chart.down circle { fill: #1d4ed8; }
+html.mode-real .market-index-item.flat .mi-delta,
+body.mode-real .market-index-item.flat .mi-delta {
+  color: #334155 !important;
+  font-weight: 800;
+}
+html.mode-real .market-index-item .mi-mini-chart.up polyline,
+body.mode-real .market-index-item .mi-mini-chart.up polyline { stroke: #991b1b; stroke-width: 2; }
+html.mode-real .market-index-item .mi-mini-chart.up polygon,
+body.mode-real .market-index-item .mi-mini-chart.up polygon { fill: rgba(153, 27, 27, 0.22); }
+html.mode-real .market-index-item .mi-mini-chart.up circle,
+body.mode-real .market-index-item .mi-mini-chart.up circle { fill: #991b1b; }
+html.mode-real .market-index-item .mi-mini-chart.down polyline,
+body.mode-real .market-index-item .mi-mini-chart.down polyline { stroke: #1e3a8a; stroke-width: 2; }
+html.mode-real .market-index-item .mi-mini-chart.down polygon,
+body.mode-real .market-index-item .mi-mini-chart.down polygon { fill: rgba(30, 58, 138, 0.2); }
+html.mode-real .market-index-item .mi-mini-chart.down circle,
+body.mode-real .market-index-item .mi-mini-chart.down circle { fill: #1e3a8a; }
 body.mode-real .market-index-item .mi-mood-calm {
   color: #14532d; background: #bbf7d0; border-color: #16a34a;
 }
