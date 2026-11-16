@@ -107,23 +107,23 @@ body.mode-real {
   --card-hover: #d1d5da;
   --border: #b3b9c1;
   --border-light: #a3aab4;
-  --text: #1a202b;
-  --text-secondary: #2d3644;
-  --muted: #535d6b;
-  --accent: #c2410c;
-  --accent-bright: #ea580c;
-  --accent-soft: rgba(234, 88, 12, 0.1);
-  --cyan: #0369a1;
-  --up: #15803d;
-  --up-soft: rgba(21, 128, 61, 0.1);
-  --down: #b91c1c;
-  --down-soft: rgba(185, 28, 28, 0.1);
-  --amber: #a16207;
-  --amber-soft: rgba(161, 98, 7, 0.11);
-  --green: #15803d;
-  --green-soft: rgba(21, 128, 61, 0.09);
+  --text: #111827;
+  --text-secondary: #1f2937;
+  --muted: #374151;
+  --accent: #9a3412;
+  --accent-bright: #9a3412;
+  --accent-soft: rgba(154, 52, 18, 0.14);
+  --cyan: #075985;
+  --up: #166534;
+  --up-soft: rgba(22, 101, 52, 0.12);
+  --down: #991b1b;
+  --down-soft: rgba(153, 27, 27, 0.12);
+  --amber: #92400e;
+  --amber-soft: rgba(146, 64, 14, 0.14);
+  --green: #166534;
+  --green-soft: rgba(22, 101, 52, 0.1);
   --shadow: 0 3px 14px rgba(15, 23, 42, 0.07);
-  --glow: 0 0 0 1px rgba(194, 65, 12, 0.04);
+  --glow: 0 0 0 1px rgba(154, 52, 18, 0.06);
 }
 
 body.mode-real {
@@ -141,7 +141,7 @@ body.mode-real .topbar {
 }
 
 body.mode-real .brand h1 {
-  background: linear-gradient(135deg, #9a3412 0%, #f97316 100%);
+  background: linear-gradient(135deg, #7c2d12 0%, #9a3412 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -151,9 +151,9 @@ body.mode-real .brand::after {
   content: 'REAL MONEY · 실전투자';
   font-size: 9px;
   font-weight: 900;
-  color: #9a3412;
-  background: #e6d8cb;
-  border: 1px solid #d49a68;
+  color: #fff;
+  background: #9a3412;
+  border: 1px solid #7c2d12;
   padding: 2px 7px;
   border-radius: 3px;
   letter-spacing: 0.45px;
@@ -163,25 +163,25 @@ body.mode-real .brand::after {
 }
 
 .conn-badge.mode-real-badge {
-  background: #e6d8cb !important;
-  color: #9a3412 !important;
-  border: 1px solid #d49a68 !important;
+  background: #9a3412 !important;
+  color: #fff !important;
+  border: 1px solid #7c2d12 !important;
   font-weight: 800;
 }
 .conn-badge.mode-real-badge .dot {
-  background: #ea580c !important;
-  box-shadow: 0 0 5px rgba(234, 88, 12, 0.45) !important;
+  background: #fdba74 !important;
+  box-shadow: 0 0 5px rgba(253, 186, 116, 0.55) !important;
 }
 
 body.mode-real .topbar .tab.active {
-  background: #c2410c;
-  box-shadow: 0 1px 6px rgba(194, 65, 12, 0.2);
+  background: #9a3412;
+  box-shadow: 0 1px 6px rgba(154, 52, 18, 0.25);
 }
 
 body.mode-real .topbar-site-switch {
-  border: 1px solid #d49a68;
-  color: #9a3412;
-  background: #e6d8cb;
+  border: 1px solid #7c2d12;
+  color: #fff;
+  background: #9a3412;
 }
 
 body.mode-real .activity-console {
@@ -223,7 +223,208 @@ body.mode-real .auto-screener-body .tbl tr.screener-out td { opacity: 0.55; }
 body.mode-real .field input:focus,
 body.mode-real .field select:focus,
 body.mode-real .select-dark:focus {
-  box-shadow: 0 0 0 2px rgba(194, 65, 12, 0.16);
+  box-shadow: 0 0 0 2px rgba(154, 52, 18, 0.2);
+}
+
+/* 실전: 밝은 배경에서 파스텔/노란 칩이 흐려지지 않도록 고대비 오버라이드 */
+body.mode-real .mi-group {
+  background: rgba(255, 255, 255, 0.45);
+  border-color: #9aa3af;
+}
+body.mode-real .mi-group-kr { border-color: #2563eb; }
+body.mode-real .mi-group-kr .mi-group-label {
+  color: #fff;
+  background: #1d4ed8;
+}
+body.mode-real .mi-group-us { border-color: #7c3aed; }
+body.mode-real .mi-group-us .mi-group-label {
+  color: #fff;
+  background: #6d28d9;
+}
+body.mode-real .mi-group-fear { border-color: #dc2626; }
+body.mode-real .mi-group-fear .mi-group-label {
+  color: #fff;
+  background: #b91c1c;
+}
+body.mode-real .mi-group-vol { border-color: #475569; }
+body.mode-real .mi-group-vol .mi-group-label {
+  color: #fff;
+  background: #334155;
+}
+body.mode-real .market-index-item .mi-label {
+  color: #1f2937;
+  font-weight: 700;
+}
+body.mode-real .market-index-item .mi-value {
+  color: #111827;
+  font-weight: 800;
+}
+body.mode-real .market-index-item.up .mi-label,
+body.mode-real .market-index-item.up .mi-value,
+body.mode-real .market-index-item.up .mi-delta { color: #b91c1c; }
+body.mode-real .market-index-item.down .mi-label,
+body.mode-real .market-index-item.down .mi-value,
+body.mode-real .market-index-item.down .mi-delta { color: #1d4ed8; }
+body.mode-real .market-index-item.flat .mi-label,
+body.mode-real .market-index-item.flat .mi-value,
+body.mode-real .market-index-item.flat .mi-delta { color: #374151; }
+body.mode-real .market-index-item .mi-mini-chart.up polyline { stroke: #b91c1c; }
+body.mode-real .market-index-item .mi-mini-chart.up polygon { fill: rgba(185, 28, 28, 0.2); }
+body.mode-real .market-index-item .mi-mini-chart.up circle { fill: #b91c1c; }
+body.mode-real .market-index-item .mi-mini-chart.down polyline { stroke: #1d4ed8; }
+body.mode-real .market-index-item .mi-mini-chart.down polygon { fill: rgba(29, 78, 216, 0.18); }
+body.mode-real .market-index-item .mi-mini-chart.down circle { fill: #1d4ed8; }
+body.mode-real .market-index-item .mi-mood-calm {
+  color: #14532d; background: #bbf7d0; border-color: #16a34a;
+}
+body.mode-real .market-index-item .mi-mood-normal {
+  color: #0c4a6e; background: #bae6fd; border-color: #0284c7;
+}
+body.mode-real .market-index-item .mi-mood-watch {
+  color: #fff; background: #b45309; border-color: #92400e;
+}
+body.mode-real .market-index-item .mi-mood-uneasy {
+  color: #fff; background: #c2410c; border-color: #9a3412;
+}
+body.mode-real .market-index-item .mi-mood-fear {
+  color: #fff; background: #dc2626; border-color: #991b1b;
+}
+body.mode-real .market-index-item .mi-mood-panic {
+  color: #fff; background: #991b1b; border-color: #7f1d1d;
+}
+body.mode-real .market-index-item.mood-watch { border-color: #b45309; }
+body.mode-real .market-index-item.mood-uneasy { border-color: #c2410c; }
+body.mode-real .market-index-item.mood-fear { border-color: #dc2626; }
+body.mode-real .market-index-item.mood-panic {
+  border-color: #991b1b;
+  background: rgba(153, 27, 27, 0.1);
+}
+
+body.mode-real .tag-chip {
+  font-weight: 800;
+}
+body.mode-real .tag-chip.theme {
+  background: #9a3412;
+  color: #fff;
+  border: 1px solid #7c2d12;
+}
+body.mode-real .tag-chip.theme.core {
+  background: #166534;
+  color: #fff;
+  border-color: #14532d;
+}
+body.mode-real .tag-chip.theme.related {
+  background: #7c2d12;
+  color: #fff;
+  border-color: #9a3412;
+}
+body.mode-real .tag-chip.theme.event {
+  opacity: 1;
+  background: #44403c;
+  color: #fff;
+  border: 1px dashed #78716c;
+}
+body.mode-real .tag-chip.kw {
+  background: #075985;
+  color: #fff;
+  border: 1px solid #0c4a6e;
+}
+body.mode-real .tag-chip.strategy {
+  background: #78350f;
+  color: #fff;
+  border: 1px solid #92400e;
+}
+body.mode-real .tag-chip.strategy.sangtta {
+  background: #991b1b;
+  color: #fff;
+  border-color: #7f1d1d;
+}
+body.mode-real .tag-chip.strategy.breakout {
+  background: #166534;
+  color: #fff;
+  border-color: #14532d;
+}
+body.mode-real .tag-chip.strategy.legacy {
+  background: #475569;
+  color: #fff;
+  border-color: #334155;
+}
+body.mode-real .tag-chip.strategy.ymgp {
+  background: #9a3412;
+  color: #fff;
+  border-color: #7c2d12;
+}
+
+body.mode-real .pos-metrics .pk {
+  color: #1f2937;
+  font-weight: 800;
+}
+body.mode-real .pos-metrics .pk-sub {
+  color: #075985;
+  font-weight: 700;
+}
+body.mode-real .pos-metrics .pv {
+  color: #111827;
+  font-weight: 800;
+}
+body.mode-real .pos-card-head .code {
+  color: #374151;
+  font-weight: 600;
+}
+body.mode-real .pos-level-chip {
+  color: #1f2937;
+  background: #e5e7eb;
+  border-color: #9ca3af;
+}
+body.mode-real .pos-level-chip.active {
+  color: #fff;
+  background: #9a3412;
+  border-color: #7c2d12;
+}
+body.mode-real .pos-level-chip.atr {
+  color: #fff;
+  background: #075985;
+  border-color: #0c4a6e;
+}
+body.mode-real .pos-stop-bar {
+  background: rgba(153, 27, 27, 0.1);
+  border-color: rgba(153, 27, 27, 0.35);
+}
+body.mode-real .pos-stop-bar.safe {
+  background: rgba(22, 101, 52, 0.1);
+  border-color: rgba(22, 101, 52, 0.35);
+}
+body.mode-real .pos-stop-bar .stop-main .stop-pct-hint,
+body.mode-real .pos-stop-bar .stop-sub {
+  color: #374151;
+}
+body.mode-real .stat .label,
+body.mode-real .kv .k,
+body.mode-real .hint,
+body.mode-real .stock-code {
+  color: #374151;
+  font-weight: 700;
+}
+body.mode-real .conn-badge.warn {
+  background: #78350f;
+  color: #fff;
+  border-color: #92400e;
+}
+body.mode-real .exit-note {
+  color: #fff;
+  background: #78350f;
+  border: 1px solid #92400e;
+}
+body.mode-real .exit-note b { color: #fff; }
+body.mode-real .activity-line.warn .msg { color: #92400e; }
+body.mode-real .activity-banner.warn {
+  background: #78350f;
+  border-color: #92400e;
+  color: #fff;
+}
+body.mode-real .stat-deposit .delta-stack .delta.match-warn {
+  color: #92400e;
+  font-weight: 800;
 }
 
 .conn-badge.mode-mock-badge {
