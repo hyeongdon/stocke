@@ -13,7 +13,7 @@
   <meta name="apple-mobile-web-app-title" content="Stocke">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="theme-color" content="#131720">
-  <link rel="stylesheet" href="/static/dashboard.css?v=149">
+  <link rel="stylesheet" href="/static/dashboard.css?v=151">
   <script src="/static/theme-sync.js?v=3"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
@@ -60,11 +60,25 @@
       <div class="auto-subpane active" id="auto-sub-monitor">
         <div class="auto-layout">
 
+        <!-- 바로가기 -->
+        <div class="home-shortcuts" aria-label="바로가기">
+          <a href="/ladder" class="home-shortcut">
+            <span class="home-shortcut-kicker">바로가기</span>
+            <span class="home-shortcut-label">사다리매수</span>
+            <span class="home-shortcut-desc">분할매수 감시 · 판정</span>
+          </a>
+          <a href="/analysis" class="home-shortcut">
+            <span class="home-shortcut-kicker">바로가기</span>
+            <span class="home-shortcut-label">분석</span>
+            <span class="home-shortcut-desc">기본적분석 · 테마 · 지표</span>
+          </a>
+        </div>
+
         <!-- 1행: 보유 포지션 (전체 너비) -->
         <div class="card compact-card positions-card">
           <div class="card-head">
             <div><h3>보유 포지션 <span class="hint" id="autoHoldingCount"></span></h3>
-              <div class="hint" style="margin-top:2px;">현재가·ATR·손절선 10초 갱신 · 비중=평가금액÷주식총평가</div></div>
+              <div class="hint" style="margin-top:2px;">파이 비중 · 안쪽 손익률·보유금액 · 10초 갱신</div></div>
             <button class="btn sm" id="autoPosRefresh">새로고침</button>
           </div>
           <div class="card-body scroll positions-card-body" id="autoPositionsBody"><div class="empty"><span class="ico">💼</span>로딩 중...</div></div>
@@ -410,7 +424,7 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/static/dashboard.js?v=198"></script>
+  <script src="/static/dashboard.js?v=200"></script>
   <script src="/static/telegram-price-alert.js?v=3"></script>
 </body>
 </html>

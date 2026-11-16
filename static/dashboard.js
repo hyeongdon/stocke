@@ -2124,75 +2124,189 @@ async function loadPositionSparklines(items) {
   }
 }
 
+const POS_PIE_COLORS = [
+  '#7c6cf0', '#38bdf8', '#34d399', '#fbbf24', '#f472b6',
+  '#a78bfa', '#22d3ee', '#4ade80', '#fb923c', '#e879f9',
+  '#60a5fa', '#2dd4bf', '#facc15', '#fb7185', '#818cf8',
+];
+
+let posPieChart = null;
+
+function compactWon(v) {
+  const n = Math.round(parseNum(v));
+  const abs = Math.abs(n);
+  const sign = n < 0 ? '-' : '';
+  if (abs >= 100000000) {
+    const eok = abs / 100000000;
+    return `${sign}${eok >= 10 ? Math.round(eok) : eok.toFixed(1)}억`;
+  }
+  if (abs >= 10000) return `${sign}${Math.round(abs / 10000).toLocaleString('ko-KR')}만`;
+  return `${sign}${Math.abs(n).toLocaleString('ko-KR')}원`;
+}
+
+function destroyPosPieChart() {
+  if (posPieChart) {
+    try { posPieChart.destroy(); } catch (_) { /* ignore */ }
+    posPieChart = null;
+  }
+}
+
+function drawPosPieChart(canvas, slices) {
+  if (!window.Chart || !canvas) return;
+  const labels = slices.map((s) => s.name);
+  const values = slices.map((s) => s.chartAmt);
+  const colors = slices.map((s) => s.color);
+  const border = getComputedStyle(document.documentElement).getPropertyValue('--card').trim() || '#131720';
+  const tooltipCbs = {
+    title: (items) => {
+      const list = posPieChart?.$posSlices || slices;
+      const s = list[items?.[0]?.dataIndex];
+      return s ? s.name : '';
+    },
+    label: (c) => {
+      const list = posPieChart?.$posSlices || slices;
+      const s = list[c.dataIndex];
+      if (!s) return '';
+      return ` ${s.rateText} · ${s.amtFull} · ${s.weight.toFixed(1)}%`;
+    },
+  };
+  if (posPieChart && posPieChart.canvas === canvas) {
+    posPieChart.$posSlices = slices;
+    posPieChart.data.labels = labels;
+    const ds = posPieChart.data.datasets[0];
+    ds.data = values;
+    ds.backgroundColor = colors;
+    ds.borderColor = border;
+    posPieChart.update('none');
+    return;
+  }
+  destroyPosPieChart();
+  posPieChart = new Chart(canvas, {
+    type: 'doughnut',
+    data: {
+      labels,
+      datasets: [{
+        data: values,
+        backgroundColor: colors,
+        borderColor: border,
+        borderWidth: 2,
+        hoverOffset: 6,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: '58%',
+      animation: { duration: 280 },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1a1f2b',
+          borderColor: '#2f3647',
+          borderWidth: 1,
+          titleColor: '#8b95a8',
+          bodyColor: '#e8edf5',
+          callbacks: tooltipCbs,
+        },
+      },
+    },
+  });
+  posPieChart.$posSlices = slices;
+}
+
 function renderPositionCards(items, containerId) {
   const el = $(containerId);
   if (!el) return;
-  if (!items.length) { el.innerHTML = emptyRow('보유 포지션 없음 — 매수 체결 시 여기에 표시됩니다.', '💼'); return; }
+  if (!items.length) {
+    destroyPosPieChart();
+    el.innerHTML = emptyRow('보유 포지션 없음 — 매수 체결 시 여기에 표시됩니다.', '💼');
+    return;
+  }
 
   const weights = computePositionWeights(items);
-  el.innerHTML = `<div class="pos-grid">${items.map((p, i) => {
+  let totalBuy = 0;
+  let totalEval = 0;
+  const slices = items.map((p, i) => {
     const ex = p.exit_levels || {};
     const rate = parseNum(ex.profit_loss_rate ?? p.current_profit_loss_rate);
-    const pl = parseNum(ex.profit_loss ?? p.current_profit_loss);
-    const cur = ex.current_price || p.current_price || p.buy_price;
+    const holdAmt = positionEvalAmount(p) || positionBuyAmount(p);
     const buyAmt = positionBuyAmount(p);
-    const weight = weights[i];
-    const effStop = ex.effective_stop_price;
-    const effMeta = effectiveStopMeta(ex);
-    const effPrice = effMeta.price;
-    const effRate = effectiveStopRate(ex, p);
-    const effDisplay = effectiveStopDisplayRate(ex, p);
-    const dist = ex.stop_distance_pct;
-    const pctRate = pctStopRate(ex, p);
-    const peakDrop = peakDropMeta(ex, p, cur);
-    const peakDropAmt = ex.peak_drop_amount != null ? parseNum(ex.peak_drop_amount) : peakDrop.amount;
-    const peakDropPct = ex.peak_drop_pct != null ? parseNum(ex.peak_drop_pct) : peakDrop.pct;
-    const trailPctSetting = parseNum(ex.trailing_stop_pct);
-    const safe = dist != null && dist > 1.5;
-    const atrTxt = ex.atr ? `ATR ${num(ex.atr)}원 (${ex.atr_period}일)` : (ex.levels_live === false ? 'ATR: 새로고침 시 계산' : 'ATR 미사용 (%기준)');
-    const reason = REASON_LABEL[ex.effective_stop_reason] || ex.effective_stop_reason || '-';
-    const methodLbl = effMeta.method === 'ATR' ? 'ATR' : (effMeta.method === 'PCT' ? 'PCT' : '');
-    const stopPolicy = ex.stop_policy || p.stop_policy || '';
+    totalBuy += buyAmt;
+    totalEval += holdAmt;
+    const code = normStockCode(p.stock_code);
+    const analysisHref = code ? analysisPageUrl(code) : '';
+    return {
+      p,
+      name: p.stock_name || p.stock_code || code,
+      code: p.stock_code,
+      qty: p.buy_quantity,
+      holdAmt,
+      chartAmt: Math.max(holdAmt, 1),
+      rate,
+      rateText: rateStr(rate),
+      amtText: compactWon(holdAmt),
+      amtFull: won(holdAmt),
+      weight: weights[i],
+      color: POS_PIE_COLORS[i % POS_PIE_COLORS.length],
+      analysisHref,
+    };
+  });
+  const totalPl = totalEval - totalBuy;
+  const totalRate = totalBuy > 0
+    ? (totalPl / totalBuy) * 100
+    : slices.reduce((s, x) => s + x.rate, 0) / (slices.length || 1);
 
-    const chips = (ex.levels || []).map((l) => renderLevelChip(l, ex, p, effStop, pctRate)).join('');
-
-    const themeChips = posNameTagsHtml(p);
-    return `<div class="pos-card">
-      <div class="pos-card-head">
-        <div class="pos-card-title">
-          <div class="name">${esc(p.stock_name)}${themeChips}</div>
-          <div class="code">${esc(p.stock_code)} · ${num(p.buy_quantity)}주</div>
+  const legendHtml = slices.map((s) => {
+    const nameHtml = s.analysisHref
+      ? `<a class="pos-name-link pos-pie-name" href="${esc(s.analysisHref)}" title="분석 보기">${esc(s.name)}</a>`
+      : `<span class="pos-pie-name">${esc(s.name)}</span>`;
+    return `<div class="pos-pie-item">
+      <span class="pos-pie-swatch" style="background:${s.color}"></span>
+      <div class="pos-pie-item-main">
+        <div class="pos-pie-item-top">
+          ${nameHtml}
+          <span class="pos-pie-code">${esc(s.code)} · ${num(s.qty)}주</span>
         </div>
-        <div class="pos-card-spark">${sparklineForPosition(p)}</div>
-        <div class="pos-pnl ${signClass(rate)}">${pnlStr(pl)}<small>${rateStr(rate)}</small></div>
+        <div class="pos-pie-item-stats">
+          <span class="${signClass(s.rate)}">${s.rateText}</span>
+          <span>${s.amtFull}</span>
+        </div>
       </div>
-      <div class="pos-metrics">
-        <div><div class="pk">매입단가</div><div class="pv">${num(positionBuyPrice(p))}</div></div>
-        <div><div class="pk">현재가</div><div class="pv">${num(cur)}</div></div>
-        <div><div class="pk">손절율${methodLbl ? ` <span class="pk-sub">(${methodLbl})</span>` : ''}</div><div class="pv ${stopPolicy ? 'flat' : 'down'}">${stopPolicy ? '없음' : (effRate != null ? `−${effRate.toFixed(1)}%` : '-')}</div></div>
-        <div><div class="pk">손절가${methodLbl ? ` <span class="pk-sub">(${methodLbl})</span>` : ''}</div><div class="pv ${stopPolicy ? 'flat' : 'down'}">${stopPolicy ? '없음' : (effPrice ? num(effPrice) : '-')}</div></div>
-        <div><div class="pk">매입금액</div><div class="pv">${won(buyAmt)}</div></div>
-        <div><div class="pk">비중</div><div class="pv" title="평가금액 ÷ 키움 주식총평가">${weight.toFixed(1)}%</div></div>
-        <div><div class="pk">고점</div><div class="pv">${num(ex.peak_price || p.peak_price || cur)}</div></div>
-        <div><div class="pk">고점대비 하락</div><div class="pv ${peakDropAmt > 0 ? 'down' : 'flat'}">${fmtPeakDrop(peakDropAmt, peakDropPct)}</div></div>
-        ${softConfirmMetricHtml(p)}
-        <div><div class="pk">${ex.trailing_armed ? '트레일링' : '트레일 시작'}</div><div class="pv ${ex.trailing_armed ? 'up' : ''}">${ex.trailing_armed && effStop ? num(effStop) : (ex.trailing_start_price ? num(ex.trailing_start_price) : '-')}</div></div>
-        ${ex.trailing_floor_price ? `<div><div class="pk">익절 바닥</div><div class="pv up">${num(ex.trailing_floor_price)}</div></div>` : ''}
-        <div><div class="pk">${ex.atr ? 'ATR' : '변동성'}</div><div class="pv text-cyan">${ex.atr ? num(ex.atr) + '원' : '-'}</div></div>
-      </div>
-      ${stopPolicy ? `<div class="pos-stop-bar safe">
-        <div class="stop-main">${esc(stopPolicy)}</div>
-        <div class="stop-sub">글로벌 손절·트레일링·장마감 청산 미적용 · 손실 구간은 추가 매수/수동 판단</div>
-      </div>` : `<div class="pos-stop-bar ${safe ? 'safe' : ''}">
-        <div class="stop-main">유효 손절선 <span style="color:var(--down);">${effPrice ? num(effPrice) + '원' : '-'}</span>
-          ${effDisplay.rate != null && effPrice ? `<span class="stop-pct-hint"> · ${methodLbl || esc(reason)} ${effDisplay.prefix}−${effDisplay.rate.toFixed(1)}%</span>` : ''}
-          <span class="pill run" style="margin-left:6px;">${esc(reason)}</span></div>
-        <div class="stop-sub">${atrTxt}${dist != null ? ` · 손절선까지 ${dist.toFixed(2)}%` : ''}${ex.trailing_armed && peakDropAmt != null ? ` · 고점대비 ${fmtPeakDrop(peakDropAmt, peakDropPct)}` : ''}${ex.trailing_armed && trailPctSetting > 0 ? ` · 트레일 기준 −${trailPctSetting.toFixed(1)}%` : ''}${softConfirmStopHint(p)}${ex.liquidate_time ? ` · ${ex.liquidate_time} 장마감청산` : ''}${ex.levels_live ? ' · 실시간' : ''}</div>
-        ${chips ? `<div class="pos-levels">${chips}</div>` : ''}
-      </div>`}
-      <div class="pos-card-actions">${renderPosActionButtons(p)}</div>
+      <div class="pos-pie-item-actions">${renderPosSellBtn(s.p)}</div>
     </div>`;
-  }).join('')}</div>`;
+  }).join('');
+
+  let wrap = el.querySelector('.pos-pie-wrap');
+  let canvas = el.querySelector('#posPieChart');
+  let center = el.querySelector('.pos-pie-center');
+  let legend = el.querySelector('.pos-pie-legend');
+  if (!wrap || !canvas || !center || !legend) {
+    destroyPosPieChart();
+    el.innerHTML = `<div class="pos-pie-wrap">
+      <div class="pos-pie-chart-box">
+        <canvas id="posPieChart" aria-label="보유 포지션 비중"></canvas>
+        <div class="pos-pie-center" aria-live="polite">
+          <div class="pos-pie-center-rate"></div>
+          <div class="pos-pie-center-amt"></div>
+        </div>
+      </div>
+      <div class="pos-pie-legend"></div>
+    </div>`;
+    canvas = el.querySelector('#posPieChart');
+    center = el.querySelector('.pos-pie-center');
+    legend = el.querySelector('.pos-pie-legend');
+  }
+
+  const rateEl = center.querySelector('.pos-pie-center-rate');
+  const amtEl = center.querySelector('.pos-pie-center-amt');
+  if (rateEl) {
+    rateEl.className = `pos-pie-center-rate ${signClass(totalRate)}`;
+    rateEl.textContent = rateStr(totalRate);
+  }
+  if (amtEl) amtEl.textContent = compactWon(totalEval);
+  center.title = `합산 손익률 ${rateStr(totalRate)} · 보유 ${won(totalEval)}`;
+  legend.innerHTML = legendHtml;
+  drawPosPieChart(canvas, slices);
 }
 
 function renderKiwoomHoldingsTable(holdings) {
@@ -2286,8 +2400,8 @@ function bindPositionSellButtons() {
   const onClick = async (e) => {
     const btn = e.target.closest('.pos-sell-btn, .pos-avg-down-btn');
     if (!btn || btn.disabled) return;
-    const card = btn.closest('.pos-card, tr');
-    const name = card?.querySelector('.name, .stock-name')?.textContent?.trim();
+    const card = btn.closest('.pos-card, .pos-pie-item, tr');
+    const name = card?.querySelector('.name, .stock-name, .pos-pie-name')?.textContent?.trim();
     const id = btn.dataset.posId;
     btn.disabled = true;
     const prev = btn.textContent;
@@ -2342,7 +2456,8 @@ async function loadPositions(live = false, opts = {}) {
   const seq = ++positionsLoadSeq;
   if (effectiveLive) positionsLiveInFlight += 1;
   const sk = '<div class="skeleton">현재가·ATR 조회 중...</div>';
-  if (effectiveLive && !silent && !$('autoPositionsBody')?.querySelector('.pos-card')) {
+  if (effectiveLive && !silent && !$('autoPositionsBody')?.querySelector('.pos-card, .pos-pie-wrap')) {
+    destroyPosPieChart();
     if ($('positionsBody')) $('positionsBody').innerHTML = sk;
     if ($('autoPositionsBody')) $('autoPositionsBody').innerHTML = sk;
   }
@@ -2385,9 +2500,6 @@ async function loadPositions(live = false, opts = {}) {
     }
     if ($('autoPositionsBody')) renderPositionCards(items, 'autoPositionsBody');
     bindPositionSellButtons();
-    if (items.length) {
-      loadPositionSparklines(items);
-    }
     if ($('positionsBody')) {
       if (items.length) {
         $('positionsBody').innerHTML = renderPositionsTable(items);
@@ -2404,7 +2516,10 @@ async function loadPositions(live = false, opts = {}) {
     }
   } catch (e) {
     const msg = effectiveLive ? '현재가/ATR 갱신 실패 — 잠시 후 다시 시도하세요.' : '포지션을 불러오지 못했습니다.';
-    if ($('autoPositionsBody') && !silent) $('autoPositionsBody').innerHTML = emptyRow(msg, '⚠️');
+    if ($('autoPositionsBody') && !silent) {
+      destroyPosPieChart();
+      $('autoPositionsBody').innerHTML = emptyRow(msg, '⚠️');
+    }
     if (!silent && $('positionsBody')) $('positionsBody').innerHTML = emptyRow(msg, '⚠️');
     if (effectiveLive && !silent) toast('보유종목 갱신 실패', true);
   } finally {
