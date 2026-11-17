@@ -287,6 +287,7 @@
 
   function renderSummary() {
     const live = plans().filter((p) => p.status !== 'DONE');
+    const cashBlocked = live.filter((p) => buyBlock(p) && buyBlock(p).kind === 'no_cash').length;
     let cost = 0, budget = 0, evalAmt = 0, buyNear = 0, sellFire = 0, entryOk = 0;
     live.forEach((p) => {
       cost += (p.hold || 0) * (p.avg || 0);
@@ -302,7 +303,7 @@
       { k: '사다리', v: live.length + '개', s: ['ACTIVE', 'RSI_WAIT', 'EXITING', 'FULL'].map((st) => STATUS_LABEL[st] + ' ' + live.filter((p) => p.status === st).length).join(' · ') },
       { k: '보유 원가 / 계획', v: fmt(cost / 10000) + '만', s: '계획 ' + fmt(budget / 10000) + '만 (' + (budget ? ((cost / budget) * 100).toFixed(0) : 0) + '%)' },
       { k: '평가손익', v: '<span class="' + cls(pnl) + '">' + (pnl > 0 ? '+' : '') + fmt(pnl / 10000) + '만</span>', s: '<span class="' + cls(pnlPct) + '">' + fmtPct(pnlPct) + '</span> (보유분)' },
-      { k: '1차 진입 조건 충족', v: entryOk + '개', s: '현재가 기준 · 15:05 에 확정' },
+      { k: '예수금 부족', v: cashBlocked ? ('<span class="down">' + cashBlocked + '개</span>') : '0개', s: cashBlocked ? '자동 매수 중지 · 상세에서 해제' : '매수 가능' },
       { k: '지금 판정하면', v: '<span class="' + (buyNear ? 'ld-near' : '') + '">매수 ' + (buyNear + entryOk) + '</span> · <span class="' + (sellFire ? 'up' : '') + '">매도 ' + sellFire + '</span>', s: '추가매수는 장중 10분 감시 · 진입·매도는 15:05' },
     ];
     document.getElementById('summaryCards').innerHTML = cards
@@ -316,7 +317,9 @@
     const steps = maxSteps(p);
     let h = '<span class="ld-dots">';
     for (let i = 1; i <= steps; i++) {
-      const c = i <= n ? 'on' : (i === n + 1 && p.status === 'ACTIVE') ? 'next' : '';
+      let c = '';
+      if (i <= n) c = 'on';
+      else if (i === n + 1 && p.status === 'ACTIVE') c = buyBlock(p) ? 'blocked' : 'next';
       h += '<i class="' + c + '"></i>';
     }
     for (let i = 0; i < extra; i++) h += '<i class="extra" title="수동 추가"></i>';
@@ -337,7 +340,18 @@
     return '<span class="ld-stage-chips">' + chip('S1', '10선50%') + chip('S2', '15선25%') + chip('S3', '20선잔량') + '</span>';
   }
 
+  function buyBlock(p) {
+    const b = p && p.buy_block;
+    return (b && b.kind) ? b : null;
+  }
+
   function pendingTag(p) {
+    const block = buyBlock(p);
+    if (block) {
+      const why = block.reason || '자동 매수 중지';
+      const label = block.kind === 'no_cash' ? '예수금부족' : '매수차단';
+      return ' <span class="ld-chip block" title="' + esc(why) + '"> ' + label + '</span>';
+    }
     if (p.pending_buy) return ' <span class="ld-chip ready" title="매수 신호 체결 대기">매수대기</span>';
     if (p.pending_sell && p.pending_sell.status === 'HOLD') return ' <span class="ld-chip ready" title="3분 안에 취소하지 않으면 익절">익절 확인</span>';
     if (p.pending_sell && ['QUEUED', 'SENT'].includes(p.pending_sell.status)) return ' <span class="ld-chip fire" title="매도 주문 대기">매도대기</span>';
@@ -361,6 +375,12 @@
         else if (e) nextCell = 'RSI ' + (e.r1 || e.r2 ? '✓' : '✗') + ' · GC ' + (e.g ? '✓' : e.gc && e.gc.state === 'near' ? '임박' : '✗');
         distCell = e && e.ok && mode === 'auto' ? '<span class="ld-near">충족</span>' : '<span class="hint">대기</span>';
       }
+    } else if (p.status === 'ACTIVE' && buyBlock(p)) {
+      const b = buyBlock(p);
+      nextCell = b.kind === 'no_cash'
+        ? '<span class="down">예수금 부족</span>'
+        : '<span class="down">매수 차단</span>';
+      distCell = '<span class="hint">매수 불가</span>';
     } else if (p.status === 'ACTIVE' && p.next_trigger) {
       const dist = p.price ? (p.next_trigger / p.price - 1) * 100 : null;
       nextCell = fmt(p.next_trigger) + ' <span class="sub">' + (p.auto_steps + 1) + '차</span>';
@@ -521,6 +541,17 @@
     return h + '</div>';
   }
 
+  function buyBlockPanel(p) {
+    const b = buyBlock(p);
+    if (!b) return '';
+    const title = b.kind === 'no_cash' ? '예수금 부족 — 자동 매수 중지' : '매수 차단';
+    const step = b.step ? (b.step + '차 · ') : '';
+    return '<div class="ld-panel ld-panel-block"><div class="ld-panel-head">' + title + '</div>' +
+      '<div class="ld-verdict manual">' + esc(step + (b.reason || '자동 매수 재시도 중지')) +
+      (b.at ? ' <span class="hint">· ' + md(b.at) + '</span>' : '') +
+      '</div><div class="hint">예수금을 채운 뒤 [매수차단 해제]를 누르면 다시 감시합니다. 재개·수동매수도 차단을 풉니다.</div></div>';
+  }
+
   function chartSvg(p, ladder) {
     const ch = (p.market || {}).chart;
     if (!ch || !ch.close || ch.close.length < 2) return '<div class="hint">차트 데이터 없음</div>';
@@ -607,6 +638,7 @@
     if (canEdit(p)) btns += '<button type="button" class="btn sm" data-act="edit">수정</button>';
     if (p.status === 'RSI_WAIT') btns += '<button type="button" class="btn sm primary" data-act="buy">1차 수동 매수</button>';
     if (['ACTIVE', 'FULL'].includes(p.status)) btns += '<button type="button" class="btn sm" data-act="buy">수동 추가 매수</button>';
+    if (buyBlock(p) && p.status !== 'DONE') btns += '<button type="button" class="btn sm" data-act="clearBuyBlock" title="예수금 확보 후 자동 매수 재시도 허용">매수차단 해제</button>';
     if (p.status === 'PAUSED') btns += '<button type="button" class="btn sm" data-act="resume">재개</button>';
     else if (p.status !== 'DONE') btns += '<button type="button" class="btn sm" data-act="pause">일시정지</button>';
     if (p.pending_sell && p.pending_sell.status === 'HOLD') {
@@ -631,11 +663,14 @@
       { k: '실현손익', v: (p.sells || []).length ? '<span class="' + cls(realized) + '">' + (realized > 0 ? '+' : '') + fmt(realized) + '</span>' : '—' },
       { k: '5 / 10일선', v: fmt(m.ma5) + ' / ' + fmt(m.ma10) },
       { k: '20 / 60일선', v: fmt(m.ma20) + ' / ' + fmt(m.ma60) },
-      { k: '다음 매수가', v: p.next_trigger ? fmt(p.next_trigger) + ' <span class="hint">' + (p.auto_steps + 1) + '차 · ' + fmt(p.next_qty) + '주</span>' : '—' },
+      { k: '다음 매수가', v: buyBlock(p)
+        ? '<span class="down">' + (buyBlock(p).kind === 'no_cash' ? '예수금 부족 · 매수 불가' : '매수 차단') + '</span>'
+        : (p.next_trigger ? fmt(p.next_trigger) + ' <span class="hint">' + (p.auto_steps + 1) + '차 · ' + fmt(p.next_qty) + '주</span>' : '—') },
       { k: '투입 / 예산', v: fmt(p.invested / 10000) + ' / ' + fmt(p.budget / 10000) + '만' },
       { k: '금액 분할', v: allocText(p) },
     ];
     let html = '<div class="ld-detail-meta">' + meta.map((x) => '<div><div class="k">' + x.k + '</div><div class="v">' + x.v + '</div></div>').join('') + '</div>';
+    html += buyBlockPanel(p);
     html += '<section class="ld-financial" data-financial-panel data-code="' + esc(p.code) + '" aria-label="재무 요약"></section>';
     if (p.status === 'DONE') {
       html += '<div class="ld-verdict manual">종료된 사이클' + (p.closed_at ? ' · ' + hm(p.closed_at) : '') + '</div>';
@@ -653,7 +688,10 @@
       let label;
       if (r.state === 'filled') label = '체결';
       else if (r.state === 'manual') label = '수동 추가';
-      else if (r.state === 'next') label = p.status === 'ACTIVE' ? '장중 감시' : p.status === 'RSI_WAIT' ? '진입 대기' : '정지';
+      else if (r.state === 'next') {
+        if (buyBlock(p)) label = buyBlock(p).kind === 'no_cash' ? '예수금 부족' : '매수 차단';
+        else label = p.status === 'ACTIVE' ? '장중 감시' : p.status === 'RSI_WAIT' ? '진입 대기' : '정지';
+      }
       else label = '대기';
       return '<tr class="' + r.state + '"><td>' + r.step + '차</td>' +
         '<td><span class="ld-step-state ' + r.state + '">' + label + '</span></td>' +
@@ -847,7 +885,7 @@
   }
 
   const EVENT_KIND = {
-    FILL: 'buy', FILL_PX: 'buy', BUY_SIGNAL: 'buy', SELL_FILL: 'sell', SELL_HOLD: 'sell', SELL_QUEUED: 'sell', SELL_CANCEL: 'warn', BUY_FAIL: 'warn', SELL_FAIL: 'warn',
+    FILL: 'buy', FILL_PX: 'buy', BUY_SIGNAL: 'buy', SELL_FILL: 'sell', SELL_HOLD: 'sell', SELL_QUEUED: 'sell', SELL_CANCEL: 'warn', BUY_FAIL: 'warn', BUY_BLOCK: 'warn', BUY_UNBLOCK: 'buy', SELL_FAIL: 'warn',
     JUDGE: 'judge', ARM: 'judge', DONE: 'sell', SYSTEM: 'info',
   };
 
@@ -923,6 +961,9 @@
     if (act === 'edit') return openEdit(p);
     if (act === 'pause') return run(() => api('POST', base + '/pause'), '일시정지 — 자동 매수·매도 판정 중지');
     if (act === 'resume') return run(() => api('POST', base + '/resume'), '재개');
+    if (act === 'clearBuyBlock') {
+      return run(() => api('POST', base + '/clear-buy-block'), '매수 차단 해제 — 예수금 확인 후 다시 감시');
+    }
     if (act === 'finish') {
       if (!confirm(p.name + ' 사이클을 종료할까요?')) return;
       return run(() => api('POST', base + '/finish'), '종료');

@@ -3,6 +3,7 @@ from datetime import date, timedelta
 from utils.rsi_ladder import (
     LadderStore,
     bars_with_today,
+    clear_buy_block,
     count_low_episodes,
     evaluate_add_buy,
     evaluate_entry,
@@ -10,10 +11,12 @@ from utils.rsi_ladder import (
     evaluate_price_entry,
     execution_avg_price,
     gc_state,
+    is_no_cash_failure,
     judge_plan,
     ladder_preview,
     merge_profile,
     next_trigger,
+    set_buy_block,
     step_amounts,
     step_budget,
     step_qty,
@@ -208,6 +211,31 @@ def test_intraday_add_buy_uses_price_only():
     assert evaluate_add_buy(p, price=60_000, today=today)["buy"] is None
     assert evaluate_add_buy(_plan(fills=p["fills"], pending_sell={"status": "QUEUED"}),
                             price=60_000, today=today)["buy"] is None
+
+
+def test_no_cash_failure_detects_investable_zero():
+    assert is_no_cash_failure("매수 가능 금액 없음 (예산 0원)")
+    assert is_no_cash_failure("현금 보유 10% 적용 후 매수 가능 금액 부족 (가능 0원)")
+    assert not is_no_cash_failure("2차 분할 예산 부족 (2차 예산 100원 < 1주 1,000원)")
+    assert not is_no_cash_failure("계좌 정보 조회 실패")
+
+
+def test_buy_block_stops_add_buy_and_price_entry():
+    today = date(2025, 6, 2)
+    p = _plan(fills=[{"step": 1, "price": 70_000, "qty": 14}])
+    assert set_buy_block(p, kind="no_cash", reason="매수 가능 금액 없음 (예산 0원)", step=2)
+    assert not set_buy_block(p, kind="no_cash", reason="매수 가능 금액 없음 (예산 0원)", step=2)
+    r = evaluate_add_buy(p, price=60_000, today=today)
+    assert r["buy"] is None
+    assert any("매수 차단" in n for n in r["notes"])
+
+    pe = evaluate_price_entry(
+        _price_plan(50_000, buy_block={"kind": "no_cash", "reason": "매수 가능 금액 없음 (예산 0원)"}),
+        price=40_000,
+    )
+    assert pe["buy"] is None
+    assert clear_buy_block(p)
+    assert evaluate_add_buy(p, price=60_000, today=today)["buy"]["step"] == 2
 
 
 def _price_plan(target, **kw):

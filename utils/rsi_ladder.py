@@ -508,11 +508,17 @@ def judge_plan(plan: Dict[str, Any], *, price: float, bars: Sequence[Dict[str, A
             out["buy"] = pe["buy"]
             out["notes"].extend(pe["notes"])
         elif prof["entry_mode"] == "auto" and ent["ok"] and not plan.get("pending_buy"):
-            qty = step_qty(plan, price, step=1)
-            if qty > 0:
-                out["buy"] = {"step": 1, "qty": qty, "price": int(price), "reason": "1차 자동 진입"}
+            block = buy_block_of(plan)
+            if block:
+                out["notes"].append(
+                    f"매수 차단({block.get('kind')}): {block.get('reason') or '자동매수 중지'}"
+                )
             else:
-                out["notes"].append("1차 수량 0 (예산 부족)")
+                qty = step_qty(plan, price, step=1)
+                if qty > 0:
+                    out["buy"] = {"step": 1, "qty": qty, "price": int(price), "reason": "1차 자동 진입"}
+                else:
+                    out["notes"].append("1차 수량 0 (예산 부족)")
         return out
 
     if hold > 0 and avg > 0:
@@ -527,6 +533,61 @@ def judge_plan(plan: Dict[str, Any], *, price: float, bars: Sequence[Dict[str, A
     out["buy"] = add["buy"]
     out["notes"].extend(add["notes"])
     return out
+
+
+def is_no_cash_failure(reason: Optional[str]) -> bool:
+    """계좌 예수금/투자가능현금 부족으로 매수가 막힌 실패인지."""
+    s = str(reason or "")
+    return ("매수 가능 금액 없음" in s) or ("매수 가능 금액 부족" in s)
+
+
+def buy_block_of(plan: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """자동 매수 차단 상태. kind=no_cash 이면 예수금 부족으로 재시도 금지."""
+    if not plan:
+        return None
+    block = plan.get("buy_block")
+    if not isinstance(block, dict) or not block.get("kind"):
+        return None
+    return block
+
+
+def is_buy_blocked(plan: Optional[Dict[str, Any]]) -> bool:
+    return buy_block_of(plan) is not None
+
+
+def set_buy_block(
+    plan: Dict[str, Any],
+    *,
+    kind: str,
+    reason: str,
+    step: Optional[int] = None,
+    at: Optional[str] = None,
+) -> bool:
+    """차단 설정. 이미 같은 kind면 False(신규 아님)."""
+    prev = buy_block_of(plan)
+    if prev and str(prev.get("kind")) == str(kind):
+        # 사유만 최신으로 갱신
+        plan["buy_block"] = {
+            **prev,
+            "reason": str(reason or prev.get("reason") or ""),
+            "step": int(step) if step is not None else prev.get("step"),
+            "at": at or prev.get("at") or _now_iso(),
+        }
+        return False
+    plan["buy_block"] = {
+        "kind": str(kind),
+        "reason": str(reason or ""),
+        "step": int(step) if step is not None else None,
+        "at": at or _now_iso(),
+    }
+    return True
+
+
+def clear_buy_block(plan: Dict[str, Any]) -> bool:
+    if not plan.get("buy_block"):
+        return False
+    plan["buy_block"] = None
+    return True
 
 
 def evaluate_price_entry(plan: Dict[str, Any], *, price: float) -> Dict[str, Any]:
@@ -544,6 +605,10 @@ def evaluate_price_entry(plan: Dict[str, Any], *, price: float) -> Dict[str, Any
         return out
     out["target"] = target
     if plan.get("pending_buy") or not price or price <= 0 or price > target:
+        return out
+    block = buy_block_of(plan)
+    if block:
+        out["notes"].append(f"매수 차단({block.get('kind')}): {block.get('reason') or '자동매수 중지'}")
         return out
     qty = step_qty(plan, price, step=1)
     if qty > 0:
@@ -564,6 +629,10 @@ def evaluate_add_buy(plan: Dict[str, Any], *, price: float, today: date) -> Dict
     if plan.get("status") != "ACTIVE" or plan.get("pending_buy") or plan.get("pending_sell"):
         return out
     if plan.get("last_buy_date") == today.isoformat():
+        return out
+    block = buy_block_of(plan)
+    if block:
+        out["notes"].append(f"매수 차단({block.get('kind')}): {block.get('reason') or '자동매수 중지'}")
         return out
     n_auto = len(auto_fills(plan))
     if n_auto >= int(prof["max_steps"]):
@@ -936,6 +1005,7 @@ class LadderStore:
             "peak_pnl_pct": 0.0,
             "pending_buy": None,
             "pending_sell": None,
+            "buy_block": None,
             "last_buy_date": None,
             "paused_from": None,
             "last_judge": None,

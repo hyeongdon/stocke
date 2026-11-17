@@ -26,7 +26,9 @@ from utils.rsi_ladder import (
     SELL_RULE_LABEL,
     STRATEGY_KEY,
     auto_fills,
+    buy_block_of,
     cancel_sell_hold,
+    clear_buy_block,
     confirm_sell_hold,
     bars_with_today,
     evaluate_add_buy,
@@ -35,6 +37,7 @@ from utils.rsi_ladder import (
     evaluate_price_entry,
     execution_avg_price,
     get_ladder_store,
+    is_no_cash_failure,
     judge_plan,
     is_take_profit,
     last_fill_price,
@@ -42,6 +45,7 @@ from utils.rsi_ladder import (
     moving_averages,
     next_trigger,
     release_sell_hold,
+    set_buy_block,
     step_qty,
 )
 
@@ -559,10 +563,13 @@ class RsiLadderScheduler:
         settings = _load_settings()
         fail = ""
         mine, others = self._holdings()
+        block = buy_block_of(plan)
         if not settings or not getattr(settings, "is_enabled", False):
             fail = "자동매매 OFF — 주문 불가"
         elif not store.enabled:
             fail = "분할매수 자동 감시 OFF — 주문 불가"
+        elif block and not extra:
+            fail = f"매수 차단({block.get('kind')}): {block.get('reason') or '자동매수 중지'}"
         elif code in others:
             fail = f"다른 전략({others[code]})이 보유 중 — 분할매수 주문 불가"
         elif plan.get("pending_buy"):
@@ -570,6 +577,10 @@ class RsiLadderScheduler:
         elif qty <= 0:
             fail = "수량 0"
         if fail:
+            # 이미 예수금 부족으로 막힌 상태면 이벤트·텔레그램 스팸 방지
+            if block and not extra and str(block.get("kind")) == "no_cash":
+                _log(f"분할매수 {name} {step}차 스킵: {fail}", "warn", stock_code=code)
+                return False, fail
             store.add_event(plan["id"], "BUY_FAIL", f"{step}차 매수 실패: {fail}")
             _log(f"분할매수 {name} {step}차 매수 실패: {fail}", "warn", stock_code=code)
             return False, fail
@@ -863,12 +874,40 @@ class RsiLadderScheduler:
                         )
                         age_min = (_utc_naive() - created).total_seconds() / 60.0
                         if sig is not None and sig.status in _FAILED_SIGNAL and age_min > 0.3:
+                            reason = sig.failure_reason or sig.status
                             plan["pending_buy"] = None
-                            if not pb.get("extra"):
-                                plan["last_buy_date"] = None
-                            store.add_event(plan["id"], "BUY_FAIL",
-                                            f"{pb.get('step')}차 매수 실패: {sig.failure_reason or sig.status}", save=False)
-                            notes.append(f"{plan.get('name')} 매수 실패: {sig.failure_reason or sig.status}")
+                            step_n = int(pb.get("step") or 0)
+                            if is_no_cash_failure(reason):
+                                # 예수금 부족: 당일 재시도·알림 루프 금지
+                                if not pb.get("extra"):
+                                    plan["last_buy_date"] = now_kst().date().isoformat()
+                                first = set_buy_block(
+                                    plan, kind="no_cash", reason=str(reason), step=step_n or None,
+                                )
+                                store.add_event(
+                                    plan["id"], "BUY_BLOCK",
+                                    f"{step_n or '?'}차 예수금 부족 — 자동 매수 중지: {reason}",
+                                    save=False,
+                                )
+                                notes.append(f"{plan.get('name')} 예수금 부족으로 매수 중지")
+                                if first:
+                                    asyncio.create_task(_send_telegram(
+                                        f"<b>[분할매수 · 예수금 부족]</b> "
+                                        f"{html.escape(plan.get('name') or '')} ({plan['code']})\n"
+                                        f"{step_n or '?'}차 매수 실패 — 자동 재시도 중지\n"
+                                        f"{html.escape(str(reason))}\n"
+                                        f"예수금 확보 후 [매수차단 해제] 또는 재개하세요."
+                                    ))
+                            else:
+                                # 일시 실패만 당일 재시도 허용
+                                if not pb.get("extra"):
+                                    plan["last_buy_date"] = None
+                                store.add_event(
+                                    plan["id"], "BUY_FAIL",
+                                    f"{step_n or '?'}차 매수 실패: {reason}",
+                                    save=False,
+                                )
+                                notes.append(f"{plan.get('name')} 매수 실패: {reason}")
                             changed = True
                         elif age_min > _BUY_PENDING_TIMEOUT_MIN:
                             plan["pending_buy"] = None
@@ -937,6 +976,7 @@ class RsiLadderScheduler:
             "at": now_kst().isoformat(timespec="seconds"), "extra": extra,
         })
         plan["pending_buy"] = None
+        clear_buy_block(plan)
         label = "수동 추가" if extra else f"{step}차"
         msg = f"{label} 체결 {int(fill.quantity)}주 @ {_won(fill.price)}"
         if plan.get("status") == "RSI_WAIT":
@@ -1107,7 +1147,20 @@ class RsiLadderScheduler:
         prev = plan.get("paused_from") or ("ACTIVE" if plan.get("fills") else "RSI_WAIT")
         plan["status"] = prev
         plan["paused_from"] = None
+        if clear_buy_block(plan):
+            get_ladder_store().add_event(plan_id, "BUY_UNBLOCK", "재개 시 매수 차단 해제", save=False)
         get_ladder_store().add_event(plan_id, "RESUME", f"재개 → {prev}")
+        return plan
+
+    def clear_buy_block(self, plan_id: str) -> Dict[str, Any]:
+        """예수금 부족 등으로 걸린 자동 매수 차단을 수동 해제."""
+        plan = self._get_plan(plan_id)
+        if not clear_buy_block(plan):
+            return plan
+        # 같은 날 즉시 재시도 가능하도록 하루 1차수 잠금도 풂
+        plan["last_buy_date"] = None
+        get_ladder_store().add_event(plan_id, "BUY_UNBLOCK", "매수 차단 수동 해제")
+        self._snap_cache.pop(plan_id, None)
         return plan
 
     def delete(self, plan_id: str) -> None:
@@ -1137,6 +1190,11 @@ class RsiLadderScheduler:
             raise LadderError(f"{plan['status']} 상태에서는 매수할 수 없습니다")
         if not is_krx_session():
             raise LadderError("정규장(09:00~15:20)에만 수동 매수할 수 있습니다")
+        # 수동 매수는 차단을 풀고 한 번 시도 (실패 시 reconcile이 다시 막음)
+        if clear_buy_block(plan):
+            plan["last_buy_date"] = None
+            get_ladder_store().add_event(plan_id, "BUY_UNBLOCK", "수동 매수 전 매수 차단 해제", save=False)
+            get_ladder_store().save()
         price = await self._price(plan["code"])
         if not price:
             raise LadderError("현재가 조회 실패")

@@ -43,6 +43,8 @@ let state = {
   lastSummary: null,
   lastListMeta: null,
   favorites: new Map(),
+  favoriteFolderIds: new Map(),
+  folders: [],
   memos: new Map(),
   reloadAfterLoad: false,
 };
@@ -50,6 +52,7 @@ let state = {
 let toastTimer = null;
 const FAVORITES_KEY = 'analysisFavorites';
 const FAV_FOLDERS_KEY = 'analysisFavoriteFolders';
+const FAV_LAST_FOLDER_KEY = 'analysisFavoriteLastFolder';
 const MEMOS_KEY = 'analysisMemos';
 const PREFERENCES_MIGRATED_KEY = 'analysisPreferencesMigrated';
 const MAX_MEMO_LENGTH = 5000;
@@ -77,6 +80,41 @@ function loadFavoriteFolderIds() {
   return map;
 }
 
+function loadLocalFolders() {
+  try {
+    const raw = localStorage.getItem(FAV_FOLDERS_KEY);
+    if (!raw) return [];
+    const saved = JSON.parse(raw);
+    if (!Array.isArray(saved)) return [];
+    return saved.map((f) => ({
+      id: Number(f.id),
+      name: String(f.name || ''),
+      sort_order: Number(f.sort_order) || 0,
+    })).filter((f) => Number.isFinite(f.id) && f.id > 0 && f.name)
+      .sort((a, b) => (a.sort_order - b.sort_order) || (a.id - b.id));
+  } catch (e) {
+    return [];
+  }
+}
+
+function loadLastAddFolderId() {
+  try {
+    const raw = localStorage.getItem(FAV_LAST_FOLDER_KEY);
+    if (raw == null || raw === '') return null;
+    if (raw === 'null') return null;
+    const id = Number(raw);
+    return Number.isFinite(id) ? id : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function saveLastAddFolderId(folderId) {
+  try {
+    localStorage.setItem(FAV_LAST_FOLDER_KEY, folderId == null ? 'null' : String(folderId));
+  } catch (e) { /* ignore */ }
+}
+
 function loadFavorites() {
   try {
     const raw = localStorage.getItem(FAVORITES_KEY);
@@ -97,7 +135,7 @@ function loadFavorites() {
 
 function saveFavorites(favorites, folderIds) {
   try {
-    const prevFolders = folderIds || loadFavoriteFolderIds();
+    const prevFolders = folderIds || state.favoriteFolderIds || loadFavoriteFolderIds();
     localStorage.setItem(FAVORITES_KEY, JSON.stringify(
       [...favorites].map(([code, name]) => ({
         code,
@@ -114,14 +152,119 @@ function saveFavorites(favorites, folderIds) {
 
 function saveFavoriteFolders(folders) {
   try {
-    localStorage.setItem(FAV_FOLDERS_KEY, JSON.stringify(
-      (folders || []).map((f) => ({
-        id: Number(f.id),
-        name: String(f.name || ''),
-        sort_order: Number(f.sort_order) || 0,
-      })).filter((f) => Number.isFinite(f.id) && f.id > 0 && f.name),
-    ));
+    const rows = (folders || []).map((f) => ({
+      id: Number(f.id),
+      name: String(f.name || ''),
+      sort_order: Number(f.sort_order) || 0,
+    })).filter((f) => Number.isFinite(f.id) && f.id > 0 && f.name)
+      .sort((a, b) => (a.sort_order - b.sort_order) || (a.id - b.id));
+    localStorage.setItem(FAV_FOLDERS_KEY, JSON.stringify(rows));
+    state.folders = rows;
+    syncFavoriteFolderFilter();
   } catch (e) { /* ignore */ }
+}
+
+function folderNameById(folderId) {
+  if (folderId == null) return '미분류';
+  const folder = state.folders.find((f) => f.id === folderId);
+  return folder ? folder.name : '미분류';
+}
+
+function folderChoicesText(currentId) {
+  const lines = ['0) 미분류'];
+  state.folders.forEach((f, i) => {
+    const mark = f.id === currentId ? ' ←' : '';
+    lines.push(`${i + 1}) ${f.name}${mark}`);
+  });
+  lines.push(`${state.folders.length + 1}) ＋ 새 폴더`);
+  return lines.join('\n');
+}
+
+async function createFavoriteFolder() {
+  const name = window.prompt('새 폴더 이름');
+  if (name == null) return null;
+  const trimmed = name.trim();
+  if (!trimmed) {
+    toast('폴더 이름을 입력하세요', true);
+    return null;
+  }
+  try {
+    const row = await fetchJSON('/api/analysis/favorite-folders', preferenceRequest('POST', { name: trimmed }));
+    const folders = [...state.folders, row];
+    saveFavoriteFolders(folders);
+    toast(`폴더 "${row.name}" 추가`);
+    return row;
+  } catch (e) {
+    toast((e && (e.detail || e.message)) || '폴더 추가 실패', true);
+    return null;
+  }
+}
+
+/** @returns {Promise<number|null|undefined>} folder id, null=미분류, undefined=취소 */
+async function pickFavoriteFolder(preferredId) {
+  if (!state.folders.length) {
+    const make = window.confirm('즐겨찾기 폴더가 없습니다. 새 폴더를 만들까요?\n취소하면 미분류로 추가합니다.');
+    if (!make) return null;
+    const created = await createFavoriteFolder();
+    return created ? created.id : undefined;
+  }
+  const fallback = preferredId != null && state.folders.some((f) => f.id === preferredId)
+    ? preferredId
+    : loadLastAddFolderId();
+  const defaultIdx = fallback == null
+    ? 0
+    : (state.folders.findIndex((f) => f.id === fallback) + 1);
+  const raw = window.prompt(
+    `넣을 즐겨찾기 폴더 번호\n${folderChoicesText(fallback)}`,
+    String(defaultIdx >= 0 ? defaultIdx : 0),
+  );
+  if (raw == null) return undefined;
+  const idx = Number(String(raw).trim());
+  if (!Number.isFinite(idx) || idx < 0 || idx > state.folders.length + 1) {
+    toast('올바른 번호를 입력하세요', true);
+    return undefined;
+  }
+  if (idx === state.folders.length + 1) {
+    const created = await createFavoriteFolder();
+    return created ? created.id : undefined;
+  }
+  return idx === 0 ? null : state.folders[idx - 1].id;
+}
+
+function favoriteCodesInScope() {
+  const sel = $('fltFavoriteFolder');
+  const scope = sel ? sel.value : '';
+  const codes = [];
+  for (const code of state.favorites.keys()) {
+    const folderId = state.favoriteFolderIds.has(code) ? state.favoriteFolderIds.get(code) : null;
+    if (scope === '') {
+      codes.push(code);
+    } else if (scope === 'none') {
+      if (folderId == null) codes.push(code);
+    } else if (String(folderId) === scope) {
+      codes.push(code);
+    }
+  }
+  return codes;
+}
+
+function syncFavoriteFolderFilter() {
+  const sel = $('fltFavoriteFolder');
+  const wrap = $('fltFavoriteFolderWrap');
+  if (!sel) return;
+  const prev = sel.value;
+  const opts = ['<option value="">전체 폴더</option>', '<option value="none">미분류</option>'];
+  state.folders.forEach((f) => {
+    opts.push(`<option value="${esc(String(f.id))}">${esc(f.name)}</option>`);
+  });
+  sel.innerHTML = opts.join('');
+  const valid = prev === '' || prev === 'none' || state.folders.some((f) => String(f.id) === prev);
+  sel.value = valid ? prev : '';
+  if (wrap) {
+    const favoritesOnly = Boolean($('fltFavoritesOnly') && $('fltFavoritesOnly').checked);
+    wrap.hidden = !favoritesOnly;
+    wrap.classList.toggle('is-visible', favoritesOnly);
+  }
 }
 
 function saveMemos(memos) {
@@ -198,10 +341,12 @@ async function loadServerPreferences() {
     }
   }
   state.favorites = favorites;
+  state.favoriteFolderIds = folderIds;
   state.memos = memos;
   saveFavoriteFolders(saved.folders || []);
   saveFavorites(favorites, folderIds);
   saveMemos(memos);
+  syncFavoriteFolderFilter();
   if (migrationFailures.length) {
     toast(`기존 브라우저 저장값 일부를 서버로 옮기지 못했습니다: ${migrationFailures.join(', ')}`, true);
   } else {
@@ -272,7 +417,9 @@ function stockMemoHtml(stockCode) {
 function favoriteButtonHtml(row) {
   const code = normalizeStockCode(row.stock_code);
   const saved = state.favorites.has(code);
-  const label = saved ? '즐겨찾기 삭제' : '즐겨찾기 추가';
+  const folderId = saved && state.favoriteFolderIds.has(code) ? state.favoriteFolderIds.get(code) : null;
+  const folderLabel = saved ? folderNameById(folderId) : '';
+  const label = saved ? `즐겨찾기 삭제 (${folderLabel})` : '즐겨찾기 추가 · 폴더 선택';
   return `<button type="button" class="analysis-favorite-toggle${saved ? ' is-favorite' : ''}" data-code="${esc(code)}" title="${label}" aria-label="${esc(row.stock_name || code)} ${label}" aria-pressed="${saved}">${saved ? '★' : '☆'}</button>`;
 }
 
@@ -285,8 +432,10 @@ function syncDetailFavoriteButton() {
     return;
   }
   const saved = state.favorites.has(code);
+  const folderId = saved && state.favoriteFolderIds.has(code) ? state.favoriteFolderIds.get(code) : null;
+  const folderLabel = saved ? folderNameById(folderId) : '';
   btn.hidden = false;
-  btn.textContent = saved ? '★ 즐겨찾기 삭제' : '☆ 즐겨찾기 추가';
+  btn.textContent = saved ? `★ 즐겨찾기 삭제 (${folderLabel})` : '☆ 즐겨찾기 추가';
   btn.classList.toggle('is-favorite', saved);
   btn.setAttribute('aria-pressed', saved ? 'true' : 'false');
 }
@@ -295,31 +444,50 @@ async function toggleFavorite(stockCode, stockName) {
   const code = normalizeStockCode(stockCode);
   if (!code) return;
   const next = new Map(state.favorites);
+  const nextFolders = new Map(state.favoriteFolderIds);
   const removing = next.has(code);
+  let folderId = null;
+  if (!removing) {
+    const picked = await pickFavoriteFolder(loadLastAddFolderId());
+    if (picked === undefined) return;
+    folderId = picked;
+  }
   try {
     await fetchJSON(
       `/api/analysis/favorites/${encodeURIComponent(code)}`,
       removing
         ? preferenceRequest('DELETE')
-        : preferenceRequest('PUT', { stock_name: String(stockName || '') }),
+        : preferenceRequest('PUT', {
+          stock_name: String(stockName || ''),
+          folder_id: folderId,
+        }),
     );
   } catch (e) {
     toast('즐겨찾기를 서버에 저장하지 못했습니다. 로그인과 서버 연결을 확인하세요.', true);
     return;
   }
-  if (removing) next.delete(code);
-  else next.set(code, String(stockName || ''));
+  if (removing) {
+    next.delete(code);
+    nextFolders.delete(code);
+  } else {
+    next.set(code, String(stockName || ''));
+    nextFolders.set(code, folderId);
+    saveLastAddFolderId(folderId);
+  }
   state.favorites = next;
-  saveFavorites(next);
+  state.favoriteFolderIds = nextFolders;
+  saveFavorites(next, nextFolders);
   syncDetailFavoriteButton();
   updateFilterSummary();
   syncFavoritesQuickButton();
+  syncFavoriteFolderFilter();
   if ($('fltFavoritesOnly').checked) {
     if (state.loading) state.reloadAfterLoad = true;
     else loadList({ autoSelect: false });
   }
   else if (state.lastItems) renderTable(state.lastItems);
-  toast(removing ? '즐겨찾기에서 삭제했습니다.' : '즐겨찾기에 추가했습니다.', false);
+  if (removing) toast('즐겨찾기에서 삭제했습니다.', false);
+  else toast(`즐겨찾기에 추가했습니다 · ${folderNameById(folderId)}`, false);
 }
 
 function toast(msg, isErr) {
@@ -472,7 +640,15 @@ function updateFilterSummary() {
   if ($('fltBowlOnly').checked) parts.push('밥그릇');
   if ($('fltMa2060Only').checked) parts.push('2060');
   if ($('fltExcludeBelowMa60').checked) parts.push('추세이탈제외');
-  if ($('fltFavoritesOnly').checked) parts.push(`즐겨찾기 ${state.favorites.size}종목`);
+  if ($('fltFavoritesOnly').checked) {
+    const scopeCodes = favoriteCodesInScope();
+    const sel = $('fltFavoriteFolder');
+    const scope = sel ? sel.value : '';
+    let scopeLabel = '즐겨찾기';
+    if (scope === 'none') scopeLabel = '미분류';
+    else if (scope) scopeLabel = folderNameById(Number(scope));
+    parts.push(`${scopeLabel} ${scopeCodes.length}종목`);
+  }
   if (($('fltLimit').value || DEFAULT_LIMIT) !== DEFAULT_LIMIT) parts.push(`${$('fltLimit').value}건`);
   el.textContent = parts.join(' · ');
 }
@@ -482,7 +658,7 @@ function syncFavoritesQuickButton() {
   const countEl = $('favoritesQuickCount');
   if (!btn) return;
   const active = Boolean($('fltFavoritesOnly') && $('fltFavoritesOnly').checked);
-  const count = state.favorites.size;
+  const count = active ? favoriteCodesInScope().length : state.favorites.size;
   btn.classList.toggle('is-active', active);
   btn.setAttribute('aria-pressed', active ? 'true' : 'false');
   const label = active
@@ -502,6 +678,7 @@ function applyFilterPanel() {
     btn.setAttribute('aria-expanded', open ? 'true' : 'false');
     btn.classList.toggle('has-filters', hasActiveFilters());
   }
+  syncFavoriteFolderFilter();
   updateFilterSummary();
   syncFavoritesQuickButton();
 }
@@ -538,8 +715,9 @@ function buildQuery() {
   const minRoe = $('fltMinRoe').value.trim();
   const minCap = minCapInput();
   if (!favoritesOnly && minCap) p.set('min_market_cap', minCap);
-  if (favoritesOnly && state.favorites.size) {
-    p.set('stock_codes', [...state.favorites.keys()].join(','));
+  if (favoritesOnly) {
+    const codes = favoriteCodesInScope();
+    if (codes.length) p.set('stock_codes', codes.join(','));
   }
   if (maxPer) p.set('max_per', maxPer);
   if (maxPbr) p.set('max_pbr', maxPbr);
@@ -664,8 +842,11 @@ function renderMobileList(items) {
 function renderTable(items) {
   state.lastItems = items;
   const wrap = $('tableWrap');
-  const visibleItems = $('fltFavoritesOnly').checked
-    ? items.filter((row) => state.favorites.has(normalizeStockCode(row.stock_code)))
+  const favoriteScope = $('fltFavoritesOnly').checked
+    ? new Set(favoriteCodesInScope())
+    : null;
+  const visibleItems = favoriteScope
+    ? items.filter((row) => favoriteScope.has(normalizeStockCode(row.stock_code)))
     : items;
   const orderedItems = visibleItems.slice().sort((a, b) => {
     const aFavorite = state.favorites.has(normalizeStockCode(a.stock_code));
@@ -677,10 +858,10 @@ function renderTable(items) {
     : visibleItems.length;
   $('statShown').textContent = `${fmtNum(visibleItems.length)} / ${fmtNum(listCount)}`;
   if (!visibleItems.length) {
-    const message = $('fltFavoritesOnly').checked && state.favorites.size
-      ? '즐겨찾기 종목이 현재 필터 조건에 없습니다.'
+    const message = $('fltFavoritesOnly').checked && favoriteCodesInScope().length
+      ? '선택한 즐겨찾기 폴더 종목이 현재 필터 조건에 없습니다.'
       : $('fltFavoritesOnly').checked
-        ? '즐겨찾기에 등록된 종목이 없습니다. 목록의 ☆ 버튼으로 추가하세요.'
+        ? '즐겨찾기에 등록된 종목이 없습니다. 목록의 ☆ 버튼으로 폴더를 골라 추가하세요.'
         : '조건에 맞는 종목이 없습니다.';
     wrap.innerHTML = `<div class="empty"><span class="ico">📭</span>${message}</div>`;
     $('tableHint').textContent = '';
@@ -2158,7 +2339,7 @@ async function loadList(options) {
   try {
     let summary;
     let list;
-    if ($('fltFavoritesOnly').checked && !state.favorites.size) {
+    if ($('fltFavoritesOnly').checked && !favoriteCodesInScope().length) {
       summary = await loadSummary();
       list = { items: [], count: 0, condition_sets: [] };
     } else {
@@ -2205,6 +2386,7 @@ function resetFilters() {
   $('fltMa2060Only').checked = false;
   $('fltExcludeBelowMa60').checked = false;
   $('fltFavoritesOnly').checked = false;
+  if ($('fltFavoriteFolder')) $('fltFavoriteFolder').value = '';
   state.sortBy = 'market_cap';
   state.sortDesc = true;
   if (phoneLayout()) filterUserOpen = false;
@@ -2254,6 +2436,8 @@ function onPhoneLayoutChange() {
 
 document.addEventListener('DOMContentLoaded', async () => {
   state.favorites = loadFavorites();
+  state.favoriteFolderIds = loadFavoriteFolderIds();
+  state.folders = loadLocalFolders();
   state.memos = loadMemos();
   await loadServerPreferences();
   if (state.lastItems) renderTable(state.lastItems);
@@ -2294,14 +2478,36 @@ document.addEventListener('DOMContentLoaded', async () => {
     applyFilterPanel();
     loadList({ autoSelect: false });
   };
+  if ($('fltFavoriteFolder')) {
+    $('fltFavoriteFolder').onchange = () => {
+      updateFilterSummary();
+      syncFavoritesQuickButton();
+      if ($('fltFavoritesOnly').checked) loadList({ autoSelect: false });
+    };
+  }
   $('fltSortBy').onchange = () => {
     state.sortBy = $('fltSortBy').value;
     updateFilterSummary();
   };
-  $('codeSearch').addEventListener('keydown', (e) => {
+  const codeSearch = $('codeSearch');
+  // 포커스 시 기존 코드 전체 선택 → 바로 타이핑하면 덮어씀
+  codeSearch.addEventListener('focus', (e) => {
+    const el = e.target;
+    el.dataset.selectAll = '1';
+    requestAnimationFrame(() => {
+      if (el.dataset.selectAll === '1') el.select();
+    });
+  });
+  codeSearch.addEventListener('mousedown', (e) => {
+    if (document.activeElement === e.target) e.target.dataset.selectAll = '0';
+  });
+  codeSearch.addEventListener('mouseup', (e) => {
+    if (e.target.dataset.selectAll === '1') e.preventDefault();
+  });
+  codeSearch.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter') return;
     e.preventDefault();
-    const v = $('codeSearch').value.trim().replace(/\D/g, '');
+    const v = codeSearch.value.trim().replace(/\D/g, '');
     if (v.length < 4) { toast('종목코드를 4~6자리로 입력하세요.', true); return; }
     selectStock(v, { scrollDetail: true });
   });

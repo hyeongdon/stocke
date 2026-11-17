@@ -148,6 +148,25 @@ html.mode-real {
   height: 18px;
   border-color: transparent;
 }
+.analysis-fav-folder-wrap {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding-bottom: 7px;
+  font-size: 11px;
+}
+.analysis-fav-folder-wrap[hidden] { display: none !important; }
+.analysis-fav-folder-wrap select {
+  min-width: 0;
+  width: auto;
+  max-width: 110px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.2;
+}
 
 .analysis-detail-title { min-width: 0; }
 .analysis-investor-lookup {

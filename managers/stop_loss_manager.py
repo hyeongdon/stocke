@@ -538,14 +538,49 @@ class StopLossManager:
                 logger.debug("🛡️ [STOP_LOSS] 모니터링할 포지션이 없습니다.")
                 return
             
-            logger.info(f"🛡️ [STOP_LOSS] {len(positions)}개 포지션 모니터링 중...")
+            ladder_n = sum(
+                1 for p in positions
+                if str(getattr(p, "strategy_key", "") or "").strip().lower() == "rsi_ladder"
+            )
+            check_n = len(positions) - ladder_n
+            logger.info(
+                f"🛡️ [STOP_LOSS] 손절점검 {check_n}개"
+                + (f" · 사다리 {ladder_n}개 제외(pending_sell만)" if ladder_n else "")
+            )
             holdings_map, _ = await self._fetch_balance_holdings()
 
             for idx, position in enumerate(positions, 1):
                 try:
-                    debug_tracer.log_checkpoint(f"[{idx}/{len(positions)}] 포지션 점검: {position.stock_name}({position.stock_code})", "STOP_LOSS")
                     code = KiwoomAPI.normalize_stock_code(position.stock_code)
-                    await self._check_position_stop_loss(position, holdings_map.get(code))
+                    holding = holdings_map.get(code)
+                    sk = str(getattr(position, "strategy_key", "") or "").strip().lower()
+                    # 사다리: 최대 10차 물타기 — 손절%·트레일·고점 API 점검 제외.
+                    # 15:05 판정 pending_sell 실행만 남긴다.
+                    if sk == "rsi_ladder":
+                        debug_tracer.log_checkpoint(
+                            f"[{idx}/{len(positions)}] 사다리 제외(매도대기만): "
+                            f"{position.stock_name}({position.stock_code})",
+                            "STOP_LOSS",
+                        )
+                        if holding:
+                            from utils.eval_pnl import apply_holding_to_position
+                            apply_holding_to_position(position, holding)
+                        px = int(position.current_price or position.buy_price or 0)
+                        peak = int(
+                            getattr(position, "peak_price", None)
+                            or position.buy_price
+                            or px
+                            or 0
+                        )
+                        if px > 0:
+                            await self._monitor_ladder_exit(position, px, peak)
+                        continue
+                    debug_tracer.log_checkpoint(
+                        f"[{idx}/{len(positions)}] 포지션 점검: "
+                        f"{position.stock_name}({position.stock_code})",
+                        "STOP_LOSS",
+                    )
+                    await self._check_position_stop_loss(position, holding)
                 except Exception as e:
                     logger.error(f"🛡️ [STOP_LOSS] 포지션 모니터링 오류 (ID: {position.id}): {e}")
                 
@@ -1835,6 +1870,20 @@ class StopLossManager:
         고점 따라 트레일링(바닥 이하로 선 하락 없음).
         """
         try:
+            # 사다리는 _monitor_positions 에서 손절점검 루프를 건너뛴다.
+            # 다른 경로로 호출돼도 고점 API·손절% 점검은 하지 않는다.
+            if str(getattr(position, "strategy_key", "") or "").strip().lower() == "rsi_ladder":
+                if holding:
+                    from utils.eval_pnl import apply_holding_to_position
+                    apply_holding_to_position(position, holding)
+                px = int(position.current_price or position.buy_price or 0)
+                peak = int(
+                    getattr(position, "peak_price", None) or position.buy_price or px or 0
+                )
+                if px > 0:
+                    await self._monitor_ladder_exit(position, px, peak)
+                return
+
             if holding:
                 from utils.eval_pnl import apply_holding_to_position
                 apply_holding_to_position(position, holding)
@@ -1948,10 +1997,6 @@ class StopLossManager:
                 await self._monitor_rwm_exit(
                     position, int(current_price), peak, profit_loss, profit_loss_rate,
                 )
-                return
-
-            if getattr(position, "strategy_key", None) == "rsi_ladder":
-                await self._monitor_ladder_exit(position, int(current_price), peak)
                 return
 
             # 종가배팅: 매수 당일은 청산 모니터 스킵, 익일부터 고정손절·트레일
@@ -3632,14 +3677,14 @@ class StopLossManager:
         await self._execute_sell_order(position, current_price, sell_reason, detail)
 
     async def _monitor_ladder_exit(self, position: Position, current_price: int, peak: int) -> None:
-        """RSI 분할매수: 글로벌 손절·트레일링·익절 미사용.
+        """RSI 분할매수: 손절점검(손절%·트레일·고점 API) 대상 아님.
 
-        매도 판정(S0~S3·수동)은 managers/rsi_ladder_scheduler 가 15:05 에 계획에 pending_sell 로 기록하고,
-        여기서 정규장 중 지정 수량만 매도한다.
+        매도 판정(S1~S3·수동)은 managers/rsi_ladder_scheduler 가 15:05 에 계획에 pending_sell 로 기록하고,
+        여기서 정규장 중 지정 수량만 매도한다. peak 인자는 호환용(고점 갱신 안 함).
         """
         from utils.rsi_ladder import SELL_REASON_CODE, SELL_RULE_LABEL, get_ladder_store
 
-        await self._update_position_tracking(position.id, peak, None)
+        _ = peak  # 손절점검 제외 — 고점 추적/DB 갱신 생략
         if not is_krx_session():
             return
         store = get_ladder_store()

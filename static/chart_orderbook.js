@@ -47,10 +47,16 @@ const state = {
   favOpen: true,
   favPanelOpen: true,
   groupOpen: {},
+  activeFolderId: null,
   autoTimer: null,
   resizeObs: null,
   syncingRange: false,
 };
+
+const MOBILE_FAV_MQ = window.matchMedia('(max-width: 960px)');
+function isMobileFavLayout() {
+  return MOBILE_FAV_MQ.matches;
+}
 
 const suggest = {
   items: [],
@@ -746,26 +752,54 @@ function favItemHtml(f) {
   </div>`;
 }
 
-function renderFavorites() {
-  const folder = $('favFolder');
-  const list = $('favList');
-  const count = $('favCount');
-  if (count) count.textContent = String(state.favorites.length);
-  if (folder) folder.classList.toggle('is-collapsed', !state.favOpen);
+function resolveActiveFolder(groups) {
+  if (state.activeFolderId == null) return null;
+  return groups.find((g) => g.id === state.activeFolderId) || null;
+}
 
-  if (!list) return;
-  const favs = filteredFavorites();
-  if (!state.favorites.length) {
-    list.innerHTML = `<div class="cob-fav-empty">기본적분석에서 ★로 추가하거나<br>+ 로 폴더를 만드세요</div>`;
-    return;
-  }
-  if (!favs.length) {
-    list.innerHTML = `<div class="cob-fav-empty">검색 결과 없음</div>`;
-    return;
-  }
+function renderMobileFolderList(groups) {
+  return groups.map((g) => {
+    const canEdit = g.id !== UNCATEGORIZED_ID;
+    const actions = canEdit
+      ? `<div class="cob-fav-group-actions">
+          <button type="button" class="btn sm" data-rename-folder="${g.id}" title="이름 변경">✎</button>
+          <button type="button" class="btn sm" data-del-folder="${g.id}" title="폴더 삭제">×</button>
+        </div>`
+      : '';
+    return `<div class="cob-fav-group cob-fav-folder-pick" data-group="${g.id}">
+      <div class="cob-fav-group-head">
+        <button type="button" class="cob-fav-group-toggle" data-open-folder="${g.id}" aria-label="${esc(g.name)} 폴더 열기">
+          <span class="cob-fav-group-ico" aria-hidden="true">${canEdit ? '📂' : '☆'}</span>
+          <span class="cob-fav-group-name">${esc(g.name)}</span>
+          <span class="cob-fav-group-count">${g.items.length}</span>
+          <span class="cob-fav-group-enter" aria-hidden="true">›</span>
+        </button>
+        ${actions}
+      </div>
+    </div>`;
+  }).join('');
+}
 
-  const groups = folderGroups(favs);
-  list.innerHTML = groups.map((g) => {
+function renderMobileStockList(group) {
+  const canEdit = group.id !== UNCATEGORIZED_ID;
+  const items = group.items.length
+    ? group.items.map(favItemHtml).join('')
+    : `<div class="cob-fav-empty" style="padding:10px 6px;">비어 있음</div>`;
+  return `<div class="cob-fav-drill" data-group="${group.id}">
+    <div class="cob-fav-drill-head">
+      <button type="button" class="cob-fav-back" data-fav-back title="폴더 목록">←</button>
+      <div class="cob-fav-drill-title">
+        <span class="cob-fav-group-ico" aria-hidden="true">${canEdit ? '📂' : '☆'}</span>
+        <span class="cob-fav-group-name">${esc(group.name)}</span>
+        <span class="cob-fav-group-count">${group.items.length}</span>
+      </div>
+    </div>
+    <div class="cob-fav-group-items cob-fav-drill-items">${items}</div>
+  </div>`;
+}
+
+function renderDesktopGroups(groups) {
+  return groups.map((g) => {
     const open = state.groupOpen[g.id] !== false;
     const canEdit = g.id !== UNCATEGORIZED_ID;
     const actions = canEdit
@@ -790,6 +824,44 @@ function renderFavorites() {
       <div class="cob-fav-group-items">${items}</div>
     </div>`;
   }).join('');
+}
+
+function renderFavorites() {
+  const folder = $('favFolder');
+  const list = $('favList');
+  const count = $('favCount');
+  if (count) count.textContent = String(state.favorites.length);
+  if (folder) {
+    folder.classList.toggle('is-collapsed', !state.favOpen);
+    folder.classList.toggle('is-mobile-drill', isMobileFavLayout() && state.activeFolderId != null);
+  }
+
+  if (!list) return;
+  const favs = filteredFavorites();
+  if (!state.favorites.length) {
+    state.activeFolderId = null;
+    list.innerHTML = `<div class="cob-fav-empty">기본적분석에서 ★로 추가하거나<br>+ 로 폴더를 만드세요</div>`;
+    return;
+  }
+  if (!favs.length) {
+    list.innerHTML = `<div class="cob-fav-empty">검색 결과 없음</div>`;
+    return;
+  }
+
+  const groups = folderGroups(favs);
+  if (isMobileFavLayout()) {
+    const active = resolveActiveFolder(groups);
+    if (active) {
+      list.innerHTML = renderMobileStockList(active);
+      return;
+    }
+    state.activeFolderId = null;
+    list.innerHTML = renderMobileFolderList(groups);
+    return;
+  }
+
+  state.activeFolderId = null;
+  list.innerHTML = renderDesktopGroups(groups);
 }
 
 function setFavPanelOpen(open) {
@@ -872,6 +944,7 @@ async function deleteFavoriteFolder(folderId) {
     state.favorites.forEach((f) => {
       if (f.folder_id === folderId) f.folder_id = null;
     });
+    if (state.activeFolderId === folderId) state.activeFolderId = null;
     delete state.groupOpen[folderId];
     saveGroupOpen();
     persistLocalFavorites();
@@ -1232,8 +1305,22 @@ function bindEvents() {
   });
   $('codeSearch')?.addEventListener('input', onSearchInput);
   $('codeSearch')?.addEventListener('keydown', onSearchKey);
-  $('codeSearch')?.addEventListener('focus', () => {
+  // 포커스 시 기존 검색어 전체 선택 → 바로 타이핑하면 덮어씀 (지우지 않아도 됨)
+  $('codeSearch')?.addEventListener('focus', (e) => {
+    const el = e.target;
+    el.dataset.selectAll = '1';
+    requestAnimationFrame(() => {
+      if (el.dataset.selectAll === '1') el.select();
+    });
     if (suggest.items.length) renderSuggest();
+  });
+  $('codeSearch')?.addEventListener('mousedown', (e) => {
+    // 이미 포커스된 상태에서 클릭하면 캐럿 위치 지정 허용
+    if (document.activeElement === e.target) e.target.dataset.selectAll = '0';
+  });
+  $('codeSearch')?.addEventListener('mouseup', (e) => {
+    // 클릭으로 포커스될 때 mouseup이 선택을 풀지 않도록
+    if (e.target.dataset.selectAll === '1') e.preventDefault();
   });
   $('stockSuggest')?.addEventListener('mousedown', (e) => {
     const li = e.target.closest('li[data-idx]');
@@ -1277,6 +1364,19 @@ function bindEvents() {
     renderFavorites();
   });
   $('favList')?.addEventListener('click', async (e) => {
+    const backBtn = e.target.closest('[data-fav-back]');
+    if (backBtn) {
+      state.activeFolderId = null;
+      renderFavorites();
+      return;
+    }
+    const openFolder = e.target.closest('[data-open-folder]');
+    if (openFolder) {
+      const id = Number(openFolder.dataset.openFolder);
+      state.activeFolderId = Number.isFinite(id) ? id : null;
+      renderFavorites();
+      return;
+    }
     const toggle = e.target.closest('[data-toggle-group]');
     if (toggle) {
       const id = Number(toggle.dataset.toggleGroup);
@@ -1314,6 +1414,16 @@ function bindEvents() {
     if (fav && fav.name) state.name = fav.name;
     loadAll(code);
   });
+
+  const onFavLayoutChange = () => {
+    if (!isMobileFavLayout()) state.activeFolderId = null;
+    renderFavorites();
+  };
+  if (typeof MOBILE_FAV_MQ.addEventListener === 'function') {
+    MOBILE_FAV_MQ.addEventListener('change', onFavLayoutChange);
+  } else if (typeof MOBILE_FAV_MQ.addListener === 'function') {
+    MOBILE_FAV_MQ.addListener(onFavLayoutChange);
+  }
 
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden && state.code && $('autoRefresh')?.checked) {

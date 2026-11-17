@@ -7226,6 +7226,8 @@ async def ladder_action(plan_id: str, action: str, req: Optional[LadderSellReque
         return _ladder_call(rsi_ladder_scheduler.pause, plan_id)
     if action == "resume":
         return _ladder_call(rsi_ladder_scheduler.resume, plan_id)
+    if action in ("clear-buy-block", "clear_buy_block"):
+        return _ladder_call(rsi_ladder_scheduler.clear_buy_block, plan_id)
     if action == "finish":
         return _ladder_call(rsi_ladder_scheduler.finish, plan_id)
     if action == "buy":

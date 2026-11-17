@@ -84,6 +84,9 @@
 .ld-chip.done { background: var(--up-soft); border-color: rgba(52, 211, 153, 0.45); color: var(--up); text-decoration: line-through; }
 .ld-chip.ready { border-color: var(--amber); color: var(--amber); }
 .ld-chip.fire { background: var(--down-soft); border-color: var(--down); color: var(--down); }
+.ld-chip.block { background: var(--down-soft); border-color: var(--down); color: var(--down); font-weight: 700; }
+.ld-panel-block { border-color: rgba(248, 113, 113, 0.45); }
+.ld-dots i.blocked { background: var(--down); box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.35); }
 
 .ld-detail-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .ld-analysis-memo-float {
