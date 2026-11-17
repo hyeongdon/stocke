@@ -13,7 +13,7 @@
   <meta name="apple-mobile-web-app-title" content="Stocke">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="theme-color" content="#131720">
-  <link rel="stylesheet" href="/static/dashboard.css?v=152">
+  <link rel="stylesheet" href="/static/dashboard.css?v=153">
   <script src="/static/theme-sync.js?v=3"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
@@ -70,7 +70,7 @@
           <a href="/analysis" class="home-shortcut">
             <span class="home-shortcut-kicker">바로가기</span>
             <span class="home-shortcut-label">분석</span>
-            <span class="home-shortcut-desc">기본적분석 · 테마 · 지표</span>
+            <span class="home-shortcut-desc">기본적분석 · 차트/호가 · 테마</span>
           </a>
         </div>
 
@@ -301,7 +301,7 @@
       <div class="board-layout">
 
       <div class="board-block">
-        <div class="section-title">계좌 요약</div>
+        <div class="section-title">계좌 요약 · 국내</div>
         <div class="grid cols-4 board-stat-grid">
           <div class="card stat compact-stat"><div class="label">총 평가자산</div><div class="value" id="stTotalAsset">-</div><div class="delta flat" id="stAccountNo">-</div></div>
           <div class="card stat compact-stat"><div class="label">평가손익 <span class="hint">(미실현 · 키움)</span></div><div class="value" id="stPnl">-</div><div class="delta flat" id="stPnlRate">-</div><div class="delta flat board-stat-sub" id="stUnrealizedDetail">-</div><div class="delta flat board-stat-sub" id="stRealizedPnl">실현손익: -</div></div>
@@ -317,6 +317,26 @@
             </div>
           </div>
           <div class="card stat compact-stat"><div class="label">총 매입금액</div><div class="value" id="stBuyAmt">-</div><div class="delta flat" id="stHoldingCnt">키움 보유 -</div></div>
+        </div>
+      </div>
+
+      <div class="board-block board-overseas-block">
+        <div class="section-title">계좌 요약 · 해외 (미국) <span class="hint">조회 전용 · 키움 ust21070/ust21160</span></div>
+        <div class="grid cols-4 board-stat-grid">
+          <div class="card stat compact-stat"><div class="label">USD 예수금</div><div class="value" id="usDeposit">-</div><div class="delta flat" id="usDepositHint">-</div></div>
+          <div class="card stat compact-stat"><div class="label">평가손익 <span class="hint" id="usPnlUnitHint">(키움)</span></div><div class="value" id="usPnl">-</div><div class="delta flat" id="usPnlRate">-</div></div>
+          <div class="card stat compact-stat"><div class="label">주식 평가합</div><div class="value" id="usEvalSum">-</div><div class="delta flat" id="usBuySum">매입: -</div></div>
+          <div class="card stat compact-stat"><div class="label">보유 종목</div><div class="value" id="usHoldingCnt">-</div><div class="delta flat" id="usStatusHint">-</div></div>
+        </div>
+        <div class="card compact-card board-overseas-holdings-card">
+          <div class="card-head">
+            <div>
+              <h3>해외 보유 종목 <span class="hint" id="usHoldingsCount"></span></h3>
+              <div class="hint" style="margin-top:2px;">미국주식 원장잔고 · 평단/현재가 USD · 평가·손익은 키움 응답 단위</div>
+            </div>
+            <button class="btn sm" id="usAcctRefresh" type="button">새로고침</button>
+          </div>
+          <div class="card-body scroll board-overseas-body" id="usHoldingsBody"><div class="skeleton">불러오는 중...</div></div>
         </div>
       </div>
 
@@ -424,7 +444,7 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/static/dashboard.js?v=200"></script>
+  <script src="/static/dashboard.js?v=201"></script>
   <script src="/static/telegram-price-alert.js?v=3"></script>
 </body>
 </html>

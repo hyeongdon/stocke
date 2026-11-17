@@ -12,6 +12,7 @@ from api.kiwoom_api_shared import (
     _ACCOUNT_BALANCE_FRESH_SEC,
     _account_balance_cache,
     _get_balance_fetch_lock,
+    _parse_kiwoom_float,
     _parse_kiwoom_int,
     _parse_kiwoom_rate,
     _stale_account_balance,
@@ -24,6 +25,22 @@ from utils.api_traffic_guard import APIPriority
 __all__ = ["_AccountMixin"]
 
 _balance_inflight: Optional[asyncio.Task] = None
+_US_BALANCE_FRESH_SEC = 30.0
+_us_balance_cache: Dict = {"at": 0.0, "data": None}
+_us_balance_inflight: Optional[asyncio.Task] = None
+_us_balance_lock: Optional[asyncio.Lock] = None
+
+
+def _get_us_balance_lock() -> asyncio.Lock:
+    global _us_balance_lock
+    if _us_balance_lock is None:
+        _us_balance_lock = asyncio.Lock()
+    return _us_balance_lock
+
+
+def invalidate_us_account_balance_cache() -> None:
+    _us_balance_cache.clear()
+    _us_balance_cache.update({"at": 0.0, "data": None})
 
 
 class _AccountMixin:
@@ -891,3 +908,432 @@ class _AccountMixin:
             import traceback
             logger.error(f"스택 트레이스: {traceback.format_exc()}")
             return {}
+
+    async def get_us_account_overview(
+        self,
+        *,
+        force_refresh: bool = False,
+        priority: Optional[APIPriority] = None,
+        max_wait: float = 12.0,
+    ) -> Dict:
+        """미국주식 원장잔고(ust21070) + 예수금상세(ust21160) 조회.
+
+        조회 전용. 주문/자동매매와 분리. 동시 호출은 하나로 합친다.
+        """
+        if force_refresh:
+            invalidate_us_account_balance_cache()
+
+        now = time.monotonic()
+        cached = _us_balance_cache.get("data")
+        if (
+            not force_refresh
+            and cached
+            and now - _us_balance_cache.get("at", 0.0) < _US_BALANCE_FRESH_SEC
+        ):
+            out = dict(cached)
+            out["_cached"] = True
+            return out
+
+        lock = _get_us_balance_lock()
+        async with lock:
+            now = time.monotonic()
+            cached = _us_balance_cache.get("data")
+            if (
+                not force_refresh
+                and cached
+                and now - _us_balance_cache.get("at", 0.0) < _US_BALANCE_FRESH_SEC
+            ):
+                out = dict(cached)
+                out["_cached"] = True
+                return out
+
+            global _us_balance_inflight
+            if (
+                not force_refresh
+                and _us_balance_inflight is not None
+                and not _us_balance_inflight.done()
+            ):
+                task = _us_balance_inflight
+            else:
+                task = asyncio.create_task(
+                    self._fetch_us_account_overview(
+                        priority=priority,
+                        max_wait=max_wait,
+                    )
+                )
+                _us_balance_inflight = task
+
+        try:
+            return await task
+        finally:
+            async with lock:
+                if _us_balance_inflight is task:
+                    _us_balance_inflight = None
+
+    async def _fetch_us_account_overview(
+        self,
+        *,
+        priority: Optional[APIPriority] = None,
+        max_wait: float = 12.0,
+    ) -> Dict:
+        use_mock = Config.KIWOOM_USE_MOCK_ACCOUNT
+        account_type = "모의투자" if use_mock else "실계좌"
+        base = {
+            "market": "US",
+            "market_label": "해외(미국)",
+            "holdings": [],
+            "deposit": {},
+            "summary": {
+                "holding_count": 0,
+                "qty_sum": 0.0,
+                "eval_sum": 0.0,
+                "buy_sum": 0.0,
+                "pl_sum": 0.0,
+                "pl_rate": 0.0,
+                "usd_deposit": 0.0,
+                "currency_hint": "USD",
+            },
+            "_account_type": account_type,
+            "_api_connected": False,
+            "_token_valid": False,
+            "_data_source": "API_ERROR",
+        }
+
+        if not self.token_manager.get_valid_token():
+            base["_error"] = "no_token"
+            base["_error_msg"] = "토큰 없음"
+            return base
+
+        slot_priority = priority if priority is not None else APIPriority.NORMAL
+        slot_wait = max(1.0, float(max_wait or 12.0))
+        if not await self._acquire_api_slot(
+            "get_us_account_overview",
+            max_wait=slot_wait,
+            priority=slot_priority,
+        ):
+            stale = _us_balance_cache.get("data")
+            if stale:
+                out = dict(stale)
+                out["_cached"] = True
+                out["_stale_reason"] = "rate_limit"
+                return out
+            base["_error"] = "rate_limited"
+            base["_error_msg"] = "API 호출 제한 또는 슬롯 대기 초과"
+            return base
+
+        host = Config.KIWOOM_MOCK_API_URL if use_mock else Config.KIWOOM_REAL_API_URL
+        url = host + "/api/us/acnt"
+
+        async def _post(api_id: str, body: Optional[Dict] = None) -> Dict:
+            headers = {
+                "Content-Type": "application/json;charset=UTF-8",
+                "authorization": f"Bearer {self.token_manager.get_valid_token()}",
+                "cont-yn": "N",
+                "next-key": "",
+                "api-id": api_id,
+            }
+            timeout = aiohttp.ClientTimeout(total=15)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(url, headers=headers, json=body or {}) as resp:
+                    text = await resp.text()
+                    if resp.status != 200:
+                        return {
+                            "_http_status": resp.status,
+                            "return_code": -1,
+                            "return_msg": text[:300],
+                            "_raw_text": text[:500],
+                        }
+                    try:
+                        data = json.loads(text)
+                    except json.JSONDecodeError:
+                        return {
+                            "_http_status": resp.status,
+                            "return_code": -1,
+                            "return_msg": "JSON 파싱 실패",
+                            "_raw_text": text[:500],
+                        }
+                    if not isinstance(data, dict):
+                        return {
+                            "_http_status": resp.status,
+                            "return_code": -1,
+                            "return_msg": "응답 형식 오류",
+                        }
+                    data["_http_status"] = resp.status
+                    return data
+
+        try:
+            bal_resp, dep_resp = await asyncio.gather(
+                _post("ust21070", {}),
+                _post("ust21160", {}),
+                return_exceptions=True,
+            )
+        except Exception as e:
+            logger.error(f"미국주식 계좌 조회 오류: {e}")
+            base["_error"] = "unexpected"
+            base["_error_msg"] = str(e)
+            return base
+
+        errors: List[str] = []
+        if isinstance(bal_resp, Exception):
+            errors.append(f"잔고: {bal_resp}")
+            bal_resp = {}
+        if isinstance(dep_resp, Exception):
+            errors.append(f"예수금: {dep_resp}")
+            dep_resp = {}
+
+        def _us_resp_ok(resp: dict, label: str) -> bool:
+            if not resp:
+                errors.append(f"{label}: 응답 없음")
+                return False
+            if resp.get("_http_status") != 200:
+                errors.append(
+                    f"{label} HTTP {resp.get('_http_status')} "
+                    f"{resp.get('return_msg') or ''}".strip()
+                )
+                return False
+            code = resp.get("return_code")
+            # 0=성공, 20=조회결과없음 — 정상. return_code 없음도 허용
+            if code in (0, "0", 20, "20", None):
+                return True
+            if resp.get("result_list") is not None or resp.get("result_lsit") is not None:
+                return True
+            if any(
+                ("entr" in str(k).lower() or "usd" in str(k).lower())
+                for k in resp.keys()
+            ):
+                return True
+            errors.append(
+                f"{label}: {resp.get('return_msg') or resp.get('msg1') or code}"
+            )
+            return False
+
+        bal_ok = _us_resp_ok(bal_resp if isinstance(bal_resp, dict) else {}, "잔고")
+        dep_ok = _us_resp_ok(dep_resp if isinstance(dep_resp, dict) else {}, "예수금")
+
+        holdings = self._parse_us_holdings(bal_resp if isinstance(bal_resp, dict) else {})
+        deposit = self._parse_us_deposit(dep_resp if isinstance(dep_resp, dict) else {})
+
+        eval_sum = sum(float(h.get("eval_amt") or 0) for h in holdings)
+        buy_sum = sum(float(h.get("buy_amt") or 0) for h in holdings)
+        pl_sum = sum(float(h.get("pl_amt") or 0) for h in holdings)
+        qty_sum = sum(float(h.get("qty") or 0) for h in holdings)
+        pl_rate = (pl_sum / buy_sum * 100.0) if buy_sum else 0.0
+        # 매입금액이 없으면 평단×수량으로 추정
+        if buy_sum <= 0:
+            buy_est = sum(
+                float(h.get("avg_usd") or 0) * float(h.get("qty") or 0)
+                for h in holdings
+            )
+            if buy_est > 0:
+                buy_sum = buy_est
+                pl_rate = (pl_sum / buy_sum * 100.0) if buy_sum else 0.0
+
+        currency_hint = "USD"
+        # 평가금액이 평단×수량(USD)과 크게 다르면 원화 환산일 가능성
+        usd_eval_est = sum(
+            abs(float(h.get("cur_usd") or 0)) * float(h.get("qty") or 0)
+            for h in holdings
+        )
+        if holdings and eval_sum > 0 and usd_eval_est > 0:
+            ratio = eval_sum / usd_eval_est
+            if ratio > 200:  # 대략 환율 배수
+                currency_hint = "KRW"
+
+        result = {
+            "market": "US",
+            "market_label": "해외(미국)",
+            "holdings": holdings,
+            "deposit": deposit,
+            "summary": {
+                "holding_count": len(holdings),
+                "qty_sum": round(qty_sum, 6),
+                "eval_sum": round(eval_sum, 4),
+                "buy_sum": round(buy_sum, 4),
+                "pl_sum": round(pl_sum, 4),
+                "pl_rate": round(pl_rate, 4),
+                "usd_deposit": float(deposit.get("usd_deposit") or 0),
+                "currency_hint": currency_hint,
+            },
+            "_account_type": account_type,
+            "_api_connected": bool(bal_ok or dep_ok),
+            "_token_valid": True,
+            "_data_source": "REAL_API" if (bal_ok or dep_ok) else "API_ERROR",
+            "_balance_ok": bal_ok,
+            "_deposit_ok": dep_ok,
+        }
+        if errors:
+            result["_warnings"] = errors
+            result["_error_msg"] = " · ".join(errors[:3])
+        if not bal_ok and not dep_ok:
+            result["_error"] = "api_error"
+
+        if result["_api_connected"]:
+            _us_balance_cache.clear()
+            _us_balance_cache.update({"at": time.monotonic(), "data": result})
+            logger.info(
+                f"미국주식 계좌 조회 완료 - 보유 {len(holdings)}종목, "
+                f"USD예수금 {result['summary']['usd_deposit']}, "
+                f"평가합 {eval_sum} ({currency_hint})"
+            )
+        else:
+            logger.warning(f"미국주식 계좌 조회 실패: {result.get('_error_msg')}")
+
+        return result
+
+    @staticmethod
+    def _parse_us_holdings(api_response: dict) -> List[Dict]:
+        """ust21070 응답 → 정규화 보유 목록."""
+        if not isinstance(api_response, dict):
+            return []
+        rows = (
+            api_response.get("result_list")
+            or api_response.get("result_lsit")  # 키움 오타 대비
+            or api_response.get("stk_acnt_evlt_prst")
+            or []
+        )
+        if isinstance(rows, dict):
+            rows = [rows]
+        if not isinstance(rows, list):
+            return []
+
+        out: List[Dict] = []
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            code = str(
+                item.get("stk_cd")
+                or item.get("symbol")
+                or item.get("ticker")
+                or ""
+            ).strip()
+            if not code:
+                continue
+            qty = _parse_kiwoom_float(
+                item.get("poss_qty")
+                or item.get("rmnd_qty")
+                or item.get("qty")
+                or 0
+            )
+            if qty <= 0:
+                continue
+            avg_usd = abs(
+                _parse_kiwoom_float(
+                    item.get("frgn_stk_book_uv")
+                    or item.get("avg_prc")
+                    or item.get("avg_pr")
+                    or item.get("pur_pric")
+                    or 0
+                )
+            )
+            cur_usd = abs(
+                _parse_kiwoom_float(
+                    item.get("now_pric")
+                    or item.get("now_prc")
+                    or item.get("cur_prc")
+                    or item.get("cur_pr")
+                    or 0
+                )
+            )
+            eval_amt = _parse_kiwoom_float(
+                item.get("evlt_amt")
+                or item.get("frgn_evlt_amt")
+                or item.get("eval_amt")
+                or 0
+            )
+            if eval_amt == 0 and cur_usd > 0:
+                eval_amt = cur_usd * qty
+            buy_amt = _parse_kiwoom_float(
+                item.get("pur_amt")
+                or item.get("buy_amt")
+                or item.get("frgn_pur_amt")
+                or 0
+            )
+            if buy_amt == 0 and avg_usd > 0:
+                buy_amt = avg_usd * qty
+            pl_amt = _parse_kiwoom_float(
+                item.get("pl_amt")
+                or item.get("lspft_amt")
+                or item.get("evltv_prft")
+                or 0
+            )
+            pl_rt = _parse_kiwoom_float(
+                item.get("pl_rt")
+                or item.get("lspft_rt")
+                or item.get("prft_rt")
+                or 0
+            )
+            if pl_rt == 0 and buy_amt:
+                pl_rt = pl_amt / buy_amt * 100.0
+            sellable = _parse_kiwoom_float(
+                item.get("sell_alowq")
+                or item.get("trde_able_qty")
+                or item.get("ord_psbl_qty")
+                or item.get("sellable_qty")
+                or 0
+            )
+            exchange = str(
+                item.get("stex_tp")
+                or item.get("ovrs_excg_cd")
+                or item.get("excg_cd")
+                or ""
+            ).strip()
+            name = str(item.get("stk_nm") or item.get("stock_name") or code).strip()
+            out.append({
+                "code": code,
+                "name": name,
+                "exchange": exchange,
+                "qty": qty,
+                "sellable_qty": sellable,
+                "avg_usd": avg_usd,
+                "cur_usd": cur_usd,
+                "buy_amt": buy_amt,
+                "eval_amt": eval_amt,
+                "pl_amt": pl_amt,
+                "pl_rt": pl_rt,
+            })
+        return out
+
+    @staticmethod
+    def _parse_us_deposit(api_response: dict) -> Dict:
+        """ust21160(예수금 상세) 등 → USD 예수금 정규화."""
+        if not isinstance(api_response, dict):
+            return {"usd_deposit": 0.0}
+        # 문서·실측에서 자주 쓰는 키를 순서대로 시도
+        candidates = (
+            "d0_usd_fx_entr",
+            "usd_fx_entr",
+            "frgn_entr",
+            "fx_entr",
+            "usd_entr",
+            "d0_entra",
+            "entr",
+            "deposit",
+        )
+        usd_deposit = 0.0
+        matched = ""
+        for key in candidates:
+            if key in api_response and api_response.get(key) not in (None, ""):
+                usd_deposit = abs(_parse_kiwoom_float(api_response.get(key)))
+                matched = key
+                break
+        # 중첩 dict 대비
+        if not matched:
+            for key, val in api_response.items():
+                if not isinstance(val, dict):
+                    continue
+                for ck in candidates:
+                    if ck in val and val.get(ck) not in (None, ""):
+                        usd_deposit = abs(_parse_kiwoom_float(val.get(ck)))
+                        matched = f"{key}.{ck}"
+                        break
+                if matched:
+                    break
+        out = {
+            "usd_deposit": usd_deposit,
+            "usd_deposit_field": matched,
+        }
+        # 참고용 원시 숫자 필드 소수 보관
+        for key in ("d2_usd_fx_entr", "ord_alow_amt", "wthd_alow_amt", "exrt"):
+            if key in api_response and api_response.get(key) not in (None, ""):
+                out[key] = _parse_kiwoom_float(api_response.get(key))
+        return out

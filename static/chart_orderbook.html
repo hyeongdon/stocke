@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <title>차트/호가</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="manifest" href="/static/manifest.json">
+  <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Stocke">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="theme-color" content="#131720">
+  <script>
+    if (new URLSearchParams(location.search).get('embed') === '1') {
+      document.documentElement.classList.add('page-embedded');
+    }
+  </script>
+  <link rel="stylesheet" href="/static/dashboard.css?v=153">
+  <link rel="stylesheet" href="/static/chart_orderbook.css?v=6">
+  <script src="/static/theme-sync.js?v=3"></script>
+  <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="topbar-head">
+        <div class="brand">
+          <a class="brand-home" href="/" aria-label="인덱스 페이지"><h1>stock</h1></a>
+        </div>
+      </div>
+      <nav class="tabs tabs-scroll" aria-label="메인 메뉴">
+        <a href="/static/dashboard.html?tab=trading" class="tab-link">트레이딩</a>
+        <a href="/static/dashboard.html?tab=board" class="tab-link">대시보드</a>
+        <a href="/analysis" class="tab-link">분석 ↗</a>
+        <a href="/static/dashboard.html?tab=settings" class="tab-link">설정</a>
+      </nav>
+      <div class="topbar-actions cob-filters">
+        <div class="cob-search-wrap">
+          <input type="search" id="codeSearch" class="cob-search" placeholder="종목명·코드" autocomplete="off" enterkeyhint="search" aria-autocomplete="list" aria-controls="stockSuggest" aria-expanded="false">
+          <ul id="stockSuggest" class="cob-suggest" role="listbox" hidden></ul>
+        </div>
+        <button class="btn sm primary" id="btnLoad" type="button">조회</button>
+        <button class="btn sm" id="btnRefresh" type="button" title="차트·호가 새로고침">새로고침</button>
+        <label class="cob-auto" title="호가 자동 갱신">
+          <input type="checkbox" id="autoRefresh" checked> 자동(10s)
+        </label>
+        <span class="updated">갱신 <span id="lastUpdated">-</span></span>
+      </div>
+    </div>
+  </header>
+
+  <div class="wrap cob-wrap">
+    <section class="cob-quote-bar" id="quoteBar" aria-live="polite">
+      <div class="cob-quote-main">
+        <div class="cob-name-block">
+          <span class="cob-name" id="stockName">종목을 조회하세요</span>
+          <span class="cob-code" id="stockCode"></span>
+        </div>
+        <div class="cob-price-block">
+          <span class="cob-price" id="currentPrice">-</span>
+          <span class="cob-change" id="priceChange">-</span>
+        </div>
+      </div>
+      <div class="cob-quote-meta">
+        <span>거래량 <b id="quoteVolume">-</b></span>
+        <span>호가시각 <b id="orderbookTime">-</b></span>
+        <span class="hint" id="chartHint"></span>
+      </div>
+    </section>
+
+    <div class="cob-toolbar">
+      <button type="button" class="btn sm cob-fav-toggle" id="btnFavToggle" aria-expanded="true" title="즐겨찾기 폴더">★ 폴더</button>
+      <div class="cob-intervals" role="tablist" aria-label="차트 간격">
+        <button type="button" class="cob-interval" data-interval="5M">5분</button>
+        <button type="button" class="cob-interval" data-interval="15M">15분</button>
+        <button type="button" class="cob-interval active" data-interval="1D">일봉</button>
+        <button type="button" class="cob-interval" data-interval="1W">주봉</button>
+        <button type="button" class="cob-interval" data-interval="1MO">월봉</button>
+      </div>
+      <div class="cob-ma-toggles" aria-label="이동평균·보조지표">
+        <label class="cob-ma"><input type="checkbox" data-ma="ma5" checked> MA5</label>
+        <label class="cob-ma"><input type="checkbox" data-ma="ma20" checked> MA20</label>
+        <label class="cob-ma"><input type="checkbox" data-ma="ma60" checked> MA60</label>
+        <label class="cob-ma"><input type="checkbox" data-ma="ma120"> MA120</label>
+        <label class="cob-ma"><input type="checkbox" id="togRsi" checked> RSI(14)</label>
+      </div>
+    </div>
+
+    <div class="cob-main" id="cobMain">
+      <aside class="card cob-fav-folder" id="favFolder" aria-label="즐겨찾기 폴더">
+        <div class="cob-fav-head">
+          <button type="button" class="cob-fav-folder-toggle" id="btnFavFolder" aria-expanded="true">
+            <span class="cob-fav-folder-ico" aria-hidden="true">📁</span>
+            <span class="cob-fav-folder-title">즐겨찾기</span>
+            <span class="cob-fav-count" id="favCount">0</span>
+            <span class="cob-fav-chevron" aria-hidden="true"></span>
+          </button>
+          <button type="button" class="btn sm cob-fav-add" id="btnFavAddFolder" title="폴더 추가">+</button>
+          <button type="button" class="btn sm cob-fav-refresh" id="btnFavRefresh" title="즐겨찾기 새로고침">⟳</button>
+        </div>
+        <div class="cob-fav-body" id="favBody">
+          <input type="search" id="favFilter" class="cob-fav-filter" placeholder="폴더·종목 검색" autocomplete="off">
+          <div class="cob-fav-list" id="favList" role="tree" aria-label="즐겨찾기 폴더">
+            <div class="cob-fav-empty">불러오는 중…</div>
+          </div>
+        </div>
+      </aside>
+
+      <div class="cob-layout">
+        <section class="card cob-chart-card">
+          <div class="card-body cob-chart-body">
+            <div class="cob-chart-stack">
+              <div id="chartHost" class="cob-chart-host" role="img" aria-label="종목 차트"></div>
+              <div id="rsiPane" class="cob-rsi-pane">
+                <div class="cob-rsi-label">RSI(14) <b id="rsiLatest">-</b></div>
+                <div id="rsiHost" class="cob-rsi-host" role="img" aria-label="RSI 차트"></div>
+              </div>
+            </div>
+            <div id="chartEmpty" class="cob-empty">종목코드를 입력한 뒤 조회하세요</div>
+            <div id="chartStatus" class="cob-status" hidden></div>
+          </div>
+        </section>
+
+        <aside class="card cob-orderbook-card">
+          <div class="card-head">
+            <h3>호가 <span class="hint" id="obHint">10호가</span></h3>
+          </div>
+          <div class="card-body cob-orderbook-body" id="orderbookBody">
+            <div class="cob-empty sm">조회 후 표시됩니다</div>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <script src="/static/chart_orderbook.js?v=8"></script>
+</body>
+</html>

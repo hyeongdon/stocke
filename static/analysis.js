@@ -49,6 +49,7 @@ let state = {
 
 let toastTimer = null;
 const FAVORITES_KEY = 'analysisFavorites';
+const FAV_FOLDERS_KEY = 'analysisFavoriteFolders';
 const MEMOS_KEY = 'analysisMemos';
 const PREFERENCES_MIGRATED_KEY = 'analysisPreferencesMigrated';
 const MAX_MEMO_LENGTH = 5000;
@@ -57,6 +58,23 @@ const DEFAULT_STOCK_CODE = '005930';
 function normalizeStockCode(value) {
   const raw = String(value == null ? '' : value).trim().replace(/^A/i, '');
   return /^\d{1,6}$/.test(raw) ? raw.padStart(6, '0') : '';
+}
+
+function loadFavoriteFolderIds() {
+  const map = new Map();
+  try {
+    const raw = localStorage.getItem(FAVORITES_KEY);
+    if (!raw) return map;
+    const saved = JSON.parse(raw);
+    if (!Array.isArray(saved)) return map;
+    saved.forEach((item) => {
+      const code = normalizeStockCode(item && typeof item === 'object' ? item.code : item);
+      if (!code) return;
+      const folderId = item && item.folder_id != null ? Number(item.folder_id) : null;
+      map.set(code, Number.isFinite(folderId) ? folderId : null);
+    });
+  } catch (e) { /* ignore */ }
+  return map;
 }
 
 function loadFavorites() {
@@ -77,16 +95,33 @@ function loadFavorites() {
   }
 }
 
-function saveFavorites(favorites) {
+function saveFavorites(favorites, folderIds) {
   try {
+    const prevFolders = folderIds || loadFavoriteFolderIds();
     localStorage.setItem(FAVORITES_KEY, JSON.stringify(
-      [...favorites].map(([code, name]) => ({ code, name })),
+      [...favorites].map(([code, name]) => ({
+        code,
+        name,
+        folder_id: prevFolders.has(code) ? prevFolders.get(code) : null,
+      })),
     ));
     return true;
   } catch (e) {
     toast('즐겨찾기를 저장하지 못했습니다. 브라우저 저장 공간을 확인하세요.', true);
     return false;
   }
+}
+
+function saveFavoriteFolders(folders) {
+  try {
+    localStorage.setItem(FAV_FOLDERS_KEY, JSON.stringify(
+      (folders || []).map((f) => ({
+        id: Number(f.id),
+        name: String(f.name || ''),
+        sort_order: Number(f.sort_order) || 0,
+      })).filter((f) => Number.isFinite(f.id) && f.id > 0 && f.name),
+    ));
+  } catch (e) { /* ignore */ }
 }
 
 function saveMemos(memos) {
@@ -117,9 +152,13 @@ async function loadServerPreferences() {
   }
 
   const favorites = new Map();
+  const folderIds = new Map();
   (saved.favorites || []).forEach((item) => {
     const code = normalizeStockCode(item && item.code);
-    if (code) favorites.set(code, String((item && item.name) || ''));
+    if (!code) return;
+    favorites.set(code, String((item && item.name) || ''));
+    const folderId = item && item.folder_id != null ? Number(item.folder_id) : null;
+    folderIds.set(code, Number.isFinite(folderId) ? folderId : null);
   });
   const memos = new Map();
   Object.entries(saved.memos || {}).forEach(([key, text]) => {
@@ -140,8 +179,10 @@ async function loadServerPreferences() {
       try {
         await fetchJSON(`/api/analysis/favorites/${encodeURIComponent(code)}`, preferenceRequest('PUT', { stock_name: name }));
         favorites.set(code, name);
+        if (!folderIds.has(code)) folderIds.set(code, null);
       } catch (e) {
         favorites.set(code, name);
+        if (!folderIds.has(code)) folderIds.set(code, null);
         migrationFailures.push(`즐겨찾기 ${code}`);
       }
     }
@@ -158,7 +199,8 @@ async function loadServerPreferences() {
   }
   state.favorites = favorites;
   state.memos = memos;
-  saveFavorites(favorites);
+  saveFavoriteFolders(saved.folders || []);
+  saveFavorites(favorites, folderIds);
   saveMemos(memos);
   if (migrationFailures.length) {
     toast(`기존 브라우저 저장값 일부를 서버로 옮기지 못했습니다: ${migrationFailures.join(', ')}`, true);
@@ -271,6 +313,7 @@ async function toggleFavorite(stockCode, stockName) {
   saveFavorites(next);
   syncDetailFavoriteButton();
   updateFilterSummary();
+  syncFavoritesQuickButton();
   if ($('fltFavoritesOnly').checked) {
     if (state.loading) state.reloadAfterLoad = true;
     else loadList({ autoSelect: false });
@@ -434,6 +477,22 @@ function updateFilterSummary() {
   el.textContent = parts.join(' · ');
 }
 
+function syncFavoritesQuickButton() {
+  const btn = $('btnFavoritesQuick');
+  const countEl = $('favoritesQuickCount');
+  if (!btn) return;
+  const active = Boolean($('fltFavoritesOnly') && $('fltFavoritesOnly').checked);
+  const count = state.favorites.size;
+  btn.classList.toggle('is-active', active);
+  btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  const label = active
+    ? `즐겨찾기만 보기 해제${count ? ` (${count}종목)` : ''}`
+    : `즐겨찾기만 보기${count ? ` (${count}종목)` : ''}`;
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+  if (countEl) countEl.textContent = count ? String(count) : '';
+}
+
 function applyFilterPanel() {
   const card = document.querySelector('.analysis-toolbar-card');
   const btn = $('btnFilterToggle');
@@ -444,6 +503,7 @@ function applyFilterPanel() {
     btn.classList.toggle('has-filters', hasActiveFilters());
   }
   updateFilterSummary();
+  syncFavoritesQuickButton();
 }
 
 function syncSortDirButton() {
@@ -582,24 +642,12 @@ function renderMobileList(items) {
   const wrap = $('tableWrap');
   const cards = items.map((row) => {
     const sel = row.stock_code === state.selectedCode ? ' selected' : '';
-    const metrics = [
-      ['PER', fmtFloat(row.per, 2)],
-      ['PBR', fmtFloat(row.pbr, 2)],
-      ['ROE', fmtFloat(row.roe, 2)],
-    ].map(([k, v]) => `<span><em>${k}</em>${v}</span>`).join('');
     return `<div class="analysis-row-item">
       ${favoriteButtonHtml(row)}
       <button type="button" class="analysis-row${sel}" data-code="${esc(row.stock_code)}">
-        <span class="analysis-row-body">
-          <span class="analysis-row-top">
-            <span class="analysis-row-name">${esc(row.stock_name ?? '-')}${badgeHtml(row)}</span>
-            <span class="analysis-row-price">${fmtWon(row.current_price)}</span>
-          </span>
-          <span class="analysis-row-sub">
-            <span class="analysis-row-meta">${esc(row.market || '-')}</span>
-            <span class="analysis-row-cap">${fmtEok(row.market_cap)}</span>
-          </span>
-          <span class="analysis-row-metrics">${metrics}</span>
+        <span class="analysis-row-body analysis-row-body-compact">
+          <span class="analysis-row-name">${esc(row.stock_name ?? '-')}${badgeHtml(row)}</span>
+          <span class="analysis-row-price">${fmtWon(row.current_price)}</span>
         </span>
       </button>
     </div>`;
@@ -758,14 +806,6 @@ function renderDetail(row) {
     detailField('거래대금', row.trading_value != null ? fmtNum(row.trading_value) + '백만' : '-'),
     indicatorFieldsHtml(),
   ].join('');
-  const valBlock = [
-    detailField('PER', fmtFloat(row.per, 2)),
-    detailField('PBR', fmtFloat(row.pbr, 2)),
-    detailField('ROE', fmtPct(row.roe)),
-    detailField('EPS', fmtFloat(row.eps, 0) + '원'),
-    detailField('보통주배당금', fmtWon(row.dividend_per_share)),
-    detailField('외국인비율', fmtPct(row.foreign_ratio)),
-  ].join('');
   const metaBlock = [
     detailField('상장주식수', row.listed_shares != null ? fmtNum(row.listed_shares) + '주' : '-'),
     detailField('데이터 출처', esc(row.source || '-')),
@@ -780,7 +820,6 @@ function renderDetail(row) {
       ${companyProfilePlaceholderHtml()}
     </div>
     <div class="detail-grid">${priceBlock}</div>
-    <div class="detail-section"><div class="detail-section-title">밸류에이션</div><div class="detail-grid">${valBlock}</div></div>
     <div class="detail-section"><div class="detail-section-title">메타</div><div class="detail-grid">${metaBlock}</div></div>
     ${stockInvestorHistoryHtml(row.stock_code)}`;
   applyChartDrawMode();
@@ -1136,14 +1175,92 @@ function indicatorFieldsHtml() {
   ].join('');
 }
 
+function debtRatioPct(row) {
+  const assets = parseNum(row.total_assets);
+  const debt = parseNum(row.total_debt);
+  if (assets === null || debt === null || assets <= 0) return null;
+  return (debt / assets) * 100;
+}
+
+function financeScore(row) {
+  const roe = parseNum(row.roe);
+  const per = parseNum(row.per);
+  const pbr = parseNum(row.pbr);
+  const op = parseNum(row.operating_profit);
+  const debtPct = debtRatioPct(row);
+  let score = 50;
+  let used = 0;
+
+  if (roe !== null) {
+    used += 1;
+    if (roe >= 15) score += 20;
+    else if (roe >= 10) score += 12;
+    else if (roe >= 5) score += 5;
+    else if (roe < 0) score -= 12;
+    else score -= 3;
+  }
+  if (per !== null) {
+    used += 1;
+    if (per > 0 && per <= 12) score += 15;
+    else if (per > 0 && per <= 18) score += 8;
+    else if (per > 30) score -= 10;
+    else if (per <= 0) score -= 6;
+  }
+  if (pbr !== null) {
+    used += 1;
+    if (pbr > 0 && pbr <= 1) score += 10;
+    else if (pbr > 0 && pbr <= 1.5) score += 5;
+    else if (pbr > 3) score -= 6;
+  }
+  if (debtPct !== null) {
+    used += 1;
+    if (debtPct < 30) score += 10;
+    else if (debtPct < 50) score += 5;
+    else if (debtPct > 100) score -= 15;
+    else if (debtPct > 80) score -= 8;
+  }
+  if (op !== null) {
+    used += 1;
+    if (op > 0) score += 5;
+    else if (op < 0) score -= 10;
+  }
+
+  if (!used) return null;
+  score = Math.max(0, Math.min(100, Math.round(score)));
+  let grade = 'C';
+  if (score >= 80) grade = 'A';
+  else if (score >= 65) grade = 'B';
+  else if (score >= 50) grade = 'C';
+  else if (score >= 35) grade = 'D';
+  else grade = 'E';
+  return { score, grade };
+}
+
 function financeStripHtml(row) {
-  const items = [
-    ['매출액', fmtEok(row.revenue)],
-    ['영업이익', fmtEok(row.operating_profit)],
-    ['자산총계', fmtEok(row.total_assets)],
-    ['부채총계', fmtEok(row.total_debt)],
-  ].map(([k, v]) => `<div class="analysis-fin-item"><span class="k">${k}</span><span class="v">${v}</span></div>`).join('');
-  return `<div class="analysis-fin-strip" aria-label="재무 요약">${items}</div>`;
+  const scored = financeScore(row);
+  const debtPct = debtRatioPct(row);
+  const parts = [
+    ['ROE', fmtPct(row.roe)],
+    ['PER', fmtFloat(row.per, 2)],
+    ['PBR', fmtFloat(row.pbr, 2)],
+    ['매출', fmtEok(row.revenue)],
+    ['영업익', fmtEok(row.operating_profit)],
+    ['부채비율', debtPct === null ? '-' : fmtFloat(debtPct, 1) + '%'],
+    ['배당', fmtWon(row.dividend_per_share)],
+  ].filter(([, v]) => v && v !== '-');
+
+  const metrics = parts
+    .map(([k, v]) => `<span class="analysis-fin-metric"><span class="k">${esc(k)}</span><span class="v">${v}</span></span>`)
+    .join('<span class="analysis-fin-sep" aria-hidden="true">·</span>');
+
+  const badge = scored
+    ? `<span class="analysis-fin-score grade-${scored.grade}" title="ROE·PER·PBR·부채비율·영업이익 기반 간이 재무지수">${esc(scored.grade)} ${scored.score}</span>`
+    : `<span class="analysis-fin-score grade-na" title="재무지수 산출 불가">-</span>`;
+
+  return `<div class="analysis-fin-line" aria-label="재무 요약">
+    ${badge}
+    <div class="analysis-fin-metrics">${metrics || '<span class="hint">재무 지표 없음</span>'}</div>
+  </div>`;
 }
 
 function chartSectionsHtml() {
@@ -2148,6 +2265,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('btnFilterToggle').onclick = () => {
     filterUserOpen = !filterUserOpen;
     applyFilterPanel();
+  };
+  $('btnFavoritesQuick').onclick = () => {
+    const cb = $('fltFavoritesOnly');
+    if (!cb) return;
+    cb.checked = !cb.checked;
+    applyFilterPanel();
+    loadList({ autoSelect: false });
   };
   $('btnSortDir').onclick = () => {
     state.sortDesc = !state.sortDesc;

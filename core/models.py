@@ -148,6 +148,21 @@ class TelegramPriceAlert(Base):
     )
 
 
+class AnalysisFavoriteFolder(Base):
+    __tablename__ = "analysis_favorite_folders"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(120), nullable=False, index=True)
+    name = Column(String(80), nullable=False)
+    sort_order = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, nullable=False, default=_utc_now_naive)
+
+    __table_args__ = (
+        UniqueConstraint("username", "name", name="uq_analysis_favorite_folder_user_name"),
+        Index("idx_analysis_favorite_folder_user_sort", "username", "sort_order"),
+    )
+
+
 class AnalysisFavorite(Base):
     __tablename__ = "analysis_favorites"
 
@@ -155,6 +170,7 @@ class AnalysisFavorite(Base):
     username = Column(String(120), nullable=False, index=True)
     stock_code = Column(String(6), nullable=False)
     stock_name = Column(String(100), nullable=False, default="")
+    folder_id = Column(Integer, nullable=True, index=True)
     created_at = Column(DateTime, nullable=False, default=_utc_now_naive)
 
     __table_args__ = (
@@ -1864,7 +1880,20 @@ def init_db() -> None:
         # 마이그레이션 실패는 치명적이지 않게 무시
         print(f"Migration warning: {e}")
 
+    _migrate_analysis_favorite_folders()
     _migrate_auto_trade_settings_account_mode()
+
+
+def _migrate_analysis_favorite_folders() -> None:
+    """analysis_favorite_folders 테이블 + analysis_favorites.folder_id 컬럼."""
+    try:
+        AnalysisFavoriteFolder.__table__.create(bind=engine, checkfirst=True)
+        cols = {c["name"] for c in inspect(engine).get_columns("analysis_favorites")}
+        if "folder_id" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE analysis_favorites ADD COLUMN folder_id INTEGER"))
+    except Exception as e:
+        print(f"Migration warning (analysis favorite folders): {e}")
 
 
 def _migrate_auto_trade_settings_account_mode() -> None:

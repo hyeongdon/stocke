@@ -38,6 +38,7 @@ from core.models import (
     get_db,
     AutoTradeCondition,
     AnalysisFavorite,
+    AnalysisFavoriteFolder,
     AnalysisMemo,
     PendingBuySignal,
     AutoTradeSettings,
@@ -559,6 +560,7 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
                     "/analysis",
                     "/theme-map",
                     "/indicators",
+                    "/chart-orderbook",
                     "/verify",
                     "/exit-replay",
                     "/api-explorer",
@@ -1308,6 +1310,13 @@ async def theme_map_page():
 async def indicators_page():
     """분석 페이지의 지표 탭."""
     return RedirectResponse(url="/static/analysis.html?view=indicators")
+
+@app.get("/chart-orderbook")
+async def chart_orderbook_page(request: Request):
+    """분석 페이지의 차트/호가 탭."""
+    qs = request.url.query
+    base = "/static/analysis.html?view=chart"
+    return RedirectResponse(url=f"{base}&{qs}" if qs else base)
 
 @app.get("/verify")
 async def verify_page(request: Request):
@@ -2280,6 +2289,22 @@ class KrxHolidayRequest(BaseModel):
 
 class AnalysisFavoriteRequest(BaseModel):
     stock_name: str = Field(default="", max_length=100)
+    folder_id: Optional[int] = None
+
+
+class AnalysisFavoriteFolderRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    sort_order: Optional[int] = None
+
+
+class AnalysisFavoriteFolderPatchRequest(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    sort_order: Optional[int] = None
+
+
+class AnalysisFavoriteMoveRequest(BaseModel):
+    folder_id: Optional[int] = None
+    stock_name: Optional[str] = Field(default=None, max_length=100)
 
 
 class AnalysisMemoRequest(BaseModel):
@@ -2299,20 +2324,130 @@ def _analysis_stock_code(stock_code: str) -> str:
     return code
 
 
+def _analysis_folder_for_user(db: Session, username: str, folder_id: Optional[int]) -> Optional[AnalysisFavoriteFolder]:
+    if folder_id is None:
+        return None
+    folder = db.query(AnalysisFavoriteFolder).filter(
+        AnalysisFavoriteFolder.id == folder_id,
+        AnalysisFavoriteFolder.username == username,
+    ).one_or_none()
+    if folder is None:
+        raise HTTPException(status_code=404, detail="폴더를 찾을 수 없습니다")
+    return folder
+
+
+def _analysis_folder_payload(row: AnalysisFavoriteFolder) -> Dict[str, Any]:
+    return {
+        "id": row.id,
+        "name": row.name,
+        "sort_order": int(row.sort_order or 0),
+    }
+
+
 @app.get("/api/analysis/preferences")
 def get_analysis_preferences(request: Request, db: Session = Depends(get_db)):
     username = _analysis_username(request)
+    folders = (
+        db.query(AnalysisFavoriteFolder)
+        .filter(AnalysisFavoriteFolder.username == username)
+        .order_by(AnalysisFavoriteFolder.sort_order.asc(), AnalysisFavoriteFolder.id.asc())
+        .all()
+    )
+    folder_ids = {f.id for f in folders}
     favorites = db.query(AnalysisFavorite).filter(
         AnalysisFavorite.username == username
     ).all()
     memos = db.query(AnalysisMemo).filter(AnalysisMemo.username == username).all()
     return {
+        "folders": [_analysis_folder_payload(row) for row in folders],
         "favorites": [
-            {"code": row.stock_code, "name": row.stock_name}
+            {
+                "code": row.stock_code,
+                "name": row.stock_name,
+                "folder_id": row.folder_id if row.folder_id in folder_ids else None,
+            }
             for row in favorites
         ],
         "memos": {row.stock_code: row.content for row in memos},
     }
+
+
+@app.post("/api/analysis/favorite-folders")
+def create_analysis_favorite_folder(
+    body: AnalysisFavoriteFolderRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    username = _analysis_username(request)
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="폴더 이름을 입력하세요")
+    exists = db.query(AnalysisFavoriteFolder).filter(
+        AnalysisFavoriteFolder.username == username,
+        AnalysisFavoriteFolder.name == name,
+    ).one_or_none()
+    if exists is not None:
+        raise HTTPException(status_code=409, detail="같은 이름의 폴더가 있습니다")
+    max_order = db.query(AnalysisFavoriteFolder.sort_order).filter(
+        AnalysisFavoriteFolder.username == username
+    ).order_by(AnalysisFavoriteFolder.sort_order.desc()).first()
+    next_order = int((max_order[0] if max_order else -1) or -1) + 1
+    row = AnalysisFavoriteFolder(
+        username=username,
+        name=name,
+        sort_order=body.sort_order if body.sort_order is not None else next_order,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _analysis_folder_payload(row)
+
+
+@app.patch("/api/analysis/favorite-folders/{folder_id}")
+def patch_analysis_favorite_folder(
+    folder_id: int,
+    body: AnalysisFavoriteFolderPatchRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    username = _analysis_username(request)
+    row = _analysis_folder_for_user(db, username, folder_id)
+    assert row is not None
+    if body.name is not None:
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="폴더 이름을 입력하세요")
+        clash = db.query(AnalysisFavoriteFolder).filter(
+            AnalysisFavoriteFolder.username == username,
+            AnalysisFavoriteFolder.name == name,
+            AnalysisFavoriteFolder.id != folder_id,
+        ).one_or_none()
+        if clash is not None:
+            raise HTTPException(status_code=409, detail="같은 이름의 폴더가 있습니다")
+        row.name = name
+    if body.sort_order is not None:
+        row.sort_order = int(body.sort_order)
+    db.commit()
+    db.refresh(row)
+    return _analysis_folder_payload(row)
+
+
+@app.delete("/api/analysis/favorite-folders/{folder_id}")
+def delete_analysis_favorite_folder(
+    folder_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    username = _analysis_username(request)
+    row = _analysis_folder_for_user(db, username, folder_id)
+    assert row is not None
+    db.query(AnalysisFavorite).filter(
+        AnalysisFavorite.username == username,
+        AnalysisFavorite.folder_id == folder_id,
+    ).update({AnalysisFavorite.folder_id: None}, synchronize_session=False)
+    db.delete(row)
+    db.commit()
+    return {"success": True, "id": folder_id}
 
 
 @app.put("/api/analysis/favorites/{stock_code}")
@@ -2324,6 +2459,7 @@ def save_analysis_favorite(
 ):
     code = _analysis_stock_code(stock_code)
     username = _analysis_username(request)
+    folder = _analysis_folder_for_user(db, username, body.folder_id)
     row = db.query(AnalysisFavorite).filter(
         AnalysisFavorite.username == username,
         AnalysisFavorite.stock_code == code,
@@ -2332,8 +2468,34 @@ def save_analysis_favorite(
         row = AnalysisFavorite(username=username, stock_code=code)
         db.add(row)
     row.stock_name = body.stock_name.strip()
+    if "folder_id" in body.model_fields_set:
+        row.folder_id = folder.id if folder is not None else None
     db.commit()
-    return {"code": code, "name": row.stock_name}
+    return {"code": code, "name": row.stock_name, "folder_id": row.folder_id}
+
+
+@app.patch("/api/analysis/favorites/{stock_code}")
+def patch_analysis_favorite(
+    stock_code: str,
+    body: AnalysisFavoriteMoveRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    code = _analysis_stock_code(stock_code)
+    username = _analysis_username(request)
+    row = db.query(AnalysisFavorite).filter(
+        AnalysisFavorite.username == username,
+        AnalysisFavorite.stock_code == code,
+    ).one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="즐겨찾기에 없는 종목입니다")
+    if "folder_id" in body.model_fields_set:
+        folder = _analysis_folder_for_user(db, username, body.folder_id)
+        row.folder_id = folder.id if folder is not None else None
+    if body.stock_name is not None:
+        row.stock_name = body.stock_name.strip()
+    db.commit()
+    return {"code": code, "name": row.stock_name, "folder_id": row.folder_id}
 
 
 @app.delete("/api/analysis/favorites/{stock_code}")
@@ -4412,6 +4574,76 @@ async def get_account_balance():
     except Exception as e:
         logger.error(f"계좌 잔고 조회 오류: {e}")
         raise HTTPException(status_code=500, detail="계좌 잔고 조회 중 오류가 발생했습니다.")
+
+@app.get("/account/overseas")
+async def get_account_overseas():
+    """해외(미국) 계좌 상세 조회 — ust21070 잔고 + ust21160 예수금. 조회 전용."""
+    try:
+        use_mock_account = config.KIWOOM_USE_MOCK_ACCOUNT
+        account_type = "모의투자" if use_mock_account else "실계좌"
+        token_valid = bool(kiwoom_api.token_manager.get_valid_token())
+        if not token_valid:
+            return {
+                "market": "US",
+                "market_label": "해외(미국)",
+                "holdings": [],
+                "deposit": {"usd_deposit": 0.0},
+                "summary": {
+                    "holding_count": 0,
+                    "qty_sum": 0.0,
+                    "eval_sum": 0.0,
+                    "buy_sum": 0.0,
+                    "pl_sum": 0.0,
+                    "pl_rate": 0.0,
+                    "usd_deposit": 0.0,
+                    "currency_hint": "USD",
+                },
+                "_account_type": account_type,
+                "_api_connected": False,
+                "_token_valid": False,
+                "_data_source": "API_ERROR",
+                "_error": "no_token",
+                "_error_msg": "토큰 없음",
+            }
+
+        result = await asyncio.wait_for(
+            kiwoom_api.get_us_account_overview(max_wait=15.0),
+            timeout=20.0,
+        )
+        if not isinstance(result, dict):
+            result = {"_error": "bad_response", "_error_msg": "응답 형식 오류"}
+        result.setdefault("_account_type", account_type)
+        result.setdefault("market", "US")
+        result.setdefault("market_label", "해외(미국)")
+        return result
+    except asyncio.TimeoutError:
+        logger.warning("🌐 [API] 해외(미국) 계좌 조회 타임아웃")
+        return {
+            "market": "US",
+            "market_label": "해외(미국)",
+            "holdings": [],
+            "deposit": {"usd_deposit": 0.0},
+            "summary": {
+                "holding_count": 0,
+                "qty_sum": 0.0,
+                "eval_sum": 0.0,
+                "buy_sum": 0.0,
+                "pl_sum": 0.0,
+                "pl_rate": 0.0,
+                "usd_deposit": 0.0,
+                "currency_hint": "USD",
+            },
+            "_account_type": "모의투자" if config.KIWOOM_USE_MOCK_ACCOUNT else "실계좌",
+            "_api_connected": False,
+            "_token_valid": True,
+            "_data_source": "API_ERROR",
+            "_error": "timeout",
+            "_error_msg": "해외 계좌 조회 타임아웃",
+        }
+    except Exception as e:
+        logger.error(f"해외(미국) 계좌 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail="해외 계좌 조회 중 오류가 발생했습니다.")
+
 
 @app.get("/account/holdings")
 async def get_account_holdings():

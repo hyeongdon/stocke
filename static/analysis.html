@@ -13,8 +13,8 @@
   <meta name="apple-mobile-web-app-title" content="Stocke">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="theme-color" content="#131720">
-  <link rel="stylesheet" href="/static/dashboard.css?v=149">
-  <link rel="stylesheet" href="/static/analysis.css?v=26">
+  <link rel="stylesheet" href="/static/dashboard.css?v=153">
+  <link rel="stylesheet" href="/static/analysis.css?v=31">
   <script src="/static/theme-sync.js?v=3"></script>
 </head>
 <body>
@@ -31,7 +31,7 @@
         <a href="/analysis" class="tab-link active" aria-current="page">분석 ↗</a>
         <a href="/static/dashboard.html?tab=settings" class="tab-link">설정</a>
       </nav>
-      <div class="topbar-actions analysis-filters">
+      <div class="topbar-actions analysis-filters" hidden>
         <input type="search" id="codeSearch" class="analysis-search" placeholder="종목코드" maxlength="6" inputmode="numeric" autocomplete="off" enterkeyhint="search">
         <button class="btn sm primary" id="btnRefresh" type="button">새로고침</button>
         <span class="updated">갱신: <span id="lastUpdated">-</span></span>
@@ -41,12 +41,16 @@
 
   <div class="auto-subtabs-bar analysis-view-bar">
     <nav class="auto-subtabs" aria-label="분석 하위 메뉴">
-      <button type="button" class="auto-subtab analysis-view-tab active" data-view="fundamental">기본적분석</button>
+      <button type="button" class="auto-subtab analysis-view-tab active" data-view="chart">차트/호가</button>
+      <button type="button" class="auto-subtab analysis-view-tab" data-view="fundamental">기본적분석</button>
       <button type="button" class="auto-subtab analysis-view-tab" data-view="theme">테마</button>
       <button type="button" class="auto-subtab analysis-view-tab" data-view="indicators">지표</button>
     </nav>
   </div>
 
+  <div class="analysis-view" id="analysis-view-chart">
+    <iframe class="analysis-embed-frame" title="차트/호가" data-src="/static/chart_orderbook.html?embed=1"></iframe>
+  </div>
   <div class="analysis-view" id="analysis-view-theme" hidden>
     <iframe class="analysis-embed-frame" title="테마" data-src="/static/theme_map.html?embed=1"></iframe>
   </div>
@@ -54,7 +58,7 @@
     <iframe class="analysis-embed-frame" title="지표" data-src="/static/indicators.html?embed=1"></iframe>
   </div>
 
-  <div class="wrap analysis-wrap analysis-view" id="analysis-view-fundamental">
+  <div class="wrap analysis-wrap analysis-view" id="analysis-view-fundamental" hidden>
     <section class="analysis-summary" id="summaryCards">
       <div class="v-stat"><div class="k">총 종목</div><div class="v" id="statTotal">-</div></div>
       <div class="v-stat"><div class="k">기준일</div><div class="v" id="statDate">-</div></div>
@@ -64,11 +68,17 @@
     </section>
 
     <div class="card analysis-toolbar-card">
-      <button type="button" class="analysis-filter-toggle" id="btnFilterToggle" aria-expanded="false" aria-controls="filterPanel">
-        <span class="analysis-filter-toggle-label">필터</span>
-        <span class="analysis-filter-summary" id="filterSummary">전체 · 시가총액 · 시총≥1천억</span>
-        <span class="analysis-filter-chevron" aria-hidden="true"></span>
-      </button>
+      <div class="analysis-filter-bar">
+        <button type="button" class="analysis-filter-toggle" id="btnFilterToggle" aria-expanded="false" aria-controls="filterPanel">
+          <span class="analysis-filter-toggle-label">필터</span>
+          <span class="analysis-filter-summary" id="filterSummary">전체 · 시가총액 · 시총≥1천억</span>
+          <span class="analysis-filter-chevron" aria-hidden="true"></span>
+        </button>
+        <button type="button" class="analysis-favorites-quick" id="btnFavoritesQuick" aria-pressed="false" title="즐겨찾기만 보기" aria-label="즐겨찾기만 보기">
+          <span class="analysis-favorites-quick-icon" aria-hidden="true">★</span>
+          <span class="analysis-favorites-quick-count" id="favoritesQuickCount"></span>
+        </button>
+      </div>
       <div class="card-body analysis-toolbar" id="filterPanel">
         <label>시장
           <select id="fltMarket">
@@ -151,11 +161,19 @@
 
   <div class="toast" id="toast"></div>
   <script src="/static/investor-history.js?v=8"></script>
-  <script src="/static/analysis.js?v=38"></script>
+  <script src="/static/analysis.js?v=42"></script>
   <script src="/static/telegram-price-alert.js?v=2"></script>
   <script>
     (function () {
       const filters = document.querySelector('.analysis-filters');
+      const EMBED_VIEWS = new Set(['chart', 'theme', 'indicators']);
+      function embedSrc(base) {
+        const code = new URLSearchParams(location.search).get('code') || '';
+        if (!code || !/^\d{1,6}$/.test(code)) return base;
+        const u = new URL(base, location.origin);
+        u.searchParams.set('code', code.padStart(6, '0'));
+        return u.pathname + u.search;
+      }
       function showView(name) {
         document.querySelectorAll('.analysis-view-tab').forEach((t) => {
           t.classList.toggle('active', t.dataset.view === name);
@@ -165,17 +183,32 @@
         });
         if (filters) filters.hidden = name !== 'fundamental';
         const frame = document.querySelector('#analysis-view-' + name + ' iframe');
-        if (frame && !frame.hasAttribute('src')) frame.src = frame.dataset.src;
+        if (frame) {
+          const next = embedSrc(frame.dataset.src);
+          const cur = frame.getAttribute('src');
+          if (!cur) {
+            frame.src = next;
+          } else if (name === 'chart') {
+            try {
+              const curCode = new URL(cur, location.origin).searchParams.get('code') || '';
+              const wantCode = new URLSearchParams(location.search).get('code') || '';
+              const norm = (c) => (/^\d{1,6}$/.test(c) ? c.padStart(6, '0') : '');
+              if (norm(wantCode) && norm(wantCode) !== norm(curCode)) frame.src = next;
+            } catch (_) { /* ignore */ }
+          }
+        }
         const url = new URL(location.href);
-        if (name === 'fundamental') url.searchParams.delete('view');
+        if (name === 'chart') url.searchParams.delete('view');
         else url.searchParams.set('view', name);
         history.replaceState(null, '', url);
       }
       document.querySelectorAll('.analysis-view-tab').forEach((t) => {
         t.addEventListener('click', () => showView(t.dataset.view));
       });
-      const initial = new URLSearchParams(location.search).get('view');
-      if (initial === 'theme' || initial === 'indicators') showView(initial);
+      const initial = new URLSearchParams(location.search).get('view') || 'chart';
+      if (initial === 'fundamental') showView('fundamental');
+      else if (EMBED_VIEWS.has(initial)) showView(initial);
+      else showView('chart');
     })();
   </script>
 </body>

@@ -43,6 +43,18 @@ function parseNum(v) {
   return sign * parseFloat(cleaned);
 }
 function won(v) { return Math.round(parseNum(v)).toLocaleString('ko-KR') + '원'; }
+function usd(v, digits) {
+  const n = parseNum(v);
+  const d = digits == null ? 2 : digits;
+  return '$' + n.toLocaleString('en-US', {
+    minimumFractionDigits: d,
+    maximumFractionDigits: d,
+  });
+}
+function moneyByHint(v, hint) {
+  if (String(hint || '').toUpperCase() === 'KRW') return won(v);
+  return usd(v);
+}
 function num(v) { return Math.round(parseNum(v)).toLocaleString('ko-KR'); }
 function numFixed(v, digits) {
   const n = parseNum(v);
@@ -598,7 +610,109 @@ function renderCashBreakdown(d, holdings) {
   }
 }
 
+function renderUsHoldingsTable(holdings, currencyHint) {
+  const el = $('usHoldingsBody');
+  if (!el) return;
+  if (!holdings || !holdings.length) {
+    el.innerHTML = emptyRow('해외(미국) 보유 종목 없음', '🌐');
+    return;
+  }
+  const hint = currencyHint || 'USD';
+  const rows = holdings.map((h) => {
+    const pl = parseNum(h.pl_amt);
+    const rate = parseNum(h.pl_rt);
+    const ex = h.exchange ? `<span class="hint">${esc(h.exchange)}</span>` : '';
+    return `<tr>
+      <td><div class="stock-name">${esc(h.name || h.code)}</div><div class="stock-code">${esc(h.code)} ${ex}</div></td>
+      <td class="num">${numFixed(h.qty, Math.abs(parseNum(h.qty) % 1) > 0 ? 4 : 0)}</td>
+      <td class="num">${usd(h.avg_usd)}</td>
+      <td class="num">${usd(h.cur_usd)}</td>
+      <td class="num">${moneyByHint(h.eval_amt, hint)}</td>
+      <td class="num ${signClass(pl)}">${moneyByHint(pl, hint)}</td>
+      <td class="num ${signClass(rate)}">${rateStr(rate)}</td>
+    </tr>`;
+  }).join('');
+  el.innerHTML = `<table class="tbl board-overseas-tbl">
+    <thead><tr>
+      <th>종목</th><th class="num">수량</th><th class="num">평단</th><th class="num">현재가</th>
+      <th class="num">평가</th><th class="num">손익</th><th class="num">수익률</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+function renderOverseasAccount(d) {
+  const summary = (d && d.summary) || {};
+  const hint = summary.currency_hint || 'USD';
+  const holdings = (d && d.holdings) || [];
+  const connected = Boolean(d && d._api_connected);
+  const err = (d && (d._error_msg || d._error)) || '';
+
+  if ($('usPnlUnitHint')) {
+    $('usPnlUnitHint').textContent = hint === 'KRW' ? '(원화 환산 · 키움)' : '(USD · 키움)';
+  }
+  if ($('usDeposit')) $('usDeposit').textContent = usd(summary.usd_deposit || 0);
+  if ($('usDepositHint')) {
+    $('usDepositHint').textContent = connected
+      ? (d._cached ? '캐시 · ust21160' : 'ust21160')
+      : (err ? String(err) : '조회 실패');
+  }
+
+  const pl = parseNum(summary.pl_sum);
+  if ($('usPnl')) {
+    $('usPnl').textContent = moneyByHint(pl, hint);
+    $('usPnl').className = 'value ' + signClass(pl);
+  }
+  if ($('usPnlRate')) {
+    $('usPnlRate').textContent = rateStr(summary.pl_rate);
+    $('usPnlRate').className = 'delta ' + signClass(summary.pl_rate);
+  }
+  if ($('usEvalSum')) $('usEvalSum').textContent = moneyByHint(summary.eval_sum, hint);
+  if ($('usBuySum')) $('usBuySum').textContent = `매입: ${moneyByHint(summary.buy_sum, hint)}`;
+  if ($('usHoldingCnt')) $('usHoldingCnt').textContent = `${summary.holding_count || 0}종목`;
+  if ($('usHoldingsCount')) {
+    $('usHoldingsCount').textContent = holdings.length ? `(${holdings.length})` : '';
+  }
+  if ($('usStatusHint')) {
+    if (!connected) {
+      $('usStatusHint').textContent = err || '키움 미국주식 API 미응답';
+      $('usStatusHint').className = 'delta flat down';
+    } else if (d._warnings && d._warnings.length) {
+      $('usStatusHint').textContent = d._warnings[0];
+      $('usStatusHint').className = 'delta flat';
+    } else {
+      $('usStatusHint').textContent = d._cached ? '캐시' : '실시간';
+      $('usStatusHint').className = 'delta flat';
+    }
+  }
+  renderUsHoldingsTable(holdings, hint);
+}
+
 /* ===== 계좌 요약 ===== */
+async function loadOverseasAccount() {
+  try {
+    const d = await fetchJSON('/account/overseas', { timeoutMs: 25000 });
+    window._usAccount = d;
+    renderOverseasAccount(d);
+  } catch (e) {
+    window._usAccount = null;
+    if ($('usDeposit')) $('usDeposit').textContent = '-';
+    if ($('usDepositHint')) $('usDepositHint').textContent = '조회 실패';
+    if ($('usPnl')) { $('usPnl').textContent = '-'; $('usPnl').className = 'value flat'; }
+    if ($('usPnlRate')) { $('usPnlRate').textContent = '-'; $('usPnlRate').className = 'delta flat'; }
+    if ($('usEvalSum')) $('usEvalSum').textContent = '-';
+    if ($('usBuySum')) $('usBuySum').textContent = '매입: -';
+    if ($('usHoldingCnt')) $('usHoldingCnt').textContent = '-';
+    if ($('usStatusHint')) {
+      $('usStatusHint').textContent = (e && e.message) ? String(e.message) : '조회 실패';
+      $('usStatusHint').className = 'delta flat down';
+    }
+    if ($('usHoldingsBody')) {
+      $('usHoldingsBody').innerHTML = emptyRow('해외 계좌 조회 실패', '🌐');
+    }
+  }
+}
+
 async function loadAccount() {
   try {
     const d = await fetchJSON('/account/balance', { timeoutMs: 25000 });
@@ -647,7 +761,9 @@ async function loadAccount() {
     renderCashBreakdown(d, holdings);
     if (window._perfStats) applyRealizedSummary(window._perfStats);
     syncKiwoomHoldingsView();
+    loadOverseasAccount();
   } catch (e) {
+    loadOverseasAccount();
     const serverOk = await pingServer();
     if (!serverOk) {
       setConn('off', '서버 응답 없음');
@@ -5810,6 +5926,7 @@ document.addEventListener('DOMContentLoaded', () => {
     t.onclick = () => switchSettingsSubTab(t.dataset.settingsSub);
   });
   $('refreshAll').onclick = refreshAll;
+  if ($('usAcctRefresh')) $('usAcctRefresh').onclick = () => loadOverseasAccount();
   $('pfRefresh').onclick = () => loadPerformance(true);
   $('logRefresh').onclick = loadLog;
   if ($('logDays')) $('logDays').onchange = loadLog;
