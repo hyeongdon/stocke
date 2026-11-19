@@ -17,7 +17,7 @@ mkdir -p "$ROOT_DIR/logs"
 
 usage() {
     echo "Usage: $0 <batch-name>"
-    echo "Batches: condition-alert, condition-alert-realtime, daily-trade-journal, failed-buy-signals, fundamental, kiwoom-pnl-sync, realtime-candle-cleanup, technical-mart, theme-mart, trade-industry"
+    echo "Batches: chart-ohlcv-daily, chart-ohlcv-weekly, chart-ohlcv-monthly, condition-alert, condition-alert-realtime, daily-trade-journal, failed-buy-signals, fundamental, kiwoom-pnl-sync, realtime-candle-cleanup, technical-mart, theme-mart, trade-industry"
 }
 
 if [[ $# -ne 1 ]]; then
@@ -75,6 +75,21 @@ case "$1" in
         SCRIPT="scripts/realtime_candle_cleanup_batch.py"
         ARGS=()
         LOG_FILE="$ROOT_DIR/logs/realtime_candle_cleanup_batch.log"
+        ;;
+    chart-ohlcv-daily)
+        SCRIPT="scripts/chart_ohlcv_mart_batch.py"
+        ARGS=(--scope fundamental --intervals 1D --workers 1 --sleep 0.3)
+        LOG_FILE="$ROOT_DIR/logs/chart_ohlcv_mart_batch.log"
+        ;;
+    chart-ohlcv-weekly)
+        SCRIPT="scripts/chart_ohlcv_mart_batch.py"
+        ARGS=(--scope fundamental --intervals 1W --workers 1 --sleep 0.3)
+        LOG_FILE="$ROOT_DIR/logs/chart_ohlcv_mart_batch.log"
+        ;;
+    chart-ohlcv-monthly)
+        SCRIPT="scripts/chart_ohlcv_mart_batch.py"
+        ARGS=(--scope fundamental --intervals 1MO --workers 1 --sleep 0.3)
+        LOG_FILE="$ROOT_DIR/logs/chart_ohlcv_mart_batch.log"
         ;;
     *)
         echo "Unknown batch: $1" >&2

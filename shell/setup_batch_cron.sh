@@ -45,6 +45,10 @@ $ANALYSIS_CRON_BEGIN
 30 13 * * 1-5 $RUNNER technical-mart; technical_status=\$?; $RUNNER theme-mart; theme_status=\$?; test "\$technical_status" -eq 0 && test "\$theme_status" -eq 0
 # theme-mart: weekends at 23:00 KST
 0 14 * * 6,0 $RUNNER theme-mart
+# chart OHLCV 일봉: 평일 장후 20:30 KST (UTC 11:30) — NXT 20:00 이후
+30 11 * * 1-5 $RUNNER chart-ohlcv-daily
+# chart OHLCV 주봉→월봉: 토요일 20:30 KST (UTC 11:30) 순차 실행
+30 11 * * 6 $RUNNER chart-ohlcv-weekly; weekly_status=\$?; $RUNNER chart-ohlcv-monthly; monthly_status=\$?; test "\$weekly_status" -eq 0 && test "\$monthly_status" -eq 0
 $ANALYSIS_CRON_END
 EOF
 )

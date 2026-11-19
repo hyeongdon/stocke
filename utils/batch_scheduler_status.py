@@ -106,6 +106,32 @@ KNOWN_BATCHES: List[Dict[str, Any]] = [
         "description": "네이버 기본적분석 데이터 → DB 마트 — sise_market_sum 페이지가 stock.naver.com 으로 바뀌어 수집 0건, 스케줄 비활성",
     },
     {
+        "id": "chart_ohlcv_daily",
+        "label": "차트 OHLCV 일봉",
+        "task_name": "Stocke-ChartOhlcvBatch",
+        "process_needles": [
+            "chart_ohlcv_mart_batch.py",
+            "run_chart_ohlcv_daily_batch.bat",
+            "chart-ohlcv-daily",
+        ],
+        "log_file": os.path.join(LOG_DIR, "chart_ohlcv_mart_batch.log"),
+        "default_schedule": "평일 20:30 (장후)",
+        "description": "분석화면용 일봉 OHLCV 마트 (fundamental 전체) — 실전 cron UTC 11:30 = KST 20:30",
+    },
+    {
+        "id": "chart_ohlcv_weekly_monthly",
+        "label": "차트 OHLCV 주/월봉",
+        "task_name": "Stocke-ChartOhlcvWeeklyMonthly",
+        "process_needles": [
+            "run_chart_ohlcv_weekly_monthly_batch.bat",
+            "chart-ohlcv-weekly",
+            "chart-ohlcv-monthly",
+        ],
+        "log_file": os.path.join(LOG_DIR, "chart_ohlcv_mart_batch.log"),
+        "default_schedule": "토요일 20:30 순차",
+        "description": "분석화면용 주봉→월봉 OHLCV 마트 순차 적재 (fundamental)",
+    },
+    {
         "id": "log_cleanup",
         "label": "로그 7일 정리",
         "task_name": "stocke-log-cleanup",

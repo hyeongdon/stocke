@@ -872,6 +872,28 @@ class TechnicalSnapshot(Base):
     )
 
 
+class ChartOhlcvSeries(Base):
+    """차트 OHLCV 마트 — 종목×타임프레임별 봉 시리즈(JSON). 분석화면 장외 조회용."""
+    __tablename__ = "chart_ohlcv_series"
+
+    id = Column(Integer, primary_key=True, index=True)
+    stock_code = Column(String(20), nullable=False, index=True)
+    stock_name = Column(String(100), nullable=False, default="")
+    interval = Column(String(10), nullable=False, index=True)  # 1D | 1W | 1MO
+    as_of_date = Column(Date, nullable=False, index=True)
+    bar_count = Column(Integer, nullable=False, default=0)
+    first_bar_date = Column(String(10), nullable=True)  # YYYY-MM-DD
+    last_bar_date = Column(String(10), nullable=True)
+    bars_json = Column(JSON, nullable=False, default=list)
+    source = Column(String(20), nullable=False, default="kiwoom")
+    fetched_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        UniqueConstraint("stock_code", "interval", name="uq_chart_ohlcv_code_interval"),
+        Index("idx_chart_ohlcv_as_of_interval", "as_of_date", "interval"),
+    )
+
+
 class ConditionWatchlistSync(Base):
     """조건식 관심종목 동기화 테이블"""
     __tablename__ = "condition_watchlist_sync"
@@ -1203,6 +1225,11 @@ def ensure_technical_snapshot_columns() -> None:
             if col_name not in ts_cols:
                 conn.execute(text(f"ALTER TABLE technical_snapshots ADD COLUMN {col_name} {col_def}"))
                 conn.commit()
+
+
+def ensure_chart_ohlcv_series_table() -> None:
+    """chart_ohlcv_series 테이블 생성 (배치·서버 기동 시)."""
+    ChartOhlcvSeries.__table__.create(bind=engine, checkfirst=True)
 
 
 def init_db() -> None:
@@ -1788,6 +1815,7 @@ def init_db() -> None:
                         conn.commit()
 
             ensure_technical_snapshot_columns()
+            ensure_chart_ohlcv_series_table()
 
             # theme_tags / theme_tag_edges 확장 (연관도 v2)
             result = conn.execute(

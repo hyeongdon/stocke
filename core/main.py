@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 import os
 import asyncio
 import time
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 import logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
@@ -2931,16 +2931,49 @@ def _clamp_display_bars(bars: Any, default: int, lo: int, hi: int) -> int:
         return default
 
 
+async def _load_ohlcv_rows(
+    stock_code: str,
+    interval: str,
+    *,
+    prefer_mart: bool = True,
+    persist: bool = True,
+) -> Tuple[List[Dict[str, Any]], str]:
+    """분석 차트용 OHLCV — 마트 우선, 없으면 키움 API 폴백(+선택적 write-through).
+
+    반환: (rows, source)  source = mart | kiwoom | mixed
+    """
+    from utils.chart_ohlcv_mart_store import get_bars, upsert_series
+
+    rows: List[Dict[str, Any]] = []
+    source = "kiwoom"
+    if prefer_mart:
+        rows = _parse_chart_rows(get_bars(stock_code, interval))
+        if rows:
+            return rows, "mart"
+
+    raw = await kiwoom_api.get_stock_chart_data(
+        stock_code, interval, allow_off_hours=True,
+    )
+    rows = _parse_chart_rows(raw)
+    if rows and persist:
+        try:
+            upsert_series(stock_code, interval, rows, source="kiwoom")
+        except Exception as e:
+            logger.debug(f"차트 OHLCV 마트 저장 실패 ({stock_code}/{interval}): {e}")
+    return rows, source
+
+
 @app.get("/fundamentals/{stock_code}/chart")
 async def get_fundamental_chart(
     stock_code: str,
     interval: str = "1D",
     bars: Optional[int] = None,
+    refresh: bool = False,
 ):
     """분석 화면용 차트 — 월봉(24개월) · 일봉(최대 189일) · 주봉(104주) + 지표·신호.
 
+    기본은 chart_ohlcv_mart 우선 조회. refresh=true 이면 키움 API를 다시 치고 마트에 갱신한다.
     월봉은 키움 ka10083, 주봉은 ka10082, 일봉은 ka10081 응답을 사용한다.
-    월봉은 최근 24개월, 일봉은 최근 최대 189거래일(약 9개월), 주봉은 최근 104주를 표시한다.
     """
     try:
         norm_interval = _normalize_chart_interval(interval)
@@ -2955,55 +2988,65 @@ async def get_fundamental_chart(
             from utils.datetime_kst import now_kst
 
             now = now_kst().replace(tzinfo=None)
+            prefer_mart = not bool(refresh)
+
             if norm_interval == "1MO":
-                monthly_rows = _parse_chart_rows(
-                    await kiwoom_api.get_stock_chart_data(stock_code, "1MO", allow_off_hours=True)
+                monthly_rows, src = await _load_ohlcv_rows(
+                    stock_code, "1MO", prefer_mart=prefer_mart,
                 )
                 if not monthly_rows:
                     raise HTTPException(
                         status_code=404,
-                        detail="월봉 데이터를 찾지 못했습니다 (키움 API 빈 응답)",
+                        detail="월봉 데이터를 찾지 못했습니다 (마트·키움 API 빈 응답)",
                     )
                 mark_monthly_partial(monthly_rows, now)
                 return _indicator_chart_payload(
                     stock_code, "1MO", monthly_rows,
                     _clamp_display_bars(bars, 24, 24, 24), "월",
                     source_monthly_bars=len(monthly_rows),
+                    data_source=src,
                 )
 
-            daily_rows = _parse_chart_rows(
-                await kiwoom_api.get_stock_chart_data(stock_code, "1D", allow_off_hours=True)
+            daily_rows, daily_src = await _load_ohlcv_rows(
+                stock_code, "1D", prefer_mart=prefer_mart,
             )
 
             if norm_interval == "1D":
                 if not daily_rows:
                     raise HTTPException(
                         status_code=404,
-                        detail="일봉 데이터를 찾지 못했습니다 (키움 API 빈 응답)",
+                        detail="일봉 데이터를 찾지 못했습니다 (마트·키움 API 빈 응답)",
                     )
                 mark_daily_partial(daily_rows, now)
                 return _indicator_chart_payload(
                     stock_code, "1D", daily_rows,
                     _clamp_display_bars(bars, 189, 30, 400), "일",
                     source_daily_bars=len(daily_rows),
+                    data_source=daily_src,
                 )
 
-            api_weeks = _parse_chart_rows(
-                await kiwoom_api.get_stock_chart_data(stock_code, "1W", allow_off_hours=True)
+            api_weeks, week_src = await _load_ohlcv_rows(
+                stock_code, "1W", prefer_mart=prefer_mart,
             )
+            # 일봉 마트만 있어도 주봉 리샘플로 표시 가능
             weekly_rows = merge_weekly_rows(
                 api_weeks, resample_weekly_ohlcv(daily_rows, now=now), now=now,
             )
             if not weekly_rows:
                 raise HTTPException(
                     status_code=404,
-                    detail="주봉 데이터를 찾지 못했습니다 (키움 API 빈 응답)",
+                    detail="주봉 데이터를 찾지 못했습니다 (마트·키움 API 빈 응답)",
                 )
+            data_source = (
+                "mart" if daily_src == "mart" and (week_src == "mart" or not api_weeks)
+                else ("kiwoom" if daily_src == "kiwoom" and week_src == "kiwoom" else "mixed")
+            )
             return _indicator_chart_payload(
                 stock_code, "1W", weekly_rows,
                 _clamp_display_bars(bars, 104, 26, 260), "주",
                 source_daily_bars=len(daily_rows),
                 source_weekly_bars=len(api_weeks),
+                data_source=data_source,
             )
 
         # 분석 화면 체감속도를 위해 기본은 최근 1거래일만 조회하고,
