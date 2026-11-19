@@ -33,6 +33,11 @@ from core.models import (  # noqa: E402
     ensure_chart_ohlcv_series_table,
     get_db,
 )
+from notifications.chart_ohlcv_batch_notify import (  # noqa: E402
+    notify_chart_ohlcv_done,
+    notify_chart_ohlcv_error,
+    notify_chart_ohlcv_start,
+)
 from utils.chart_ohlcv_mart_store import upsert_many  # noqa: E402
 from utils.datetime_kst import kst_today, now_kst  # noqa: E402
 
@@ -86,6 +91,11 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--workers", type=int, default=2, help="동시 워커 수(기본: 2)")
     p.add_argument("--sleep", type=float, default=0.25, help="종목·인터벌 간 대기(초)")
+    p.add_argument(
+        "--no-telegram",
+        action="store_true",
+        help="시작/완료/실패 텔레그램 알림 비활성화",
+    )
     return p.parse_args()
 
 
@@ -235,21 +245,45 @@ async def _fetch_one(
         return out
 
 
-async def _run_async(args: argparse.Namespace, logger: logging.Logger) -> int:
+def _telegram_on(args: argparse.Namespace) -> bool:
+    return not bool(getattr(args, "no_telegram", False))
+
+
+def _notify(enabled: bool, fn, logger: logging.Logger, **kwargs) -> None:
+    if not enabled:
+        return
+    try:
+        ok = fn(**kwargs)
+        logger.info("텔레그램 알림 %s: %s", getattr(fn, "__name__", "notify"), "OK" if ok else "FAIL/SKIP")
+    except Exception as e:
+        logger.exception("텔레그램 알림 전송 중 오류: %s", e)
+
+
+async def _run_async(args: argparse.Namespace, logger: logging.Logger) -> Tuple[int, Dict]:
     ensure_chart_ohlcv_series_table()
     as_of, universe = load_universe(args)
-    if not universe:
-        logger.error(
-            "유니버스가 비어 있습니다. 즐겨찾기를 추가하거나 --scope fundamental / --codes 를 지정하세요."
-        )
-        return 1
-
     intervals = _parse_intervals(args.intervals)
+    meta: Dict = {
+        "as_of": str(as_of),
+        "scope": args.scope,
+        "universe": len(universe),
+        "intervals": intervals,
+        "saved": 0,
+        "success_codes": 0,
+        "error": None,
+    }
+    if not universe:
+        msg = "유니버스가 비어 있습니다. 즐겨찾기를 추가하거나 --scope fundamental / --codes 를 지정하세요."
+        logger.error(msg)
+        meta["error"] = msg
+        return 1, meta
 
     api = KiwoomAPI()
     if not api.authenticate():
-        logger.error("키움 API 인증 실패")
-        return 1
+        msg = "키움 API 인증 실패"
+        logger.error(msg)
+        meta["error"] = msg
+        return 1, meta
 
     logger.info(
         "차트 OHLCV 마트 배치 시작 — as_of=%s scope=%s universe=%d intervals=%s workers=%d",
@@ -258,6 +292,15 @@ async def _run_async(args: argparse.Namespace, logger: logging.Logger) -> int:
         len(universe),
         ",".join(intervals),
         args.workers,
+    )
+    _notify(
+        _telegram_on(args),
+        notify_chart_ohlcv_start,
+        logger,
+        as_of=str(as_of),
+        scope=args.scope,
+        universe=len(universe),
+        intervals=intervals,
     )
 
     sem = asyncio.Semaphore(max(1, int(args.workers)))
@@ -271,11 +314,15 @@ async def _run_async(args: argparse.Namespace, logger: logging.Logger) -> int:
         rows.extend(chunk or [])
 
     if not rows:
-        logger.error("저장할 차트 데이터가 없습니다 (API 빈 응답·한도 가능).")
-        return 1
+        msg = "저장할 차트 데이터가 없습니다 (API 빈 응답·한도 가능)."
+        logger.error(msg)
+        meta["error"] = msg
+        return 1, meta
 
     saved = upsert_many(rows, as_of_date=as_of if isinstance(as_of, date) else kst_today())
     ok_codes = {r["stock_code"] for r in rows}
+    meta["saved"] = int(saved)
+    meta["success_codes"] = len(ok_codes)
     logger.info(
         "완료 — upsert=%d series  success_codes=%d/%d as_of=%s",
         saved,
@@ -283,7 +330,7 @@ async def _run_async(args: argparse.Namespace, logger: logging.Logger) -> int:
         len(universe),
         as_of,
     )
-    return 0
+    return 0, meta
 
 
 def main() -> int:
@@ -291,9 +338,52 @@ def main() -> int:
     logger = logging.getLogger(__name__)
     args = parse_args()
     started = now_kst()
-    rc = asyncio.run(_run_async(args, logger))
+    telegram_on = _telegram_on(args)
+    intervals = _parse_intervals(args.intervals)
+    try:
+        rc, meta = asyncio.run(_run_async(args, logger))
+    except Exception as e:
+        elapsed = (now_kst() - started).total_seconds()
+        logger.exception("차트 OHLCV 배치 예외: %s", e)
+        _notify(
+            telegram_on,
+            notify_chart_ohlcv_error,
+            logger,
+            as_of=str(kst_today()),
+            scope=getattr(args, "scope", None),
+            intervals=intervals,
+            error=str(e),
+            duration_sec=elapsed,
+        )
+        return 1
+
     elapsed = (now_kst() - started).total_seconds()
     logger.info("종료 코드=%d, 소요=%.1fs", rc, elapsed)
+    if rc == 0:
+        _notify(
+            telegram_on,
+            notify_chart_ohlcv_done,
+            logger,
+            ok=True,
+            as_of=meta.get("as_of") or str(kst_today()),
+            scope=meta.get("scope") or args.scope,
+            universe=int(meta.get("universe") or 0),
+            intervals=meta.get("intervals") or intervals,
+            saved=meta.get("saved"),
+            success_codes=meta.get("success_codes"),
+            duration_sec=elapsed,
+        )
+    else:
+        _notify(
+            telegram_on,
+            notify_chart_ohlcv_error,
+            logger,
+            as_of=meta.get("as_of"),
+            scope=meta.get("scope") or args.scope,
+            intervals=meta.get("intervals") or intervals,
+            error=meta.get("error") or f"exit={rc}",
+            duration_sec=elapsed,
+        )
     return rc
 
 
