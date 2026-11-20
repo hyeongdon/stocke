@@ -24,8 +24,8 @@ cat > /tmp/new_crontab << EOF
 # (UTC 02:00 으로 두면 KST 11:00 장중 재시작이 된다)
 0 17 * * * cd $PROJECT_DIR && ./shell/sync_production_source.sh >> $CRON_LOG 2>&1
 
-# 매일 20:30 KST (UTC 11:30) 장후(NXT 20:00 종료 이후) 소스 동기화 — 당일 반영용
-30 11 * * * cd $PROJECT_DIR && ./shell/sync_production_source.sh >> $CRON_LOG 2>&1
+# 매일 20:00 KST (UTC 11:00) 장후 소스 동기화 — chart-ohlcv(20:30)보다 30분 앞서 반영
+0 11 * * * cd $PROJECT_DIR && ./shell/sync_production_source.sh >> $CRON_LOG 2>&1
 
 # 매 30분마다 서버 상태 확인
 */30 * * * * cd $PROJECT_DIR && ./shell/health_check.sh >> $CRON_LOG 2>&1
@@ -52,7 +52,7 @@ echo "Cron Job 설정 완료:"
 echo ""
 echo "설정된 작업:"
 echo "- 매일 02:00 KST: 소스 동기화, 변경 시 서버 재시작, 결과 텔레그램"
-echo "- 매일 20:30 KST: 장후 소스 동기화, 변경 시 서버 재시작, 결과 텔레그램"
+echo "- 매일 20:00 KST: 장후 소스 동기화, 변경 시 서버 재시작, 결과 텔레그램 (OHLCV 배치 30분 전)"
 echo "- 매 30분: 서버 상태 확인"
 echo "- 매일 01:00 KST: 만료된 관심종목 정리 (DB 직접)"
 echo "- 매일 23:00 KST: 로그 7일 보관 정리"
