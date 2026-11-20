@@ -12,10 +12,22 @@ __all__ = ["_StockAnalyticsMixin"]
 class _StockAnalyticsMixin:
     @staticmethod
     def _pick_int(row: Dict, keys: List[str], default: int = 0) -> int:
+        """가격/수량용. 키움은 등락 부호를 +/-로 붙이는 경우가 있어 abs로 절댓값만 취한다."""
         for key in keys:
             if key in row and row.get(key) not in (None, ""):
                 try:
                     return abs(int(str(row.get(key)).replace(",", "").replace("+", "")))
+                except Exception:
+                    continue
+        return default
+
+    @staticmethod
+    def _pick_signed_int(row: Dict, keys: List[str], default: int = 0) -> int:
+        """전일대비 등 부호가 의미인 필드. +/- 부호를 유지한다."""
+        for key in keys:
+            if key in row and row.get(key) not in (None, ""):
+                try:
+                    return int(str(row.get(key)).replace(",", "").replace("+", "").strip())
                 except Exception:
                     continue
         return default
@@ -124,7 +136,7 @@ class _StockAnalyticsMixin:
             "current_price": cls._pick_int(
                 basic_row, ["cur_prc", "close_pric", "price", "10"]
             ),
-            "price_diff": cls._pick_int(
+            "price_diff": cls._pick_signed_int(
                 basic_row, ["pred_pre", "pre", "diff", "11"]
             ),
             "change_rate": change_rate,

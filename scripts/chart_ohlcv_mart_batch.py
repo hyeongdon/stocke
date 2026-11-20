@@ -6,6 +6,7 @@
   python scripts/chart_ohlcv_mart_batch.py --scope favorites
   python scripts/chart_ohlcv_mart_batch.py --scope fundamental --limit 200
   python scripts/chart_ohlcv_mart_batch.py --codes 000150,005930
+  python scripts/chart_ohlcv_mart_batch.py --scope fundamental --intervals 1D --chunk-size 100
 """
 from __future__ import annotations
 
@@ -91,6 +92,12 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--workers", type=int, default=2, help="동시 워커 수(기본: 2)")
     p.add_argument("--sleep", type=float, default=0.25, help="종목·인터벌 간 대기(초)")
+    p.add_argument(
+        "--chunk-size",
+        type=int,
+        default=100,
+        help="조회·저장 청크 크기(기본: 100). 청크마다 upsert 해서 중단 시에도 적재 유지",
+    )
     p.add_argument(
         "--no-telegram",
         action="store_true",
@@ -263,11 +270,14 @@ async def _run_async(args: argparse.Namespace, logger: logging.Logger) -> Tuple[
     ensure_chart_ohlcv_series_table()
     as_of, universe = load_universe(args)
     intervals = _parse_intervals(args.intervals)
+    chunk_size = max(1, int(getattr(args, "chunk_size", 100) or 100))
+    as_of_date = as_of if isinstance(as_of, date) else kst_today()
     meta: Dict = {
         "as_of": str(as_of),
         "scope": args.scope,
         "universe": len(universe),
         "intervals": intervals,
+        "chunk_size": chunk_size,
         "saved": 0,
         "success_codes": 0,
         "error": None,
@@ -285,13 +295,17 @@ async def _run_async(args: argparse.Namespace, logger: logging.Logger) -> Tuple[
         meta["error"] = msg
         return 1, meta
 
+    total_chunks = (len(universe) + chunk_size - 1) // chunk_size
     logger.info(
-        "차트 OHLCV 마트 배치 시작 — as_of=%s scope=%s universe=%d intervals=%s workers=%d",
+        "차트 OHLCV 마트 배치 시작 — as_of=%s scope=%s universe=%d intervals=%s "
+        "workers=%d chunk_size=%d chunks=%d",
         as_of,
         args.scope,
         len(universe),
         ",".join(intervals),
         args.workers,
+        chunk_size,
+        total_chunks,
     )
     _notify(
         _telegram_on(args),
@@ -304,31 +318,67 @@ async def _run_async(args: argparse.Namespace, logger: logging.Logger) -> Tuple[
     )
 
     sem = asyncio.Semaphore(max(1, int(args.workers)))
-    tasks = [
-        _fetch_one(api, sem, it, intervals, max(0.0, float(args.sleep)))
-        for it in universe
-    ]
-    done = await asyncio.gather(*tasks, return_exceptions=False)
-    rows: List[Dict] = []
-    for chunk in done:
-        rows.extend(chunk or [])
+    sleep_sec = max(0.0, float(args.sleep))
+    ok_codes: set[str] = set()
+    saved_total = 0
 
-    if not rows:
+    for chunk_idx in range(0, len(universe), chunk_size):
+        chunk = universe[chunk_idx : chunk_idx + chunk_size]
+        chunk_no = chunk_idx // chunk_size + 1
+        logger.info(
+            "청크 %d/%d 시작 — codes=%d (%s … %s)",
+            chunk_no,
+            total_chunks,
+            len(chunk),
+            chunk[0]["stock_code"],
+            chunk[-1]["stock_code"],
+        )
+        tasks = [
+            _fetch_one(api, sem, it, intervals, sleep_sec) for it in chunk
+        ]
+        done = await asyncio.gather(*tasks, return_exceptions=False)
+        rows: List[Dict] = []
+        for part in done:
+            rows.extend(part or [])
+
+        if not rows:
+            logger.warning(
+                "청크 %d/%d — 저장할 데이터 없음 (API 빈 응답·한도 가능)",
+                chunk_no,
+                total_chunks,
+            )
+            continue
+
+        saved = upsert_many(rows, as_of_date=as_of_date)
+        codes = {r["stock_code"] for r in rows}
+        ok_codes.update(codes)
+        saved_total += int(saved)
+        logger.info(
+            "청크 %d/%d 저장 — upsert=%d series  codes=%d  누적 upsert=%d success_codes=%d/%d",
+            chunk_no,
+            total_chunks,
+            saved,
+            len(codes),
+            saved_total,
+            len(ok_codes),
+            len(universe),
+        )
+
+    meta["saved"] = int(saved_total)
+    meta["success_codes"] = len(ok_codes)
+    if saved_total <= 0:
         msg = "저장할 차트 데이터가 없습니다 (API 빈 응답·한도 가능)."
         logger.error(msg)
         meta["error"] = msg
         return 1, meta
 
-    saved = upsert_many(rows, as_of_date=as_of if isinstance(as_of, date) else kst_today())
-    ok_codes = {r["stock_code"] for r in rows}
-    meta["saved"] = int(saved)
-    meta["success_codes"] = len(ok_codes)
     logger.info(
-        "완료 — upsert=%d series  success_codes=%d/%d as_of=%s",
-        saved,
+        "완료 — upsert=%d series  success_codes=%d/%d as_of=%s chunk_size=%d",
+        saved_total,
         len(ok_codes),
         len(universe),
         as_of,
+        chunk_size,
     )
     return 0, meta
 

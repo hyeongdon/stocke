@@ -36,6 +36,7 @@ def test_parse_ka10006_flat_negative_rate():
         "trde_qty": "100",
     })
     assert parsed["current_price"] == 20000
+    assert parsed["price_diff"] == -500
     assert parsed["change_rate"] == "-2.44"
 
 

@@ -20,7 +20,7 @@ const MA_COLORS = {
   ma120: '#94a3b8',
 };
 const MA_WIDTHS = {
-  ma5: 1,
+  ma5: 2,
   ma20: 3,
   ma60: 3,
   ma120: 1,
@@ -504,15 +504,21 @@ function renderQuote(snap) {
 
   $('stockName').textContent = name || (code ? `종목 ${code}` : '종목을 조회하세요');
   $('stockCode').textContent = code || '';
-  $('currentPrice').textContent = snap ? fmtWon(snap.current_price) : '-';
+  const priceEl = $('currentPrice');
+  priceEl.textContent = snap ? fmtWon(snap.current_price) : '-';
 
   const changeEl = $('priceChange');
-  const diff = Number(snap && snap.price_diff);
+  let diff = Number(snap && snap.price_diff);
   const rateRaw = snap && snap.change_rate;
   const rate = Number(String(rateRaw == null ? '' : rateRaw).replace(/[+%]/g, ''));
+  // 등락률 부호를 우선 (과거 API가 price_diff를 절댓값으로 주던 경우 보정)
+  if (Number.isFinite(diff) && Number.isFinite(rate) && rate !== 0 && Math.sign(diff) !== Math.sign(rate)) {
+    diff = Math.sign(rate) * Math.abs(diff);
+  }
   let cls = 'flat';
-  if (Number.isFinite(diff) ? diff > 0 : rate > 0) cls = 'up';
-  else if (Number.isFinite(diff) ? diff < 0 : rate < 0) cls = 'down';
+  if (Number.isFinite(rate) && rate !== 0) cls = rate > 0 ? 'up' : 'down';
+  else if (Number.isFinite(diff) && diff !== 0) cls = diff > 0 ? 'up' : 'down';
+  priceEl.className = `cob-price ${cls}`;
   changeEl.className = `cob-change ${cls}`;
   const diffText = Number.isFinite(diff) ? `${diff > 0 ? '+' : ''}${fmtWon(diff)}` : '-';
   const rateText = Number.isFinite(rate) ? fmtRate(rate) : (rateRaw != null ? String(rateRaw) : '-');

@@ -963,18 +963,46 @@ async function loadCompanyProfile(code) {
   }
 }
 
-function renderDetail(row) {
-  if (!row) {
-    $('detailTitle').textContent = '종목 상세';
-    $('detailThemes').textContent = '';
-    $('detailThemes').dataset.stockCode = '';
-    $('detailHint').textContent = '행을 클릭하거나 종목코드를 검색하세요';
-    $('detailBody').innerHTML = '<div class="empty"><span class="ico">📊</span>목록에서 종목을 선택하면 상세 지표가 표시됩니다.</div>';
-    state.selectedName = null;
-    syncDetailFavoriteButton();
-    resetChartState();
-    return;
-  }
+function clearDetailPanel() {
+  $('detailTitle').textContent = '종목 상세';
+  $('detailThemes').textContent = '';
+  $('detailThemes').dataset.stockCode = '';
+  $('detailHint').textContent = '행을 클릭하거나 종목코드를 검색하세요';
+  $('detailBody').innerHTML = '<div class="empty"><span class="ico">📊</span>목록에서 종목을 선택하면 상세 지표가 표시됩니다.</div>';
+  state.selectedName = null;
+  syncDetailFavoriteButton();
+  resetChartState();
+}
+
+function detailRestHtml(stockCode, { priceBlock, metaBlock, emptyFinance }) {
+  const c = String(stockCode || '').trim();
+  return `
+    ${emptyFinance
+      ? '<div class="empty" style="margin-top:12px;"><span class="ico">ℹ️</span>재무 지표는 <code>run_fundamental_batch.bat</code> 적재 후 표시됩니다.</div>'
+      : ''}
+    ${stockMemoHtml(c)}
+    <div class="detail-section">
+      <div class="detail-section-title">회사 정보</div>
+      ${companyProfilePlaceholderHtml()}
+    </div>
+    <div class="detail-grid">${priceBlock || indicatorFieldsHtml()}</div>
+    ${metaBlock
+      ? `<div class="detail-section"><div class="detail-section-title">메타</div><div class="detail-grid">${metaBlock}</div></div>`
+      : ''}
+    ${stockInvestorHistoryHtml(c)}`;
+}
+
+/** 차트 DOM을 먼저 붙이고 일봉 로딩을 즉시 시작 (재무 API와 병행). */
+function mountDetailChartShell(stockCode) {
+  $('detailBody').innerHTML = `
+    <div id="analysisFinanceTop"><div class="skeleton">재무 요약 불러오는 중…</div></div>
+    ${chartSectionsHtml()}
+    <div id="analysisDetailRest"><div class="skeleton">상세 불러오는 중…</div></div>`;
+  applyChartDrawMode();
+  return loadAnalysisCharts(stockCode);
+}
+
+function fillDetailFromRow(row) {
   state.selectedName = row.stock_name || '';
   syncDetailFavoriteButton();
   $('detailTitle').textContent = `${row.stock_name || ''} (${row.stock_code})`;
@@ -992,22 +1020,45 @@ function renderDetail(row) {
     detailField('데이터 출처', esc(row.source || '-')),
     detailField('수집 시각', esc(row.fetched_at || '-')),
   ].join('');
-  $('detailBody').innerHTML = `
-    ${financeStripHtml(row)}
-    ${chartSectionsHtml()}
-    ${stockMemoHtml(row.stock_code)}
-    <div class="detail-section">
-      <div class="detail-section-title">회사 정보</div>
-      ${companyProfilePlaceholderHtml()}
-    </div>
-    <div class="detail-grid">${priceBlock}</div>
-    <div class="detail-section"><div class="detail-section-title">메타</div><div class="detail-grid">${metaBlock}</div></div>
-    ${stockInvestorHistoryHtml(row.stock_code)}`;
-  applyChartDrawMode();
+  const fin = $('analysisFinanceTop');
+  const rest = $('analysisDetailRest');
+  if (fin) fin.innerHTML = financeStripHtml(row);
+  if (rest) {
+    rest.innerHTML = detailRestHtml(row.stock_code, { priceBlock, metaBlock });
+  }
+  updateIndicatorFields();
   loadCompanyProfile(row.stock_code);
-  loadAnalysisCharts(row.stock_code).then(() => {
+}
+
+function fillDetailFallback(code, name) {
+  const c = String(code || '').trim().replace(/^A/i, '').padStart(6, '0');
+  state.selectedName = name || state.selectedName || '';
+  syncDetailFavoriteButton();
+  $('detailTitle').textContent = name ? `${name} (${c})` : `종목 (${c})`;
+  $('detailHint').textContent = '기본적분석 마트에 없음 · 일봉·주봉·월봉 차트만 표시';
+  loadAnalysisThemes(c);
+  const fin = $('analysisFinanceTop');
+  const rest = $('analysisDetailRest');
+  if (fin) fin.innerHTML = '<div class="hint">재무 지표 없음</div>';
+  if (rest) {
+    rest.innerHTML = detailRestHtml(c, {
+      priceBlock: indicatorFieldsHtml(),
+      emptyFinance: true,
+    });
+  }
+  updateIndicatorFields();
+  loadCompanyProfile(c);
+}
+
+function renderDetail(row) {
+  if (!row) {
+    clearDetailPanel();
+    return;
+  }
+  mountDetailChartShell(row.stock_code).then(() => {
     loadStockInvestorHistoryForDetail(row.stock_code);
   });
+  fillDetailFromRow(row);
 }
 
 function stockInvestorHistoryHtml(stockCode) {
@@ -2138,6 +2189,12 @@ function renderChartSummary(key, payload) {
   parts.push(`RSI ${fmtInd(il.rsi)} · %R ${fmtInd(il.wr)}`);
   const vp = volumeProfile(payload);
   if (vp) parts.push(`매물대 최대 ${Math.round(vp.pocPrice).toLocaleString('ko-KR')}원 부근`);
+  if (payload.data_source) {
+    const srcLabel = payload.data_source === 'mart'
+      ? '마트'
+      : (payload.data_source === 'kiwoom' ? '키움API' : payload.data_source);
+    parts.push(`출처 ${esc(srcLabel)}`);
+  }
   if (payload.warning) parts.push(`<span class="warn">${esc(payload.warning)}</span>`);
   el.innerHTML = parts.join(' · ');
   el.style.display = 'block';
@@ -2250,13 +2307,18 @@ async function loadOneChart(key, stockCode, seq) {
   updateIndicatorFields();
 }
 
-function loadAnalysisCharts(stockCode) {
+async function loadAnalysisCharts(stockCode) {
   resetChartState();
   const seq = chartLoadSeq;
   updateIndicatorFields();
-  return Promise.all([
-    ...CHART_ORDER.map((key) => loadOneChart(key, stockCode, seq)),
-    loadChartDrawings(stockCode, seq),
+  // 일봉 먼저 그려서 체감 속도를 올리고, 주·월봉·그리기는 일봉 이후에 병행
+  const drawings = loadChartDrawings(stockCode, seq);
+  await loadOneChart('1D', stockCode, seq);
+  if (seq !== chartLoadSeq) return;
+  await Promise.all([
+    loadOneChart('1W', stockCode, seq),
+    loadOneChart('1MO', stockCode, seq),
+    drawings,
   ]);
 }
 
@@ -2271,23 +2333,11 @@ function onChartResize() {
 
 async function renderDetailFallback(code, name) {
   const c = String(code || '').trim().replace(/^A/i, '').padStart(6, '0');
-  state.selectedName = name || state.selectedName || '';
-  syncDetailFavoriteButton();
-  $('detailTitle').textContent = name ? `${name} (${c})` : `종목 (${c})`;
-  $('detailHint').textContent = '기본적분석 마트에 없음 · 일봉·주봉·월봉 차트만 표시';
-  loadAnalysisThemes(c);
-  $('detailBody').innerHTML = `
-    ${chartSectionsHtml()}
-    <div class="detail-section">
-      <div class="detail-section-title">회사 정보</div>
-      ${companyProfilePlaceholderHtml()}
-    </div>
-    <div class="detail-grid">${indicatorFieldsHtml()}</div>
-    <div class="empty" style="margin-top:12px;"><span class="ico">ℹ️</span>재무 지표는 <code>run_fundamental_batch.bat</code> 적재 후 표시됩니다.</div>
-    ${stockInvestorHistoryHtml(c)}`;
-  applyChartDrawMode();
-  loadCompanyProfile(c);
-  await loadAnalysisCharts(c);
+  const chartsPromise = $('chartCanvas1D')
+    ? Promise.resolve()
+    : mountDetailChartShell(c);
+  fillDetailFallback(c, name);
+  await chartsPromise;
   loadStockInvestorHistoryForDetail(c);
 }
 
@@ -2304,19 +2354,26 @@ async function selectStock(code, options) {
   markSelectedCode(c);
   $('detailThemes').dataset.stockCode = c;
   $('detailThemes').innerHTML = '<span class="analysis-detail-themes-label">테마 조회 중…</span>';
-  $('detailBody').innerHTML = '<div class="skeleton">상세 불러오는 중…</div>';
+  $('detailTitle').textContent = state.selectedName ? `${state.selectedName} (${c})` : `종목 (${c})`;
+  $('detailHint').textContent = '상세 불러오는 중…';
   if (options && options.scrollDetail) scrollAnalysisTarget('detailCard');
+  // 재무 API를 기다리지 않고 일봉 차트부터 요청
+  const chartsPromise = mountDetailChartShell(c);
   try {
     const row = await fetchJSON(`/fundamentals/${encodeURIComponent(c)}`);
-    renderDetail(row);
+    if (state.selectedCode !== c) return;
+    fillDetailFromRow(row);
   } catch (e) {
-    if (e && e.status === 404) {
-      await renderDetailFallback(c);
-      return;
+    if (state.selectedCode !== c) return;
+    fillDetailFallback(c);
+    if (!(e && e.status === 404)) {
+      toast('재무 지표 없음 · 차트·회사 정보만 표시', false);
     }
-    await renderDetailFallback(c);
-    toast('재무 지표 없음 · 차트·회사 정보만 표시', false);
   }
+  // 수급 DOM은 fill 이후에 생기므로, 재무 채운 뒤 + 차트 끝난 뒤에 조회
+  Promise.resolve(chartsPromise).finally(() => {
+    if (state.selectedCode === c) loadStockInvestorHistoryForDetail(c);
+  });
 }
 
 async function loadSummary() {

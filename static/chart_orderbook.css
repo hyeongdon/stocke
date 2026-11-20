@@ -132,6 +132,9 @@
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
+.cob-price.up { color: #ef4444; }
+.cob-price.down { color: #3b82f6; }
+.cob-price.flat { color: inherit; }
 .cob-change {
   font-size: 14px;
   font-weight: 600;
