@@ -382,9 +382,18 @@ async def lifespan(app: FastAPI):
 
     try:
         asyncio.create_task(investor_flow_scheduler.start_scheduler())
-        logger.info("📊 [STARTUP] 수급 스냅샷 스케줄러 시작")
+        logger.info("📊 [STARTUP] 수급·지수 스냅샷 스케줄러 시작")
     except Exception as e:
-        logger.error(f"📊 [STARTUP] 수급 스냅샷 스케줄러 시작 실패: {e}")
+        logger.error(f"📊 [STARTUP] 수급·지수 스냅샷 스케줄러 시작 실패: {e}")
+
+    try:
+        from utils.market_indices import refresh_market_indices_if_due
+
+        # 디스크/메모리 캐시 워밍 — 대시보드 첫 /market/indices 가 네이버를 기다리지 않게
+        asyncio.create_task(asyncio.to_thread(refresh_market_indices_if_due, True))
+        logger.info("📊 [STARTUP] 시장지수 캐시 백그라운드 워밍")
+    except Exception as e:
+        logger.warning(f"📊 [STARTUP] 시장지수 캐시 워밍 스킵: {e}")
 
     try:
         asyncio.create_task(ma1592_universe_scheduler.start_scheduler())
@@ -3669,7 +3678,7 @@ async def _attach_index_intraday_bars(payload: dict, date: str) -> None:
 
 @app.get("/market/indices")
 async def market_indices_api(force: bool = False, date: Optional[str] = None):
-    """주요 지수와 코스피200 선물 스냅샷. date=YYYY-MM-DD 이면 해당일 종가."""
+    """주요 지수·코스피200 선물·국제유가 스냅샷. date=YYYY-MM-DD 이면 해당일 종가."""
     try:
         from utils.market_indices import fetch_market_indices, fetch_market_indices_for_date
 

@@ -258,6 +258,10 @@ html.mode-real .mi-group-vol,
 body.mode-real .mi-group-vol { border-color: #0f172a; }
 html.mode-real .mi-group-vol .mi-group-label,
 body.mode-real .mi-group-vol .mi-group-label { background: #0f172a !important; }
+html.mode-real .mi-group-oil,
+body.mode-real .mi-group-oil { border-color: #92400e; }
+html.mode-real .mi-group-oil .mi-group-label,
+body.mode-real .mi-group-oil .mi-group-label { background: #92400e !important; }
 
 html.mode-real .market-index-item,
 body.mode-real .market-index-item {
@@ -1396,6 +1400,8 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .mi-group-fear .mi-group-label { color: #fca5a5; background: rgba(248, 113, 113, 0.14); }
 .mi-group-vol { border-color: rgba(148, 163, 184, 0.35); }
 .mi-group-vol .mi-group-label { color: #cbd5e1; background: rgba(148, 163, 184, 0.14); }
+.mi-group-oil { border-color: rgba(251, 191, 36, 0.35); }
+.mi-group-oil .mi-group-label { color: #fcd34d; background: rgba(251, 191, 36, 0.14); }
 .mi-group-body {
   display: flex;
   flex-direction: column;

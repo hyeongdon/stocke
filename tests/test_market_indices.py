@@ -6,6 +6,7 @@ from datetime import datetime
 from unittest import mock
 
 from utils.datetime_kst import KST
+import utils.market_indices as market_indices_mod
 from utils.market_indices import (
     _CACHE,
     _HIST_CACHE,
@@ -21,9 +22,11 @@ from utils.market_indices import (
     _fetch_investor_daily,
     _fetch_investor_intraday,
     _fetch_investor_trend,
+    _fetch_oils,
     _fetch_vix,
     _fetch_vkospi,
     _merge_live_investor,
+    _oil_index_on_date,
     _parse_investor_day_rows,
     _parse_investor_time_rows,
     _parse_signed_int,
@@ -189,11 +192,18 @@ class InvestorTrendTests(unittest.TestCase):
         _INV_TIME_CACHE.clear()
         self._snap_dir = tempfile.TemporaryDirectory()
         self._snap_path = os.path.join(self._snap_dir.name, "snap.json")
+        self._idx_snap = os.path.join(self._snap_dir.name, "indices.json")
         self._path_patch = mock.patch("utils.market_indices.INV_SNAPSHOT_PATH", self._snap_path)
+        self._idx_patch = mock.patch.object(market_indices_mod, "INDEX_SNAPSHOT_PATH", self._idx_snap)
+        self._bg_patch = mock.patch.object(market_indices_mod, "_ALLOW_BACKGROUND", False)
         self._path_patch.start()
+        self._idx_patch.start()
+        self._bg_patch.start()
         clear_investor_snapshot_cache()
 
     def tearDown(self):
+        self._bg_patch.stop()
+        self._idx_patch.stop()
         self._path_patch.stop()
         clear_investor_snapshot_cache()
         self._snap_dir.cleanup()
@@ -548,12 +558,76 @@ VKOSPI_CANDLES = {
     ]
 }
 
+OIL_LIST = [
+    {
+        "reutersCode": "CLcv1",
+        "name": "WTI",
+        "closePrice": "83.98",
+        "fluctuations": "0.77",
+        "fluctuationsRatio": "0.93",
+        "fluctuationsType": {"code": "2", "text": "상승", "name": "RISING"},
+        "unit": "USD/BBL",
+    },
+    {
+        "reutersCode": "LCOcv1",
+        "name": "브렌트유",
+        "closePrice": "92.57",
+        "fluctuations": "0.59",
+        "fluctuationsRatio": "0.64",
+        "fluctuationsType": {"code": "2", "text": "상승", "name": "RISING"},
+        "unit": "USD/BBL",
+    },
+    {
+        "reutersCode": "DCBc1",
+        "name": "두바이유",
+        "closePrice": "91.38",
+        "fluctuations": "-0.08",
+        "fluctuationsRatio": "-0.09",
+        "fluctuationsType": {"code": "5", "text": "하락", "name": "FALLING"},
+        "unit": "USD/BBL",
+    },
+]
+
+OIL_PRICES_WTI = [
+    {
+        "localTradedAt": "2026-08-14T16:00:00-05:00",
+        "closePrice": "78.50",
+        "fluctuations": "1.20",
+        "fluctuationsRatio": "1.55",
+        "fluctuationsType": {"code": "2", "text": "상승", "name": "RISING"},
+        "openPrice": "77.10",
+        "highPrice": "78.90",
+        "lowPrice": "76.80",
+    },
+    {
+        "localTradedAt": "2026-08-13T16:00:00-05:00",
+        "closePrice": "77.30",
+        "fluctuations": "-0.40",
+        "fluctuationsRatio": "-0.51",
+        "fluctuationsType": {"code": "5", "text": "하락", "name": "FALLING"},
+        "openPrice": "77.80",
+        "highPrice": "78.00",
+        "lowPrice": "76.90",
+    },
+]
+
 
 class VixIndexTests(unittest.TestCase):
     def setUp(self):
         _CACHE["at"] = 0.0
         _CACHE["data"] = None
         _HIST_CACHE.clear()
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._snap = os.path.join(self._tmpdir.name, "indices.json")
+        self._path_patch = mock.patch.object(market_indices_mod, "INDEX_SNAPSHOT_PATH", self._snap)
+        self._bg_patch = mock.patch.object(market_indices_mod, "_ALLOW_BACKGROUND", False)
+        self._path_patch.start()
+        self._bg_patch.start()
+
+    def tearDown(self):
+        self._bg_patch.stop()
+        self._path_patch.stop()
+        self._tmpdir.cleanup()
 
     @mock.patch("utils.market_indices.requests.get")
     def test_fetch_vix_signs_a_drop(self, mock_get):
@@ -631,6 +705,8 @@ class VixIndexTests(unittest.TestCase):
             elif "api/realtime" in url:
                 code = url.rsplit(":", 1)[-1]
                 r.json = mock.Mock(return_value=_poll_payload(code))
+            elif "marketindex/energy" in url:
+                r.json = mock.Mock(return_value=OIL_LIST)
             else:
                 r.text = ""
             return r
@@ -638,7 +714,10 @@ class VixIndexTests(unittest.TestCase):
         mock_get.side_effect = _resp
         payload = fetch_market_indices(force=True)
         keys = [row["key"] for row in payload["indices"]]
-        self.assertEqual(keys, ["vix", "vkospi", "kospi", "kosdaq", "fut", "nasdaq", "dow"])
+        self.assertEqual(
+            keys,
+            ["vix", "vkospi", "kospi", "kosdaq", "fut", "nasdaq", "dow", "wti", "brent", "dubai"],
+        )
         vix = next(row for row in payload["indices"] if row["key"] == "vix")
         self.assertAlmostEqual(vix["value"], 18.13)
         self.assertEqual(vix["direction"], "up")
@@ -663,6 +742,20 @@ class VixIndexTests(unittest.TestCase):
         self.assertEqual(dow["label"], "다우")
         self.assertAlmostEqual(dow["value"], 51770.31)
         self.assertAlmostEqual(dow["change"], -572.25)
+        wti = next(row for row in payload["indices"] if row["key"] == "wti")
+        self.assertEqual(wti["label"], "WTI")
+        self.assertAlmostEqual(wti["value"], 83.98)
+        self.assertEqual(wti["direction"], "up")
+        self.assertAlmostEqual(wti["change"], 0.77)
+        self.assertAlmostEqual(wti["change_pct"], 0.93)
+        brent = next(row for row in payload["indices"] if row["key"] == "brent")
+        self.assertEqual(brent["label"], "브렌트유")
+        self.assertAlmostEqual(brent["value"], 92.57)
+        dubai = next(row for row in payload["indices"] if row["key"] == "dubai")
+        self.assertEqual(dubai["label"], "두바이유")
+        self.assertEqual(dubai["direction"], "down")
+        self.assertAlmostEqual(dubai["change"], -0.08)
+        self.assertAlmostEqual(dubai["change_pct"], -0.09)
 
     @mock.patch("utils.market_indices.kst_today")
     @mock.patch("utils.market_indices.requests.get")
@@ -699,6 +792,103 @@ class VixIndexTests(unittest.TestCase):
         self.assertEqual(payload["indices"][2]["key"], "kospi")
         candle_calls = [c for c in mock_get.call_args_list if "day_candles" in c.args[0]]
         self.assertEqual(candle_calls[0].kwargs["params"]["to"], "2026-08-15")
+
+    @mock.patch("utils.market_indices.requests.get")
+    def test_fetch_oils_from_energy_list(self, mock_get):
+        resp = mock.Mock()
+        resp.raise_for_status = mock.Mock()
+        resp.json = mock.Mock(return_value=OIL_LIST)
+        mock_get.return_value = resp
+        rows = _fetch_oils()
+        self.assertEqual([r["key"] for r in rows], ["wti", "brent", "dubai"])
+        self.assertAlmostEqual(rows[0]["value"], 83.98)
+        self.assertEqual(rows[2]["direction"], "down")
+        self.assertAlmostEqual(rows[2]["change"], -0.08)
+
+    @mock.patch("utils.market_indices.requests.get")
+    def test_oil_index_on_date(self, mock_get):
+        resp = mock.Mock()
+        resp.raise_for_status = mock.Mock()
+        resp.json = mock.Mock(return_value=OIL_PRICES_WTI)
+        mock_get.return_value = resp
+        row = _oil_index_on_date("CLcv1", "wti", "WTI", "2026-08-14")
+        self.assertFalse(row["closed"])
+        self.assertAlmostEqual(row["value"], 78.50)
+        self.assertAlmostEqual(row["change"], 1.20)
+        self.assertAlmostEqual(row["change_pct"], 1.55)
+        self.assertAlmostEqual(row["open"], 77.10)
+        self.assertEqual(row["session_date"], "2026-08-14")
+
+
+class IndexCacheServeTests(unittest.TestCase):
+    def setUp(self):
+        _CACHE["at"] = 0.0
+        _CACHE["data"] = None
+        _YEAR_CACHE["at"] = 0.0
+        _YEAR_CACHE["series"] = None
+        _YEAR_CACHE["ok"] = False
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._snap = os.path.join(self._tmpdir.name, "indices.json")
+        self._path_patch = mock.patch.object(market_indices_mod, "INDEX_SNAPSHOT_PATH", self._snap)
+        self._bg_patch = mock.patch.object(market_indices_mod, "_ALLOW_BACKGROUND", False)
+        self._path_patch.start()
+        self._bg_patch.start()
+
+    def tearDown(self):
+        self._bg_patch.stop()
+        self._path_patch.stop()
+        self._tmpdir.cleanup()
+
+    @mock.patch("utils.market_indices.requests.get")
+    def test_memory_cache_skips_http(self, mock_get):
+        _CACHE["at"] = time.time()
+        _CACHE["data"] = {
+            "updated_at": "2026-08-18T10:00:00",
+            "date": "2026-08-18",
+            "as_of": "live",
+            "indices": [{"key": "kospi", "label": "코스피", "value": 7000.0}],
+            "errors": [],
+        }
+        payload = fetch_market_indices(force=False)
+        mock_get.assert_not_called()
+        self.assertEqual(payload["indices"][0]["key"], "kospi")
+        self.assertIn(payload.get("as_of"), ("live", "cache"))
+
+    @mock.patch("utils.market_indices._fetch_year_closes_map")
+    @mock.patch("utils.market_indices.requests.get")
+    def test_force_refresh_does_not_block_on_year(self, mock_get, mock_year):
+        mock_year.side_effect = AssertionError("year closes must not run inline")
+
+        def _resp(url, **kwargs):
+            r = mock.Mock()
+            r.raise_for_status = mock.Mock()
+            if ".VIX" in url:
+                r.json = mock.Mock(return_value=VIX_BASIC)
+            elif "O2901P" in url:
+                r.json = mock.Mock(return_value=VKOSPI_LIVE)
+            elif "marketindex/energy" in url:
+                r.json = mock.Mock(return_value=OIL_LIST)
+            elif ".IXIC" in url or ".DJI" in url:
+                r.json = mock.Mock(return_value={
+                    "closePrice": "1",
+                    "compareToPreviousClosePrice": "0",
+                    "fluctuationsRatio": "0",
+                    "compareToPreviousPrice": {"code": "3", "name": "UNCHANGED"},
+                })
+            elif "api/realtime" in url:
+                code = url.rsplit(":", 1)[-1]
+                r.json = mock.Mock(return_value=_poll_payload(code))
+            else:
+                r.text = ""
+            return r
+
+        mock_get.side_effect = _resp
+        with mock.patch("utils.market_indices.kst_today") as mock_today:
+            mock_today.return_value = mock.Mock(isoformat=lambda: "2026-08-18")
+            payload = fetch_market_indices(force=True)
+        self.assertTrue(payload["indices"])
+        mock_year.assert_not_called()
+        self.assertTrue(os.path.exists(self._snap))
 
 
 class YearChartTests(unittest.TestCase):

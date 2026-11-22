@@ -78,7 +78,7 @@ function Test-ServerHealth([int]$Port) {
     }
 }
 
-function Wait-ServerHealth([int]$Port, [int]$TimeoutSec = 30) {
+function Wait-ServerHealth([int]$Port, [int]$TimeoutSec = 45) {
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
         if (Test-ServerHealth $Port) { return $true }
@@ -154,14 +154,18 @@ function Start-StockeServer([int]$Port, [string]$BindHost) {
         -PassThru `
         -RedirectStandardError $LogFile
 
+    # 런처 PID가 아닌 실제 listen PID를 나중에 기록한다
     $proc.Id | Out-File -FilePath $PidFile -Encoding ascii
 
     Write-Host "시작 대기 중..."
-    if (Wait-ServerHealth $Port) {
-        $listen = Get-ListenerPids $Port
+    if (Wait-ServerHealth $Port 45) {
+        $listen = @(Get-ListenerPids $Port)
+        if ($listen.Count -gt 0) {
+            $listen[0] | Out-File -FilePath $PidFile -Encoding ascii
+        }
         Write-Host "서버 시작 완료 (PID $($listen -join ', '))" -ForegroundColor Green
     } else {
-        Write-Host "프로세스는 실행됐지만 30초 내 응답 없음. logs\server.log 를 확인하세요." -ForegroundColor Yellow
+        Write-Host "프로세스는 실행됐지만 45초 내 응답 없음. logs\server.log 를 확인하세요." -ForegroundColor Yellow
     }
 }
 

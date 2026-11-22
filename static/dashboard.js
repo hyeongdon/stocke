@@ -137,13 +137,27 @@ function volHint(it) {
   const shown = Number.isFinite(n) ? fmtIndexValue(n) : '-';
   return `한국 변동성지수(VKOSPI) ${shown}. 코스피200 옵션에 반영된 향후 30일 기대 변동성. 높을수록 하루 출렁임이 큼`;
 }
+function oilHint(it) {
+  const key = String((it && it.key) || '').toLowerCase();
+  const tips = {
+    wti: 'WTI(서부텍사스산 원유) NYMEX 최근월물 · USD/배럴. 국제 유가를 선도하는 지표',
+    brent: '브렌트유 ICE 최근월물 · USD/배럴. 유럽·세계 원유 기준가',
+    dubai: '두바이유 · 아시아 기준 유종 · USD/배럴',
+  };
+  const base = tips[key];
+  if (!base) return null;
+  const n = Number(it && it.value);
+  const shown = Number.isFinite(n) ? fmtIndexValue(n) : '-';
+  const unit = (it && it.unit) ? ` ${it.unit}` : '';
+  return `${base} · 현재 ${shown}${unit}`;
+}
 function renderMarketIndexItem(it) {
   const dir = signClass(it.change_pct ?? it.change);
   const deltaParts = [];
   if (it.change != null) deltaParts.push(fmtIndexDelta(it.change));
   if (it.change_pct != null) deltaParts.push(`(${fmtIndexPct(it.change_pct)})`);
   const mood = fearMood(it);
-  const hint = mood ? mood.title : volHint(it);
+  const hint = mood ? mood.title : (volHint(it) || oilHint(it));
   const title = hint ? ` title="${esc(hint)}"` : '';
   const moodHtml = mood ? mood.html : '';
   const moodCls = mood ? ` mood-${mood.key}` : '';
@@ -154,6 +168,7 @@ function renderMarketIndexItem(it) {
 const MARKET_INDEX_GROUPS = [
   { id: 'kr', label: '한국', keys: ['kospi', 'kosdaq', 'fut'] },
   { id: 'us', label: '미국', keys: ['nasdaq', 'dow'] },
+  { id: 'oil', label: '국제유가', keys: ['wti', 'brent', 'dubai'] },
   { id: 'fear', label: '공포지수', keys: ['vix'] },
   { id: 'vol', label: '변동성', keys: ['vkospi'] },
 ];
@@ -5828,10 +5843,8 @@ function refreshAll() {
   loadPerformance(true);
   loadAccount(); loadStatus(); loadTelegram();
   loadThemeBatchStatus();
-  // 재시작·NXT 직후: DB로 먼저 그린 뒤 live 갱신 (동기화 대기로 목록이 비지 않게)
-  loadPositions(false, { silent: true }).finally(() => {
-    loadPositions(true, { silent: true, forceLive: true });
-  });
+  // 첫 화면은 DB 포지션만 — 키움 live 동기화는 수동 새로고침/보유 탭에서
+  loadPositions(false, { silent: true });
   loadSells(); loadOrders();
   loadActivity(); loadLog(); loadSettings();
 }
@@ -5868,7 +5881,7 @@ function setupAutoRefresh() {
         loadAccount(); loadStatus();
         loadMarketIndices();
         loadThemeBatchStatus();
-        loadPositions(true, { silent: true });
+        loadPositions(false, { silent: true });
         loadSells(); loadOrders(); loadLog();
         if ($('pane-settings')?.classList.contains('active') && $('pane-alert')?.classList.contains('active')) refreshConditionAlertStatuses();
         $('lastUpdated').textContent = new Date().toLocaleTimeString('ko-KR');

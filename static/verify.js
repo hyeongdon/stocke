@@ -449,7 +449,7 @@ function renderMarketIndexItem(it, filterDate) {
   const sparkBars = intradayBars
     || (it.bars && it.bars.length ? it.bars : [{ open: it.open, high: it.high, low: it.low, close: it.value }]);
   const mood = fearMood(it);
-  const hint = mood ? mood.title : volHint(it);
+  const hint = mood ? mood.title : (volHint(it) || oilHint(it));
   const title = hint ? ` title="${esc(hint)}"` : '';
   const moodHtml = mood ? mood.html : '';
   const moodCls = mood ? ` mood-${mood.key}` : '';
@@ -487,6 +487,19 @@ function volHint(it) {
   const shown = Number.isFinite(n) ? fmtIndexValue(n) : '-';
   return `한국 변동성지수(VKOSPI) ${shown}. 코스피200 옵션에 반영된 향후 30일 기대 변동성. 높을수록 하루 출렁임이 큼`;
 }
+function oilHint(it) {
+  const key = String((it && it.key) || '').toLowerCase();
+  const tips = {
+    wti: 'WTI(서부텍사스산 원유) NYMEX 최근월물 · USD/배럴',
+    brent: '브렌트유 ICE 최근월물 · USD/배럴',
+    dubai: '두바이유 · 아시아 기준 유종 · USD/배럴',
+  };
+  const base = tips[key];
+  if (!base) return null;
+  const n = Number(it && it.value);
+  const shown = Number.isFinite(n) ? fmtIndexValue(n) : '-';
+  return `${base} · ${shown}`;
+}
 function renderMarketIndexStrip(items, filterDate) {
   const list = items || [];
   const keyOf = (it) => String((it && it.key) || '').toLowerCase();
@@ -505,7 +518,7 @@ async function loadMarketIndices() {
   const dateParam = getDateFilterParam();
   const req = ++_indexReqSeq;
   if (!dateParam || dateParam === 'this_week') {
-    el.innerHTML = '<span class="market-index-skeleton">거래일(하루)을 고르면 VIX·VKOSPI·코스피·코스닥·나스닥·다우가 표시됩니다</span>';
+    el.innerHTML = '<span class="market-index-skeleton">거래일(하루)을 고르면 VIX·VKOSPI·코스피·코스닥·나스닥·다우·국제유가가 표시됩니다</span>';
     return;
   }
   el.innerHTML = '<span class="market-index-skeleton">지수 불러오는 중…</span>';

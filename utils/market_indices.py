@@ -1,6 +1,6 @@
-"""주요 지수(VIX·VKOSPI·코스피·코스닥·코스피200 선물·나스닥·다우) 조회.
+"""주요 지수(VIX·VKOSPI·코스피·코스닥·코스피200 선물·나스닥·다우·국제유가) 조회.
 
-VIX·코스피·코스닥·코스피200 선물·나스닥·다우는 네이버 금융,
+VIX·코스피·코스닥·코스피200 선물·나스닥·다우·WTI·브렌트·두바이는 네이버 금융,
 VKOSPI(코스피200 변동성지수)는 증권플러스 시세. 네이버 지수 API에는 VKOSPI가 없다.
 """
 from __future__ import annotations
@@ -39,6 +39,13 @@ VIX_BASIC_URL = "https://api.stock.naver.com/index/.VIX/basic"
 VIX_DAY_URL = (
     "https://api.stock.naver.com/chart/foreign/index/.VIX/day"
     "?startDateTime={start}000000&endDateTime={end}000000"
+)
+ENERGY_LIST_URL = "https://api.stock.naver.com/marketindex/energy"
+ENERGY_PRICES_URL = "https://api.stock.naver.com/marketindex/energy/{code}/prices"
+_OIL_SPECS = (
+    ("CLcv1", "wti", "WTI"),
+    ("LCOcv1", "brent", "브렌트유"),
+    ("DCBc1", "dubai", "두바이유"),
 )
 INDEX_DAY_CHART_URL = (
     "https://api.stock.naver.com/chart/{market}/index/{code}/day"
@@ -81,15 +88,23 @@ _INV_FETCH_LOCKS: Dict[str, threading.Lock] = {}
 
 _CACHE_LOCK = threading.Lock()
 _CACHE: Dict[str, Any] = {"at": 0.0, "data": None}
-_CACHE_TTL_SEC = 45
+# 대시보드는 실시간보다 빠른 응답 우선 — 최대 5분 지연 허용
+_CACHE_TTL_SEC = 300
+# TTL이 지나도 이 안에는 캐시를 바로 주고 백그라운드 갱신
+_CACHE_STALE_SERVE_SEC = 6 * 3600
 _YEAR_LOCK = threading.Lock()
 _YEAR_CACHE: Dict[str, Any] = {"at": 0.0, "series": None, "ok": False}
 _HIST_CACHE: Dict[str, Any] = {}
 _HIST_CACHE_TTL_SEC = 3600
 _INTRADAY_HISTORY: Dict[str, Dict[str, Any]] = {}
+_BG_LOCK = threading.Lock()
+_BG_REFRESHING = False
+# 테스트에서 False 로 두면 백그라운드 갱신·year 워밍 스레드를 띄우지 않는다
+_ALLOW_BACKGROUND = True
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INV_SNAPSHOT_PATH = os.path.join(_PROJECT_ROOT, "logs", "_investor_flow_snapshot.json")
+INDEX_SNAPSHOT_PATH = os.path.join(_PROJECT_ROOT, "logs", "_market_indices_snapshot.json")
 INV_SNAPSHOT_INTERVAL_SEC = 300
 INV_REFRESH_START = dt_time(8, 50)
 INV_REFRESH_END = dt_time(15, 40)
@@ -555,6 +570,66 @@ def _fetch_world(symbol: str, label: str) -> Dict[str, Any]:
     return _row_from_basic(resp.json(), key, label)
 
 
+def _ymd_from_local_traded(text: object) -> Optional[str]:
+    s = str(text or "").strip()
+    if len(s) >= 10:
+        return _parse_ymd(s[:10])
+    return None
+
+
+def _row_from_energy(data: object, key: str, label: str) -> Dict[str, Any]:
+    """네이버 에너지(유가) 시장지표 JSON."""
+    if not isinstance(data, dict):
+        raise RuntimeError(f"{label} empty")
+    direction = _direction_from_compare(data.get("fluctuationsType"))
+    value = _to_float(data.get("closePrice"))
+    if value is None:
+        raise RuntimeError(f"{label} empty")
+    change = _signed_change(_to_float(data.get("fluctuations")), direction)
+    pct = _to_float(data.get("fluctuationsRatio"))
+    if pct is not None and direction == "down" and pct > 0:
+        pct = -pct
+    if pct is not None and direction == "up" and pct < 0:
+        pct = abs(pct)
+    return {
+        "key": key,
+        "label": label,
+        "value": value,
+        "change": round(change, 2) if change is not None else None,
+        "change_pct": round(pct, 2) if pct is not None else None,
+        "direction": direction,
+        "open": _to_float(data.get("openPrice")),
+        "high": _to_float(data.get("highPrice")),
+        "low": _to_float(data.get("lowPrice")),
+        "unit": str(data.get("unit") or "USD/BBL"),
+    }
+
+
+def _fetch_oils() -> List[Dict[str, Any]]:
+    """WTI·브렌트·두바이. 에너지 목록 API에서 한 번에 집는다."""
+    resp = requests.get(ENERGY_LIST_URL, timeout=12, headers=HEADERS)
+    resp.raise_for_status()
+    rows = resp.json()
+    if not isinstance(rows, list):
+        raise RuntimeError("oil list empty")
+    by_code = {
+        str(row.get("reutersCode") or ""): row
+        for row in rows
+        if isinstance(row, dict)
+    }
+    out: List[Dict[str, Any]] = []
+    missing: List[str] = []
+    for code, key, label in _OIL_SPECS:
+        item = by_code.get(code)
+        if not item:
+            missing.append(label)
+            continue
+        out.append(_row_from_energy(item, key, label))
+    if not out:
+        raise RuntimeError("oil empty" + (f": {', '.join(missing)}" if missing else ""))
+    return out
+
+
 def clear_investor_snapshot_cache() -> None:
     with _INV_SNAP_LOCK:
         _INV_SNAP["data"] = None
@@ -754,12 +829,18 @@ def _with_live_tail(closes: List[float], value: object) -> List[float]:
     return list(closes) + [live]
 
 
+def _peek_year_closes() -> Dict[str, List[float]]:
+    """이미 워밍된 1년 종가만 반환. 네트워크 호출 없음."""
+    with _YEAR_LOCK:
+        series = _YEAR_CACHE.get("series")
+        if isinstance(series, dict) and series:
+            return series
+    return {}
+
+
 def _with_year_closes(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """코스피·코스닥·나스닥·다우에 최근 1년 종가 스파크를 붙인다."""
-    try:
-        series = _cached_year_closes()
-    except Exception:
-        return payload
+    """코스피·코스닥·나스닥·다우에 캐시된 1년 종가 스파크만 붙인다(미워밍이면 생략)."""
+    series = _peek_year_closes()
     if not series:
         return payload
     out = dict(payload)
@@ -774,12 +855,121 @@ def _with_year_closes(payload: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def fetch_market_indices(force: bool = False) -> Dict[str, Any]:
-    now = time.time()
-    with _CACHE_LOCK:
-        if not force and _CACHE.get("data") and now - float(_CACHE.get("at") or 0) < _CACHE_TTL_SEC:
-            return _with_year_closes(_with_investor_snapshot(dict(_CACHE["data"])))
+def _strip_index_row_for_disk(row: Dict[str, Any]) -> Dict[str, Any]:
+    item = dict(row)
+    item.pop("year_closes", None)
+    item.pop("investor", None)
+    item.pop("investor_intraday", None)
+    item.pop("intraday_bars", None)
+    return item
 
+
+def load_index_snapshot() -> Optional[Dict[str, Any]]:
+    try:
+        with open(INDEX_SNAPSHOT_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("indices"), list):
+        return None
+    return data
+
+
+def _save_index_snapshot(payload: Dict[str, Any], at: float) -> None:
+    disk = {
+        "at": at,
+        "updated_at": payload.get("updated_at"),
+        "date": payload.get("date"),
+        "as_of": payload.get("as_of") or "live",
+        "indices": [
+            _strip_index_row_for_disk(row)
+            for row in (payload.get("indices") or [])
+            if isinstance(row, dict)
+        ],
+        "errors": list(payload.get("errors") or []),
+    }
+    os.makedirs(os.path.dirname(INDEX_SNAPSHOT_PATH), exist_ok=True)
+    tmp = INDEX_SNAPSHOT_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(disk, f, ensure_ascii=False)
+    os.replace(tmp, INDEX_SNAPSHOT_PATH)
+
+
+def _hydrate_cache_from_disk() -> Tuple[Optional[Dict[str, Any]], float]:
+    with _CACHE_LOCK:
+        cached = _CACHE.get("data")
+        at = float(_CACHE.get("at") or 0)
+        if isinstance(cached, dict) and cached.get("indices"):
+            return dict(cached), at
+    disk = load_index_snapshot()
+    if not disk:
+        return None, 0.0
+    at = float(disk.get("at") or 0)
+    cached = {
+        "updated_at": disk.get("updated_at"),
+        "date": disk.get("date"),
+        "as_of": disk.get("as_of") or "cache",
+        "indices": list(disk.get("indices") or []),
+        "errors": list(disk.get("errors") or []),
+    }
+    with _CACHE_LOCK:
+        if not (_CACHE.get("data") or {}).get("indices"):
+            _CACHE["data"] = cached
+            _CACHE["at"] = at
+    return dict(cached), at
+
+
+def _serve_indices_payload(
+    payload: Dict[str, Any],
+    *,
+    as_of: Optional[str] = None,
+    cache_age_sec: Optional[float] = None,
+) -> Dict[str, Any]:
+    out = _with_year_closes(_with_investor_snapshot(dict(payload)))
+    if as_of:
+        out["as_of"] = as_of
+    if cache_age_sec is not None:
+        out["cache_age_sec"] = int(max(0, cache_age_sec))
+    return out
+
+
+def _schedule_year_closes_warm() -> None:
+    if not _ALLOW_BACKGROUND:
+        return
+
+    def _run() -> None:
+        try:
+            _cached_year_closes(force=False)
+        except Exception:
+            pass
+
+    threading.Thread(target=_run, daemon=True, name="year-closes-warm").start()
+
+
+def _schedule_indices_refresh() -> None:
+    """TTL 만료 캐시를 서빙한 뒤 백그라운드에서 갱신."""
+    global _BG_REFRESHING
+    if not _ALLOW_BACKGROUND:
+        return
+    with _BG_LOCK:
+        if _BG_REFRESHING:
+            return
+        _BG_REFRESHING = True
+
+    def _run() -> None:
+        global _BG_REFRESHING
+        try:
+            fetch_market_indices(force=True)
+        except Exception:
+            pass
+        finally:
+            with _BG_LOCK:
+                _BG_REFRESHING = False
+
+    threading.Thread(target=_run, daemon=True, name="market-indices-refresh").start()
+
+
+def _fetch_live_indices_payload() -> Dict[str, Any]:
     indices: List[Dict[str, Any]] = []
     errors: List[str] = []
 
@@ -792,12 +982,17 @@ def fetch_market_indices(force: bool = False) -> Dict[str, Any]:
         ("나스닥", lambda: _fetch_world("NAS@IXIC", "나스닥")),
         ("다우", lambda: _fetch_world("DJI@DJI", "다우")),
     ]
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        futs = {pool.submit(fn): name for name, fn in jobs}
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futs = {pool.submit(fn): ("one", name) for name, fn in jobs}
+        futs[pool.submit(_fetch_oils)] = ("many", "국제유가")
         for fut in as_completed(futs):
-            name = futs[fut]
+            kind, name = futs[fut]
             try:
-                indices.append(fut.result())
+                result = fut.result()
+                if kind == "many":
+                    indices.extend(result or [])
+                else:
+                    indices.append(result)
             except Exception as exc:
                 errors.append(f"{name}: {exc}")
     order = {
@@ -810,28 +1005,72 @@ def fetch_market_indices(force: bool = False) -> Dict[str, Any]:
         "나스닥": 5,
         "dow": 6,
         "다우": 6,
+        "wti": 7,
+        "brent": 8,
+        "dubai": 9,
     }
-    indices.sort(key=lambda row: order.get(str(row.get("key") or row.get("label") or ""), 9))
+    indices.sort(key=lambda row: order.get(str(row.get("key") or row.get("label") or ""), 99))
 
     if not indices:
-        with _CACHE_LOCK:
-            stale = _CACHE.get("data")
-        if stale and stale.get("indices"):
-            payload = dict(stale)
-            payload["errors"] = list(stale.get("errors") or []) + errors + ["using_cache"]
-            return _with_year_closes(_with_investor_snapshot(payload))
+        cached, _ = _hydrate_cache_from_disk()
+        if cached and cached.get("indices"):
+            payload = dict(cached)
+            payload["errors"] = list(cached.get("errors") or []) + errors + ["using_cache"]
+            payload["as_of"] = "cache"
+            return payload
 
-    payload = {
+    return {
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "date": kst_today().isoformat(),
         "as_of": "live",
         "indices": indices,
         "errors": errors,
     }
+
+
+def fetch_market_indices(force: bool = False) -> Dict[str, Any]:
+    """지수 스냅샷. 기본은 5분 캐시·디스크 우선(요청 경로에서 네이버를 막지 않음)."""
+    now = time.time()
+    cached, at = _hydrate_cache_from_disk()
+    age = (now - at) if at else None
+
+    if not force and cached and cached.get("indices") and age is not None:
+        if age < _CACHE_TTL_SEC:
+            return _serve_indices_payload(
+                cached,
+                as_of=str(cached.get("as_of") or "cache"),
+                cache_age_sec=age,
+            )
+        if age < _CACHE_STALE_SERVE_SEC:
+            _schedule_indices_refresh()
+            return _serve_indices_payload(cached, as_of="cache", cache_age_sec=age)
+
+    payload = _fetch_live_indices_payload()
+    saved_at = time.time()
     with _CACHE_LOCK:
-        _CACHE["at"] = now
+        _CACHE["at"] = saved_at
         _CACHE["data"] = payload
-    return _with_year_closes(_with_investor_snapshot(dict(payload)))
+    try:
+        _save_index_snapshot(payload, saved_at)
+    except OSError:
+        pass
+    _schedule_year_closes_warm()
+    return _serve_indices_payload(payload, as_of=str(payload.get("as_of") or "live"))
+
+
+def refresh_market_indices_if_due(force: bool = False) -> Optional[Dict[str, Any]]:
+    """스케줄러·기동 워밍용. TTL 안이면 None, 아니면 force 갱신."""
+    now = time.time()
+    cached, at = _hydrate_cache_from_disk()
+    if (
+        not force
+        and cached
+        and cached.get("indices")
+        and at
+        and now - at < _CACHE_TTL_SEC
+    ):
+        return None
+    return fetch_market_indices(force=True)
 
 
 def _ymd_compact(ymd: str) -> str:
@@ -1198,6 +1437,79 @@ def _world_index_on_date(symbol: str, label: str, ymd: str) -> Dict[str, Any]:
     )
 
 
+def _fetch_oil_day_bars(code: str, ymd: str, max_pages: int = 8) -> List[Dict[str, Any]]:
+    """유가 일봉(최신→과거 페이지). ymd 이하만 모아 날짜 오름차순으로 반환."""
+    collected: List[Dict[str, Any]] = []
+    oldest: Optional[str] = None
+    for page in range(1, max_pages + 1):
+        resp = requests.get(
+            ENERGY_PRICES_URL.format(code=code),
+            params={"page": page, "pageSize": 20},
+            timeout=12,
+            headers=HEADERS,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        if not isinstance(rows, list) or not rows:
+            break
+        page_oldest: Optional[str] = None
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            d = _ymd_from_local_traded(row.get("localTradedAt"))
+            if not d or d > ymd:
+                continue
+            close = _to_float(row.get("closePrice"))
+            if close is None:
+                continue
+            direction = _direction_from_compare(row.get("fluctuationsType"))
+            change = _signed_change(_to_float(row.get("fluctuations")), direction)
+            pct = _to_float(row.get("fluctuationsRatio"))
+            if pct is not None and direction == "down" and pct > 0:
+                pct = -pct
+            if pct is not None and direction == "up" and pct < 0:
+                pct = abs(pct)
+            collected.append(
+                {
+                    "date": d,
+                    "open": _to_float(row.get("openPrice")),
+                    "high": _to_float(row.get("highPrice")),
+                    "low": _to_float(row.get("lowPrice")),
+                    "close": close,
+                    "change": round(change, 2) if change is not None else None,
+                    "change_pct": round(pct, 2) if pct is not None else None,
+                }
+            )
+            page_oldest = d if page_oldest is None else min(page_oldest, d)
+        if page_oldest:
+            oldest = page_oldest if oldest is None else min(oldest, page_oldest)
+        if oldest and oldest <= ymd and any(b["date"] == ymd for b in collected):
+            break
+        if oldest and oldest < ymd:
+            break
+    by_day = {b["date"]: b for b in collected}
+    return [by_day[d] for d in sorted(by_day)]
+
+
+def _oil_index_on_date(code: str, key: str, label: str, ymd: str) -> Dict[str, Any]:
+    bars = _fetch_oil_day_bars(code, ymd)
+    bar = next((b for b in bars if b["date"] == ymd), None)
+    if bar is None:
+        return _closed_row(key, label, ymd)
+    return _index_row(
+        key,
+        label,
+        bar.get("close"),
+        bar.get("change"),
+        bar.get("change_pct"),
+        session_date=bar["date"],
+        open_=bar.get("open"),
+        high=bar.get("high"),
+        low=bar.get("low"),
+        bars=_spark_bars(bars, ymd),
+    )
+
+
 def fetch_market_indices_for_date(ymd: str, force: bool = False) -> Dict[str, Any]:
     """특정일(KST YYYY-MM-DD) 종가 기준 지수. 당일이면 실시간 스냅샷."""
     parsed = _parse_ymd(ymd)
@@ -1240,6 +1552,12 @@ def fetch_market_indices_for_date(ymd: str, force: bool = False) -> Dict[str, An
         except Exception as exc:
             errors.append(f"{label}: {exc}")
             key = "nasdaq" if "NAS" in symbol else "dow"
+            indices.append(_closed_row(key, label, parsed))
+    for code, key, label in _OIL_SPECS:
+        try:
+            indices.append(_oil_index_on_date(code, key, label, parsed))
+        except Exception as exc:
+            errors.append(f"{label}: {exc}")
             indices.append(_closed_row(key, label, parsed))
 
     payload = {
