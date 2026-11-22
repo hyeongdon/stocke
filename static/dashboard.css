@@ -2536,6 +2536,21 @@ html.mode-real, body.mode-real { --if-price-line: #000; }
 .board-layout .grid { gap: 8px; }
 .board-layout .board-split { gap: 8px; }
 .board-layout .board-stat-grid { gap: 8px; }
+#pane-board .board-layout .board-block { width: 100%; min-width: 0; }
+.board-layout .board-stat-grid.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 1100px) {
+  .board-layout .board-stat-grid.cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .board-layout .board-stat-grid.cols-4 { grid-template-columns: minmax(0, 1fr); }
+}
+.board-layout .board-stat-grid .compact-stat { min-width: 0; }
+.board-layout .board-stat-grid .compact-stat .value,
+.board-layout .board-stat-grid .compact-stat .delta {
+  overflow-wrap: anywhere;
+  word-break: keep-all;
+  white-space: normal;
+}
 .board-layout .board-overseas-block { margin-top: 4px; }
 .board-layout .board-overseas-holdings-card { margin-top: 8px; }
 .board-layout .board-overseas-body {

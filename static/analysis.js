@@ -170,16 +170,6 @@ function folderNameById(folderId) {
   return folder ? folder.name : '미분류';
 }
 
-function folderChoicesText(currentId) {
-  const lines = ['0) 미분류'];
-  state.folders.forEach((f, i) => {
-    const mark = f.id === currentId ? ' ←' : '';
-    lines.push(`${i + 1}) ${f.name}${mark}`);
-  });
-  lines.push(`${state.folders.length + 1}) ＋ 새 폴더`);
-  return lines.join('\n');
-}
-
 async function createFavoriteFolder() {
   const name = window.prompt('새 폴더 이름');
   if (name == null) return null;
@@ -214,21 +204,74 @@ async function pickFavoriteFolder(preferredId) {
   const defaultIdx = fallback == null
     ? 0
     : (state.folders.findIndex((f) => f.id === fallback) + 1);
-  const raw = window.prompt(
-    `넣을 즐겨찾기 폴더 번호\n${folderChoicesText(fallback)}`,
-    String(defaultIdx >= 0 ? defaultIdx : 0),
-  );
-  if (raw == null) return undefined;
-  const idx = Number(String(raw).trim());
-  if (!Number.isFinite(idx) || idx < 0 || idx > state.folders.length + 1) {
-    toast('올바른 번호를 입력하세요', true);
-    return undefined;
-  }
-  if (idx === state.folders.length + 1) {
+  const picked = await showFolderCardPicker({
+    title: '넣을 즐겨찾기 폴더',
+    folders: state.folders,
+    currentId: defaultIdx > 0 ? fallback : null,
+    allowNew: true,
+  });
+  if (!picked) return undefined;
+  if (picked.type === 'new') {
     const created = await createFavoriteFolder();
     return created ? created.id : undefined;
   }
-  return idx === 0 ? null : state.folders[idx - 1].id;
+  return picked.id;
+}
+
+function ensureFolderPickerStyle() {
+  if (document.getElementById('folder-picker-style')) return;
+  const style = document.createElement('style');
+  style.id = 'folder-picker-style';
+  style.textContent = `
+.fp-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:10000;display:flex;align-items:flex-end;justify-content:center}
+@media(min-width:700px){.fp-backdrop{align-items:center}}
+.fp-sheet{background:#1b1f27;color:#e6e9ef;width:100%;max-width:520px;max-height:80vh;overflow:auto;border-radius:16px 16px 0 0;padding:16px;box-sizing:border-box}
+@media(min-width:700px){.fp-sheet{border-radius:16px}}
+.fp-title{font-weight:700;font-size:16px;margin-bottom:12px}
+.fp-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.fp-card{background:#262b36;border:2px solid transparent;border-radius:12px;padding:16px 12px;font-size:15px;color:inherit;text-align:left;cursor:pointer;min-height:56px;word-break:break-all}
+.fp-card:active{transform:scale(.97)}
+.fp-card.current{border-color:#f5c542}
+.fp-card.new{border:2px dashed #4a5263;color:#9aa4b8}
+.fp-cancel{margin-top:14px;width:100%;padding:12px;border-radius:10px;border:none;background:#333a48;color:#e6e9ef;font-size:15px}`;
+  document.head.appendChild(style);
+}
+
+/** @returns {Promise<{type:'folder',id:number|null}|{type:'new'}|null>} null=취소 */
+function showFolderCardPicker({ title, folders, currentId, allowNew }) {
+  ensureFolderPickerStyle();
+  return new Promise((resolve) => {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'fp-backdrop';
+    const sheet = document.createElement('div');
+    sheet.className = 'fp-sheet';
+    const head = document.createElement('div');
+    head.className = 'fp-title';
+    head.textContent = title;
+    const grid = document.createElement('div');
+    grid.className = 'fp-grid';
+    const done = (v) => { backdrop.remove(); resolve(v); };
+    const addCard = (label, cls, value) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = `fp-card ${cls}`;
+      b.textContent = label;
+      b.addEventListener('click', () => done(value));
+      grid.appendChild(b);
+    };
+    addCard('미분류', currentId == null ? 'current' : '', { type: 'folder', id: null });
+    folders.forEach((f) => addCard(`📁 ${f.name}`, f.id === currentId ? 'current' : '', { type: 'folder', id: f.id }));
+    if (allowNew) addCard('＋ 새 폴더', 'new', { type: 'new' });
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'fp-cancel';
+    cancel.textContent = '취소';
+    cancel.addEventListener('click', () => done(null));
+    backdrop.addEventListener('click', (e) => { if (e.target === backdrop) done(null); });
+    sheet.append(head, grid, cancel);
+    backdrop.appendChild(sheet);
+    document.body.appendChild(backdrop);
+  });
 }
 
 function favoriteCodesInScope() {
@@ -554,6 +597,7 @@ function badgeHtml(row) {
   if (row.daily_williams_hit) badge += ' <span class="wr-cond-badge" title="키움 조건식 일봉윌리암 검색 결과">일WR</span>';
   if (row.bowl_hit) badge += ' <span class="bowl-cond-badge" title="키움 조건식 밥그릇 검색 결과">밥그릇</span>';
   if (row.ma2060_hit) badge += ' <span class="gc-cond-badge" title="키움 조건식 2060돌파 검색 결과 — 20일·60일 이평 골든크로스">2060</span>';
+  if (row.ma2060_soon_hit) badge += ' <span class="gc-cond-badge" title="키움 조건식 2060돌파임박 검색 결과 — 20일·60일 이평 골든크로스 임박">2060임박</span>';
   return badge;
 }
 
@@ -613,6 +657,7 @@ function hasActiveFilters() {
     || $('fltDailyWilliamsOnly').checked
     || $('fltBowlOnly').checked
     || $('fltMa2060Only').checked
+    || $('fltMa2060SoonOnly').checked
     || $('fltExcludeBelowMa60').checked
     || $('fltFavoritesOnly').checked
     || ($('fltSortBy').value || 'market_cap') !== 'market_cap'
@@ -639,6 +684,7 @@ function updateFilterSummary() {
   if ($('fltDailyWilliamsOnly').checked) parts.push('일WR');
   if ($('fltBowlOnly').checked) parts.push('밥그릇');
   if ($('fltMa2060Only').checked) parts.push('2060');
+  if ($('fltMa2060SoonOnly').checked) parts.push('2060임박');
   if ($('fltExcludeBelowMa60').checked) parts.push('추세이탈제외');
   if ($('fltFavoritesOnly').checked) {
     const scopeCodes = favoriteCodesInScope();
@@ -728,6 +774,7 @@ function buildQuery() {
   if ($('fltDailyWilliamsOnly').checked) p.set('daily_williams_only', 'true');
   if ($('fltBowlOnly').checked) p.set('bowl_only', 'true');
   if ($('fltMa2060Only').checked) p.set('ma2060_only', 'true');
+  if ($('fltMa2060SoonOnly').checked) p.set('ma2060_soon_only', 'true');
   if ($('fltExcludeBelowMa60').checked) p.set('exclude_below_ma60', 'true');
   return p.toString();
 }
@@ -2441,6 +2488,7 @@ function resetFilters() {
   $('fltDailyWilliamsOnly').checked = false;
   $('fltBowlOnly').checked = false;
   $('fltMa2060Only').checked = false;
+  $('fltMa2060SoonOnly').checked = false;
   $('fltExcludeBelowMa60').checked = false;
   $('fltFavoritesOnly').checked = false;
   if ($('fltFavoriteFolder')) $('fltFavoriteFolder').value = '';

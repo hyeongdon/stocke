@@ -23,6 +23,10 @@ logger = logging.getLogger(__name__)
 _INSERT_MARKERS = frozenset({"I", "i", "1", "+", "편입", "삽입"})
 _DELETE_MARKERS = frozenset({"D", "d", "0", "-", "이탈", "삭제"})
 
+# 알림 카테고리 설정 변경 확인 주기 / 무응답 시 재연결 기준
+_NAMES_CHECK_SEC = 60.0
+_IDLE_TIMEOUT_SEC = 120.0
+
 
 def _dedup_sec() -> float:
     try:
@@ -146,6 +150,10 @@ class ConditionRealtimeAlerter:
         name = str(condition_name or "")
         if "1592" in name or "1590" in name:
             return True
+        from utils.condition_code_sets import ALL_SETS
+        # 분석 필터용 조건식(2060돌파임박 등)은 알림만 받고 MA1592 장부에는 넣지 않음
+        if any(n == name for cs in ALL_SETS for n in cs.names):
+            return False
         for kw in (self.names or []):
             if kw and kw in name:
                 return True
@@ -405,25 +413,50 @@ class ConditionRealtimeAlerter:
                 return out
         raise TimeoutError("CNSRLST 미수신")
 
+    def _subscription_names(self) -> List[str]:
+        """.env 조건식 + 알림 카테고리에서 '실시간(신규 편입)'으로 설정한 조건식."""
+        if not self.names:
+            return []
+        try:
+            from utils.condition_alert_scheduler import realtime_condition_names
+            extra = realtime_condition_names()
+        except Exception as e:
+            logger.warning(f"실시간 알림 설정 조회 실패 — .env 조건식만 사용: {e}")
+            extra = []
+        return list(dict.fromkeys([*self.names, *extra]))
+
     async def _run_session(self) -> None:
         # 스냅샷 세션과 동일하게 메인 WS와 충돌 방지
         main_state = await self.api._suspend_main_websocket()
         try:
             self._ws = await self.api._open_condition_websocket()
             conditions = await self._list_conditions_on_ws()
-            conditions = filter_conditions(conditions, self.names or None)
+            names = self._subscription_names()
+            conditions = filter_conditions(conditions, names or None)
             if not conditions:
                 raise RuntimeError(
-                    f"대상 조건식 없음 (필터={self.names or '전체'})"
+                    f"대상 조건식 없음 (필터={names or '전체'})"
                 )
             await self._subscribe(conditions)
             logger.info(
                 f"실시간 편입 알림 대기 중 — {len(conditions)}개 조건식 "
                 f"{[c.get('condition_name') for c in conditions]}"
             )
+            last_msg_at = last_check_at = time.monotonic()
             while not self._stop and self._ws:
-                raw = await asyncio.wait_for(self._ws.recv(), timeout=120.0)
-                await self._handle_message(raw)
+                try:
+                    raw = await asyncio.wait_for(self._ws.recv(), timeout=_NAMES_CHECK_SEC)
+                    last_msg_at = time.monotonic()
+                    await self._handle_message(raw)
+                except asyncio.TimeoutError:
+                    if time.monotonic() - last_msg_at >= _IDLE_TIMEOUT_SEC:
+                        raise
+                if time.monotonic() - last_check_at >= _NAMES_CHECK_SEC:
+                    last_check_at = time.monotonic()
+                    new_names = self._subscription_names()
+                    if new_names != names:
+                        logger.info(f"알림 대상 조건식 변경 {names} → {new_names} — 재등록")
+                        return
         finally:
             if self._ws:
                 try:

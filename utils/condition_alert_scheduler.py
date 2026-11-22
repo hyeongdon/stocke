@@ -17,6 +17,8 @@ INTRADAY_INTERVAL_SECONDS = (600, 3600, 7200, 10800, 18000)
 INTRADAY_START = dt_time(9, 0)
 INTRADAY_END = dt_time(20, 0)
 POLL_SECONDS = 5
+# 주기 대신 실시간 편입(CNSRREQ search_type=1) 시점에 알림 — ConditionRealtimeAlerter가 처리
+REALTIME_INTERVAL = 0
 
 
 def _next_intraday_run(
@@ -82,8 +84,19 @@ def _is_due(config: Dict, now_utc: datetime) -> bool:
     return scheduled_at <= now_utc
 
 
+def realtime_condition_names() -> List[str]:
+    """사용 중인 실시간(신규 편입) 알림 설정의 조건식 이름."""
+    names: List[str] = []
+    for config in list_condition_alert_configs():
+        if config["is_enabled"] and config["interval_seconds"] == REALTIME_INTERVAL:
+            names.extend(config["condition_names"])
+    return list(dict.fromkeys(names))
+
+
 def _config_to_dict(config: ConditionAlertConfig) -> Dict:
-    if config.is_intraday:
+    if config.interval_seconds == REALTIME_INTERVAL:
+        next_run = None
+    elif config.is_intraday:
         next_run = _next_intraday_run(config.interval_seconds, config.last_run_at)
     else:
         run_anchor = config.last_run_at or config.updated_at
@@ -132,7 +145,7 @@ def save_condition_alert_config(
     if not normalized_conditions:
         raise ValueError("조건식을 하나 이상 선택하세요.")
     allowed_intervals = INTRADAY_INTERVAL_SECONDS if is_intraday else ALLOWED_INTERVAL_SECONDS
-    if interval_seconds not in allowed_intervals:
+    if interval_seconds != REALTIME_INTERVAL and interval_seconds not in allowed_intervals:
         raise ValueError("지원하지 않는 알림 주기입니다.")
 
     with SessionLocal() as db:
@@ -250,7 +263,7 @@ class ConditionAlertScheduler:
             try:
                 now = utc_now_naive()
                 for config in list_condition_alert_configs():
-                    if not config["is_enabled"]:
+                    if not config["is_enabled"] or config["interval_seconds"] == REALTIME_INTERVAL:
                         continue
                     if not _is_due(config, now):
                         continue

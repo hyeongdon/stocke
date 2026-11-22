@@ -1,4 +1,4 @@
-"""키움 조건식(CNSRREQ) 결과 종목코드를 파일 캐시로 보관 — 추세이탈·주봉RSI·일봉RSI·주봉윌리암·일봉윌리암·밥그릇·2060돌파.
+"""키움 조건식(CNSRREQ) 결과 종목코드를 파일 캐시로 보관 — 추세이탈·주봉RSI·일봉RSI·주봉윌리암·일봉윌리암·밥그릇·2060돌파·2060돌파임박.
 
 기술적 마트 배치(종목별 일봉 조회)는 API 제한으로 전 종목 적재가 어려워,
 HTS에 등록한 조건식 결과를 필터 목록으로 쓴다.
@@ -212,3 +212,11 @@ MA2060 = ConditionCodeSet(
     _env_names("MA2060_CONDITION_NAMES", "2060돌파"),
     "_ma2060_condition.json",
 )
+MA2060_SOON = ConditionCodeSet(
+    "ma2060_soon",
+    "2060돌파임박",
+    _env_names("MA2060_SOON_CONDITION_NAMES", "2060돌파임박"),
+    "_ma2060_soon_condition.json",
+)
+
+ALL_SETS = (TREND_BREAK, WEEKLY_RSI, DAILY_RSI, WEEKLY_WILLIAMS, DAILY_WILLIAMS, BOWL, MA2060, MA2060_SOON)

@@ -2619,6 +2619,7 @@ async def get_fundamentals(
     daily_williams_only: bool = False,
     bowl_only: bool = False,
     ma2060_only: bool = False,
+    ma2060_soon_only: bool = False,
     exclude_below_ma60: bool = False,
     stock_codes: Optional[str] = None,
 ):
@@ -2627,7 +2628,8 @@ async def get_fundamentals(
         from utils.fundamental_mart_store import list_latest
         from utils.technical_mart_store import get_latest_map_by_codes
         from utils.condition_code_sets import (
-            BOWL, DAILY_RSI, DAILY_WILLIAMS, MA2060, TREND_BREAK, WEEKLY_RSI, WEEKLY_WILLIAMS,
+            BOWL, DAILY_RSI, DAILY_WILLIAMS, MA2060, MA2060_SOON, TREND_BREAK, WEEKLY_RSI,
+            WEEKLY_WILLIAMS,
         )
         from datetime import datetime as dt
 
@@ -2643,6 +2645,7 @@ async def get_fundamentals(
             (DAILY_WILLIAMS, daily_williams_only),
             (BOWL, bowl_only),
             (MA2060, ma2060_only),
+            (MA2060_SOON, ma2060_soon_only),
         ):
             cond_sets[cs.key] = await cs.get_codes() if active else cs.cached_codes()
         requested_stock_codes = None
@@ -2664,6 +2667,7 @@ async def get_fundamentals(
             ("daily_williams", daily_williams_only),
             ("bowl", bowl_only),
             ("ma2060", ma2060_only),
+            ("ma2060_soon", ma2060_soon_only),
         ):
             if active:
                 codes = cond_sets[key]["codes"]
@@ -2704,7 +2708,7 @@ async def get_fundamentals(
             it["weekly_rsi14_min26"] = t.get("weekly_rsi14_min26")
             it["daily_rsi14"] = t.get("rsi14")
             it["below_ma60"] = it["stock_code"] in break_codes if trend_break["fetched_at"] else None
-            for key in ("weekly_rsi", "daily_rsi", "weekly_williams", "daily_williams", "bowl", "ma2060"):
+            for key in ("weekly_rsi", "daily_rsi", "weekly_williams", "daily_williams", "bowl", "ma2060", "ma2060_soon"):
                 cs = cond_sets[key]
                 it[f"{key}_hit"] = it["stock_code"] in cs["codes"] if cs["fetched_at"] else None
         result["condition_sets"] = [

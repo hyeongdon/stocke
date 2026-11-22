@@ -882,13 +882,60 @@ function setFavPanelOpen(open) {
   resizeCharts();
 }
 
-function folderChoices(currentId) {
-  const lines = ['0) 미분류'];
-  state.folders.forEach((f, i) => {
-    const mark = f.id === currentId ? ' ←' : '';
-    lines.push(`${i + 1}) ${f.name}${mark}`);
+function ensureFolderPickerStyle() {
+  if (document.getElementById('folder-picker-style')) return;
+  const style = document.createElement('style');
+  style.id = 'folder-picker-style';
+  style.textContent = `
+.fp-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:10000;display:flex;align-items:flex-end;justify-content:center}
+@media(min-width:700px){.fp-backdrop{align-items:center}}
+.fp-sheet{background:#1b1f27;color:#e6e9ef;width:100%;max-width:520px;max-height:80vh;overflow:auto;border-radius:16px 16px 0 0;padding:16px;box-sizing:border-box}
+@media(min-width:700px){.fp-sheet{border-radius:16px}}
+.fp-title{font-weight:700;font-size:16px;margin-bottom:12px}
+.fp-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.fp-card{background:#262b36;border:2px solid transparent;border-radius:12px;padding:16px 12px;font-size:15px;color:inherit;text-align:left;cursor:pointer;min-height:56px;word-break:break-all}
+.fp-card:active{transform:scale(.97)}
+.fp-card.current{border-color:#f5c542}
+.fp-card.new{border:2px dashed #4a5263;color:#9aa4b8}
+.fp-cancel{margin-top:14px;width:100%;padding:12px;border-radius:10px;border:none;background:#333a48;color:#e6e9ef;font-size:15px}`;
+  document.head.appendChild(style);
+}
+
+/** @returns {Promise<{type:'folder',id:number|null}|{type:'new'}|null>} null=취소 */
+function showFolderCardPicker({ title, folders, currentId, allowNew }) {
+  ensureFolderPickerStyle();
+  return new Promise((resolve) => {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'fp-backdrop';
+    const sheet = document.createElement('div');
+    sheet.className = 'fp-sheet';
+    const head = document.createElement('div');
+    head.className = 'fp-title';
+    head.textContent = title;
+    const grid = document.createElement('div');
+    grid.className = 'fp-grid';
+    const done = (v) => { backdrop.remove(); resolve(v); };
+    const addCard = (label, cls, value) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = `fp-card ${cls}`;
+      b.textContent = label;
+      b.addEventListener('click', () => done(value));
+      grid.appendChild(b);
+    };
+    addCard('미분류', currentId == null ? 'current' : '', { type: 'folder', id: null });
+    folders.forEach((f) => addCard(`📁 ${f.name}`, f.id === currentId ? 'current' : '', { type: 'folder', id: f.id }));
+    if (allowNew) addCard('＋ 새 폴더', 'new', { type: 'new' });
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'fp-cancel';
+    cancel.textContent = '취소';
+    cancel.addEventListener('click', () => done(null));
+    backdrop.addEventListener('click', (e) => { if (e.target === backdrop) done(null); });
+    sheet.append(head, grid, cancel);
+    backdrop.appendChild(sheet);
+    document.body.appendChild(backdrop);
   });
-  return lines.join('\n');
 }
 
 async function createFavoriteFolder() {
@@ -1005,17 +1052,14 @@ async function moveFavoriteToFolder(code) {
     await createFavoriteFolder();
     if (!state.folders.length) return;
   }
-  const raw = window.prompt(
-    `이동할 폴더 번호\n${folderChoices(fav.folder_id)}`,
-    '0',
-  );
-  if (raw == null) return;
-  const idx = Number(String(raw).trim());
-  if (!Number.isFinite(idx) || idx < 0 || idx > state.folders.length) {
-    toast('올바른 번호를 입력하세요', true);
-    return;
-  }
-  const folderId = idx === 0 ? null : state.folders[idx - 1].id;
+  const picked = await showFolderCardPicker({
+    title: '이동할 폴더',
+    folders: state.folders,
+    currentId: fav.folder_id ?? null,
+    allowNew: false,
+  });
+  if (!picked) return;
+  const folderId = picked.id;
   try {
     const row = await fetchJSON(`/api/analysis/favorites/${encodeURIComponent(code)}`, {
       method: 'PATCH',

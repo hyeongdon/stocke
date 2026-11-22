@@ -1294,6 +1294,7 @@ function renderNotificationRegistry(notifications, deliveries, data) {
 }
 
 const CONDITION_ALERT_INTERVALS = [
+  [0, '실시간 (신규 편입)'],
   [60, '1분'],
   [300, '5분'],
   [600, '10분'],
@@ -1304,7 +1305,7 @@ const CONDITION_ALERT_INTERVALS = [
   [10800, '3시간'],
   [18000, '5시간'],
 ];
-const CONDITION_ALERT_INTRADAY_INTERVALS = new Set([600, 3600, 7200, 10800, 18000]);
+const CONDITION_ALERT_INTRADAY_INTERVALS = new Set([0, 600, 3600, 7200, 10800, 18000]);
 
 function renderConditionAlertConfigs(configured) {
   const options = new Map();
@@ -1488,7 +1489,7 @@ function conditionAlertStatusMarkup(config) {
   const statusClass = state === 'sent' ? 'up' : (state === 'failed' ? 'down' : 'flat');
   return `<span class="${statusClass}">${esc(statusNames[state] || '미실행')}</span>
     <div class="condition-alert-last">최근 ${notificationTime(config.last_run_at)}</div>
-    <div class="condition-alert-last">${config.is_enabled ? `다음 ${config.next_run_at ? notificationTime(config.next_run_at) : '곧 실행'}` : '비활성'}</div>
+    <div class="condition-alert-last">${!config.is_enabled ? '비활성' : config.interval_seconds === 0 ? '신규 편입 시 즉시 전송' : `다음 ${config.next_run_at ? notificationTime(config.next_run_at) : '곧 실행'}`}</div>
     ${config.last_message ? `<div class="condition-alert-last">${esc(config.last_message)}</div>` : ''}
     ${config.last_error ? `<div class="down">${esc(config.last_error)}</div>` : ''}`;
 }
