@@ -26,7 +26,8 @@ class FailedBuySignalsFormatTests(unittest.TestCase):
             }
         )
         self.assertIn("매수 실패", html)
-        self.assertIn("FAILED 매수 신호 없음", html)
+        self.assertIn("매수 실패 없음", html)
+        self.assertNotIn("🚫", html)
 
     @mock.patch("notifications.failed_buy_signals_notify.now_kst")
     def test_table_html(self, mock_now):

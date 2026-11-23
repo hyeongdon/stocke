@@ -35,17 +35,20 @@ def format_failed_buy_signals_html(report: Dict[str, Any]) -> str:
     strategy_counts: Sequence[Tuple[str, int]] = report.get("strategy_counts") or []
     reason_counts: Sequence[Tuple[str, int]] = report.get("reason_counts") or []
 
+    if not count:
+        return "\n".join([
+            f"<b>✅ 매수 실패 없음 · {_esc(day)}</b>",
+            f"발송: {_esc(now)}",
+            "오늘 실패한 매수 신호가 없습니다 (정상).",
+            "\n출처: pending_buy_signals (FAILED)",
+        ])
+
     lines: List[str] = [
         f"<b>🚫 매수 실패 · {_esc(day)}</b>",
         f"발송: {_esc(now)}",
         f"실패 신호: <b>{_esc(count)}</b>건",
         "",
     ]
-
-    if not count:
-        lines.append("오늘 FAILED 매수 신호 없음")
-        lines.append("\n출처: pending_buy_signals (FAILED)")
-        return "\n".join(lines)
 
     # 전략별 표 (pipe — 한글 폭 이슈 회피)
     strat_rows = ["전략 | 건수"]
