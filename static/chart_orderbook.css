@@ -783,3 +783,7 @@
 .page-embedded .cob-wrap {
   min-height: calc(100vh - 56px);
 }
+
+.cob-fav-star { margin-left: 6px; padding: 0 8px; font-size: 15px; line-height: 1.6; }
+.cob-fav-star.on { color: #f5b301; }
+

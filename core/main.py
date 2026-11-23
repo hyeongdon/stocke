@@ -2976,6 +2976,28 @@ async def _load_ohlcv_rows(
     return rows, source
 
 
+async def _append_live_daily_bars(
+    stock_code: str, rows: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], bool]:
+    """마트 일봉 뒤에 키움 ka10081 최신 봉(마트 이후 일자 · 장중 오늘 봉)을 붙인다. 마트에는 저장하지 않는다."""
+    from utils.chart_indicators import row_date
+
+    try:
+        raw = await kiwoom_api.get_stock_chart_data(
+            stock_code, "1D", allow_off_hours=True,
+        )
+    except Exception as e:
+        logger.debug(f"오늘 일봉 조회 실패 ({stock_code}): {e}")
+        return rows, False
+    live = _parse_chart_rows(raw)
+    last_d = row_date(rows[-1]) if rows else None
+    newer = [r for r in live if last_d is None or ((d := row_date(r)) is not None and d > last_d)]
+    if not newer:
+        return rows, False
+    newer.sort(key=lambda r: str(r.get("timestamp") or ""))
+    return rows + newer, True
+
+
 @app.get("/fundamentals/{stock_code}/chart")
 async def get_fundamental_chart(
     stock_code: str,
@@ -3023,6 +3045,10 @@ async def get_fundamental_chart(
             daily_rows, daily_src = await _load_ohlcv_rows(
                 stock_code, "1D", prefer_mart=prefer_mart,
             )
+            if daily_src == "mart" and daily_rows:
+                daily_rows, appended = await _append_live_daily_bars(stock_code, daily_rows)
+                if appended:
+                    daily_src = "mixed"
 
             if norm_interval == "1D":
                 if not daily_rows:

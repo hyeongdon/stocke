@@ -2609,12 +2609,47 @@ document.addEventListener('DOMContentLoaded', async () => {
   codeSearch.addEventListener('mouseup', (e) => {
     if (e.target.dataset.selectAll === '1') e.preventDefault();
   });
+  const codeSearchList = $('codeSearchList');
+  let searchSeq = 0;
+  const searchStocks = async (q) => {
+    try {
+      const data = await fetchJSON(`/api/ladder/search?q=${encodeURIComponent(q)}&limit=15`);
+      return (data && data.items) || [];
+    } catch (_) {
+      return [];
+    }
+  };
+  const parseSearchCode = (raw) => {
+    const m = raw.match(/\((\d{6})\)\s*$/) || raw.match(/^(\d{6})$/);
+    return m ? m[1] : '';
+  };
+  const submitSearch = async () => {
+    const raw = codeSearch.value.trim();
+    if (!raw) return;
+    let code = parseSearchCode(raw);
+    if (!code) {
+      const items = await searchStocks(raw);
+      if (!items.length) { toast(`'${raw}' 종목을 찾을 수 없습니다.`, true); return; }
+      code = items[0].code;
+    }
+    selectStock(code, { scrollDetail: true });
+  };
+  codeSearch.addEventListener('input', async () => {
+    const raw = codeSearch.value.trim();
+    const code = parseSearchCode(raw);
+    if (code && raw.includes('(')) { submitSearch(); return; }
+    if (!raw || code) { codeSearchList.innerHTML = ''; return; }
+    const seq = ++searchSeq;
+    const items = await searchStocks(raw);
+    if (seq !== searchSeq) return;
+    codeSearchList.innerHTML = items
+      .map((r) => `<option value="${esc(`${r.name} (${r.code})`)}"></option>`)
+      .join('');
+  });
   codeSearch.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter') return;
     e.preventDefault();
-    const v = codeSearch.value.trim().replace(/\D/g, '');
-    if (v.length < 4) { toast('종목코드를 4~6자리로 입력하세요.', true); return; }
-    selectStock(v, { scrollDetail: true });
+    submitSearch();
   });
   const pendingCode = state.selectedCode;
   if (pendingCode) selectStock(pendingCode, { scrollDetail: true });

@@ -32,7 +32,8 @@
         <a href="/static/dashboard.html?tab=settings" class="tab-link">설정</a>
       </nav>
       <div class="topbar-actions analysis-filters" hidden>
-        <input type="search" id="codeSearch" class="analysis-search" placeholder="종목코드" maxlength="6" inputmode="numeric" autocomplete="off" enterkeyhint="search">
+        <input type="search" id="codeSearch" class="analysis-search" placeholder="종목코드/종목명" maxlength="30" autocomplete="off" enterkeyhint="search" list="codeSearchList">
+        <datalist id="codeSearchList"></datalist>
         <button class="btn sm primary" id="btnRefresh" type="button">새로고침</button>
         <span class="updated">갱신: <span id="lastUpdated">-</span></span>
       </div>

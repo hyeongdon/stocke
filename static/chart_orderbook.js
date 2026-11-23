@@ -837,6 +837,7 @@ function renderFavorites() {
   const list = $('favList');
   const count = $('favCount');
   if (count) count.textContent = String(state.favorites.length);
+  renderFavStar();
   if (folder) {
     folder.classList.toggle('is-collapsed', !state.favOpen);
     folder.classList.toggle('is-mobile-drill', isMobileFavLayout() && state.activeFolderId != null);
@@ -958,6 +959,7 @@ async function createFavoriteFolder() {
     persistLocalFavorites();
     renderFavorites();
     toast(`폴더 "${row.name}" 추가`);
+    return row;
   } catch (e) {
     toast((e && (e.detail || e.message)) || '폴더 추가 실패', true);
   }
@@ -1079,6 +1081,70 @@ async function moveFavoriteToFolder(code) {
   }
 }
 
+function renderFavStar() {
+  const btn = $('btnFavStar');
+  if (!btn) return;
+  btn.hidden = !state.code;
+  const on = state.favorites.some((f) => f.code === state.code);
+  btn.textContent = on ? '★' : '☆';
+  btn.title = on ? '즐겨찾기 해제' : '즐겨찾기 추가';
+  btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  btn.classList.toggle('on', on);
+}
+
+async function toggleCurrentFavorite() {
+  const code = state.code;
+  if (!code) return;
+  const existing = state.favorites.find((f) => f.code === code);
+  if (existing) {
+    if (!window.confirm(`${existing.name || code} 즐겨찾기를 해제할까요?`)) return;
+    try {
+      await fetchJSON(`/api/analysis/favorites/${encodeURIComponent(code)}`, { method: 'DELETE' });
+    } catch (e) {
+      toast((e && (e.detail || e.message)) || '즐겨찾기 해제 실패', true);
+      return;
+    }
+    state.favorites = state.favorites.filter((f) => f.code !== code);
+    persistLocalFavorites();
+    renderFavorites();
+    toast(`${existing.name || code} 즐겨찾기 해제`);
+    return;
+  }
+
+  const picked = await showFolderCardPicker({
+    title: '추가할 폴더',
+    folders: state.folders,
+    currentId: null,
+    allowNew: true,
+  });
+  if (!picked) return;
+  let folderId = picked.id ?? null;
+  if (picked.type === 'new') {
+    const row = await createFavoriteFolder();
+    if (!row) return;
+    folderId = row.id;
+  }
+  const name = state.name || '';
+  try {
+    await fetchJSON(`/api/analysis/favorites/${encodeURIComponent(code)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stock_name: name, folder_id: folderId }),
+    });
+  } catch (e) {
+    toast((e && (e.detail || e.message)) || '즐겨찾기 저장 실패', true);
+    return;
+  }
+  state.favorites.push({ code, name, folder_id: folderId });
+  if (folderId != null) state.groupOpen[folderId] = true;
+  persistLocalFavorites();
+  renderFavorites();
+  const dest = folderId == null
+    ? '미분류'
+    : ((state.folders.find((f) => f.id === folderId) || {}).name || '폴더');
+  toast(`${name || code} → ${dest} 추가`);
+}
+
 function syncUrlCode(code) {
   const url = new URL(location.href);
   if (code) url.searchParams.set('code', code);
@@ -1182,6 +1248,31 @@ async function loadAll(code, { quiet } = {}) {
   }
 }
 
+function updateLiveCandle(snap) {
+  const price = Number(snap && snap.current_price) || 0;
+  const bars = state.lastBars;
+  if (!price || !bars.length || !state.candleSeries) return;
+  const last = bars[bars.length - 1];
+  if (!last.partial) return;
+  const time = toChartTime(last.timestamp, state.interval);
+  if (time == null) return;
+  last.close = price;
+  last.high = Math.max(Number(last.high) || price, price);
+  last.low = Math.min(Number(last.low) || price, price);
+  state.candleSeries.update({
+    time, open: Number(last.open) || price, high: last.high, low: last.low, close: price,
+  });
+  const vol = Number(snap.volume) || 0;
+  if (state.interval === '1D' && vol > 0 && state.volumeSeries) {
+    last.volume = vol;
+    state.volumeSeries.update({
+      time,
+      value: vol,
+      color: price >= Number(last.open) ? 'rgba(239, 68, 68, 0.42)' : 'rgba(59, 130, 246, 0.42)',
+    });
+  }
+}
+
 async function refreshSnapshotOnly() {
   const c = state.code;
   if (!c || state.loading) return;
@@ -1189,6 +1280,7 @@ async function refreshSnapshotOnly() {
     const data = await fetchJSON(`/stocks/${encodeURIComponent(c)}/snapshot`);
     renderQuote(data);
     renderOrderbook(data);
+    updateLiveCandle(data);
     markUpdated();
   } catch (_) {
     /* 자동갱신 실패는 조용히 */
@@ -1405,6 +1497,7 @@ function bindEvents() {
     renderFavorites();
   });
   $('btnFavAddFolder')?.addEventListener('click', () => createFavoriteFolder());
+  $('btnFavStar')?.addEventListener('click', () => toggleCurrentFavorite());
   $('btnFavRefresh')?.addEventListener('click', async () => {
     await loadFavoritesList();
     toast(`즐겨찾기 ${state.favorites.length}종목 · 폴더 ${state.folders.length}`);
