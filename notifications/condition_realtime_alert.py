@@ -58,6 +58,7 @@ def _stock_code_from_values(values: Dict[str, Any], item: Dict[str, Any]) -> str
     code = (
         values.get("9001")
         or values.get("jmcode")
+        or item.get("item")
         or item.get("name")
         or ""
     )
@@ -465,6 +466,91 @@ class ConditionRealtimeAlerter:
                     pass
                 self._ws = None
             await self.api._resume_main_websocket(main_state)
+
+
+class MainSocketConditionAlerter(ConditionRealtimeAlerter):
+    """서버 메인 WS에 CNSRREQ를 등록 — 별도 WS를 열면 키움이 메인 연결을 끊으므로."""
+
+    _CHECK_SEC = 15.0
+
+    def __init__(self, api, notifier: Optional[TelegramNotifier] = None):
+        super().__init__(api, notifier=notifier, names=[])
+        self._registered_ws = None
+        self._registered_names: List[str] = []
+        self._cnsrlst: Optional[asyncio.Future] = None
+
+    def _subscription_names(self) -> List[str]:
+        from utils.condition_alert_scheduler import realtime_condition_names
+        return realtime_condition_names()
+
+    async def _on_main_message(self, data: Dict[str, Any]) -> None:
+        trnm = data.get("trnm")
+        if trnm == "CNSRLST":
+            if self._cnsrlst and not self._cnsrlst.done():
+                self._cnsrlst.set_result(data)
+            return
+        if trnm == "REAL":
+            items = data.get("data")
+            if not isinstance(items, list):
+                return
+            for item in items:
+                if not isinstance(item, dict) or item.get("type") == "0D":
+                    continue
+                seq = str(item.get("seq") or item.get("name") or "").strip()
+                if seq not in self._seq_to_name:
+                    continue
+                await self._handle_message(json.dumps({"trnm": "REAL", "seq": seq, "data": [item]}))
+            return
+        await self._handle_message(json.dumps(data))
+
+    async def _register(self, names: List[str]) -> None:
+        ws = self.api.websocket
+        self._ws = ws
+        self._seq_to_name.clear()
+        self._cnsrlst = asyncio.get_running_loop().create_future()
+        await ws.send(json.dumps({
+            "trnm": "CNSRLST",
+            "token": self.api.token_manager.get_valid_token(),
+        }))
+        msg = await asyncio.wait_for(self._cnsrlst, timeout=12.0)
+        if msg.get("return_code") not in (0, None):
+            raise RuntimeError(f"CNSRLST 실패: {msg}")
+        conditions = []
+        for item in msg.get("data") or []:
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                conditions.append({"condition_id": str(item[0]), "condition_name": str(item[1])})
+        conditions = filter_conditions(conditions, names)
+        if not conditions:
+            logger.warning(f"실시간 편입 알림: 키움에 대상 조건식 없음 {names}")
+        await self._subscribe(conditions)
+        self._registered_ws = ws
+        self._registered_names = names
+        logger.info(
+            f"실시간 편입 알림 대기 중(메인 WS) — {[c['condition_name'] for c in conditions]}"
+        )
+
+    async def run_forever(self) -> None:
+        self.api.register_condition_message_listener(self._on_main_message)
+        try:
+            while not self._stop:
+                try:
+                    names = self._subscription_names()
+                    ws = self.api.websocket
+                    connected = ws is not None and self.api.running
+                    if not names:
+                        self._registered_names = []
+                    elif connected and (
+                        ws is not self._registered_ws or names != self._registered_names
+                    ):
+                        await self._register(names)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.warning(f"실시간 편입 알림 등록 실패 — 재시도 예정: {e}")
+                    self._registered_ws = None
+                await asyncio.sleep(self._CHECK_SEC)
+        finally:
+            self.api.unregister_condition_message_listener(self._on_main_message)
 
 
 async def run_realtime_condition_alerts(

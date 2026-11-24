@@ -27,6 +27,10 @@ from api.kiwoom_stock_analytics import _StockAnalyticsMixin
 from api.token_manager import TokenManager, get_token_manager
 from core.config import Config
 
+_SHARED_REALTIME_SUBSCRIBED: set = set()
+_SHARED_REALTIME_TRADE_CALLBACKS: list = []
+_SHARED_CONDITION_MESSAGE_LISTENERS: list = []
+
 __all__ = [
     "KiwoomAPI",
     "ConditionSearchSession",
@@ -72,10 +76,11 @@ class KiwoomAPI(
         self._chart_cache_ttl = 300  # 분봉 등: 5분
         self._daily_chart_cache_ttl = 43200  # 일봉: 12시간 (ATR은 stop_loss에서 일 1회 캐시)
 
-        # 실시간 체결 구독 종목 집합 (WebSocket REG/UNREG 관리)
-        self._realtime_subscribed: set = set()
+        # 메인 WS는 프로세스당 1개(키움 동시연결 불가) — 인스턴스가 여러 개여도 구독·콜백은 공유
+        self._realtime_subscribed: set = _SHARED_REALTIME_SUBSCRIBED
         # 실시간 REAL 메시지 수신 콜백 [(stock_code, values) -> Awaitable]
-        self._realtime_trade_callbacks: list = []
+        self._realtime_trade_callbacks: list = _SHARED_REALTIME_TRADE_CALLBACKS
+        self._condition_message_listeners: list = _SHARED_CONDITION_MESSAGE_LISTENERS
 
     @staticmethod
     def normalize_stock_code(stock_code: str) -> str:

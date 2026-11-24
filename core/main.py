@@ -423,6 +423,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.exception("🔔 [STARTUP] 조건식 알림 스케줄러 시작 실패: %s", e)
 
+    condition_realtime_task = None
+    try:
+        from notifications.condition_realtime_alert import MainSocketConditionAlerter
+
+        condition_realtime_task = asyncio.create_task(
+            MainSocketConditionAlerter(kiwoom_api).run_forever()
+        )
+    except Exception as e:
+        logger.exception("🔔 [STARTUP] 실시간 편입 알림 시작 실패: %s", e)
+
     price_alert_scheduler = None
     price_alert_task = None
     try:
@@ -445,6 +455,12 @@ async def lifespan(app: FastAPI):
             await condition_alert_task
         except Exception as e:
             logger.error("🔔 [SHUTDOWN] 조건식 알림 스케줄러 종료 실패: %s", e)
+    if condition_realtime_task:
+        condition_realtime_task.cancel()
+        try:
+            await condition_realtime_task
+        except asyncio.CancelledError:
+            pass
     if price_alert_scheduler:
         price_alert_scheduler.stop()
     if price_alert_task:

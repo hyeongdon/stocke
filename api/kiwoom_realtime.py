@@ -25,6 +25,13 @@ __all__ = ["_RealtimeMixin", "ConditionSearchSession"]
 if TYPE_CHECKING:
     from api.kiwoom_api import KiwoomAPI
 
+# 키움은 같은 토큰의 WS 동시 연결 시 한쪽을 끊으므로, 메인 WS 조작은 연결 소유 인스턴스로 위임
+_main_ws_owner = None
+
+
+def _ws_owner(api):
+    return _main_ws_owner or api
+
 
 class _RealtimeMixin:
     async def connect(self):
@@ -64,8 +71,26 @@ class _RealtimeMixin:
                 max_size=2**20,    # 최대 메시지 크기 1MB
                 max_queue=32       # 최대 큐 크기
             )
+            # 키움은 LOGIN 전 전문(REG/CNSRREQ 등)을 무시함
+            await self.websocket.send(json.dumps({
+                "trnm": "LOGIN", "token": self.token_manager.get_valid_token(),
+            }))
+            for _ in range(8):
+                resp = json.loads(await asyncio.wait_for(self.websocket.recv(), timeout=12.0))
+                if resp.get("trnm") == "PING":
+                    await self.websocket.send(json.dumps(resp))
+                    continue
+                if resp.get("trnm") == "LOGIN":
+                    if resp.get("return_code") not in (0, None):
+                        await self.websocket.close()
+                        self.websocket = None
+                        logger.error(f"WebSocket LOGIN 실패: {resp}")
+                        return False
+                    break
             logger.info("🔄 [DEBUG] self.running을 True로 설정 (connect 메서드)")
             self.running = True
+            global _main_ws_owner
+            _main_ws_owner = self
             logger.info("WebSocket 연결 성공 - 메시지 핸들러 시작")
             
             # 재연결 성공 시 카운터 리셋
@@ -112,6 +137,9 @@ class _RealtimeMixin:
           {"trnm":"REG","data":[{"item":["005930"],"type":["0D"]}]}
         0D = 주식체결 실시간
         """
+        owner = _ws_owner(self)
+        if owner is not self:
+            return await owner.subscribe_realtime_stock(stock_code)
         code = str(stock_code or "").strip().lstrip("A")
         if not code:
             return False
@@ -135,6 +163,9 @@ class _RealtimeMixin:
         여러 종목 실시간 체결 구독 — WebSocket REG 1회 전송 (효율적).
         개별 subscribe_realtime_stock()을 반복 호출하는 것보다 서버 부하가 적다.
         """
+        owner = _ws_owner(self)
+        if owner is not self:
+            return await owner.subscribe_realtime_stocks_batch(stock_codes)
         codes = [str(c or "").strip().lstrip("A") for c in stock_codes]
         codes = [c for c in codes if c and c not in self._realtime_subscribed]
         if not codes:
@@ -155,6 +186,9 @@ class _RealtimeMixin:
 
     async def unsubscribe_realtime_stock(self, stock_code: str) -> bool:
         """종목 실시간 체결 구독 해제 (WebSocket UNREG)."""
+        owner = _ws_owner(self)
+        if owner is not self:
+            return await owner.unsubscribe_realtime_stock(stock_code)
         code = str(stock_code or "").strip().lstrip("A")
         self._realtime_subscribed.discard(code)
         if not self.websocket or not self.running:
@@ -174,6 +208,21 @@ class _RealtimeMixin:
         callback(stock_code: str, values: dict) — 코루틴 또는 일반 함수.
         """
         self._realtime_trade_callbacks.append(callback)
+
+    def register_condition_message_listener(self, callback) -> None:
+        """메인 WS의 CNSRLST/CNSRREQ/조건식 REAL 메시지 수신. callback(data: dict) 코루틴."""
+        self._condition_message_listeners.append(callback)
+
+    def unregister_condition_message_listener(self, callback) -> None:
+        if callback in self._condition_message_listeners:
+            self._condition_message_listeners.remove(callback)
+
+    async def _dispatch_condition_message(self, data: dict) -> None:
+        for cb in list(self._condition_message_listeners):
+            try:
+                await cb(data)
+            except Exception as e:
+                logger.warning(f"🔔 [CONDITION_RT] 리스너 오류: {e}")
 
     async def _dispatch_realtime(self, data: dict) -> None:
         """WebSocket REAL 메시지를 파싱해 등록된 콜백들에 전달."""
@@ -256,6 +305,9 @@ class _RealtimeMixin:
                 # ── 실시간 체결 메시지 (REAL 0D) ─────────────────────
                 if trnm == "REAL":
                     await self._dispatch_realtime(data)
+                    await self._dispatch_condition_message(data)
+                elif trnm in ("CNSRLST", "CNSRREQ"):
+                    await self._dispatch_condition_message(data)
                 elif trnm == "PING":
                     if self.websocket:
                         await self.websocket.send(json.dumps({"trnm": "PONG"}))
@@ -336,6 +388,9 @@ class _RealtimeMixin:
 
         키움은 동일 토큰으로 /api/dostk/websocket 동시 연결 시 한쪽을 Bye로 끊는 경우가 많음.
         """
+        owner = _ws_owner(self)
+        if owner is not self:
+            return await owner._suspend_main_websocket()
         state = {
             "auto_reconnect": bool(getattr(self, "auto_reconnect", True)),
             "had_ws": bool(self.websocket) or bool(self.running),
@@ -364,6 +419,9 @@ class _RealtimeMixin:
         """조건식 조회 후 메인 WS 복구."""
         if not state:
             return
+        owner = _ws_owner(self)
+        if owner is not self:
+            return await owner._resume_main_websocket(state)
         self.auto_reconnect = bool(state.get("auto_reconnect", True))
         if not state.get("had_ws"):
             return

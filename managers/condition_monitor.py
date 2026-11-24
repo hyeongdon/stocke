@@ -223,12 +223,8 @@ class ConditionMonitor:
                     pass
             finally:
                 self._monitor_task = None
-        # WebSocket 연결 종료 추가 (타임아웃 내 비차단)
-        try:
-            await asyncio.wait_for(self.kiwoom_api.disconnect(), timeout=3.0)
-        except asyncio.TimeoutError:
-            logger.warning("🔍 [CONDITION_MONITOR] disconnect 타임아웃 - 강제 종료 진행")
-        logger.info("🔍 [CONDITION_MONITOR] 모든 조건식 모니터링 중지 및 WebSocket 연결 종료")
+        # 메인 WS는 실시간 체결·조건식 편입 알림이 공유하므로 여기서 끊지 않음 (종료 시 graceful_shutdown)
+        logger.info("🔍 [CONDITION_MONITOR] 모든 조건식 모니터링 중지")
     
     async def get_monitoring_status(self) -> Dict:
         """모니터링 상태 조회 (개선된 상태 정보 포함)"""
