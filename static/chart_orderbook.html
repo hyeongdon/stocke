@@ -87,6 +87,8 @@
         <label class="cob-ma"><input type="checkbox" data-ma="ma60" checked> MA60</label>
         <label class="cob-ma"><input type="checkbox" data-ma="ma120"> MA120</label>
         <label class="cob-ma"><input type="checkbox" id="togRsi" checked> RSI(14)</label>
+        <label class="cob-ma"><input type="checkbox" id="togMacd" checked> MACD</label>
+        <label class="cob-ma"><input type="checkbox" id="togWr" checked> Williams %R</label>
       </div>
     </div>
 
@@ -118,6 +120,14 @@
               <div id="rsiPane" class="cob-rsi-pane">
                 <div class="cob-rsi-label">RSI(14) <b id="rsiLatest">-</b></div>
                 <div id="rsiHost" class="cob-rsi-host" role="img" aria-label="RSI 차트"></div>
+              </div>
+              <div id="macdPane" class="cob-rsi-pane">
+                <div class="cob-rsi-label">MACD(12,26,9) <b id="macdLatest" class="cob-macd">-</b> 시그널 <b id="macdSignalLatest" class="cob-sig">-</b></div>
+                <div id="macdHost" class="cob-rsi-host" role="img" aria-label="MACD 차트"></div>
+              </div>
+              <div id="wrPane" class="cob-rsi-pane">
+                <div class="cob-rsi-label">Williams %R(14) <b id="wrLatest" class="cob-wr">-</b> 시그널(9) <b id="wrSignalLatest" class="cob-sig">-</b></div>
+                <div id="wrHost" class="cob-rsi-host" role="img" aria-label="Williams %R 차트"></div>
               </div>
             </div>
             <div id="chartEmpty" class="cob-empty">종목코드를 입력한 뒤 조회하세요</div>

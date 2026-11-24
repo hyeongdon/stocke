@@ -27,6 +27,15 @@ const MA_WIDTHS = {
 };
 const RSI_PERIOD = 14;
 const RSI_COLOR = '#f472b6';
+const MACD_FAST = 12;
+const MACD_SLOW = 26;
+const MACD_SIGNAL = 9;
+const MACD_COLOR = '#38bdf8';
+const MACD_SIGNAL_COLOR = '#f59e0b';
+const WR_PERIOD = 14;
+const WR_SIGNAL = 9;
+const WR_COLOR = '#a78bfa';
+const WR_SIGNAL_COLOR = '#f59e0b';
 
 const state = {
   code: '',
@@ -39,6 +48,13 @@ const state = {
   candleSeries: null,
   volumeSeries: null,
   rsiSeries: null,
+  macdChart: null,
+  macdSeries: null,
+  macdSignalSeries: null,
+  macdHistSeries: null,
+  wrChart: null,
+  wrSeries: null,
+  wrSignalSeries: null,
   maSeries: {},
   lastBars: [],
   favorites: [],
@@ -197,12 +213,85 @@ function wilderRsiSeries(closes, period = RSI_PERIOD) {
   return out;
 }
 
+/** EMA — null 구간은 건너뛰고 첫 period개 SMA로 시드 */
+function emaSeries(values, period) {
+  const out = new Array(values.length).fill(null);
+  const k = 2 / (period + 1);
+  let seed = [];
+  let prev = null;
+  for (let i = 0; i < values.length; i += 1) {
+    const v = values[i];
+    if (v == null) continue;
+    if (prev == null) {
+      seed.push(v);
+      if (seed.length === period) {
+        prev = seed.reduce((a, b) => a + b, 0) / period;
+        out[i] = prev;
+        seed = [];
+      }
+      continue;
+    }
+    prev = v * k + prev * (1 - k);
+    out[i] = prev;
+  }
+  return out;
+}
+
+function smaSeries(values, period) {
+  const out = new Array(values.length).fill(null);
+  for (let i = period - 1; i < values.length; i += 1) {
+    let sum = 0;
+    let ok = true;
+    for (let j = i - period + 1; j <= i; j += 1) {
+      if (values[j] == null) { ok = false; break; }
+      sum += values[j];
+    }
+    if (ok) out[i] = sum / period;
+  }
+  return out;
+}
+
+function macdSeries(closes) {
+  const fast = emaSeries(closes, MACD_FAST);
+  const slow = emaSeries(closes, MACD_SLOW);
+  const macd = closes.map((_, i) => (fast[i] != null && slow[i] != null ? fast[i] - slow[i] : null));
+  const signal = emaSeries(macd, MACD_SIGNAL);
+  const hist = macd.map((m, i) => (m != null && signal[i] != null ? m - signal[i] : null));
+  return { macd, signal, hist };
+}
+
+/** Williams %R (-100~0) + SMA 시그널 */
+function williamsRSeries(highs, lows, closes, period = WR_PERIOD) {
+  const wr = new Array(closes.length).fill(null);
+  for (let i = period - 1; i < closes.length; i += 1) {
+    let hh = -Infinity;
+    let ll = Infinity;
+    for (let j = i - period + 1; j <= i; j += 1) {
+      if (highs[j] > hh) hh = highs[j];
+      if (lows[j] < ll) ll = lows[j];
+    }
+    wr[i] = hh === ll ? -50 : ((hh - closes[i]) / (hh - ll)) * -100;
+  }
+  return { wr, signal: smaSeries(wr, WR_SIGNAL) };
+}
+
+function toPoints(values, times, digits = 2) {
+  const f = 10 ** digits;
+  const pts = [];
+  values.forEach((v, i) => {
+    if (v != null && Number.isFinite(v)) pts.push({ time: times[i], value: Math.round(v * f) / f });
+  });
+  return pts;
+}
+
 function barsToSeries(bars, interval) {
   const candles = [];
   const volumes = [];
   const maMaps = { ma5: [], ma20: [], ma60: [], ma120: [] };
   const rsiPoints = [];
   const closes = [];
+  const highs = [];
+  const lows = [];
   const times = [];
   let prevTime = null;
 
@@ -221,6 +310,8 @@ function barsToSeries(bars, interval) {
 
     candles.push({ time, open, high, low, close });
     closes.push(close);
+    highs.push(high > 0 ? high : close);
+    lows.push(low > 0 ? low : close);
     times.push(time);
     const vol = Number(b.volume) || 0;
     volumes.push({
@@ -250,7 +341,18 @@ function barsToSeries(bars, interval) {
       if (v != null && Number.isFinite(v)) rsiSeries.push({ time: times[i], value: Math.round(v * 100) / 100 });
     });
   }
-  return { candles, volumes, maMaps, rsiSeries };
+  const m = macdSeries(closes);
+  const macd = {
+    macd: toPoints(m.macd, times),
+    signal: toPoints(m.signal, times),
+    hist: toPoints(m.hist, times).map((p) => ({
+      ...p,
+      color: p.value >= 0 ? 'rgba(239, 68, 68, 0.55)' : 'rgba(59, 130, 246, 0.55)',
+    })),
+  };
+  const w = williamsRSeries(highs, lows, closes);
+  const wr = { wr: toPoints(w.wr, times), signal: toPoints(w.signal, times) };
+  return { candles, volumes, maMaps, rsiSeries, macd, wr };
 }
 
 function destroyChart() {
@@ -261,45 +363,65 @@ function destroyChart() {
   if (state.chart) {
     try { state.chart.remove(); } catch (_) { /* ignore */ }
   }
-  if (state.rsiChart) {
-    try { state.rsiChart.remove(); } catch (_) { /* ignore */ }
-  }
+  [state.rsiChart, state.macdChart, state.wrChart].forEach((c) => {
+    if (c) {
+      try { c.remove(); } catch (_) { /* ignore */ }
+    }
+  });
   state.chart = null;
   state.rsiChart = null;
+  state.macdChart = null;
+  state.wrChart = null;
   state.candleSeries = null;
   state.volumeSeries = null;
   state.rsiSeries = null;
+  state.macdSeries = null;
+  state.macdSignalSeries = null;
+  state.macdHistSeries = null;
+  state.wrSeries = null;
+  state.wrSignalSeries = null;
   state.maSeries = {};
 }
 
-function syncVisibleRange(source, target) {
-  if (!source || !target || state.syncingRange) return;
+function allCharts() {
+  return [state.chart, state.rsiChart, state.macdChart, state.wrChart].filter(Boolean);
+}
+
+function syncVisibleRange(source) {
+  if (!source || state.syncingRange) return;
   state.syncingRange = true;
   try {
     const range = source.timeScale().getVisibleLogicalRange();
-    if (range) target.timeScale().setVisibleLogicalRange(range);
+    if (range) {
+      allCharts().forEach((c) => {
+        if (c !== source) c.timeScale().setVisibleLogicalRange(range);
+      });
+    }
   } catch (_) { /* ignore */ }
   state.syncingRange = false;
 }
 
 function resizeCharts() {
-  const host = $('chartHost');
-  const rsiHost = $('rsiHost');
-  if (state.chart && host) {
-    const { width, height } = host.getBoundingClientRect();
-    if (width > 0 && height > 0) state.chart.applyOptions({ width, height });
-  }
-  if (state.rsiChart && rsiHost) {
-    const { width, height } = rsiHost.getBoundingClientRect();
-    if (width > 0 && height > 0) state.rsiChart.applyOptions({ width, height });
-  }
+  [
+    [state.chart, 'chartHost'],
+    [state.rsiChart, 'rsiHost'],
+    [state.macdChart, 'macdHost'],
+    [state.wrChart, 'wrHost'],
+  ].forEach(([c, id]) => {
+    const el = $(id);
+    if (!c || !el) return;
+    const { width, height } = el.getBoundingClientRect();
+    if (width > 0 && height > 0) c.applyOptions({ width, height });
+  });
 }
 
 function ensureChart() {
   const host = $('chartHost');
   const rsiHost = $('rsiHost');
-  if (!host || !rsiHost) return null;
-  if (state.chart && state.rsiChart) return state.chart;
+  const macdHost = $('macdHost');
+  const wrHost = $('wrHost');
+  if (!host || !rsiHost || !macdHost || !wrHost) return null;
+  if (state.chart && state.rsiChart && state.macdChart && state.wrChart) return state.chart;
 
   if (typeof LightweightCharts === 'undefined') {
     setChartStatus('Lightweight Charts 로드 실패', true);
@@ -367,7 +489,7 @@ function ensureChart() {
     });
   });
 
-  const rsiChart = LightweightCharts.createChart(rsiHost, {
+  const subChartOpts = {
     ...sharedOpts,
     layout: { ...sharedOpts.layout, attributionLogo: false },
     timeScale: {
@@ -376,7 +498,8 @@ function ensureChart() {
       secondsVisible: false,
       visible: true,
     },
-  });
+  };
+  const rsiChart = LightweightCharts.createChart(rsiHost, subChartOpts);
   rsiChart.priceScale('right').applyOptions({
     scaleMargins: { top: 0.12, bottom: 0.08 },
   });
@@ -396,8 +519,55 @@ function ensureChart() {
   state.rsiChart = rsiChart;
   state.rsiSeries = rsiSeries;
 
-  chart.timeScale().subscribeVisibleLogicalRangeChange(() => syncVisibleRange(chart, rsiChart));
-  rsiChart.timeScale().subscribeVisibleLogicalRangeChange(() => syncVisibleRange(rsiChart, chart));
+  const macdChart = LightweightCharts.createChart(macdHost, subChartOpts);
+  macdChart.priceScale('right').applyOptions({ scaleMargins: { top: 0.15, bottom: 0.08 } });
+  const macdFmt = { type: 'custom', formatter: (v) => Number(v).toFixed(Math.abs(v) >= 100 ? 0 : 2) };
+  state.macdHistSeries = macdChart.addHistogramSeries({
+    priceLineVisible: false,
+    lastValueVisible: false,
+    priceFormat: macdFmt,
+  });
+  state.macdSeries = macdChart.addLineSeries({
+    color: MACD_COLOR,
+    lineWidth: 2,
+    priceLineVisible: false,
+    lastValueVisible: true,
+    priceFormat: macdFmt,
+  });
+  state.macdSignalSeries = macdChart.addLineSeries({
+    color: MACD_SIGNAL_COLOR,
+    lineWidth: 1,
+    priceLineVisible: false,
+    lastValueVisible: true,
+    priceFormat: macdFmt,
+  });
+  state.macdSeries.createPriceLine({ price: 0, color: 'rgba(148, 163, 184, 0.35)', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, axisLabelVisible: false });
+  state.macdChart = macdChart;
+
+  const wrChart = LightweightCharts.createChart(wrHost, subChartOpts);
+  wrChart.priceScale('right').applyOptions({ scaleMargins: { top: 0.12, bottom: 0.08 } });
+  const wrFmt = { type: 'custom', formatter: (v) => Number(v).toFixed(1) };
+  state.wrSeries = wrChart.addLineSeries({
+    color: WR_COLOR,
+    lineWidth: 2,
+    priceLineVisible: false,
+    lastValueVisible: true,
+    priceFormat: wrFmt,
+  });
+  state.wrSignalSeries = wrChart.addLineSeries({
+    color: WR_SIGNAL_COLOR,
+    lineWidth: 1,
+    priceLineVisible: false,
+    lastValueVisible: true,
+    priceFormat: wrFmt,
+  });
+  state.wrSeries.createPriceLine({ price: -20, color: 'rgba(239, 68, 68, 0.45)', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: '-20' });
+  state.wrSeries.createPriceLine({ price: -80, color: 'rgba(59, 130, 246, 0.45)', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: '-80' });
+  state.wrChart = wrChart;
+
+  allCharts().forEach((c) => {
+    c.timeScale().subscribeVisibleLogicalRangeChange(() => syncVisibleRange(c));
+  });
 
   if (!state.resizeObs) {
     const stack = host.closest('.cob-chart-stack') || host;
@@ -431,10 +601,19 @@ function applyMaVisibility() {
 }
 
 function applyRsiVisibility() {
-  const on = !$('togRsi') || $('togRsi').checked;
-  const pane = $('rsiPane');
-  if (pane) pane.hidden = !on;
+  [['togRsi', 'rsiPane'], ['togMacd', 'macdPane'], ['togWr', 'wrPane']].forEach(([tog, paneId]) => {
+    const on = !$(tog) || $(tog).checked;
+    const pane = $(paneId);
+    if (pane) pane.hidden = !on;
+  });
   resizeCharts();
+}
+
+function setLatestText(id, points, digits) {
+  const el = $(id);
+  if (!el) return;
+  const last = points && points.length ? points[points.length - 1].value : null;
+  el.textContent = last != null ? Number(last).toFixed(digits) : '-';
 }
 
 function renderChartData(payload) {
@@ -454,7 +633,7 @@ function renderChartData(payload) {
   ensureChart();
   if (!state.candleSeries || !state.rsiSeries) return;
 
-  const { candles, volumes, maMaps, rsiSeries } = barsToSeries(bars, state.interval);
+  const { candles, volumes, maMaps, rsiSeries, macd, wr } = barsToSeries(bars, state.interval);
   if (!candles.length) {
     if (empty) {
       empty.hidden = false;
@@ -468,6 +647,8 @@ function renderChartData(payload) {
   const timeOpts = { timeVisible: isIntraday(state.interval), secondsVisible: false };
   state.chart.applyOptions({ timeScale: timeOpts });
   state.rsiChart.applyOptions({ timeScale: timeOpts });
+  state.macdChart.applyOptions({ timeScale: timeOpts });
+  state.wrChart.applyOptions({ timeScale: timeOpts });
 
   state.candleSeries.setData(candles);
   state.volumeSeries.setData(volumes);
@@ -475,10 +656,19 @@ function renderChartData(payload) {
     state.maSeries[key].setData(maMaps[key] || []);
   });
   state.rsiSeries.setData(rsiSeries || []);
+  state.macdHistSeries.setData(macd.hist);
+  state.macdSeries.setData(macd.macd);
+  state.macdSignalSeries.setData(macd.signal);
+  state.wrSeries.setData(wr.wr);
+  state.wrSignalSeries.setData(wr.signal);
+  setLatestText('macdLatest', macd.macd, 2);
+  setLatestText('macdSignalLatest', macd.signal, 2);
+  setLatestText('wrLatest', wr.wr, 1);
+  setLatestText('wrSignalLatest', wr.signal, 1);
   applyMaVisibility();
   applyRsiVisibility();
   state.chart.timeScale().fitContent();
-  syncVisibleRange(state.chart, state.rsiChart);
+  syncVisibleRange(state.chart);
 
   const latest = rsiSeries.length ? rsiSeries[rsiSeries.length - 1].value : null;
   const rsiEl = $('rsiLatest');
@@ -1489,6 +1679,8 @@ function bindEvents() {
     input.addEventListener('change', applyMaVisibility);
   });
   $('togRsi')?.addEventListener('change', applyRsiVisibility);
+  $('togMacd')?.addEventListener('change', applyRsiVisibility);
+  $('togWr')?.addEventListener('change', applyRsiVisibility);
 
   $('btnFavToggle')?.addEventListener('click', () => setFavPanelOpen(!state.favPanelOpen));
   $('btnFavFolder')?.addEventListener('click', () => {

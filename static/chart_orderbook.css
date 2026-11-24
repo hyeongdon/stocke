@@ -595,6 +595,10 @@
   margin-left: 4px;
 }
 
+.cob-rsi-label b.cob-macd { color: #38bdf8; }
+.cob-rsi-label b.cob-wr { color: #a78bfa; }
+.cob-rsi-label b.cob-sig { color: #f59e0b; }
+
 .cob-rsi-host {
   flex: 1;
   min-height: 0;
