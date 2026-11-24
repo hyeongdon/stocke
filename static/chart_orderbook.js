@@ -358,7 +358,6 @@ function panelTemplate(idx) {
     </div>
     <div class="cob-quote-meta">
       <span>거래량 <b data-role="volume">-</b></span>
-      <span>호가시각 <b data-role="obTime">-</b></span>
       <span class="hint" data-role="chartHint"></span>
       <button type="button" class="btn sm cob-split-toggle" data-role="splitToggle" title="분할매수 시나리오" aria-pressed="false">분할매수</button>
       <button type="button" class="btn sm cob-panel-clear" data-role="clear" title="이 칸 비우기">×</button>
@@ -386,14 +385,6 @@ function panelTemplate(idx) {
         <div data-role="chartStatus" class="cob-status" hidden></div>
       </div>
     </section>
-    <aside class="card cob-orderbook-card">
-      <div class="card-head">
-        <h3>호가 <span class="hint" data-role="obHint">10호가</span></h3>
-      </div>
-      <div class="card-body cob-orderbook-body" data-role="orderbookBody">
-        <div class="cob-empty sm">조회 후 표시됩니다</div>
-      </div>
-    </aside>
   </div>
   <section class="card cob-split-card" data-role="splitCard" hidden></section>`;
 }
@@ -476,6 +467,16 @@ class Panel {
       }
     } catch (_) { /* ignore */ }
     this.syncingRange = false;
+  }
+
+  syncPriceScaleWidth() {
+    const charts = this.allCharts();
+    if (!charts.length) return;
+    charts.forEach((c) => c.applyOptions({ rightPriceScale: { minimumWidth: 0 } }));
+    const w = Math.max(...charts.map((c) => {
+      try { return c.priceScale('right').width(); } catch (_) { return 0; }
+    }));
+    if (w > 0) charts.forEach((c) => c.applyOptions({ rightPriceScale: { minimumWidth: w } }));
   }
 
   resizeCharts() {
@@ -630,6 +631,14 @@ class Panel {
     this.wrSeries.createPriceLine({ price: -80, color: 'rgba(59, 130, 246, 0.45)', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: '-80' });
     this.wrChart = wrChart;
 
+    // 지표 앞부분(warm-up) 공백 때문에 logical index가 캔들과 어긋나지 않도록 전체 시간축을 채우는 공백 시리즈
+    this.padSeries = [rsiChart, macdChart, wrChart].map((c) => c.addLineSeries({
+      visible: false,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+    }));
+
     this.allCharts().forEach((c) => {
       c.timeScale().subscribeVisibleLogicalRangeChange(() => this.syncVisibleRange(c));
     });
@@ -721,6 +730,8 @@ class Panel {
     this.macdSignalSeries.setData(macd.signal);
     this.wrSeries.setData(wr.wr);
     this.wrSignalSeries.setData(wr.signal);
+    const pad = candles.map((c) => ({ time: c.time }));
+    (this.padSeries || []).forEach((s) => s.setData(pad));
     this.setLatestText('macdLatest', macd.macd, 2);
     this.setLatestText('macdSignalLatest', macd.signal, 2);
     this.setLatestText('wrLatest', wr.wr, 1);
@@ -729,6 +740,7 @@ class Panel {
     this.applyRsiVisibility();
     this.chart.timeScale().fitContent();
     this.syncVisibleRange(this.chart);
+    requestAnimationFrame(() => this.syncPriceScaleWidth());
 
     const latest = rsiSeries.length ? rsiSeries[rsiSeries.length - 1].value : null;
     const rsiEl = this.el('rsiLatest');
@@ -780,7 +792,6 @@ class Panel {
     }
 
     this.el('volume').textContent = snap ? fmtQty(snap.volume) : '-';
-    this.el('obTime').textContent = (snap && snap.orderbook_time) || '-';
     if (this.split && snap) this.split.setCurrentPrice(snap.current_price);
   }
 

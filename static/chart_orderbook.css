@@ -597,7 +597,7 @@
 .cob-panels.multi .cob-price { font-size: 18px; }
 .cob-panels.multi .cob-change { font-size: 12px; }
 .cob-panels.multi .cob-quote-meta { gap: 4px 10px; font-size: 11px; align-items: center; flex: 1 1 auto; }
-.cob-panels.multi .cob-layout { grid-template-columns: minmax(0, 1fr) 190px; gap: 6px; }
+.cob-panels.multi .cob-layout { grid-template-columns: minmax(0, 1fr); gap: 6px; }
 .cob-panels.multi .cob-ob-table { font-size: 11px; }
 .cob-panels.multi .cob-ob-table th,
 .cob-panels.multi .cob-ob-table td { padding: 3px 6px; }
@@ -621,7 +621,7 @@
 
 .cob-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 280px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   min-width: 0;
   min-height: 0;
