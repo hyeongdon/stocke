@@ -54,12 +54,36 @@ function roundTick(price) {
   return Math.round(p / t) * t;
 }
 
+/** 호가 단위 내림 (utils/rsi_ladder.tick_floor 와 동일) */
+function floorTick(price) {
+  const p = Number(price);
+  if (!Number.isFinite(p) || p <= 0) return 0;
+  const t = krxTick(p);
+  const v = Math.floor(p / t) * t;
+  const t2 = krxTick(v);
+  return t2 !== t ? Math.floor(p / t2) * t2 : v;
+}
+
+const SPLIT_GROW_RATIO = 1.2;
+
+/** 피라미드 = 사다리 grow(직전 차수의 1.2배), 역피라미드는 그 반대 */
 function presetWeights(preset, n) {
   return Array.from({ length: n }, (_, i) => {
-    if (preset === 'pyramid') return i + 1;
-    if (preset === 'reverse') return n - i;
+    if (preset === 'pyramid') return Math.pow(SPLIT_GROW_RATIO, i);
+    if (preset === 'reverse') return Math.pow(SPLIT_GROW_RATIO, n - 1 - i);
     return 1;
   });
+}
+
+/** 사다리 엔진과 같은 가격: 직전 차수 × (1 - 간격%) 호가 내림 */
+function ladderPrices(base, gapPct, n) {
+  const out = [];
+  let px = floorTick(base);
+  for (let i = 0; i < n; i++) {
+    if (i > 0) px = floorTick(px * (1 - gapPct / 100));
+    out.push(px);
+  }
+  return out;
 }
 
 function readSplitPlans() {
@@ -74,8 +98,8 @@ function readSplitPlans() {
 function defaultSplitPlan() {
   return {
     total: 3000000,
-    count: 3,
-    gapPct: 3,
+    count: 10,
+    gapPct: 5,
     preset: 'equal',
     basis: 'current',
     base: 0,
@@ -90,8 +114,10 @@ function computeSplit(plan, currentPrice) {
   const sumW = levels.reduce((a, l) => a + (l.weight > 0 ? l.weight : 0), 0) || 1;
   let cumQty = 0;
   let cumCost = 0;
-  const rows = levels.map((l) => {
-    const budget = plan.total * (Math.max(0, l.weight) / sumW);
+  const budgets = levels.map((l) => Math.floor(plan.total * (Math.max(0, l.weight) / sumW)));
+  if (budgets.length) budgets[budgets.length - 1] += Math.floor(plan.total) - budgets.reduce((a, b) => a + b, 0);
+  const rows = levels.map((l, i) => {
+    const budget = budgets[i];
     const qty = Math.floor(budget / l.price);
     const cost = qty * l.price;
     cumQty += qty;
@@ -145,6 +171,10 @@ class SplitPlanner {
       this.toggleBtn.setAttribute('aria-pressed', this.open ? 'true' : 'false');
     }
     if (this.open && !this.plan.levels.length) this.generate();
+    if (!!this.plan.open !== this.open) {
+      this.plan.open = this.open;
+      this.save();
+    }
     this.render();
     this.drawLines();
     requestAnimationFrame(() => this.panel.resizeCharts());
@@ -156,6 +186,10 @@ class SplitPlanner {
     const saved = code ? readSplitPlans()[code] : null;
     this.plan = Object.assign(defaultSplitPlan(), saved || {});
     this.currentPrice = 0;
+    if (!!this.plan.open !== this.open) {
+      this.setOpen(!!this.plan.open);
+      return;
+    }
     if (this.open && !this.plan.levels.length) this.generate();
     this.render();
     this.drawLines();
@@ -193,7 +227,7 @@ class SplitPlanner {
 
   generate() {
     const p = this.plan;
-    const base = roundTick(p.basis === 'manual' ? p.base : this.basisPrice(p.basis));
+    const base = floorTick(p.basis === 'manual' ? p.base : this.basisPrice(p.basis));
     if (!base) {
       p.levels = [];
       return;
@@ -201,10 +235,8 @@ class SplitPlanner {
     p.base = base;
     const n = Math.max(1, Math.min(10, Math.round(p.count) || 1));
     const weights = presetWeights(p.preset, n);
-    p.levels = weights.map((w, i) => ({
-      price: roundTick(base * (1 - (p.gapPct * i) / 100)),
-      weight: w,
-    }));
+    const prices = ladderPrices(base, p.gapPct, n);
+    p.levels = weights.map((w, i) => ({ price: prices[i], weight: w }));
     this.save();
   }
 
@@ -231,7 +263,38 @@ class SplitPlanner {
     this.drawLines();
   }
 
+  /** 시나리오 → /ladder 새 계획 모달 프리필 (가격 도달 진입, 등록은 사다리 화면에서 확인 후) */
+  toLadder() {
+    const p = this.plan;
+    const levels = (p.levels || []).filter((l) => l.price > 0).sort((a, b) => b.price - a.price);
+    if (!this.code || !levels.length) return;
+    const n = levels.length;
+    const gap = Math.max(0.5, Number(p.gapPct) || 5);
+    const prices = ladderPrices(levels[0].price, gap, n);
+    const weights = presetWeights(p.preset, n);
+    const custom = levels.some((l, i) => l.price !== prices[i] || Math.abs(l.weight - weights[i]) > 1e-6);
+    const warns = [];
+    if (custom) warns.push(`차수 가격·비중을 직접 수정했습니다. 사다리는 1차 ${splitFmt(levels[0].price)}원에서 직전 체결가 대비 -${gap}%마다 매수하므로 예상 평단이 달라질 수 있습니다. [재생성]으로 맞춘 뒤 넘기는 것을 권장합니다.`);
+    if (p.preset === 'reverse') warns.push('사다리는 역피라미드 배분을 지원하지 않아 균등 배분으로 넘깁니다.');
+    if (warns.length && !confirm(`${warns.join('\n\n')}\n\n그래도 사다리 등록 화면을 열까요?`)) return;
+    const q = new URLSearchParams({
+      code: this.code,
+      name: this.panel.name || '',
+      budget: String(Math.floor(p.total) || 0),
+      entry_price: String(levels[0].price),
+      step_pct: String(gap),
+      max_steps: String(n),
+      alloc_mode: p.preset === 'pyramid' ? 'grow' : 'equal',
+      from: 'split',
+    });
+    window.open(`/ladder?${q.toString()}`, '_blank');
+  }
+
   onClick(e) {
+    if (e.target.closest('[data-split-ladder]')) {
+      this.toLadder();
+      return;
+    }
     const del = e.target.closest('[data-del-level]');
     if (del) {
       this.plan.levels.splice(Number(del.dataset.delLevel), 1);
@@ -246,7 +309,7 @@ class SplitPlanner {
     } else if (e.target.closest('[data-split-regen]')) {
       this.generate();
     } else if (e.target.closest('[data-split-reset]')) {
-      this.plan = defaultSplitPlan();
+      this.plan = Object.assign(defaultSplitPlan(), { open: this.open });
       this.generate();
     } else {
       return;
@@ -280,7 +343,7 @@ class SplitPlanner {
           <td class="no">${i + 1}차</td>
           <td><input class="cob-split-in" data-level="${i}" data-key="price" value="${splitFmt(row.price)}" inputmode="numeric"></td>
           <td class="dim ${cls(row.vsCur)}">${row.vsCur == null ? '-' : splitPct(row.vsCur)}</td>
-          <td><input class="cob-split-in sm" data-level="${i}" data-key="weight" value="${row.weight}" inputmode="decimal"><span class="dim">${row.pct.toFixed(0)}%</span></td>
+          <td><input class="cob-split-in sm" data-level="${i}" data-key="weight" value="${+Number(row.weight).toFixed(2)}" inputmode="decimal"><span class="dim">${row.pct.toFixed(0)}%</span></td>
           <td>${splitFmt(row.qty)}</td>
           <td>${splitFmt(row.cost)}</td>
           <td class="avg">${splitFmt(row.avg)}</td>
@@ -309,6 +372,7 @@ class SplitPlanner {
           <button type="button" class="btn sm" data-split-regen title="설정값으로 다시 생성">재생성</button>
           <button type="button" class="btn sm" data-split-add>+ 차수</button>
           <button type="button" class="btn sm" data-split-reset title="기본값으로">초기화</button>
+          <button type="button" class="btn sm" data-split-ladder title="이 시나리오로 분할매수 감시(사다리) 계획 등록 화면 열기">사다리로 등록 →</button>
         </div>
       </div>
       <div class="cob-split-table-wrap">
@@ -333,9 +397,73 @@ class SplitPlanner {
       try { if (s) s.removePriceLine(l); } catch (_) { /* ignore */ }
     });
     this.lines = [];
+    this.tags = [];
+    if (this.tagLayer) this.tagLayer.innerHTML = '';
+  }
+
+  ensureTagLayer() {
+    const host = this.panel.el('chartHost');
+    if (!host) return null;
+    if (this.tagLayer && this.tagLayer.parentNode === host) return this.tagLayer;
+    if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
+    const layer = document.createElement('div');
+    layer.className = 'cob-split-tags';
+    layer.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:5;overflow:hidden;';
+    host.appendChild(layer);
+    this.tagLayer = layer;
+    return layer;
+  }
+
+  addTag(price, text, color) {
+    const layer = this.ensureTagLayer();
+    if (!layer) return;
+    const el = document.createElement('div');
+    el.style.cssText = `position:absolute;right:0;transform:translateY(-50%);display:flex;align-items:center;`
+      + `font:600 11px/1 sans-serif;color:#fff;white-space:nowrap;`;
+    el.innerHTML = `<span style="background:${color};padding:3px 6px;border-radius:3px 0 0 3px;">${text}</span>`
+      + `<span style="width:0;height:0;border-top:8.5px solid transparent;border-bottom:8.5px solid transparent;`
+      + `border-left:7px solid ${color};"></span>`;
+    layer.appendChild(el);
+    this.tags.push({ el, price });
+    this.startTagLoop();
+  }
+
+  positionTags() {
+    const s = this.panel.candleSeries;
+    const chart = this.panel.chart;
+    if (!s || !chart || !this.tags.length) return;
+    let axisW = 0;
+    try { axisW = chart.priceScale('right').width(); } catch (_) { /* ignore */ }
+    const h = this.tagLayer ? this.tagLayer.clientHeight : 0;
+    const placed = [];
+    this.tags.forEach((t) => {
+      const y = s.priceToCoordinate(t.price);
+      const show = y != null && y >= 0 && y <= h;
+      t.el.style.display = show ? 'flex' : 'none';
+      if (!show) return;
+      let right = axisW + 2;
+      placed.forEach((p) => {
+        if (Math.abs(p.y - y) < 17) right = Math.max(right, p.right + p.w + 4);
+      });
+      t.el.style.top = `${y}px`;
+      t.el.style.right = `${right}px`;
+      placed.push({ y, right, w: t.el.offsetWidth });
+    });
+  }
+
+  startTagLoop() {
+    if (this.tagRaf) return;
+    const tick = () => {
+      if (!this.open || !this.tags || !this.tags.length) { this.tagRaf = null; return; }
+      this.positionTags();
+      this.tagRaf = requestAnimationFrame(tick);
+    };
+    this.tagRaf = requestAnimationFrame(tick);
   }
 
   onChartDestroyed() {
+    this.tagLayer = null;
+    this.tags = [];
     this.lines = [];
     this.boundHost = null;
   }
@@ -357,19 +485,20 @@ class SplitPlanner {
         color: SPLIT_LEVEL_COLOR,
         lineWidth: 1,
         lineStyle: LS.Dashed,
-        axisLabelVisible: true,
-        title: `${i + 1}차 ${row.qty}주`,
+        axisLabelVisible: false,
       }));
+      this.addTag(row.price, `${i + 1}차 ${row.qty}주 · ${splitFmt(row.price)}`, SPLIT_LEVEL_COLOR);
     });
     if (r.avg > 0) {
+      const avg = Math.round(r.avg);
       this.lines.push(s.createPriceLine({
-        price: Math.round(r.avg),
+        price: avg,
         color: SPLIT_AVG_COLOR,
         lineWidth: 2,
-        lineStyle: LS.Dotted,
-        axisLabelVisible: true,
-        title: '예상평단',
+        lineStyle: LS.Solid,
+        axisLabelVisible: false,
       }));
+      this.addTag(avg, `예상평단 · ${splitFmt(avg)}`, SPLIT_AVG_COLOR);
     }
     if (this.plan.stop > 0) {
       this.lines.push(s.createPriceLine({
@@ -377,10 +506,11 @@ class SplitPlanner {
         color: SPLIT_STOP_COLOR,
         lineWidth: 1,
         lineStyle: LS.SparseDotted,
-        axisLabelVisible: true,
-        title: '손절',
+        axisLabelVisible: false,
       }));
+      this.addTag(this.plan.stop, `손절 · ${splitFmt(this.plan.stop)}`, SPLIT_STOP_COLOR);
     }
+    this.positionTags();
   }
 
   levelIndexAt(y) {

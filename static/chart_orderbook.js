@@ -455,6 +455,30 @@ class Panel {
     return [this.chart, this.rsiChart, this.macdChart, this.wrChart].filter(Boolean);
   }
 
+  clearChartData(message) {
+    this.lastBars = [];
+    [
+      this.candleSeries, this.volumeSeries, this.rsiSeries,
+      this.macdSeries, this.macdSignalSeries, this.macdHistSeries,
+      this.wrSeries, this.wrSignalSeries,
+      ...Object.values(this.maSeries),
+      ...(this.padSeries || []),
+    ].forEach((s) => {
+      if (s) s.setData([]);
+    });
+    ['rsiLatest', 'macdLatest', 'macdSignalLatest', 'wrLatest', 'wrSignalLatest'].forEach((r) => {
+      const el = this.el(r);
+      if (el) el.textContent = '-';
+    });
+    const hint = this.el('chartHint');
+    if (hint) hint.textContent = '';
+    const empty = this.el('chartEmpty');
+    if (empty) {
+      empty.hidden = !message;
+      empty.textContent = message || '';
+    }
+  }
+
   syncVisibleRange(source) {
     if (!source || this.syncingRange) return;
     this.syncingRange = true;
@@ -695,10 +719,7 @@ class Panel {
     this.lastBars = bars;
 
     if (!bars.length) {
-      if (empty) {
-        empty.hidden = false;
-        empty.textContent = '차트 데이터가 없습니다';
-      }
+      this.clearChartData('차트 데이터가 없습니다');
       this.setChartStatus('차트 데이터가 없습니다', true);
       return;
     }
@@ -708,10 +729,7 @@ class Panel {
 
     const { candles, volumes, maMaps, rsiSeries, macd, wr } = barsToSeries(bars, this.interval);
     if (!candles.length) {
-      if (empty) {
-        empty.hidden = false;
-        empty.textContent = '표시할 봉이 없습니다';
-      }
+      this.clearChartData('표시할 봉이 없습니다');
       this.setChartStatus('표시할 봉이 없습니다', true);
       return;
     }
@@ -897,6 +915,7 @@ class Panel {
       this.name = (state.favorites.find((f) => f.code === c) || {}).name || '';
       this.renderQuote(null);
       this.renderOrderbook(null);
+      this.clearChartData('');
     }
     this.code = c;
     if (this.split) this.split.setCode(c);
@@ -939,11 +958,7 @@ class Panel {
       const msg = (e && (e.detail || e.message)) || '조회 실패';
       this.setChartStatus(String(msg), true);
       if (!quiet) toast(String(msg), true);
-      const empty = this.el('chartEmpty');
-      if (empty && !this.candleSeries) {
-        empty.hidden = false;
-        empty.textContent = '조회 실패';
-      }
+      if (!this.lastBars.length) this.clearChartData('조회 실패');
     } finally {
       if (seq === this.loadSeq) this.loading = false;
     }

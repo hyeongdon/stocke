@@ -1472,7 +1472,34 @@
     el.textContent = mins < target ? '다음 판정 15:05 (' + Math.floor((target - mins) / 60) + '시간 ' + ((target - mins) % 60) + '분 후)' : '오늘 판정 시각 지남 · 다음 거래일 15:05';
   }
 
+  function openFromQuery() {
+    const q = new URLSearchParams(location.search);
+    const code = (q.get('code') || '').trim();
+    if (q.get('from') !== 'split' || !/^\d{6}$/.test(code)) return;
+    history.replaceState(null, '', location.pathname);
+    resetForm();
+    fillForm({
+      code: code,
+      name: q.get('name') || '',
+      budget: Number(q.get('budget')) || 0,
+      memo: '차트 분할매수 시나리오에서 등록',
+      profile: {
+        entry_mode: 'price',
+        entry_price: Number(q.get('entry_price')) || 0,
+        step_pct: Number(q.get('step_pct')) || 5,
+        max_steps: Number(q.get('max_steps')) || 10,
+        alloc_mode: q.get('alloc_mode') === 'grow' ? 'grow' : 'equal',
+      },
+    });
+    if (!q.get('name')) document.getElementById('newPlanForm').elements.search.value = code;
+    syncAllocFields();
+    openModal(true);
+    onCodeInput();
+    toast('분할매수 시나리오를 불러왔습니다. 확인 후 [등록]을 누르세요', 'ok');
+  }
+
   bind();
+  openFromQuery();
   load(false);
   updateClock();
   setInterval(() => { if (!document.hidden && !state.busy) load(false); }, REFRESH_MS);

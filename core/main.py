@@ -1356,9 +1356,10 @@ async def exit_replay_page():
     return RedirectResponse(url="/static/exit_replay.html")
 
 @app.get("/ladder")
-async def ladder_page():
+async def ladder_page(request: Request):
     """RSI 저점 분할매수(-5% 사다리) 감시 페이지"""
-    return RedirectResponse(url="/static/ladder.html")
+    qs = request.url.query
+    return RedirectResponse(url="/static/ladder.html" + (f"?{qs}" if qs else ""))
 
 @app.get("/api-explorer")
 async def api_explorer_page():
