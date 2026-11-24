@@ -50,6 +50,8 @@ INTERVAL_BARS = {
     "1W": 260,
     "1MO": 36,
 }
+RETRY_ROUNDS = 2
+RETRY_DELAY_SEC = 30.0
 
 
 def setup_logging() -> None:
@@ -364,8 +366,43 @@ async def _run_async(args: argparse.Namespace, logger: logging.Logger) -> Tuple[
             len(universe),
         )
 
+    for attempt in range(1, RETRY_ROUNDS + 1):
+        failed = [it for it in universe if it["stock_code"] not in ok_codes]
+        if not failed:
+            break
+        logger.warning(
+            "실패 종목 재시도 %d/%d — codes=%d (%s)",
+            attempt,
+            RETRY_ROUNDS,
+            len(failed),
+            ",".join(it["stock_code"] for it in failed[:20]),
+        )
+        await asyncio.sleep(RETRY_DELAY_SEC)
+        done = await asyncio.gather(
+            *[_fetch_one(api, sem, it, intervals, sleep_sec) for it in failed]
+        )
+        rows = [r for part in done for r in (part or [])]
+        if not rows:
+            continue
+        saved = upsert_many(rows, as_of_date=as_of_date)
+        ok_codes.update(r["stock_code"] for r in rows)
+        saved_total += int(saved)
+        logger.info(
+            "재시도 %d/%d 저장 — upsert=%d series  누적 success_codes=%d/%d",
+            attempt,
+            RETRY_ROUNDS,
+            saved,
+            len(ok_codes),
+            len(universe),
+        )
+
+    failed_codes = [it["stock_code"] for it in universe if it["stock_code"] not in ok_codes]
+    if failed_codes:
+        logger.warning("최종 누락 종목 %d건: %s", len(failed_codes), ",".join(failed_codes))
+
     meta["saved"] = int(saved_total)
     meta["success_codes"] = len(ok_codes)
+    meta["failed_codes"] = failed_codes
     if saved_total <= 0:
         msg = "저장할 차트 데이터가 없습니다 (API 빈 응답·한도 가능)."
         logger.error(msg)
