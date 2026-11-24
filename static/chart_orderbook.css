@@ -532,6 +532,93 @@
   border-color: var(--accent);
 }
 
+.cob-panels {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+}
+.cob-panels.layout-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.cob-panels.layout-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+.cob-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+}
+.cob-panel[hidden] { display: none !important; }
+
+.cob-panel-no { display: none; }
+.cob-panel-clear { display: none; padding: 0 7px !important; line-height: 1.5; }
+
+.cob-panels.multi .cob-panel {
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: default;
+}
+.cob-panels.multi .cob-panel.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.cob-panels.multi .cob-panel-no {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+.cob-panels.multi .cob-panel.active .cob-panel-no {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.cob-panels.multi .cob-panel-clear { display: inline-block; margin-left: auto; }
+.cob-panels.multi .cob-quote-bar { padding: 8px 10px; gap: 4px 12px; align-items: center; }
+.cob-panels.multi .cob-quote-main { gap: 4px 14px; }
+.cob-panels.multi .cob-name {
+  font-size: 15px;
+  max-width: 14em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cob-panels.multi .cob-price { font-size: 18px; }
+.cob-panels.multi .cob-change { font-size: 12px; }
+.cob-panels.multi .cob-quote-meta { gap: 4px 10px; font-size: 11px; align-items: center; flex: 1 1 auto; }
+.cob-panels.multi .cob-layout { grid-template-columns: minmax(0, 1fr) 190px; gap: 6px; }
+.cob-panels.multi .cob-ob-table { font-size: 11px; }
+.cob-panels.multi .cob-ob-table th,
+.cob-panels.multi .cob-ob-table td { padding: 3px 6px; }
+.cob-panels.multi .cob-ob-mid td { padding: 5px 6px; }
+.cob-panels.multi .cob-orderbook-card .card-head { padding-top: 6px; padding-bottom: 6px; }
+
+.cob-panels.layout-2 .cob-chart-body { min-height: 520px; }
+.cob-panels.layout-2 .cob-orderbook-body { max-height: 520px; }
+.cob-panels.layout-4 .cob-chart-body { min-height: 340px; }
+.cob-panels.layout-4 .cob-orderbook-body { max-height: 340px; }
+.cob-panels.layout-4 .cob-rsi-pane { flex-basis: 64px; min-height: 56px; }
+.cob-panels.layout-4 .cob-rsi-label { top: 3px; font-size: 10px; }
+.cob-panels.layout-4 .cob-quote-meta .hint { display: none; }
+
+.cob-orderbook-body { position: relative; }
+
+.cob-fav-item.shown {
+  border-color: var(--border-light, var(--border));
+  background: var(--bg-elevated);
+}
+
 .cob-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 280px;
@@ -760,19 +847,29 @@
     padding: 10px 8px;
     min-height: 44px;
   }
-  .cob-layout {
+  .cob-layout,
+  .cob-panels.multi .cob-layout {
     grid-template-columns: 1fr;
   }
-  .cob-chart-body { min-height: 420px; }
-  .cob-rsi-pane { flex-basis: 112px; }
+  .cob-panels.layout-2,
+  .cob-panels.layout-4 {
+    grid-template-columns: 1fr;
+  }
+  .cob-chart-body,
+  .cob-panels.multi .cob-chart-body { min-height: 0; }
+  .cob-chart-stack { position: relative; inset: auto; }
+  .cob-chart-host { flex: 0 0 auto; height: 300px; }
+  .cob-rsi-pane { flex: 0 0 96px; min-height: 96px; }
+  .cob-panels.layout-4 .cob-chart-host { height: 240px; }
+  .cob-panels.layout-4 .cob-rsi-pane { flex-basis: 72px; min-height: 72px; }
   .cob-orderbook-card { max-height: 420px; }
 }
 
 @media (max-width: 640px) {
   .cob-price { font-size: 22px; }
   .cob-name { font-size: 17px; }
-  .cob-chart-body { min-height: 360px; }
-  .cob-rsi-pane { flex-basis: 100px; }
+  .cob-chart-host { height: 260px; }
+  .cob-rsi-pane { flex-basis: 88px; min-height: 88px; }
   .cob-ma-toggles { display: none; }
   .cob-fav-folder {
     height: min(46vh, 360px);

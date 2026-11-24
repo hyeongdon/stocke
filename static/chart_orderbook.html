@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
@@ -19,7 +19,7 @@
     }
   </script>
   <link rel="stylesheet" href="/static/dashboard.css?v=153">
-  <link rel="stylesheet" href="/static/chart_orderbook.css?v=8">
+  <link rel="stylesheet" href="/static/chart_orderbook.css?v=10">
   <script src="/static/theme-sync.js?v=3"></script>
   <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
 </head>
@@ -53,27 +53,13 @@
   </header>
 
   <div class="wrap cob-wrap">
-    <section class="cob-quote-bar" id="quoteBar" aria-live="polite">
-      <div class="cob-quote-main">
-        <div class="cob-name-block">
-          <span class="cob-name" id="stockName">종목을 조회하세요</span>
-          <span class="cob-code" id="stockCode"></span>
-          <button type="button" class="btn sm cob-fav-star" id="btnFavStar" title="즐겨찾기 추가" aria-pressed="false" hidden>☆</button>
-        </div>
-        <div class="cob-price-block">
-          <span class="cob-price" id="currentPrice">-</span>
-          <span class="cob-change" id="priceChange">-</span>
-        </div>
-      </div>
-      <div class="cob-quote-meta">
-        <span>거래량 <b id="quoteVolume">-</b></span>
-        <span>호가시각 <b id="orderbookTime">-</b></span>
-        <span class="hint" id="chartHint"></span>
-      </div>
-    </section>
-
     <div class="cob-toolbar">
       <button type="button" class="btn sm cob-fav-toggle" id="btnFavToggle" aria-expanded="true" title="즐겨찾기 폴더">★ 폴더</button>
+      <div class="cob-intervals cob-layouts" role="group" aria-label="화면 분할">
+        <button type="button" class="cob-interval cob-layout-btn active" data-layout="1" title="1종목" aria-pressed="true">1칸</button>
+        <button type="button" class="cob-interval cob-layout-btn" data-layout="2" title="2종목" aria-pressed="false">2칸</button>
+        <button type="button" class="cob-interval cob-layout-btn" data-layout="4" title="4종목" aria-pressed="false">4칸</button>
+      </div>
       <div class="cob-intervals" role="tablist" aria-label="차트 간격">
         <button type="button" class="cob-interval" data-interval="5M">5분</button>
         <button type="button" class="cob-interval" data-interval="15M">15분</button>
@@ -112,42 +98,11 @@
         </div>
       </aside>
 
-      <div class="cob-layout">
-        <section class="card cob-chart-card">
-          <div class="card-body cob-chart-body">
-            <div class="cob-chart-stack">
-              <div id="chartHost" class="cob-chart-host" role="img" aria-label="종목 차트"></div>
-              <div id="rsiPane" class="cob-rsi-pane">
-                <div class="cob-rsi-label">RSI(14) <b id="rsiLatest">-</b></div>
-                <div id="rsiHost" class="cob-rsi-host" role="img" aria-label="RSI 차트"></div>
-              </div>
-              <div id="macdPane" class="cob-rsi-pane">
-                <div class="cob-rsi-label">MACD(12,26,9) <b id="macdLatest" class="cob-macd">-</b> 시그널 <b id="macdSignalLatest" class="cob-sig">-</b></div>
-                <div id="macdHost" class="cob-rsi-host" role="img" aria-label="MACD 차트"></div>
-              </div>
-              <div id="wrPane" class="cob-rsi-pane">
-                <div class="cob-rsi-label">Williams %R(14) <b id="wrLatest" class="cob-wr">-</b> 시그널(9) <b id="wrSignalLatest" class="cob-sig">-</b></div>
-                <div id="wrHost" class="cob-rsi-host" role="img" aria-label="Williams %R 차트"></div>
-              </div>
-            </div>
-            <div id="chartEmpty" class="cob-empty">종목코드를 입력한 뒤 조회하세요</div>
-            <div id="chartStatus" class="cob-status" hidden></div>
-          </div>
-        </section>
-
-        <aside class="card cob-orderbook-card">
-          <div class="card-head">
-            <h3>호가 <span class="hint" id="obHint">10호가</span></h3>
-          </div>
-          <div class="card-body cob-orderbook-body" id="orderbookBody">
-            <div class="cob-empty sm">조회 후 표시됩니다</div>
-          </div>
-        </aside>
-      </div>
+      <div class="cob-panels layout-1" id="cobPanels"></div>
     </div>
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/static/chart_orderbook.js?v=12"></script>
+  <script src="/static/chart_orderbook.js?v=13"></script>
 </body>
 </html>

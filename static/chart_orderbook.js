@@ -37,26 +37,14 @@ const WR_SIGNAL = 9;
 const WR_COLOR = '#a78bfa';
 const WR_SIGNAL_COLOR = '#f59e0b';
 
+const PANELS_KEY = 'chartOrderbookPanels';
+const MAX_PANELS = 4;
+const LAYOUTS = [1, 2, 4];
+
 const state = {
-  code: '',
-  name: '',
-  interval: '1D',
-  loading: false,
-  loadSeq: 0,
-  chart: null,
-  rsiChart: null,
-  candleSeries: null,
-  volumeSeries: null,
-  rsiSeries: null,
-  macdChart: null,
-  macdSeries: null,
-  macdSignalSeries: null,
-  macdHistSeries: null,
-  wrChart: null,
-  wrSeries: null,
-  wrSignalSeries: null,
-  maSeries: {},
-  lastBars: [],
+  panels: [],
+  activeIdx: 0,
+  layout: 1,
   favorites: [],
   folders: [],
   favFilter: '',
@@ -65,8 +53,6 @@ const state = {
   groupOpen: {},
   activeFolderId: null,
   autoTimer: null,
-  resizeObs: null,
-  syncingRange: false,
 };
 
 const MOBILE_FAV_MQ = window.matchMedia('(max-width: 960px)');
@@ -355,419 +341,663 @@ function barsToSeries(bars, interval) {
   return { candles, volumes, maMaps, rsiSeries, macd, wr };
 }
 
-function destroyChart() {
-  if (state.resizeObs) {
-    state.resizeObs.disconnect();
-    state.resizeObs = null;
+function panelTemplate(idx) {
+  return `
+  <section class="cob-quote-bar" aria-live="polite">
+    <div class="cob-quote-main">
+      <div class="cob-name-block">
+        <span class="cob-panel-no" aria-hidden="true">${idx + 1}</span>
+        <span class="cob-name" data-role="name">종목을 선택하세요</span>
+        <span class="cob-code" data-role="code"></span>
+        <button type="button" class="btn sm cob-fav-star" data-role="favStar" title="즐겨찾기 추가" aria-pressed="false" hidden>☆</button>
+      </div>
+      <div class="cob-price-block">
+        <span class="cob-price" data-role="price">-</span>
+        <span class="cob-change" data-role="change">-</span>
+      </div>
+    </div>
+    <div class="cob-quote-meta">
+      <span>거래량 <b data-role="volume">-</b></span>
+      <span>호가시각 <b data-role="obTime">-</b></span>
+      <span class="hint" data-role="chartHint"></span>
+      <button type="button" class="btn sm cob-panel-clear" data-role="clear" title="이 칸 비우기">×</button>
+    </div>
+  </section>
+  <div class="cob-layout">
+    <section class="card cob-chart-card">
+      <div class="card-body cob-chart-body">
+        <div class="cob-chart-stack">
+          <div data-role="chartHost" class="cob-chart-host" role="img" aria-label="종목 차트"></div>
+          <div data-role="rsiPane" class="cob-rsi-pane">
+            <div class="cob-rsi-label">RSI(14) <b data-role="rsiLatest">-</b></div>
+            <div data-role="rsiHost" class="cob-rsi-host" role="img" aria-label="RSI 차트"></div>
+          </div>
+          <div data-role="macdPane" class="cob-rsi-pane">
+            <div class="cob-rsi-label">MACD(12,26,9) <b data-role="macdLatest" class="cob-macd">-</b> 시그널 <b data-role="macdSignalLatest" class="cob-sig">-</b></div>
+            <div data-role="macdHost" class="cob-rsi-host" role="img" aria-label="MACD 차트"></div>
+          </div>
+          <div data-role="wrPane" class="cob-rsi-pane">
+            <div class="cob-rsi-label">Williams %R(14) <b data-role="wrLatest" class="cob-wr">-</b> 시그널(9) <b data-role="wrSignalLatest" class="cob-sig">-</b></div>
+            <div data-role="wrHost" class="cob-rsi-host" role="img" aria-label="Williams %R 차트"></div>
+          </div>
+        </div>
+        <div data-role="chartEmpty" class="cob-empty">검색 또는 즐겨찾기에서 종목을 선택하세요</div>
+        <div data-role="chartStatus" class="cob-status" hidden></div>
+      </div>
+    </section>
+    <aside class="card cob-orderbook-card">
+      <div class="card-head">
+        <h3>호가 <span class="hint" data-role="obHint">10호가</span></h3>
+      </div>
+      <div class="card-body cob-orderbook-body" data-role="orderbookBody">
+        <div class="cob-empty sm">조회 후 표시됩니다</div>
+      </div>
+    </aside>
+  </div>`;
+}
+
+class Panel {
+  constructor(idx, root) {
+    this.idx = idx;
+    this.root = root;
+    this.code = '';
+    this.name = '';
+    this.interval = '1D';
+    this.loading = false;
+    this.loadSeq = 0;
+    this.loadedKey = '';
+    this.chart = null;
+    this.rsiChart = null;
+    this.macdChart = null;
+    this.wrChart = null;
+    this.candleSeries = null;
+    this.volumeSeries = null;
+    this.rsiSeries = null;
+    this.macdSeries = null;
+    this.macdSignalSeries = null;
+    this.macdHistSeries = null;
+    this.wrSeries = null;
+    this.wrSignalSeries = null;
+    this.maSeries = {};
+    this.lastBars = [];
+    this.resizeObs = null;
+    this.syncingRange = false;
+    this.obCentered = false;
   }
-  if (state.chart) {
-    try { state.chart.remove(); } catch (_) { /* ignore */ }
+
+  el(role) {
+    return this.root.querySelector(`[data-role="${role}"]`);
   }
-  [state.rsiChart, state.macdChart, state.wrChart].forEach((c) => {
-    if (c) {
+
+  isVisible() {
+    return !this.root.hidden;
+  }
+
+  destroyChart() {
+    if (this.resizeObs) {
+      this.resizeObs.disconnect();
+      this.resizeObs = null;
+    }
+    this.allCharts().forEach((c) => {
       try { c.remove(); } catch (_) { /* ignore */ }
-    }
-  });
-  state.chart = null;
-  state.rsiChart = null;
-  state.macdChart = null;
-  state.wrChart = null;
-  state.candleSeries = null;
-  state.volumeSeries = null;
-  state.rsiSeries = null;
-  state.macdSeries = null;
-  state.macdSignalSeries = null;
-  state.macdHistSeries = null;
-  state.wrSeries = null;
-  state.wrSignalSeries = null;
-  state.maSeries = {};
-}
-
-function allCharts() {
-  return [state.chart, state.rsiChart, state.macdChart, state.wrChart].filter(Boolean);
-}
-
-function syncVisibleRange(source) {
-  if (!source || state.syncingRange) return;
-  state.syncingRange = true;
-  try {
-    const range = source.timeScale().getVisibleLogicalRange();
-    if (range) {
-      allCharts().forEach((c) => {
-        if (c !== source) c.timeScale().setVisibleLogicalRange(range);
-      });
-    }
-  } catch (_) { /* ignore */ }
-  state.syncingRange = false;
-}
-
-function resizeCharts() {
-  [
-    [state.chart, 'chartHost'],
-    [state.rsiChart, 'rsiHost'],
-    [state.macdChart, 'macdHost'],
-    [state.wrChart, 'wrHost'],
-  ].forEach(([c, id]) => {
-    const el = $(id);
-    if (!c || !el) return;
-    const { width, height } = el.getBoundingClientRect();
-    if (width > 0 && height > 0) c.applyOptions({ width, height });
-  });
-}
-
-function ensureChart() {
-  const host = $('chartHost');
-  const rsiHost = $('rsiHost');
-  const macdHost = $('macdHost');
-  const wrHost = $('wrHost');
-  if (!host || !rsiHost || !macdHost || !wrHost) return null;
-  if (state.chart && state.rsiChart && state.macdChart && state.wrChart) return state.chart;
-
-  if (typeof LightweightCharts === 'undefined') {
-    setChartStatus('Lightweight Charts 로드 실패', true);
-    return null;
+    });
+    this.chart = null;
+    this.rsiChart = null;
+    this.macdChart = null;
+    this.wrChart = null;
+    this.candleSeries = null;
+    this.volumeSeries = null;
+    this.rsiSeries = null;
+    this.macdSeries = null;
+    this.macdSignalSeries = null;
+    this.macdHistSeries = null;
+    this.wrSeries = null;
+    this.wrSignalSeries = null;
+    this.maSeries = {};
   }
 
-  destroyChart();
+  allCharts() {
+    return [this.chart, this.rsiChart, this.macdChart, this.wrChart].filter(Boolean);
+  }
 
-  const theme = chartTheme();
-  const sharedOpts = {
-    layout: {
-      background: { type: 'solid', color: theme.bg },
-      textColor: theme.text,
-    },
-    grid: {
-      vertLines: { color: theme.grid },
-      horzLines: { color: theme.grid },
-    },
-    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-    rightPriceScale: { borderColor: theme.grid },
-    handleScroll: { vertTouchDrag: false },
-  };
+  syncVisibleRange(source) {
+    if (!source || this.syncingRange) return;
+    this.syncingRange = true;
+    try {
+      const range = source.timeScale().getVisibleLogicalRange();
+      if (range) {
+        this.allCharts().forEach((c) => {
+          if (c !== source) c.timeScale().setVisibleLogicalRange(range);
+        });
+      }
+    } catch (_) { /* ignore */ }
+    this.syncingRange = false;
+  }
 
-  const chart = LightweightCharts.createChart(host, {
-    ...sharedOpts,
-    layout: { ...sharedOpts.layout, attributionLogo: true },
-    timeScale: {
-      borderColor: theme.grid,
-      timeVisible: isIntraday(state.interval),
-      secondsVisible: false,
-    },
-  });
+  resizeCharts() {
+    [
+      [this.chart, 'chartHost'],
+      [this.rsiChart, 'rsiHost'],
+      [this.macdChart, 'macdHost'],
+      [this.wrChart, 'wrHost'],
+    ].forEach(([c, role]) => {
+      const el = this.el(role);
+      if (!c || !el) return;
+      const { width, height } = el.getBoundingClientRect();
+      if (width > 0 && height > 0) c.applyOptions({ width, height });
+    });
+  }
 
-  const candleSeries = chart.addCandlestickSeries({
-    upColor: theme.up,
-    downColor: theme.down,
-    borderUpColor: theme.up,
-    borderDownColor: theme.down,
-    wickUpColor: theme.up,
-    wickDownColor: theme.down,
-  });
+  ensureChart() {
+    const host = this.el('chartHost');
+    const rsiHost = this.el('rsiHost');
+    const macdHost = this.el('macdHost');
+    const wrHost = this.el('wrHost');
+    if (!host || !rsiHost || !macdHost || !wrHost) return null;
+    if (this.chart && this.rsiChart && this.macdChart && this.wrChart) return this.chart;
 
-  const volumeSeries = chart.addHistogramSeries({
-    priceFormat: { type: 'volume' },
-    priceScaleId: 'vol',
-  });
-  chart.priceScale('vol').applyOptions({
-    scaleMargins: { top: 0.78, bottom: 0 },
-  });
-  chart.priceScale('right').applyOptions({
-    scaleMargins: { top: 0.08, bottom: 0.22 },
-  });
+    if (typeof LightweightCharts === 'undefined') {
+      this.setChartStatus('Lightweight Charts 로드 실패', true);
+      return null;
+    }
 
-  state.chart = chart;
-  state.candleSeries = candleSeries;
-  state.volumeSeries = volumeSeries;
+    this.destroyChart();
 
-  Object.keys(MA_COLORS).forEach((key) => {
-    state.maSeries[key] = chart.addLineSeries({
-      color: MA_COLORS[key],
-      lineWidth: MA_WIDTHS[key] || 1,
+    const theme = chartTheme();
+    const sharedOpts = {
+      layout: {
+        background: { type: 'solid', color: theme.bg },
+        textColor: theme.text,
+      },
+      grid: {
+        vertLines: { color: theme.grid },
+        horzLines: { color: theme.grid },
+      },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+      rightPriceScale: { borderColor: theme.grid },
+      handleScroll: { vertTouchDrag: false },
+    };
+
+    const chart = LightweightCharts.createChart(host, {
+      ...sharedOpts,
+      layout: { ...sharedOpts.layout, attributionLogo: true },
+      timeScale: {
+        borderColor: theme.grid,
+        timeVisible: isIntraday(this.interval),
+        secondsVisible: false,
+      },
+    });
+
+    this.candleSeries = chart.addCandlestickSeries({
+      upColor: theme.up,
+      downColor: theme.down,
+      borderUpColor: theme.up,
+      borderDownColor: theme.down,
+      wickUpColor: theme.up,
+      wickDownColor: theme.down,
+    });
+    this.volumeSeries = chart.addHistogramSeries({
+      priceFormat: { type: 'volume' },
+      priceScaleId: 'vol',
+    });
+    chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } });
+    chart.priceScale('right').applyOptions({ scaleMargins: { top: 0.08, bottom: 0.22 } });
+    this.chart = chart;
+
+    Object.keys(MA_COLORS).forEach((key) => {
+      this.maSeries[key] = chart.addLineSeries({
+        color: MA_COLORS[key],
+        lineWidth: MA_WIDTHS[key] || 1,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      });
+    });
+
+    const subChartOpts = {
+      ...sharedOpts,
+      layout: { ...sharedOpts.layout, attributionLogo: false },
+      timeScale: {
+        borderColor: theme.grid,
+        timeVisible: isIntraday(this.interval),
+        secondsVisible: false,
+        visible: true,
+      },
+    };
+    const rsiChart = LightweightCharts.createChart(rsiHost, subChartOpts);
+    rsiChart.priceScale('right').applyOptions({ scaleMargins: { top: 0.12, bottom: 0.08 } });
+    const rsiSeries = rsiChart.addLineSeries({
+      color: RSI_COLOR,
+      lineWidth: 2,
+      priceLineVisible: false,
+      lastValueVisible: true,
+      crosshairMarkerVisible: true,
+      priceFormat: { type: 'custom', formatter: (v) => Number(v).toFixed(1) },
+    });
+    rsiSeries.createPriceLine({ price: 70, color: 'rgba(239, 68, 68, 0.45)', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: '70' });
+    rsiSeries.createPriceLine({ price: 30, color: 'rgba(59, 130, 246, 0.45)', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: '30' });
+    rsiSeries.createPriceLine({ price: 50, color: 'rgba(148, 163, 184, 0.35)', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, axisLabelVisible: false });
+    this.rsiChart = rsiChart;
+    this.rsiSeries = rsiSeries;
+
+    const macdChart = LightweightCharts.createChart(macdHost, subChartOpts);
+    macdChart.priceScale('right').applyOptions({ scaleMargins: { top: 0.15, bottom: 0.08 } });
+    const macdFmt = { type: 'custom', formatter: (v) => Number(v).toFixed(Math.abs(v) >= 100 ? 0 : 2) };
+    this.macdHistSeries = macdChart.addHistogramSeries({
       priceLineVisible: false,
       lastValueVisible: false,
-      crosshairMarkerVisible: false,
+      priceFormat: macdFmt,
     });
-  });
+    this.macdSeries = macdChart.addLineSeries({
+      color: MACD_COLOR,
+      lineWidth: 2,
+      priceLineVisible: false,
+      lastValueVisible: true,
+      priceFormat: macdFmt,
+    });
+    this.macdSignalSeries = macdChart.addLineSeries({
+      color: MACD_SIGNAL_COLOR,
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: true,
+      priceFormat: macdFmt,
+    });
+    this.macdSeries.createPriceLine({ price: 0, color: 'rgba(148, 163, 184, 0.35)', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, axisLabelVisible: false });
+    this.macdChart = macdChart;
 
-  const subChartOpts = {
-    ...sharedOpts,
-    layout: { ...sharedOpts.layout, attributionLogo: false },
-    timeScale: {
-      borderColor: theme.grid,
-      timeVisible: isIntraday(state.interval),
-      secondsVisible: false,
-      visible: true,
-    },
-  };
-  const rsiChart = LightweightCharts.createChart(rsiHost, subChartOpts);
-  rsiChart.priceScale('right').applyOptions({
-    scaleMargins: { top: 0.12, bottom: 0.08 },
-  });
+    const wrChart = LightweightCharts.createChart(wrHost, subChartOpts);
+    wrChart.priceScale('right').applyOptions({ scaleMargins: { top: 0.12, bottom: 0.08 } });
+    const wrFmt = { type: 'custom', formatter: (v) => Number(v).toFixed(1) };
+    this.wrSeries = wrChart.addLineSeries({
+      color: WR_COLOR,
+      lineWidth: 2,
+      priceLineVisible: false,
+      lastValueVisible: true,
+      priceFormat: wrFmt,
+    });
+    this.wrSignalSeries = wrChart.addLineSeries({
+      color: WR_SIGNAL_COLOR,
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: true,
+      priceFormat: wrFmt,
+    });
+    this.wrSeries.createPriceLine({ price: -20, color: 'rgba(239, 68, 68, 0.45)', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: '-20' });
+    this.wrSeries.createPriceLine({ price: -80, color: 'rgba(59, 130, 246, 0.45)', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: '-80' });
+    this.wrChart = wrChart;
 
-  const rsiSeries = rsiChart.addLineSeries({
-    color: RSI_COLOR,
-    lineWidth: 2,
-    priceLineVisible: false,
-    lastValueVisible: true,
-    crosshairMarkerVisible: true,
-    priceFormat: { type: 'custom', formatter: (v) => Number(v).toFixed(1) },
-  });
-  rsiSeries.createPriceLine({ price: 70, color: 'rgba(239, 68, 68, 0.45)', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: '70' });
-  rsiSeries.createPriceLine({ price: 30, color: 'rgba(59, 130, 246, 0.45)', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: '30' });
-  rsiSeries.createPriceLine({ price: 50, color: 'rgba(148, 163, 184, 0.35)', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, axisLabelVisible: false });
+    this.allCharts().forEach((c) => {
+      c.timeScale().subscribeVisibleLogicalRangeChange(() => this.syncVisibleRange(c));
+    });
 
-  state.rsiChart = rsiChart;
-  state.rsiSeries = rsiSeries;
-
-  const macdChart = LightweightCharts.createChart(macdHost, subChartOpts);
-  macdChart.priceScale('right').applyOptions({ scaleMargins: { top: 0.15, bottom: 0.08 } });
-  const macdFmt = { type: 'custom', formatter: (v) => Number(v).toFixed(Math.abs(v) >= 100 ? 0 : 2) };
-  state.macdHistSeries = macdChart.addHistogramSeries({
-    priceLineVisible: false,
-    lastValueVisible: false,
-    priceFormat: macdFmt,
-  });
-  state.macdSeries = macdChart.addLineSeries({
-    color: MACD_COLOR,
-    lineWidth: 2,
-    priceLineVisible: false,
-    lastValueVisible: true,
-    priceFormat: macdFmt,
-  });
-  state.macdSignalSeries = macdChart.addLineSeries({
-    color: MACD_SIGNAL_COLOR,
-    lineWidth: 1,
-    priceLineVisible: false,
-    lastValueVisible: true,
-    priceFormat: macdFmt,
-  });
-  state.macdSeries.createPriceLine({ price: 0, color: 'rgba(148, 163, 184, 0.35)', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, axisLabelVisible: false });
-  state.macdChart = macdChart;
-
-  const wrChart = LightweightCharts.createChart(wrHost, subChartOpts);
-  wrChart.priceScale('right').applyOptions({ scaleMargins: { top: 0.12, bottom: 0.08 } });
-  const wrFmt = { type: 'custom', formatter: (v) => Number(v).toFixed(1) };
-  state.wrSeries = wrChart.addLineSeries({
-    color: WR_COLOR,
-    lineWidth: 2,
-    priceLineVisible: false,
-    lastValueVisible: true,
-    priceFormat: wrFmt,
-  });
-  state.wrSignalSeries = wrChart.addLineSeries({
-    color: WR_SIGNAL_COLOR,
-    lineWidth: 1,
-    priceLineVisible: false,
-    lastValueVisible: true,
-    priceFormat: wrFmt,
-  });
-  state.wrSeries.createPriceLine({ price: -20, color: 'rgba(239, 68, 68, 0.45)', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: '-20' });
-  state.wrSeries.createPriceLine({ price: -80, color: 'rgba(59, 130, 246, 0.45)', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: '-80' });
-  state.wrChart = wrChart;
-
-  allCharts().forEach((c) => {
-    c.timeScale().subscribeVisibleLogicalRangeChange(() => syncVisibleRange(c));
-  });
-
-  if (!state.resizeObs) {
     const stack = host.closest('.cob-chart-stack') || host;
-    state.resizeObs = new ResizeObserver(() => resizeCharts());
-    state.resizeObs.observe(stack);
+    this.resizeObs = new ResizeObserver(() => this.resizeCharts());
+    this.resizeObs.observe(stack);
+    this.resizeCharts();
+    return chart;
   }
-  resizeCharts();
-  return chart;
-}
 
-function setChartStatus(msg, isErr) {
-  const el = $('chartStatus');
-  if (!el) return;
-  if (!msg) {
-    el.hidden = true;
-    el.textContent = '';
-    return;
+  setChartStatus(msg, isErr) {
+    const el = this.el('chartStatus');
+    if (!el) return;
+    if (!msg) {
+      el.hidden = true;
+      el.textContent = '';
+      return;
+    }
+    el.hidden = false;
+    el.textContent = msg;
+    el.classList.toggle('err', !!isErr);
   }
-  el.hidden = false;
-  el.textContent = msg;
-  el.classList.toggle('err', !!isErr);
-}
 
-function applyMaVisibility() {
-  Object.keys(state.maSeries).forEach((key) => {
-    const series = state.maSeries[key];
-    if (!series) return;
-    const checked = !!document.querySelector(`.cob-ma input[data-ma="${key}"]:checked`);
-    series.applyOptions({ visible: checked });
-  });
-}
+  applyMaVisibility() {
+    Object.keys(this.maSeries).forEach((key) => {
+      const series = this.maSeries[key];
+      if (!series) return;
+      const checked = !!document.querySelector(`.cob-ma input[data-ma="${key}"]:checked`);
+      series.applyOptions({ visible: checked });
+    });
+  }
 
-function applyRsiVisibility() {
-  [['togRsi', 'rsiPane'], ['togMacd', 'macdPane'], ['togWr', 'wrPane']].forEach(([tog, paneId]) => {
-    const on = !$(tog) || $(tog).checked;
-    const pane = $(paneId);
-    if (pane) pane.hidden = !on;
-  });
-  resizeCharts();
-}
+  applyRsiVisibility() {
+    [['togRsi', 'rsiPane'], ['togMacd', 'macdPane'], ['togWr', 'wrPane']].forEach(([tog, role]) => {
+      const on = !$(tog) || $(tog).checked;
+      const pane = this.el(role);
+      if (pane) pane.hidden = !on;
+    });
+    this.resizeCharts();
+  }
 
-function setLatestText(id, points, digits) {
-  const el = $(id);
-  if (!el) return;
-  const last = points && points.length ? points[points.length - 1].value : null;
-  el.textContent = last != null ? Number(last).toFixed(digits) : '-';
-}
+  setLatestText(role, points, digits) {
+    const el = this.el(role);
+    if (!el) return;
+    const last = points && points.length ? points[points.length - 1].value : null;
+    el.textContent = last != null ? Number(last).toFixed(digits) : '-';
+  }
 
-function renderChartData(payload) {
-  const empty = $('chartEmpty');
-  const bars = (payload && payload.bars) || [];
-  state.lastBars = bars;
+  renderChartData(payload) {
+    const empty = this.el('chartEmpty');
+    const bars = (payload && payload.bars) || [];
+    this.lastBars = bars;
 
-  if (!bars.length) {
+    if (!bars.length) {
+      if (empty) {
+        empty.hidden = false;
+        empty.textContent = '차트 데이터가 없습니다';
+      }
+      this.setChartStatus('차트 데이터가 없습니다', true);
+      return;
+    }
+
+    this.ensureChart();
+    if (!this.candleSeries || !this.rsiSeries) return;
+
+    const { candles, volumes, maMaps, rsiSeries, macd, wr } = barsToSeries(bars, this.interval);
+    if (!candles.length) {
+      if (empty) {
+        empty.hidden = false;
+        empty.textContent = '표시할 봉이 없습니다';
+      }
+      this.setChartStatus('표시할 봉이 없습니다', true);
+      return;
+    }
+
+    if (empty) empty.hidden = true;
+    const timeOpts = { timeVisible: isIntraday(this.interval), secondsVisible: false };
+    this.allCharts().forEach((c) => c.applyOptions({ timeScale: timeOpts }));
+
+    this.candleSeries.setData(candles);
+    this.volumeSeries.setData(volumes);
+    Object.keys(this.maSeries).forEach((key) => {
+      this.maSeries[key].setData(maMaps[key] || []);
+    });
+    this.rsiSeries.setData(rsiSeries || []);
+    this.macdHistSeries.setData(macd.hist);
+    this.macdSeries.setData(macd.macd);
+    this.macdSignalSeries.setData(macd.signal);
+    this.wrSeries.setData(wr.wr);
+    this.wrSignalSeries.setData(wr.signal);
+    this.setLatestText('macdLatest', macd.macd, 2);
+    this.setLatestText('macdSignalLatest', macd.signal, 2);
+    this.setLatestText('wrLatest', wr.wr, 1);
+    this.setLatestText('wrSignalLatest', wr.signal, 1);
+    this.applyMaVisibility();
+    this.applyRsiVisibility();
+    this.chart.timeScale().fitContent();
+    this.syncVisibleRange(this.chart);
+
+    const latest = rsiSeries.length ? rsiSeries[rsiSeries.length - 1].value : null;
+    const rsiEl = this.el('rsiLatest');
+    if (rsiEl) rsiEl.textContent = latest != null ? Number(latest).toFixed(1) : '-';
+
+    const warn = payload && payload.warning;
+    this.setChartStatus(warn || '', !!warn);
+    const hint = this.el('chartHint');
+    if (hint) {
+      const range = payload.date_range && payload.date_range.length
+        ? ` · ${payload.date_range.join('~')}`
+        : '';
+      const rsiTxt = latest != null ? ` · RSI ${Number(latest).toFixed(1)}` : '';
+      hint.textContent = `${payload.interval || this.interval} · ${candles.length}봉${range}${rsiTxt}`;
+    }
+  }
+
+  renderQuote(snap) {
+    const name = (snap && snap.stock_name) || this.name || '';
+    const code = (snap && snap.stock_code) || this.code || '';
+    this.name = name;
+    if (code) this.code = normalizeStockCode(code);
+
+    this.el('name').textContent = name || (code ? `종목 ${code}` : '종목을 선택하세요');
+    this.el('code').textContent = code || '';
+    const priceEl = this.el('price');
+    priceEl.textContent = snap ? fmtWon(snap.current_price) : '-';
+
+    const changeEl = this.el('change');
+    let diff = Number(snap && snap.price_diff);
+    const rateRaw = snap && snap.change_rate;
+    const rate = Number(String(rateRaw == null ? '' : rateRaw).replace(/[+%]/g, ''));
+    // 등락률 부호를 우선 (과거 API가 price_diff를 절댓값으로 주던 경우 보정)
+    if (Number.isFinite(diff) && Number.isFinite(rate) && rate !== 0 && Math.sign(diff) !== Math.sign(rate)) {
+      diff = Math.sign(rate) * Math.abs(diff);
+    }
+    let cls = 'flat';
+    if (Number.isFinite(rate) && rate !== 0) cls = rate > 0 ? 'up' : 'down';
+    else if (Number.isFinite(diff) && diff !== 0) cls = diff > 0 ? 'up' : 'down';
+    priceEl.className = `cob-price ${cls}`;
+    changeEl.className = `cob-change ${cls}`;
+    if (!snap) {
+      changeEl.textContent = '-';
+    } else {
+      const diffText = Number.isFinite(diff) ? `${diff > 0 ? '+' : ''}${fmtWon(diff)}` : '-';
+      const rateText = Number.isFinite(rate) ? fmtRate(rate) : (rateRaw != null ? String(rateRaw) : '-');
+      changeEl.textContent = `${diffText} (${rateText})`;
+    }
+
+    this.el('volume').textContent = snap ? fmtQty(snap.volume) : '-';
+    this.el('obTime').textContent = (snap && snap.orderbook_time) || '-';
+  }
+
+  renderOrderbook(snap) {
+    const body = this.el('orderbookBody');
+    const hint = this.el('obHint');
+    if (!body) return;
+
+    const rows = (snap && snap.orderbook) || [];
+    if (!rows.length) {
+      body.innerHTML = `<div class="cob-empty sm">${snap ? '호가 없음' : '조회 후 표시됩니다'}</div>`;
+      if (hint) hint.textContent = '10호가';
+      return;
+    }
+
+    const maxQty = Math.max(
+      1,
+      ...rows.map((r) => Math.max(Number(r.ask_qty) || 0, Number(r.bid_qty) || 0)),
+    );
+    const asks = [...rows].sort((a, b) => (Number(b.ask_price) || 0) - (Number(a.ask_price) || 0));
+    const bids = [...rows].sort((a, b) => (Number(b.bid_price) || 0) - (Number(a.bid_price) || 0));
+    const midPrice = snap.current_price != null ? fmtWon(snap.current_price) : '-';
+
+    const rowHtml = (cls, price, qtyRaw) => {
+      const qty = Number(qtyRaw) || 0;
+      const w = Math.round((qty / maxQty) * 100);
+      return `<tr class="${cls}">
+        <td class="price">${fmtWon(price)}</td>
+        <td class="qty"><span class="cob-ob-bar" style="width:${w}%"></span>${fmtQty(qty)}</td>
+      </tr>`;
+    };
+    const askHtml = asks.map((r) => rowHtml('cob-ob-ask', r.ask_price, r.ask_qty)).join('');
+    const bidHtml = bids.map((r) => rowHtml('cob-ob-bid', r.bid_price, r.bid_qty)).join('');
+
+    const prevScroll = body.scrollTop;
+    body.innerHTML = `<table class="cob-ob-table">
+      <thead><tr><th>가격</th><th>잔량</th></tr></thead>
+      <tbody>
+        ${askHtml}
+        <tr class="cob-ob-mid"><td colspan="2">현재가 ${esc(midPrice)}</td></tr>
+        ${bidHtml}
+      </tbody>
+    </table>`;
+
+    if (!this.obCentered) {
+      const mid = body.querySelector('.cob-ob-mid');
+      if (mid && body.scrollHeight > body.clientHeight) {
+        body.scrollTop = Math.max(0, mid.offsetTop - (body.clientHeight - mid.offsetHeight) / 2);
+        this.obCentered = true;
+      }
+    } else {
+      body.scrollTop = prevScroll;
+    }
+
+    if (hint) {
+      const live = snap.orderbook_live === false ? ' · 추정/폴백' : '';
+      hint.textContent = `${rows.length}호가${live}`;
+    }
+  }
+
+  renderFavStar() {
+    const btn = this.el('favStar');
+    if (!btn) return;
+    btn.hidden = !this.code;
+    const on = state.favorites.some((f) => f.code === this.code);
+    btn.textContent = on ? '★' : '☆';
+    btn.title = on ? '즐겨찾기 해제' : '즐겨찾기 추가';
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    btn.classList.toggle('on', on);
+  }
+
+  setName(name) {
+    this.name = name;
+    this.el('name').textContent = name || (this.code ? `종목 ${this.code}` : '종목을 선택하세요');
+    if (this.idx === state.activeIdx) syncSearchBox();
+  }
+
+  async loadChart(code, seq) {
+    const bars = INTERVAL_BARS[this.interval] || 189;
+    const data = await fetchJSON(
+      `/fundamentals/${encodeURIComponent(code)}/chart?interval=${encodeURIComponent(this.interval)}&bars=${bars}`,
+    );
+    if (seq !== this.loadSeq) return;
+    this.renderChartData(data);
+  }
+
+  async loadSnapshot(code, seq) {
+    const data = await fetchJSON(`/stocks/${encodeURIComponent(code)}/snapshot`);
+    if (seq !== this.loadSeq) return;
+    this.renderQuote(data);
+    this.renderOrderbook(data);
+  }
+
+  async load(code, { quiet } = {}) {
+    const c = normalizeStockCode(code);
+    if (!c) {
+      toast('종목코드 6자리를 입력하세요', true);
+      return;
+    }
+
+    if (c !== this.code) {
+      this.name = (state.favorites.find((f) => f.code === c) || {}).name || '';
+      this.renderQuote(null);
+      this.renderOrderbook(null);
+    }
+    this.code = c;
+    this.loading = true;
+    this.loadSeq += 1;
+    this.loadedKey = `${c}|${this.interval}`;
+    this.obCentered = false;
+    const seq = this.loadSeq;
+    this.el('code').textContent = c;
+    this.renderFavStar();
+    persistPanels();
+    renderFavorites();
+    if (this.idx === state.activeIdx) syncSearchBox();
+    // 로딩 오버레이는 띄우지 않음(.cob-empty display:flex가 [hidden]을 덮어 차트 위에 남는 문제 방지)
+    this.setChartStatus('');
+
+    try {
+      const tasks = [this.loadChart(c, seq), this.loadSnapshot(c, seq)];
+      // 이름 보강 + 즐겨찾기 표시명 갱신
+      tasks.push(
+        fetchJSON(`/fundamentals/${encodeURIComponent(c)}`)
+          .then((row) => {
+            if (seq !== this.loadSeq) return;
+            if (row && row.stock_name) {
+              this.setName(row.stock_name);
+              const fav = state.favorites.find((f) => f.code === c);
+              if (fav && !fav.name) {
+                fav.name = row.stock_name;
+                renderFavorites();
+              }
+            }
+          })
+          .catch(() => {}),
+      );
+      await Promise.all(tasks);
+      if (seq !== this.loadSeq) return;
+      markUpdated();
+    } catch (e) {
+      if (seq !== this.loadSeq) return;
+      const msg = (e && (e.detail || e.message)) || '조회 실패';
+      this.setChartStatus(String(msg), true);
+      if (!quiet) toast(String(msg), true);
+      const empty = this.el('chartEmpty');
+      if (empty && !this.candleSeries) {
+        empty.hidden = false;
+        empty.textContent = '조회 실패';
+      }
+    } finally {
+      if (seq === this.loadSeq) this.loading = false;
+    }
+  }
+
+  clear() {
+    this.loadSeq += 1;
+    this.loading = false;
+    this.loadedKey = '';
+    this.destroyChart();
+    this.code = '';
+    this.name = '';
+    this.lastBars = [];
+    this.renderQuote(null);
+    this.renderOrderbook(null);
+    const empty = this.el('chartEmpty');
     if (empty) {
       empty.hidden = false;
-      empty.textContent = '차트 데이터가 없습니다';
+      empty.textContent = '검색 또는 즐겨찾기에서 종목을 선택하세요';
     }
-    setChartStatus('차트 데이터가 없습니다', true);
-    return;
+    this.setChartStatus('');
+    const hint = this.el('chartHint');
+    if (hint) hint.textContent = '';
+    ['rsiLatest', 'macdLatest', 'macdSignalLatest', 'wrLatest', 'wrSignalLatest'].forEach((r) => {
+      const el = this.el(r);
+      if (el) el.textContent = '-';
+    });
+    this.renderFavStar();
+    persistPanels();
+    renderFavorites();
+    if (this.idx === state.activeIdx) syncSearchBox();
   }
 
-  ensureChart();
-  if (!state.candleSeries || !state.rsiSeries) return;
-
-  const { candles, volumes, maMaps, rsiSeries, macd, wr } = barsToSeries(bars, state.interval);
-  if (!candles.length) {
-    if (empty) {
-      empty.hidden = false;
-      empty.textContent = '표시할 봉이 없습니다';
+  updateLiveCandle(snap) {
+    const price = Number(snap && snap.current_price) || 0;
+    const bars = this.lastBars;
+    if (!price || !bars.length || !this.candleSeries) return;
+    const last = bars[bars.length - 1];
+    if (!last.partial) return;
+    const time = toChartTime(last.timestamp, this.interval);
+    if (time == null) return;
+    last.close = price;
+    last.high = Math.max(Number(last.high) || price, price);
+    last.low = Math.min(Number(last.low) || price, price);
+    this.candleSeries.update({
+      time, open: Number(last.open) || price, high: last.high, low: last.low, close: price,
+    });
+    const vol = Number(snap.volume) || 0;
+    if (this.interval === '1D' && vol > 0 && this.volumeSeries) {
+      last.volume = vol;
+      this.volumeSeries.update({
+        time,
+        value: vol,
+        color: price >= Number(last.open) ? 'rgba(239, 68, 68, 0.42)' : 'rgba(59, 130, 246, 0.42)',
+      });
     }
-    setChartStatus('표시할 봉이 없습니다', true);
-    return;
   }
 
-  if (empty) empty.hidden = true;
-  const timeOpts = { timeVisible: isIntraday(state.interval), secondsVisible: false };
-  state.chart.applyOptions({ timeScale: timeOpts });
-  state.rsiChart.applyOptions({ timeScale: timeOpts });
-  state.macdChart.applyOptions({ timeScale: timeOpts });
-  state.wrChart.applyOptions({ timeScale: timeOpts });
-
-  state.candleSeries.setData(candles);
-  state.volumeSeries.setData(volumes);
-  Object.keys(state.maSeries).forEach((key) => {
-    state.maSeries[key].setData(maMaps[key] || []);
-  });
-  state.rsiSeries.setData(rsiSeries || []);
-  state.macdHistSeries.setData(macd.hist);
-  state.macdSeries.setData(macd.macd);
-  state.macdSignalSeries.setData(macd.signal);
-  state.wrSeries.setData(wr.wr);
-  state.wrSignalSeries.setData(wr.signal);
-  setLatestText('macdLatest', macd.macd, 2);
-  setLatestText('macdSignalLatest', macd.signal, 2);
-  setLatestText('wrLatest', wr.wr, 1);
-  setLatestText('wrSignalLatest', wr.signal, 1);
-  applyMaVisibility();
-  applyRsiVisibility();
-  state.chart.timeScale().fitContent();
-  syncVisibleRange(state.chart);
-
-  const latest = rsiSeries.length ? rsiSeries[rsiSeries.length - 1].value : null;
-  const rsiEl = $('rsiLatest');
-  if (rsiEl) rsiEl.textContent = latest != null ? Number(latest).toFixed(1) : '-';
-
-  const warn = payload && payload.warning;
-  setChartStatus(warn || '', !!warn);
-  const hint = $('chartHint');
-  if (hint) {
-    const range = payload.date_range && payload.date_range.length
-      ? ` · ${payload.date_range.join('~')}`
-      : '';
-    const rsiTxt = latest != null ? ` · RSI ${Number(latest).toFixed(1)}` : '';
-    hint.textContent = `${payload.interval || state.interval} · ${candles.length}봉${range}${rsiTxt}`;
-  }
-}
-
-function renderQuote(snap) {
-  const name = (snap && snap.stock_name) || state.name || '';
-  const code = (snap && snap.stock_code) || state.code || '';
-  state.name = name;
-  if (code) state.code = normalizeStockCode(code);
-
-  $('stockName').textContent = name || (code ? `종목 ${code}` : '종목을 조회하세요');
-  $('stockCode').textContent = code || '';
-  const priceEl = $('currentPrice');
-  priceEl.textContent = snap ? fmtWon(snap.current_price) : '-';
-
-  const changeEl = $('priceChange');
-  let diff = Number(snap && snap.price_diff);
-  const rateRaw = snap && snap.change_rate;
-  const rate = Number(String(rateRaw == null ? '' : rateRaw).replace(/[+%]/g, ''));
-  // 등락률 부호를 우선 (과거 API가 price_diff를 절댓값으로 주던 경우 보정)
-  if (Number.isFinite(diff) && Number.isFinite(rate) && rate !== 0 && Math.sign(diff) !== Math.sign(rate)) {
-    diff = Math.sign(rate) * Math.abs(diff);
-  }
-  let cls = 'flat';
-  if (Number.isFinite(rate) && rate !== 0) cls = rate > 0 ? 'up' : 'down';
-  else if (Number.isFinite(diff) && diff !== 0) cls = diff > 0 ? 'up' : 'down';
-  priceEl.className = `cob-price ${cls}`;
-  changeEl.className = `cob-change ${cls}`;
-  const diffText = Number.isFinite(diff) ? `${diff > 0 ? '+' : ''}${fmtWon(diff)}` : '-';
-  const rateText = Number.isFinite(rate) ? fmtRate(rate) : (rateRaw != null ? String(rateRaw) : '-');
-  changeEl.textContent = `${diffText} (${rateText})`;
-
-  $('quoteVolume').textContent = snap ? fmtQty(snap.volume) : '-';
-  $('orderbookTime').textContent = (snap && snap.orderbook_time) || '-';
-}
-
-function renderOrderbook(snap) {
-  const body = $('orderbookBody');
-  const hint = $('obHint');
-  if (!body) return;
-
-  const rows = (snap && snap.orderbook) || [];
-  if (!rows.length) {
-    body.innerHTML = '<div class="cob-empty sm">호가 없음</div>';
-    if (hint) hint.textContent = '10호가';
-    return;
-  }
-
-  const maxQty = Math.max(
-    1,
-    ...rows.map((r) => Math.max(Number(r.ask_qty) || 0, Number(r.bid_qty) || 0)),
-  );
-  const asks = [...rows].sort((a, b) => (Number(b.ask_price) || 0) - (Number(a.ask_price) || 0));
-  const bids = [...rows].sort((a, b) => (Number(b.bid_price) || 0) - (Number(a.bid_price) || 0));
-  const midPrice = snap.current_price != null ? fmtWon(snap.current_price) : '-';
-
-  const askHtml = asks.map((r) => {
-    const qty = Number(r.ask_qty) || 0;
-    const w = Math.round((qty / maxQty) * 100);
-    return `<tr class="cob-ob-ask">
-      <td class="price">${fmtWon(r.ask_price)}</td>
-      <td class="qty"><span class="cob-ob-bar" style="width:${w}%"></span>${fmtQty(qty)}</td>
-    </tr>`;
-  }).join('');
-
-  const bidHtml = bids.map((r) => {
-    const qty = Number(r.bid_qty) || 0;
-    const w = Math.round((qty / maxQty) * 100);
-    return `<tr class="cob-ob-bid">
-      <td class="price">${fmtWon(r.bid_price)}</td>
-      <td class="qty"><span class="cob-ob-bar" style="width:${w}%"></span>${fmtQty(qty)}</td>
-    </tr>`;
-  }).join('');
-
-  body.innerHTML = `<table class="cob-ob-table">
-    <thead><tr><th>가격</th><th>잔량</th></tr></thead>
-    <tbody>
-      ${askHtml}
-      <tr class="cob-ob-mid"><td colspan="2">현재가 ${esc(midPrice)}</td></tr>
-      ${bidHtml}
-    </tbody>
-  </table>`;
-
-  if (hint) {
-    const live = snap.orderbook_live === false ? ' · 추정/폴백' : '';
-    hint.textContent = `${rows.length}호가${live}`;
+  async refreshSnapshot() {
+    const c = this.code;
+    if (!c || this.loading) return false;
+    const seq = this.loadSeq;
+    try {
+      const data = await fetchJSON(`/stocks/${encodeURIComponent(c)}/snapshot`);
+      if (seq !== this.loadSeq) return false;
+      this.renderQuote(data);
+      this.renderOrderbook(data);
+      this.updateLiveCandle(data);
+      return true;
+    } catch (_) {
+      /* 자동갱신 실패는 조용히 */
+      return false;
+    }
   }
 }
 
@@ -934,9 +1164,12 @@ function folderGroups(favs) {
 }
 
 function favItemHtml(f) {
-  const on = f.code === state.code ? ' active' : '';
+  const activeCode = state.panels.length ? activePanel().code : '';
+  const isActive = f.code === activeCode;
+  const shown = !isActive && state.layout > 1 && visiblePanels().some((p) => p.code === f.code);
+  const cls = (isActive ? ' active' : '') + (shown ? ' shown' : '');
   const name = f.name || f.code;
-  return `<div class="cob-fav-item${on}" role="treeitem" aria-selected="${f.code === state.code}" data-code="${esc(f.code)}" title="${esc(f.code)}">
+  return `<div class="cob-fav-item${cls}" role="treeitem" aria-selected="${isActive}" data-code="${esc(f.code)}" title="${esc(f.code)}">
     <button type="button" class="cob-fav-item-main" data-code="${esc(f.code)}">
       <span class="cob-fav-item-name">${esc(name)}</span>
       <span class="cob-fav-item-code">${esc(f.code)}</span>
@@ -1027,7 +1260,7 @@ function renderFavorites() {
   const list = $('favList');
   const count = $('favCount');
   if (count) count.textContent = String(state.favorites.length);
-  renderFavStar();
+  state.panels.forEach((p) => p.renderFavStar());
   if (folder) {
     folder.classList.toggle('is-collapsed', !state.favOpen);
     folder.classList.toggle('is-mobile-drill', isMobileFavLayout() && state.activeFolderId != null);
@@ -1070,7 +1303,7 @@ function setFavPanelOpen(open) {
     btn.setAttribute('aria-expanded', state.favPanelOpen ? 'true' : 'false');
     btn.textContent = state.favPanelOpen ? '★ 폴더' : '★ 폴더 열기';
   }
-  resizeCharts();
+  state.panels.forEach((p) => p.resizeCharts());
 }
 
 function ensureFolderPickerStyle() {
@@ -1222,10 +1455,9 @@ async function renameFavorite(code) {
     fav.name = row.name || trimmed;
     persistLocalFavorites();
     renderFavorites();
-    if (state.code === code) {
-      state.name = fav.name;
-      if ($('codeSearch')) $('codeSearch').value = `${fav.name} (${code})`;
-    }
+    state.panels.forEach((p) => {
+      if (p.code === code) p.setName(fav.name);
+    });
     toast(`표시명 → ${fav.name}`);
   } catch (e) {
     toast((e && (e.detail || e.message)) || '표시명 변경 실패', true);
@@ -1271,19 +1503,9 @@ async function moveFavoriteToFolder(code) {
   }
 }
 
-function renderFavStar() {
-  const btn = $('btnFavStar');
-  if (!btn) return;
-  btn.hidden = !state.code;
-  const on = state.favorites.some((f) => f.code === state.code);
-  btn.textContent = on ? '★' : '☆';
-  btn.title = on ? '즐겨찾기 해제' : '즐겨찾기 추가';
-  btn.setAttribute('aria-pressed', on ? 'true' : 'false');
-  btn.classList.toggle('on', on);
-}
-
-async function toggleCurrentFavorite() {
-  const code = state.code;
+async function toggleCurrentFavorite(panel) {
+  const p = panel || activePanel();
+  const code = p.code;
   if (!code) return;
   const existing = state.favorites.find((f) => f.code === code);
   if (existing) {
@@ -1314,7 +1536,7 @@ async function toggleCurrentFavorite() {
     if (!row) return;
     folderId = row.id;
   }
-  const name = state.name || '';
+  const name = p.name || '';
   try {
     await fetchJSON(`/api/analysis/favorites/${encodeURIComponent(code)}`, {
       method: 'PUT',
@@ -1335,18 +1557,132 @@ async function toggleCurrentFavorite() {
   toast(`${name || code} → ${dest} 추가`);
 }
 
-function syncUrlCode(code) {
+function activePanel() {
+  return state.panels[state.activeIdx] || state.panels[0];
+}
+
+function visiblePanels() {
+  return state.panels.slice(0, state.layout);
+}
+
+function syncSearchBox() {
+  const search = $('codeSearch');
+  if (!search || document.activeElement === search) return;
+  const p = activePanel();
+  if (!p || !p.code) {
+    search.value = '';
+    return;
+  }
+  search.value = p.name ? `${p.name} (${p.code})` : p.code;
+}
+
+function readSavedPanels() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(PANELS_KEY) || 'null');
+    return saved && typeof saved === 'object' ? saved : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function persistPanels() {
+  if (!state.panels.length) return;
+  const payload = {
+    layout: state.layout,
+    active: state.activeIdx,
+    panels: state.panels.map((p) => ({ code: p.code, interval: p.interval })),
+  };
+  try {
+    localStorage.setItem(PANELS_KEY, JSON.stringify(payload));
+  } catch (_) { /* ignore */ }
+  syncUrl();
+}
+
+function syncUrl() {
   const url = new URL(location.href);
-  if (code) url.searchParams.set('code', code);
-  else url.searchParams.delete('code');
+  const codes = visiblePanels().map((p) => p.code);
+  url.searchParams.delete('code');
+  url.searchParams.delete('codes');
+  url.searchParams.delete('layout');
+  if (state.layout === 1) {
+    if (codes[0]) url.searchParams.set('code', codes[0]);
+  } else {
+    url.searchParams.set('layout', String(state.layout));
+    if (codes.some(Boolean)) url.searchParams.set('codes', codes.join(','));
+  }
   history.replaceState(null, '', url);
 }
 
 function setIntervalActive(interval) {
-  state.interval = interval;
-  document.querySelectorAll('.cob-interval').forEach((btn) => {
+  document.querySelectorAll('.cob-interval[data-interval]').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.interval === interval);
   });
+}
+
+function setActivePanel(idx) {
+  const next = Math.max(0, Math.min(idx, state.layout - 1));
+  const changed = next !== state.activeIdx;
+  state.activeIdx = next;
+  state.panels.forEach((p) => {
+    p.root.classList.toggle('active', p.idx === next);
+  });
+  setIntervalActive(activePanel().interval);
+  syncSearchBox();
+  if (changed) {
+    renderFavorites();
+    persistPanels();
+  }
+}
+
+function setLayout(n) {
+  const layout = LAYOUTS.includes(n) ? n : 1;
+  state.layout = layout;
+  const host = $('cobPanels');
+  if (host) {
+    LAYOUTS.forEach((l) => host.classList.toggle(`layout-${l}`, l === layout));
+    host.classList.toggle('multi', layout > 1);
+  }
+  state.panels.forEach((p) => {
+    p.root.hidden = p.idx >= layout;
+  });
+  document.querySelectorAll('.cob-layout-btn').forEach((btn) => {
+    const on = Number(btn.dataset.layout) === layout;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+  if (state.activeIdx >= layout) state.activeIdx = 0;
+  setActivePanel(state.activeIdx);
+  visiblePanels().forEach((p) => {
+    if (p.code && p.loadedKey !== `${p.code}|${p.interval}`) p.load(p.code, { quiet: true });
+    requestAnimationFrame(() => p.resizeCharts());
+  });
+  persistPanels();
+  renderFavorites();
+}
+
+function buildPanels() {
+  const host = $('cobPanels');
+  if (!host) return;
+  host.innerHTML = '';
+  state.panels = [];
+  for (let i = 0; i < MAX_PANELS; i += 1) {
+    const root = document.createElement('div');
+    root.className = 'cob-panel';
+    root.dataset.panel = String(i);
+    root.innerHTML = panelTemplate(i);
+    host.appendChild(root);
+    const panel = new Panel(i, root);
+    state.panels.push(panel);
+
+    root.addEventListener('pointerdown', () => {
+      if (state.activeIdx !== i) setActivePanel(i);
+    }, true);
+    panel.el('favStar')?.addEventListener('click', () => toggleCurrentFavorite(panel));
+    panel.el('clear')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      panel.clear();
+    });
+  }
 }
 
 function markUpdated() {
@@ -1360,121 +1696,24 @@ function markUpdated() {
   });
 }
 
-async function loadChart(code, seq) {
-  const bars = INTERVAL_BARS[state.interval] || 189;
-  const data = await fetchJSON(
-    `/fundamentals/${encodeURIComponent(code)}/chart?interval=${encodeURIComponent(state.interval)}&bars=${bars}`,
-  );
-  if (seq !== state.loadSeq) return;
-  renderChartData(data);
+function loadAll(code, opts) {
+  return activePanel().load(code, opts);
 }
 
-async function loadSnapshot(code, seq) {
-  const data = await fetchJSON(`/stocks/${encodeURIComponent(code)}/snapshot`);
-  if (seq !== state.loadSeq) return;
-  renderQuote(data);
-  renderOrderbook(data);
-}
-
-async function loadAll(code, { quiet } = {}) {
-  const c = normalizeStockCode(code);
-  if (!c) {
-    toast('종목코드 6자리를 입력하세요', true);
-    return;
-  }
-
-  state.code = c;
-  state.loading = true;
-  state.loadSeq += 1;
-  const seq = state.loadSeq;
-  syncUrlCode(c);
-  renderFavorites();
-
-  const search = $('codeSearch');
-  if (search) {
-    const knownName = state.name
-      || (state.favorites.find((f) => f.code === c) || {}).name
-      || '';
-    search.value = knownName ? `${knownName} (${c})` : c;
-  }
-  // 로딩 오버레이는 띄우지 않음(.cob-empty display:flex가 [hidden]을 덮어 차트 위에 남는 문제 방지)
-  setChartStatus('');
-
+let refreshing = false;
+async function refreshVisibleSnapshots() {
+  if (refreshing) return;
+  refreshing = true;
+  let any = false;
   try {
-    const tasks = [loadChart(c, seq), loadSnapshot(c, seq)];
-    // 이름 보강 + 즐겨찾기 표시명 갱신
-    tasks.push(
-      fetchJSON(`/fundamentals/${encodeURIComponent(c)}`)
-        .then((row) => {
-          if (seq !== state.loadSeq) return;
-          if (row && row.stock_name) {
-            state.name = row.stock_name;
-            $('stockName').textContent = row.stock_name;
-            if ($('codeSearch')) $('codeSearch').value = `${row.stock_name} (${c})`;
-            const fav = state.favorites.find((f) => f.code === c);
-            if (fav && !fav.name) {
-              fav.name = row.stock_name;
-              renderFavorites();
-            }
-          }
-        })
-        .catch(() => {}),
-    );
-    await Promise.all(tasks);
-    if (seq !== state.loadSeq) return;
-    markUpdated();
-  } catch (e) {
-    if (seq !== state.loadSeq) return;
-    const msg = (e && (e.detail || e.message)) || '조회 실패';
-    setChartStatus(String(msg), true);
-    if (!quiet) toast(String(msg), true);
-    const empty = $('chartEmpty');
-    if (empty && !state.candleSeries) {
-      empty.hidden = false;
-      empty.textContent = '조회 실패';
+    // 키움 호출 제한 고려: 칸별 순차 조회
+    for (const p of visiblePanels()) {
+      if (await p.refreshSnapshot()) any = true;
     }
   } finally {
-    if (seq === state.loadSeq) state.loading = false;
+    refreshing = false;
   }
-}
-
-function updateLiveCandle(snap) {
-  const price = Number(snap && snap.current_price) || 0;
-  const bars = state.lastBars;
-  if (!price || !bars.length || !state.candleSeries) return;
-  const last = bars[bars.length - 1];
-  if (!last.partial) return;
-  const time = toChartTime(last.timestamp, state.interval);
-  if (time == null) return;
-  last.close = price;
-  last.high = Math.max(Number(last.high) || price, price);
-  last.low = Math.min(Number(last.low) || price, price);
-  state.candleSeries.update({
-    time, open: Number(last.open) || price, high: last.high, low: last.low, close: price,
-  });
-  const vol = Number(snap.volume) || 0;
-  if (state.interval === '1D' && vol > 0 && state.volumeSeries) {
-    last.volume = vol;
-    state.volumeSeries.update({
-      time,
-      value: vol,
-      color: price >= Number(last.open) ? 'rgba(239, 68, 68, 0.42)' : 'rgba(59, 130, 246, 0.42)',
-    });
-  }
-}
-
-async function refreshSnapshotOnly() {
-  const c = state.code;
-  if (!c || state.loading) return;
-  try {
-    const data = await fetchJSON(`/stocks/${encodeURIComponent(c)}/snapshot`);
-    renderQuote(data);
-    renderOrderbook(data);
-    updateLiveCandle(data);
-    markUpdated();
-  } catch (_) {
-    /* 자동갱신 실패는 조용히 */
-  }
+  if (any) markUpdated();
 }
 
 function setupAutoRefresh() {
@@ -1486,7 +1725,7 @@ function setupAutoRefresh() {
   if (!on) return;
   state.autoTimer = setInterval(() => {
     if (document.hidden) return;
-    refreshSnapshotOnly();
+    refreshVisibleSnapshots();
   }, 10000);
 }
 
@@ -1519,15 +1758,21 @@ function renderSuggest() {
   $('codeSearch')?.setAttribute('aria-expanded', 'true');
 }
 
+function loadPicked(code, name) {
+  const c = normalizeStockCode(code);
+  if (!c) return Promise.resolve();
+  const p = activePanel();
+  if ($('codeSearch')) $('codeSearch').value = name ? `${name} (${c})` : c;
+  hideSuggest();
+  const promise = p.load(c);
+  if (name) p.setName(name);
+  return promise;
+}
+
 function pickSuggest(i) {
   const s = suggest.items[i];
   if (!s) return;
-  const code = normalizeStockCode(s.code);
-  if (!code) return;
-  state.name = s.name || '';
-  if ($('codeSearch')) $('codeSearch').value = s.name ? `${s.name} (${code})` : code;
-  hideSuggest();
-  loadAll(code);
+  loadPicked(s.code, s.name || '');
 }
 
 function onSearchInput() {
@@ -1589,12 +1834,7 @@ async function resolveAndLoad(raw) {
     const exact = items.find((s) => String(s.name || '').replace(/\s/g, '') === text.replace(/\s/g, ''))
       || items.find((s) => normalizeStockCode(s.code) === normalizeStockCode(text));
     const pick = exact || items[0];
-    state.name = pick.name || '';
-    if ($('codeSearch')) {
-      $('codeSearch').value = pick.name ? `${pick.name} (${normalizeStockCode(pick.code)})` : pick.code;
-    }
-    hideSuggest();
-    await loadAll(pick.code);
+    await loadPicked(pick.code, pick.name || '');
   } catch (e) {
     toast((e && e.message) || '검색 실패', true);
   }
@@ -1632,7 +1872,8 @@ function onSearchKey(e) {
 function bindEvents() {
   $('btnLoad')?.addEventListener('click', () => resolveAndLoad($('codeSearch')?.value));
   $('btnRefresh')?.addEventListener('click', () => {
-    if (state.code) loadAll(state.code);
+    const p = activePanel();
+    if (p.code) p.load(p.code);
     else resolveAndLoad($('codeSearch')?.value);
   });
   $('codeSearch')?.addEventListener('input', onSearchInput);
@@ -1666,21 +1907,28 @@ function bindEvents() {
   });
   $('autoRefresh')?.addEventListener('change', setupAutoRefresh);
 
-  document.querySelectorAll('.cob-interval').forEach((btn) => {
+  document.querySelectorAll('.cob-layout-btn').forEach((btn) => {
+    btn.addEventListener('click', () => setLayout(Number(btn.dataset.layout)));
+  });
+
+  document.querySelectorAll('.cob-interval[data-interval]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const iv = btn.dataset.interval;
-      if (!iv || iv === state.interval) return;
+      const p = activePanel();
+      if (!iv || iv === p.interval) return;
+      p.interval = iv;
       setIntervalActive(iv);
-      if (state.code) loadAll(state.code, { quiet: true });
+      persistPanels();
+      if (p.code) p.load(p.code, { quiet: true });
     });
   });
 
   document.querySelectorAll('.cob-ma input[data-ma]').forEach((input) => {
-    input.addEventListener('change', applyMaVisibility);
+    input.addEventListener('change', () => state.panels.forEach((p) => p.applyMaVisibility()));
   });
-  $('togRsi')?.addEventListener('change', applyRsiVisibility);
-  $('togMacd')?.addEventListener('change', applyRsiVisibility);
-  $('togWr')?.addEventListener('change', applyRsiVisibility);
+  ['togRsi', 'togMacd', 'togWr'].forEach((id) => {
+    $(id)?.addEventListener('change', () => state.panels.forEach((p) => p.applyRsiVisibility()));
+  });
 
   $('btnFavToggle')?.addEventListener('click', () => setFavPanelOpen(!state.favPanelOpen));
   $('btnFavFolder')?.addEventListener('click', () => {
@@ -1689,7 +1937,6 @@ function bindEvents() {
     renderFavorites();
   });
   $('btnFavAddFolder')?.addEventListener('click', () => createFavoriteFolder());
-  $('btnFavStar')?.addEventListener('click', () => toggleCurrentFavorite());
   $('btnFavRefresh')?.addEventListener('click', async () => {
     await loadFavoritesList();
     toast(`즐겨찾기 ${state.favorites.length}종목 · 폴더 ${state.folders.length}`);
@@ -1746,8 +1993,7 @@ function bindEvents() {
     if (!itemBtn) return;
     const code = itemBtn.dataset.code;
     const fav = state.favorites.find((f) => f.code === code);
-    if (fav && fav.name) state.name = fav.name;
-    loadAll(code);
+    loadPicked(code, (fav && fav.name) || '');
   });
 
   const onFavLayoutChange = () => {
@@ -1761,28 +2007,54 @@ function bindEvents() {
   }
 
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && state.code && $('autoRefresh')?.checked) {
-      refreshSnapshotOnly();
-    }
+    if (!document.hidden && $('autoRefresh')?.checked) refreshVisibleSnapshots();
   });
 }
 
-function initialCode() {
-  const fromUrl = normalizeStockCode(new URLSearchParams(location.search).get('code'));
-  if (fromUrl) return fromUrl;
-  if (state.favorites.length) return state.favorites[0].code;
-  return DEFAULT_CODE;
+/** 저장된 칸 구성 + URL(?code= / ?codes=&layout=) 병합 */
+function restorePanels() {
+  const saved = readSavedPanels();
+  const params = new URLSearchParams(location.search);
+  let layout = saved && LAYOUTS.includes(Number(saved.layout)) ? Number(saved.layout) : 1;
+  let active = saved ? Number(saved.active) || 0 : 0;
+  const savedPanels = (saved && Array.isArray(saved.panels)) ? saved.panels : [];
+  state.panels.forEach((p, i) => {
+    const sp = savedPanels[i] || {};
+    p.code = normalizeStockCode(sp.code);
+    p.interval = INTERVAL_BARS[sp.interval] ? sp.interval : '1D';
+  });
+
+  const urlLayout = Number(params.get('layout'));
+  const urlCodes = String(params.get('codes') || '').split(',').map(normalizeStockCode);
+  const urlCode = normalizeStockCode(params.get('code'));
+  if (params.get('codes') != null) {
+    layout = LAYOUTS.includes(urlLayout) ? urlLayout : Math.min(MAX_PANELS, Math.max(1, urlCodes.length));
+    if (layout === 3) layout = 4;
+    state.panels.forEach((p, i) => { p.code = urlCodes[i] || ''; });
+  } else if (urlCode) {
+    if (LAYOUTS.includes(urlLayout)) layout = urlLayout;
+    const target = Math.min(Math.max(active, 0), layout - 1);
+    state.panels[target].code = urlCode;
+    active = target;
+  }
+
+  if (!state.panels.some((p) => p.code)) {
+    state.panels[0].code = state.favorites.length ? state.favorites[0].code : DEFAULT_CODE;
+  }
+  state.panels.forEach((p) => {
+    if (p.code) p.name = (state.favorites.find((f) => f.code === p.code) || {}).name || '';
+  });
+  state.activeIdx = Math.min(Math.max(active, 0), layout - 1);
+  return layout;
 }
 
 async function init() {
+  buildPanels();
   bindEvents();
   setFavPanelOpen(true);
-  setIntervalActive(state.interval);
   setupAutoRefresh();
   await loadFavoritesList();
-  const code = initialCode();
-  if ($('codeSearch')) $('codeSearch').value = code;
-  loadAll(code, { quiet: true });
+  setLayout(restorePanels());
 }
 
 if (document.readyState === 'loading') {
