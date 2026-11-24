@@ -372,11 +372,11 @@ function panelTemplate(idx) {
             <div class="cob-rsi-label">RSI(14) <b data-role="rsiLatest">-</b></div>
             <div data-role="rsiHost" class="cob-rsi-host" role="img" aria-label="RSI 차트"></div>
           </div>
-          <div data-role="macdPane" class="cob-rsi-pane">
+          <div data-role="macdPane" class="cob-rsi-pane" hidden>
             <div class="cob-rsi-label">MACD(12,26,9) <b data-role="macdLatest" class="cob-macd">-</b> 시그널 <b data-role="macdSignalLatest" class="cob-sig">-</b></div>
             <div data-role="macdHost" class="cob-rsi-host" role="img" aria-label="MACD 차트"></div>
           </div>
-          <div data-role="wrPane" class="cob-rsi-pane">
+          <div data-role="wrPane" class="cob-rsi-pane" hidden>
             <div class="cob-rsi-label">Williams %R(14) <b data-role="wrLatest" class="cob-wr">-</b> 시그널(9) <b data-role="wrSignalLatest" class="cob-sig">-</b></div>
             <div data-role="wrHost" class="cob-rsi-host" role="img" aria-label="Williams %R 차트"></div>
           </div>
@@ -489,8 +489,9 @@ class Panel {
       const el = this.el(role);
       if (!c || !el) return;
       const { width, height } = el.getBoundingClientRect();
-      if (width > 0 && height > 0) c.applyOptions({ width, height });
+      if (width > 0 && height > 0) c.applyOptions({ width: Math.floor(width), height: Math.floor(height) });
     });
+    this.syncPriceScaleWidth();
   }
 
   ensureChart() {
@@ -645,7 +646,7 @@ class Panel {
 
     const stack = host.closest('.cob-chart-stack') || host;
     this.resizeObs = new ResizeObserver(() => this.resizeCharts());
-    this.resizeObs.observe(stack);
+    [stack, host, rsiHost, macdHost, wrHost].forEach((el) => this.resizeObs.observe(el));
     this.resizeCharts();
     return chart;
   }

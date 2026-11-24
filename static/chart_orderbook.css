@@ -692,6 +692,17 @@
   position: relative;
 }
 
+.cob-chart-host,
+.cob-rsi-host {
+  min-width: 0;
+  overflow: hidden;
+}
+.cob-chart-host > .tv-lightweight-charts,
+.cob-rsi-host > .tv-lightweight-charts {
+  position: absolute !important;
+  inset: 0;
+}
+
 .cob-empty {
   position: absolute;
   inset: 0;
