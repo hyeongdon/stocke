@@ -548,6 +548,7 @@ class Panel {
       handleScroll: { vertTouchDrag: false },
     };
 
+    const wonFormat = { type: 'price', precision: 0, minMove: 1 };
     const chart = LightweightCharts.createChart(host, {
       ...sharedOpts,
       layout: { ...sharedOpts.layout, attributionLogo: true },
@@ -565,6 +566,7 @@ class Panel {
       borderDownColor: theme.down,
       wickUpColor: theme.up,
       wickDownColor: theme.down,
+      priceFormat: wonFormat,
     });
     this.volumeSeries = chart.addHistogramSeries({
       priceFormat: { type: 'volume' },
@@ -581,6 +583,7 @@ class Panel {
         priceLineVisible: false,
         lastValueVisible: false,
         crosshairMarkerVisible: false,
+        priceFormat: wonFormat,
       });
     });
 
