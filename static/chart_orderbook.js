@@ -360,6 +360,7 @@ function panelTemplate(idx) {
       <span>거래량 <b data-role="volume">-</b></span>
       <span>호가시각 <b data-role="obTime">-</b></span>
       <span class="hint" data-role="chartHint"></span>
+      <button type="button" class="btn sm cob-split-toggle" data-role="splitToggle" title="분할매수 시나리오" aria-pressed="false">분할매수</button>
       <button type="button" class="btn sm cob-panel-clear" data-role="clear" title="이 칸 비우기">×</button>
     </div>
   </section>
@@ -393,7 +394,8 @@ function panelTemplate(idx) {
         <div class="cob-empty sm">조회 후 표시됩니다</div>
       </div>
     </aside>
-  </div>`;
+  </div>
+  <section class="card cob-split-card" data-role="splitCard" hidden></section>`;
 }
 
 class Panel {
@@ -423,6 +425,7 @@ class Panel {
     this.resizeObs = null;
     this.syncingRange = false;
     this.obCentered = false;
+    this.split = null;
   }
 
   el(role) {
@@ -454,6 +457,7 @@ class Panel {
     this.wrSeries = null;
     this.wrSignalSeries = null;
     this.maSeries = {};
+    if (this.split) this.split.onChartDestroyed();
   }
 
   allCharts() {
@@ -740,6 +744,7 @@ class Panel {
       const rsiTxt = latest != null ? ` · RSI ${Number(latest).toFixed(1)}` : '';
       hint.textContent = `${payload.interval || this.interval} · ${candles.length}봉${range}${rsiTxt}`;
     }
+    if (this.split) this.split.onChartReady();
   }
 
   renderQuote(snap) {
@@ -776,6 +781,7 @@ class Panel {
 
     this.el('volume').textContent = snap ? fmtQty(snap.volume) : '-';
     this.el('obTime').textContent = (snap && snap.orderbook_time) || '-';
+    if (this.split && snap) this.split.setCurrentPrice(snap.current_price);
   }
 
   renderOrderbook(snap) {
@@ -881,6 +887,7 @@ class Panel {
       this.renderOrderbook(null);
     }
     this.code = c;
+    if (this.split) this.split.setCode(c);
     this.loading = true;
     this.loadSeq += 1;
     this.loadedKey = `${c}|${this.interval}`;
@@ -937,6 +944,7 @@ class Panel {
     this.destroyChart();
     this.code = '';
     this.name = '';
+    if (this.split) this.split.setCode('');
     this.lastBars = [];
     this.renderQuote(null);
     this.renderOrderbook(null);
@@ -1672,6 +1680,7 @@ function buildPanels() {
     root.innerHTML = panelTemplate(i);
     host.appendChild(root);
     const panel = new Panel(i, root);
+    if (window.SplitPlanner) panel.split = new window.SplitPlanner(panel);
     state.panels.push(panel);
 
     root.addEventListener('pointerdown', () => {

@@ -888,3 +888,46 @@
 .cob-fav-star { margin-left: 6px; padding: 0 8px; font-size: 15px; line-height: 1.6; }
 .cob-fav-star.on { color: #f5b301; }
 
+
+/* ---------- 분할매수 시나리오 ---------- */
+.cob-split-toggle.on { border-color: #22c55e; color: #22c55e; }
+.cob-split-card { margin: 0; padding: 10px 12px; }
+.cob-split-card[hidden] { display: none !important; }
+.cob-split-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.cob-split-head h3 { margin: 0; font-size: 14px; }
+.cob-split-form { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: flex-end; margin-bottom: 8px; }
+.cob-split-form label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--muted); }
+.cob-split-form input,
+.cob-split-form select,
+.cob-split-in {
+  background: var(--bg-elevated, var(--card));
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.cob-split-form input { width: 96px; }
+.cob-split-form input[data-field="count"],
+.cob-split-form input[data-field="gapPct"] { width: 60px; }
+.cob-split-actions { display: flex; gap: 6px; }
+.cob-split-table-wrap { overflow-x: auto; }
+.cob-split-table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.cob-split-table th,
+.cob-split-table td { padding: 4px 8px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
+.cob-split-table th { color: var(--muted); font-weight: 600; }
+.cob-split-table th:first-child,
+.cob-split-table td.no { text-align: left; color: #22c55e; font-weight: 700; }
+.cob-split-table td.center { text-align: center; }
+.cob-split-in { width: 88px; text-align: right; }
+.cob-split-in.sm { width: 44px; margin-right: 4px; }
+.cob-split-del { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 14px; }
+.cob-split-del:hover { color: #ef4444; }
+.cob-split-card .dim { color: var(--muted); font-size: 11px; }
+.cob-split-card .up { color: #ef4444; }
+.cob-split-card .down { color: #3b82f6; }
+.cob-split-card .avg { color: #f59e0b; font-weight: 700; }
+.cob-split-summary { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 8px; font-size: 12px; color: var(--text-secondary, var(--text)); }
+.cob-panels.multi .cob-split-card { padding: 6px 8px; }
+.cob-panels.multi .cob-split-head .hint { display: none; }
