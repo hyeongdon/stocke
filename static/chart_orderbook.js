@@ -9,9 +9,9 @@ const UNCATEGORIZED_ID = 0;
 const INTERVAL_BARS = {
   '5M': 78,
   '15M': 78,
-  '1D': 189,
-  '1W': 104,
-  '1MO': 24,
+  '1D': 504,   // 약 2년
+  '1W': 260,   // 약 5년
+  '1MO': 120,  // 약 10년
 };
 const MA_COLORS = {
   ma5: '#ef4444',

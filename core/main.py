@@ -2981,22 +2981,24 @@ async def _load_ohlcv_rows(
     *,
     prefer_mart: bool = True,
     persist: bool = True,
+    min_bars: Optional[int] = None,
 ) -> Tuple[List[Dict[str, Any]], str]:
     """분석 차트용 OHLCV — 마트 우선, 없으면 키움 API 폴백(+선택적 write-through).
 
+    min_bars: 요청 표시 봉 수. 마트가 이보다 짧으면 키움으로 보강(마트 배치 한도는 그대로).
     반환: (rows, source)  source = mart | kiwoom | mixed
     """
     from utils.chart_ohlcv_mart_store import get_bars, upsert_series
 
-    rows: List[Dict[str, Any]] = []
-    source = "kiwoom"
+    fetch_cap = max(int(min_bars or 0), 0) or None
+    mart_rows: List[Dict[str, Any]] = []
     if prefer_mart:
-        rows = _parse_chart_rows(get_bars(stock_code, interval))
-        if rows:
-            return rows, "mart"
+        mart_rows = _parse_chart_rows(get_bars(stock_code, interval))
+        if mart_rows and (fetch_cap is None or len(mart_rows) >= fetch_cap):
+            return mart_rows, "mart"
 
     raw = await kiwoom_api.get_stock_chart_data(
-        stock_code, interval, allow_off_hours=True,
+        stock_code, interval, max_bars=fetch_cap, allow_off_hours=True,
     )
     rows = _parse_chart_rows(raw)
     if rows and persist:
@@ -3004,7 +3006,11 @@ async def _load_ohlcv_rows(
             upsert_series(stock_code, interval, rows, source="kiwoom")
         except Exception as e:
             logger.debug(f"차트 OHLCV 마트 저장 실패 ({stock_code}/{interval}): {e}")
-    return rows, source
+    if rows:
+        return rows, "kiwoom"
+    if mart_rows:
+        return mart_rows, "mart"
+    return [], "kiwoom"
 
 
 async def _append_live_daily_bars(
@@ -3036,7 +3042,7 @@ async def get_fundamental_chart(
     bars: Optional[int] = None,
     refresh: bool = False,
 ):
-    """분석 화면용 차트 — 월봉(24개월) · 일봉(최대 189일) · 주봉(104주) + 지표·신호.
+    """분석 화면용 차트 — bars 파라미터로 표시 구간 지정 (기본적분석 기본값 · 분석차트는 더 길게 요청).
 
     기본은 chart_ohlcv_mart 우선 조회. refresh=true 이면 키움 API를 다시 치고 마트에 갱신한다.
     월봉은 키움 ka10083, 주봉은 ka10082, 일봉은 ka10081 응답을 사용한다.
@@ -3057,8 +3063,10 @@ async def get_fundamental_chart(
             prefer_mart = not bool(refresh)
 
             if norm_interval == "1MO":
+                # 기본적분석 기본 24개월 · 분석>차트는 최대 10년(120)
+                display = _clamp_display_bars(bars, 24, 24, 140)
                 monthly_rows, src = await _load_ohlcv_rows(
-                    stock_code, "1MO", prefer_mart=prefer_mart,
+                    stock_code, "1MO", prefer_mart=prefer_mart, min_bars=display,
                 )
                 if not monthly_rows:
                     raise HTTPException(
@@ -3067,14 +3075,16 @@ async def get_fundamental_chart(
                     )
                 mark_monthly_partial(monthly_rows, now)
                 return _indicator_chart_payload(
-                    stock_code, "1MO", monthly_rows,
-                    _clamp_display_bars(bars, 24, 24, 24), "월",
+                    stock_code, "1MO", monthly_rows, display, "월",
                     source_monthly_bars=len(monthly_rows),
                     data_source=src,
                 )
 
+            # 기본적분석 기본 189일 · 분석>차트는 최대 2년(504)
+            daily_display = _clamp_display_bars(bars, 189, 30, 620) if norm_interval == "1D" else None
             daily_rows, daily_src = await _load_ohlcv_rows(
                 stock_code, "1D", prefer_mart=prefer_mart,
+                min_bars=daily_display,
             )
             if daily_src == "mart" and daily_rows:
                 daily_rows, appended = await _append_live_daily_bars(stock_code, daily_rows)
@@ -3089,14 +3099,15 @@ async def get_fundamental_chart(
                     )
                 mark_daily_partial(daily_rows, now)
                 return _indicator_chart_payload(
-                    stock_code, "1D", daily_rows,
-                    _clamp_display_bars(bars, 189, 30, 400), "일",
+                    stock_code, "1D", daily_rows, daily_display or 189, "일",
                     source_daily_bars=len(daily_rows),
                     data_source=daily_src,
                 )
 
+            # 기본적분석 기본 104주 · 분석>차트는 최대 5년(260)
+            display = _clamp_display_bars(bars, 104, 26, 300)
             api_weeks, week_src = await _load_ohlcv_rows(
-                stock_code, "1W", prefer_mart=prefer_mart,
+                stock_code, "1W", prefer_mart=prefer_mart, min_bars=display,
             )
             # 일봉 마트만 있어도 주봉 리샘플로 표시 가능
             weekly_rows = merge_weekly_rows(
@@ -3112,8 +3123,7 @@ async def get_fundamental_chart(
                 else ("kiwoom" if daily_src == "kiwoom" and week_src == "kiwoom" else "mixed")
             )
             return _indicator_chart_payload(
-                stock_code, "1W", weekly_rows,
-                _clamp_display_bars(bars, 104, 26, 260), "주",
+                stock_code, "1W", weekly_rows, display, "주",
                 source_daily_bars=len(daily_rows),
                 source_weekly_bars=len(api_weeks),
                 data_source=data_source,
