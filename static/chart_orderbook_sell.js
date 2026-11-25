@@ -6,9 +6,16 @@ const SELL_PLANS_KEY = 'chartOrderbookSellPlans';
 const SELL_PRICE_COLOR = '#ec4899';
 const SELL_MA_COLOR = '#06b6d4';
 const SELL_MODES = {
-  price: '가격 도달',
-  ma: '이동평균선 이탈',
+  price: '가격',
+  ma: '이동평균선',
 };
+const SELL_SIDES = { reach: '도달', break: '이탈' };
+function sellArmOptions(side) {
+  return {
+    none: '없음',
+    cross: side === 'break' ? '상회 후' : '하회 후',
+  };
+}
 const SELL_PRESETS = {
   equal: '균등',
   front: '앞차수 많이',
@@ -38,15 +45,29 @@ function readSellPlans() {
 
 function defaultSellPlan() {
   return {
-    mode: 'price',
+    mode: 'ma',
     qty: 0,
     avg: 0,
-    count: 3,
+    count: 4,
     firstPct: 5,
     gapPct: 5,
     preset: 'equal',
+    armPct: 15,
     levels: [],
   };
+}
+
+function sellSideOf(lv) {
+  if (lv && (lv.side === 'reach' || lv.side === 'break')) return lv.side;
+  return lv && lv.type === 'ma' ? 'break' : 'reach';
+}
+
+function sellArmOf(lv) {
+  return lv && lv.arm === 'cross' ? 'cross' : 'none';
+}
+function sellArmLabel(lv) {
+  if (sellArmOf(lv) !== 'cross') return '';
+  return sellSideOf(lv) === 'break' ? '상회 후' : '하회 후';
 }
 
 class SellPlanner {
@@ -158,7 +179,9 @@ class SellPlanner {
     if (p.mode === 'ma') {
       const keys = ['ma5', 'ma20', 'ma60', 'ma120'].slice(0, Math.min(n, 4));
       const weights = sellWeights(p.preset, keys.length);
-      p.levels = keys.map((ma, i) => ({ type: 'ma', ma, offset: 0, weight: weights[i] }));
+      p.levels = keys.map((ma, i) => ({
+        type: 'ma', ma, offset: 0, weight: weights[i], side: 'break', arm: 'cross',
+      }));
     } else {
       const { avg } = this.holding();
       if (!avg) {
@@ -169,7 +192,7 @@ class SellPlanner {
       let px = roundTick(avg * (1 + p.firstPct / 100));
       p.levels = weights.map((w, i) => {
         if (i > 0) px = roundTick(px * (1 + p.gapPct / 100));
-        return { type: 'price', price: px, weight: w };
+        return { type: 'price', price: px, weight: w, side: 'reach', arm: 'none' };
       });
     }
     this.save();
@@ -214,7 +237,7 @@ class SellPlanner {
     if (field) {
       if (field === 'mode' || field === 'preset') p[field] = t.value;
       else p[field] = splitNum(t.value);
-      if (field !== 'qty') this.generate();
+      if (field !== 'qty' && field !== 'armPct') this.generate();
     }
     const lvIdx = t.dataset.level;
     if (lvIdx != null) {
@@ -224,6 +247,8 @@ class SellPlanner {
         if (key === 'price') lv.price = roundTick(splitNum(t.value));
         else if (key === 'ma') lv.ma = t.value;
         else if (key === 'offset') lv.offset = splitNum(t.value);
+        else if (key === 'side') lv.side = t.value === 'break' ? 'break' : 'reach';
+        else if (key === 'arm') lv.arm = t.value === 'cross' ? 'cross' : 'none';
         else lv.weight = Math.max(0, splitNum(t.value));
       }
     }
@@ -262,17 +287,21 @@ class SellPlanner {
         price: l.type === 'ma' ? 0 : l.price,
         ma: l.type === 'ma' ? Number(String(l.ma).replace('ma', '')) : 0,
         offset: Number(l.offset) || 0,
+        side: sellSideOf(l),
+        arm: sellArmOf(l),
         pct: Math.round((l.weight / sumW) * 10000) / 100,
       }));
       levels[levels.length - 1].pct = Math.round((100 - levels.slice(0, -1).reduce((a, l) => a + l.pct, 0)) * 100) / 100;
-      const desc = levels.map((l, i) => `${i + 1}차 ${l.type === 'ma'
-        ? `MA${l.ma}${l.offset ? ` ${l.offset > 0 ? '+' : ''}${l.offset}%` : ''} 이탈`
-        : `${splitFmt(l.price)}원 도달`} → ${l.pct}%`).join('\n');
+      const armPct = Math.max(0, Number(this.plan.armPct) || 0);
+      const desc = (armPct ? `익절 무장 +${armPct}% (이탈 차수)\n` : '')
+        + levels.map((l, i) => `${i + 1}차 ${l.type === 'ma'
+          ? `MA${l.ma}${l.offset ? ` ${l.offset > 0 ? '+' : ''}${l.offset}%` : ''}`
+          : `${splitFmt(l.price)}원`} ${SELL_SIDES[l.side] || l.side}${sellArmLabel(l) ? ` ·${sellArmLabel(l)}` : ''} → ${l.pct}%`).join('\n');
       const ok = confirm(`${plan.name || this.code} 매수사다리 계획에 매도사다리를 연결합니다.\n\n${desc}\n\n`
-        + '• 가격 차수: 장중 10분마다 현재가 ≥ 목표가면 매도\n'
-        + '• MA 차수: 매일 15:05 판정에서 현재가 < 일봉 MA×(1+오프셋)이면 매도\n'
-        + '• 매도 전 텔레그램 3분 유예(취소 가능), 기본 익절(S1~S3)은 사용 안 함\n'
-        + '• 비중은 첫 매도 시점 보유수량 기준, 마지막 차수는 잔량 전부\n\n실제 주문이 나갑니다. 진행할까요?');
+        + '• 도달: 현재가 ≥ 목표가 / 이탈: 현재가 < 목표가\n'
+        + '• 상회 후(이탈): 켠 뒤 목표가 위에 한 번 닿아야 무장 · 하회 후(도달): 먼저 아래\n'
+        + '• 익절 무장%: 이탈 차수만 최고수익률 조건\n'
+        + '• 가격 차수=장중 10분, MA 차수=15:05 · 텔레그램 3분 유예\n\n실제 주문이 나갑니다. 진행할까요?');
       if (!ok) return;
     } else if (!confirm('매도사다리 연결을 해제하고 기본 익절(S1~S3)로 되돌릴까요?')) {
       return;
@@ -281,7 +310,11 @@ class SellPlanner {
       const res = await fetch(`/api/ladder/plans/${encodeURIComponent(plan.id)}/sell-ladder`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled, levels }),
+        body: JSON.stringify({
+          enabled,
+          arm_pct: enabled ? Math.max(0, Number(this.plan.armPct) || 0) : 0,
+          levels,
+        }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.detail || res.statusText);
@@ -314,9 +347,9 @@ class SellPlanner {
         ? roundTick(top * (1 + (this.plan.gapPct || 5) / 100))
         : roundTick(this.holding().avg * (1 + (this.plan.firstPct || 5) / 100));
       if (!price) return;
-      lv.push({ type: 'price', price, weight: 1 });
+      lv.push({ type: 'price', price, weight: 1, side: 'reach', arm: 'none' });
     } else if (e.target.closest('[data-sell-add-ma]')) {
-      lv.push({ type: 'ma', ma: 'ma20', offset: 0, weight: 1 });
+      lv.push({ type: 'ma', ma: 'ma20', offset: 0, weight: 1, side: 'break', arm: 'cross' });
     } else if (e.target.closest('[data-sell-regen]')) {
       this.generate();
     } else if (e.target.closest('[data-sell-reset]')) {
@@ -352,13 +385,15 @@ class SellPlanner {
 
     const condCell = (row, i) => (row.lv.type === 'ma'
       ? `<select class="cob-split-in" data-level="${i}" data-key="ma">${opt(SELL_MAS, row.lv.ma)}</select>
-         <input class="cob-split-in sm" data-level="${i}" data-key="offset" value="${+Number(row.lv.offset || 0).toFixed(2)}" inputmode="decimal" title="MA 대비 오프셋(%)"><span class="dim">% 이탈</span>`
-      : `<input class="cob-split-in" data-level="${i}" data-key="price" value="${splitFmt(row.price)}" inputmode="numeric"><span class="dim">도달</span>`);
+         <input class="cob-split-in sm" data-level="${i}" data-key="offset" value="${+Number(row.lv.offset || 0).toFixed(2)}" inputmode="decimal" title="MA 대비 오프셋(%)"><span class="dim">%</span>`
+      : `<input class="cob-split-in" data-level="${i}" data-key="price" value="${splitFmt(row.price)}" inputmode="numeric"><span class="dim">원</span>`);
 
     const rowsHtml = r.rows.length
       ? r.rows.map((row, i) => `<tr>
           <td class="no sell">${i + 1}차</td>
           <td class="cond">${condCell(row, i)}</td>
+          <td><select class="cob-split-in" data-level="${i}" data-key="side">${opt(SELL_SIDES, sellSideOf(row.lv))}</select></td>
+          <td><select class="cob-split-in" data-level="${i}" data-key="arm" title="이탈=상회 후 / 도달=하회 후. 활성 이후 기준">${opt(sellArmOptions(sellSideOf(row.lv)), sellArmOf(row.lv))}</select></td>
           <td>${row.lv.type === 'ma' ? (row.price ? splitFmt(row.price) : '<span class="dim">MA 없음</span>') : ''}</td>
           <td class="dim ${cls(row.vsCur)}">${row.vsCur == null ? '-' : splitPct(row.vsCur)}</td>
           <td class="${cls(row.vsAvg)}">${row.vsAvg == null ? '-' : splitPct(row.vsAvg)}</td>
@@ -367,17 +402,18 @@ class SellPlanner {
           <td>${splitFmt(row.amt)}</td>
           <td><button type="button" class="cob-split-del" data-del-level="${i}" title="삭제">×</button></td>
         </tr>`).join('')
-      : `<tr><td colspan="9" class="dim center">평단을 구할 수 없습니다. 평단을 직접 입력하세요</td></tr>`;
+      : `<tr><td colspan="11" class="dim center">평단을 구할 수 없습니다. 평단을 직접 입력하세요</td></tr>`;
 
     this.card.innerHTML = `
       <div class="cob-split-head">
         <h3>매도사다리 시나리오</h3>
-        <span class="hint">가격 차수는 차트의 분홍 라인 드래그 · Alt+클릭으로 추가 · MA 차수는 해당 이평선(×오프셋)을 종가가 이탈하면 매도</span>
+        <span class="hint">기본=MA 이탈+상회 후 · 익절 무장 · 가격 라인 드래그/Alt+클릭</span>
       </div>
       <div class="cob-split-form">
         <label>방식<select data-field="mode">${opt(SELL_MODES, p.mode)}</select></label>
         <label>보유수량<input data-field="qty" value="${p.qty ? splitFmt(p.qty) : ''}" placeholder="${splitFmt(r.qty)}" inputmode="numeric"></label>
         <label>평단<input data-field="avg" value="${p.avg ? splitFmt(p.avg) : ''}" placeholder="${splitFmt(r.avg)}" inputmode="numeric"></label>
+        <label>익절무장%<input data-field="armPct" type="number" min="0" max="100" step="0.5" value="${p.armPct ?? 15}" title="이탈 차수만 적용. 0=끔"></label>
         <label>분할<input data-field="count" type="number" min="1" max="${priceMode ? 10 : 4}" value="${p.count}"></label>
         ${priceMode ? `
         <label>1차(평단+%)<input data-field="firstPct" type="number" step="0.5" value="${p.firstPct}"></label>
@@ -394,7 +430,7 @@ class SellPlanner {
       </div>
       <div class="cob-split-table-wrap">
         <table class="cob-split-table">
-          <thead><tr><th>차수</th><th>조건</th><th>현재 MA가</th><th>현재가比</th><th>평단比</th><th>비중</th><th>수량</th><th>금액</th><th></th></tr></thead>
+          <thead><tr><th>차수</th><th>조건</th><th>방향</th><th>확인</th><th>현재 MA가</th><th>현재가比</th><th>평단比</th><th>비중</th><th>수량</th><th>금액</th><th></th></tr></thead>
           <tbody>${rowsHtml}</tbody>
         </table>
       </div>
@@ -402,7 +438,7 @@ class SellPlanner {
         <span>매도 <b>${splitFmt(r.totalQty)}</b>/${splitFmt(r.qty)}주 · <b>${splitFmt(r.proceeds)}</b>원</span>
         <span>평단 <b class="avg">${splitFmt(r.avg)}</b></span>
         <span>예상 실현손익 <b class="${cls(r.pnl)}">${r.totalQty ? `${splitFmt(r.pnl)}원 (${splitPct(r.pnlRate)})` : '-'}</b></span>
-        <span class="dim">MA 차수 가격은 최신 봉 기준이며 이평선이 움직이면 함께 바뀝니다</span>
+        <span class="dim">도달≥ / 이탈&lt; · 상회 후·하회 후=활성 뒤 반대편 확인 · 익절무장%=이탈만</span>
       </div>`;
   }
 
@@ -447,11 +483,23 @@ class SellPlanner {
         lineStyle: isMa ? LS.Dotted : LS.Dashed,
         axisLabelVisible: false,
       }));
+      const side = SELL_SIDES[sellSideOf(row.lv)] || '';
       const label = isMa
-        ? `매도${i + 1} ${SELL_MAS[row.lv.ma] || row.lv.ma}${row.lv.offset ? ` ${row.lv.offset > 0 ? '+' : ''}${row.lv.offset}%` : ''} 이탈 ${row.qty}주`
-        : `매도${i + 1} ${row.qty}주 · ${splitFmt(row.price)}`;
+        ? `매도${i + 1}차 ${SELL_MAS[row.lv.ma] || row.lv.ma}${row.lv.offset ? ` ${row.lv.offset > 0 ? '+' : ''}${row.lv.offset}%` : ''} ${side} · ${row.qty}주`
+        : `매도${i + 1}차 ${row.qty}주 · ${splitFmt(row.price)} ${side}`;
       this.addTag(row.price, label, color);
     });
+    if (r.avg > 0) {
+      const avg = Math.round(r.avg);
+      this.lines.push(s.createPriceLine({
+        price: avg,
+        color: SPLIT_AVG_COLOR,
+        lineWidth: 2,
+        lineStyle: LS.Solid,
+        axisLabelVisible: false,
+      }));
+      this.addTag(avg, `평단 · ${splitFmt(avg)}`, SPLIT_AVG_COLOR);
+    }
     this.positionTags();
   }
 
@@ -530,7 +578,7 @@ class SellPlanner {
         if (!this.open || !e.altKey) return;
         const price = roundTick(this.panel.candleSeries?.coordinateToPrice(yOf(e)));
         if (!price) return;
-        this.plan.levels.push({ type: 'price', price, weight: 1 });
+        this.plan.levels.push({ type: 'price', price, weight: 1, side: 'reach', arm: 'none' });
         this.sortPriceLevels();
         this.save();
         this.render();

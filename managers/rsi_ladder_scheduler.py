@@ -47,6 +47,7 @@ from utils.rsi_ladder import (
     next_trigger,
     normalize_sell_ladder,
     release_sell_hold,
+    sell_ladder_rule,
     sell_rule_label,
     set_buy_block,
     step_qty,
@@ -474,10 +475,24 @@ class RsiLadderScheduler:
                     price = await self._price(plan["code"])
                     if price:
                         hold = int(pos["qty"])
-                        ex = evaluate_sell_ladder(plan, price=price, hold=hold, ma={}, price_only=True)
+                        avg = float(pos.get("avg") or 0)
+                        ex = evaluate_sell_ladder(
+                            plan, price=price, hold=hold, ma={}, avg=avg, price_only=True)
+                        changed = (
+                            (ex.get("arm_flags") or {}) != (plan.get("sell_arm_flags") or {})
+                            or round(ex.get("peak_pct") or 0, 2) != round(float(plan.get("peak_pnl_pct") or 0), 2)
+                            or (ex.get("armed") and not plan.get("armed"))
+                        )
+                        plan.update(
+                            sell_arm_flags=ex.get("arm_flags") or {},
+                            peak_pnl_pct=round(ex.get("peak_pct") or 0, 2),
+                            base_qty=ex["base_qty"],
+                        )
+                        if ex.get("armed"):
+                            plan["armed"] = True
                         if ex["sells"]:
                             rules = [s["rule"] for s in ex["sells"]]
-                            plan.update(sell_flags=ex["flags"], base_qty=ex["base_qty"])
+                            plan["sell_flags"] = ex["flags"]
                             before = plan.get("status")
                             self._queue_sell(plan, rules, sum(s["qty"] for s in ex["sells"]), price, hold,
                                              grace=True, status_before=before)
@@ -487,6 +502,8 @@ class RsiLadderScheduler:
                             results.append({"plan_id": plan["id"], "code": plan["code"], "price": price,
                                             "sells": ex["sells"]})
                             continue
+                        if changed:
+                            get_ladder_store().save()
                 price_entry = (
                     plan.get("status") == "RSI_WAIT"
                     and merge_profile(plan.get("profile"))["entry_mode"] == "price"
@@ -552,6 +569,8 @@ class RsiLadderScheduler:
                 if ex["armed"] and not plan.get("armed"):
                     store.add_event(plan["id"], "ARM", f"익절 무장 — 최고 수익률 {ex['peak_pct']:.1f}%", save=False)
                 plan.update(armed=ex["armed"], peak_pnl_pct=round(ex["peak_pct"], 2), base_qty=ex["base_qty"])
+                if "arm_flags" in ex:
+                    plan["sell_arm_flags"] = ex.get("arm_flags") or {}
             if res["sells"] and plan.get("pending_sell"):
                 row["notes"].append("이전 매도 대기 중 — 매도 판정 보류")
             elif res["sells"]:
@@ -1169,8 +1188,20 @@ class RsiLadderScheduler:
         if sl["enabled"] and sum(lv["pct"] for lv in sl["levels"]) < 99.5:
             raise LadderError("매도 비중 합계가 100%가 되어야 합니다")
         plan["sell_ladder"] = sl
-        msg = (f"매도사다리 등록 — {len(sl['levels'])}개 차수" if sl["enabled"]
-               else "매도사다리 해제 — 기본 익절(S1~S3) 사용")
+        if sl["enabled"]:
+            keep = {sell_ladder_rule(i, lv) for i, lv in enumerate(sl["levels"])}
+            arm = plan.get("sell_arm_flags") or {}
+            plan["sell_arm_flags"] = {k: v for k, v in arm.items() if k in keep}
+            bits = [f"{len(sl['levels'])}개 차수"]
+            if sl.get("arm_pct"):
+                bits.append(f"익절무장 +{sl['arm_pct']:g}%")
+            cross_n = sum(1 for lv in sl["levels"] if lv.get("arm") == "cross")
+            if cross_n:
+                bits.append(f"상회·하회확인 {cross_n}")
+            msg = "매도사다리 등록 — " + " · ".join(bits)
+        else:
+            plan["sell_arm_flags"] = {}
+            msg = "매도사다리 해제 — 기본 익절(S1~S3) 사용"
         store.add_event(plan_id, "SELL_LADDER", msg)
         self._snap_cache.pop(plan_id, None)
         return plan

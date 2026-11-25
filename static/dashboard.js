@@ -5761,7 +5761,11 @@ function switchTradingSubTab(name) {
   document.querySelectorAll('.trading-subpane').forEach((p) => {
     p.classList.toggle('active', p.id === `trading-sub-${name}`);
   });
-  const frameId = { ladder: 'tradingLadderFrame', verify: 'tradingVerifyFrame' }[name];
+  const frameId = {
+    ladder: 'tradingLadderFrame',
+    'sell-ladder': 'tradingSellLadderFrame',
+    verify: 'tradingVerifyFrame',
+  }[name];
   if (frameId) {
     const frame = $(frameId);
     if (frame && !frame.hasAttribute('src')) frame.src = frame.dataset.src;

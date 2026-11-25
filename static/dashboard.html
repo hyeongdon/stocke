@@ -64,7 +64,7 @@
         <div class="home-shortcuts" aria-label="바로가기">
           <a href="/ladder" class="home-shortcut">
             <span class="home-shortcut-kicker">바로가기</span>
-            <span class="home-shortcut-label">사다리매수</span>
+            <span class="home-shortcut-label">매수사다리</span>
             <span class="home-shortcut-desc">매수사다리 감시 · 판정</span>
           </a>
           <a href="/analysis" class="home-shortcut">
@@ -142,7 +142,8 @@
     <section class="pane" id="pane-trading">
       <div class="auto-subtabs-bar trading-subtabs-bar">
         <nav class="auto-subtabs" aria-label="트레이딩 하위 메뉴">
-          <button type="button" class="auto-subtab trading-subtab active" data-trading-sub="ladder">분할매매</button>
+          <button type="button" class="auto-subtab trading-subtab active" data-trading-sub="ladder">매수사다리</button>
+          <button type="button" class="auto-subtab trading-subtab" data-trading-sub="sell-ladder">매도사다리</button>
           <button type="button" class="auto-subtab trading-subtab" data-trading-sub="candidates">자동매매</button>
           <button type="button" class="auto-subtab trading-subtab" data-trading-sub="verify">전략검증</button>
           <button type="button" class="auto-subtab trading-subtab" data-trading-sub="settings">설정</button>
@@ -153,7 +154,15 @@
           id="tradingLadderFrame"
           class="trading-ladder-frame"
           title="매수사다리 감시"
-          data-src="/static/ladder.html?embed=1"
+          data-src="/static/ladder.html?embed=1&v=38"
+        ></iframe>
+      </div>
+      <div class="trading-subpane" id="trading-sub-sell-ladder">
+        <iframe
+          id="tradingSellLadderFrame"
+          class="trading-ladder-frame"
+          title="매도사다리"
+          data-src="/static/sell_ladder.html?embed=1&v=5"
         ></iframe>
       </div>
       <div class="trading-subpane" id="trading-sub-verify">
@@ -444,7 +453,7 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/static/dashboard.js?v=204"></script>
+  <script src="/static/dashboard.js?v=206"></script>
   <script src="/static/telegram-price-alert.js?v=3"></script>
 </body>
 </html>

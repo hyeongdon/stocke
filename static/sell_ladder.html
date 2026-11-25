@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>매도사다리</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="manifest" href="/static/manifest.json">
+  <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Stocke">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="theme-color" content="#131720">
+  <script>
+    if (new URLSearchParams(location.search).get('embed') === '1') {
+      document.documentElement.classList.add('sl-embedded');
+    }
+  </script>
+  <link rel="stylesheet" href="/static/dashboard.css?v=155">
+  <link rel="stylesheet" href="/static/ladder.css?v=25">
+  <link rel="stylesheet" href="/static/sell_ladder.css?v=5">
+  <script src="/static/theme-sync.js?v=3"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="topbar-head">
+        <div class="brand">
+          <a class="brand-home" href="/" aria-label="인덱스 페이지"><h1>stock</h1></a>
+        </div>
+      </div>
+      <nav class="tabs tabs-scroll" aria-label="메인 메뉴">
+        <a href="/static/dashboard.html?tab=trading" class="tab-link">트레이딩</a>
+        <a href="/static/dashboard.html?tab=board" class="tab-link">대시보드</a>
+        <a href="/analysis" class="tab-link">분석 ↗</a>
+        <a href="/static/dashboard.html?tab=settings" class="tab-link">설정</a>
+      </nav>
+      <div class="topbar-actions ladder-top-actions">
+        <span class="hint sl-top-hint-full">가격 차수 = 장중 10분 감시 · MA 차수 = 15:05 판정 · 연결 시 기본 익절(S1~S3) 대신 사용</span>
+        <span class="hint sl-top-hint-short">가격=장중 · MA=15:05</span>
+        <button type="button" class="btn sm" id="btnRefresh" title="목록 새로고침">↻</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="wrap ladder-wrap sl-wrap">
+    <div class="ld-main">
+      <div class="card ld-list-card">
+        <div class="card-head">
+          <h3>매수사다리 계획</h3>
+          <span class="hint" id="listHint">진행 중인 계획에 매도사다리를 연결합니다</span>
+        </div>
+        <div class="card-body ld-table-wrap">
+          <table class="ld-table" id="planTable">
+            <thead>
+              <tr>
+                <th>종목</th>
+                <th>상태</th>
+                <th>매도사다리</th>
+                <th class="r">현재가</th>
+                <th class="r">평단</th>
+                <th class="r">보유</th>
+              </tr>
+            </thead>
+            <tbody><tr><td colspan="6" class="hint">불러오는 중…</td></tr></tbody>
+          </table>
+        </div>
+        <div class="ld-plan-cards" id="planCards" aria-label="매수사다리 계획(모바일)"></div>
+      </div>
+
+      <div class="card ld-detail-card" id="detailCard">
+        <div class="card-head">
+          <h3 id="detailTitle">종목을 선택하세요</h3>
+          <div class="ld-detail-actions" id="detailActions"></div>
+        </div>
+        <div class="card-body" id="detailBody">
+          <div class="hint">왼쪽에서 진행 중인 매수사다리 계획을 고르면 매도사다리를 설정할 수 있습니다.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <script src="/static/sell_ladder.js?v=5"></script>
+</body>
+</html>

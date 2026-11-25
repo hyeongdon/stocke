@@ -525,10 +525,17 @@ app = FastAPI(
 @app.middleware("http")
 async def prevent_html_page_caching(request: Request, call_next):
     response = await call_next(request)
-    if request.method in {"GET", "HEAD"} and request.url.path.endswith(".html"):
+    content_type = response.headers.get("content-type", "")
+    if request.method in {"GET", "HEAD"} and (
+        request.url.path.endswith(".html") or content_type.startswith("text/html")
+    ):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
+    elif request.method in {"GET", "HEAD"} and request.url.path.startswith("/static/") and (
+        request.url.path.endswith((".js", ".css", ".json"))
+    ):
+        response.headers["Cache-Control"] = "no-cache"
     return response
 
 # 정적 파일 서빙 설정
@@ -591,6 +598,7 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
                     "/api-explorer",
                     "/status",
                     "/ladder",
+                    "/sell-ladder",
                 }
             )
         )
@@ -1360,6 +1368,12 @@ async def ladder_page(request: Request):
     """RSI 저점 매수사다리(-5%) 감시 페이지"""
     qs = request.url.query
     return RedirectResponse(url="/static/ladder.html" + (f"?{qs}" if qs else ""))
+
+@app.get("/sell-ladder")
+async def sell_ladder_page(request: Request):
+    """매도사다리(가격 도달·이평 이탈) 설정 페이지"""
+    qs = request.url.query
+    return RedirectResponse(url="/static/sell_ladder.html" + (f"?{qs}" if qs else ""))
 
 @app.get("/api-explorer")
 async def api_explorer_page():
@@ -7169,6 +7183,7 @@ class LadderDecideRequest(BaseModel):
 
 class LadderSellLadderRequest(BaseModel):
     enabled: bool = True
+    arm_pct: float = 0
     levels: List[Dict[str, Any]] = []
 
 

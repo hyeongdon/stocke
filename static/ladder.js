@@ -17,20 +17,45 @@
     MANUAL_HALF: '수동 50%',
     MANUAL_ALL: '수동 전량',
   };
-  /** 매도사다리 규칙: L1:P12000 (가격 도달) / L2:M20-1.5 (이평 이탈) */
+  /** 매도사다리 규칙: L1:P12000 도달 / L1:P12000v 이탈 / L2:M20 이탈 / L2:M20^ 도달 */
   function ruleLabel(r) {
     if (RULE_LABEL[r]) return RULE_LABEL[r];
-    const m = /^L(\d+):(P(\d+)|M(\d+)([+-][\d.]+)?)$/.exec(String(r || ''));
+    const m = /^L(\d+):(P(\d+)(v?)|M(\d+)([+-][\d.]+)?(\^?))$/.exec(String(r || ''));
     if (!m) return r;
-    if (m[3]) return '매도' + m[1] + ' ' + Number(m[3]).toLocaleString('ko-KR') + ' 도달';
-    return '매도' + m[1] + ' MA' + m[4] + (m[5] ? ' ' + m[5] + '%' : '') + ' 이탈';
+    if (m[3]) return '매도' + m[1] + ' ' + Number(m[3]).toLocaleString('ko-KR') + (m[4] === 'v' ? ' 이탈' : ' 도달');
+    return '매도' + m[1] + ' MA' + m[5] + (m[6] ? ' ' + m[6] + '%' : '') + (m[7] === '^' ? ' 도달' : ' 이탈');
+  }
+  function sellLadderSide(lv) {
+    if (lv && (lv.side === 'reach' || lv.side === 'break')) return lv.side;
+    return lv && lv.type === 'ma' ? 'break' : 'reach';
+  }
+  function sellLadderArmLabel(lv) {
+    if (!lv || lv.arm !== 'cross') return '';
+    return sellLadderSide(lv) === 'break' ? '상회 후' : '하회 후';
   }
   function sellLadderRule(i, lv) {
+    const side = sellLadderSide(lv);
     if (lv.type === 'ma') {
       const off = Number(lv.offset) || 0;
-      return 'L' + (i + 1) + ':M' + lv.ma + (off ? (off > 0 ? '+' : '') + off : '');
+      const body = 'M' + lv.ma + (off ? (off > 0 ? '+' : '') + off : '');
+      return 'L' + (i + 1) + ':' + body + (side === 'reach' ? '^' : '');
     }
-    return 'L' + (i + 1) + ':P' + lv.price;
+    return 'L' + (i + 1) + ':P' + lv.price + (side === 'break' ? 'v' : '');
+  }
+  function sellLadderArmRemain(p, lv, target) {
+    const price = Number(p.price) || 0;
+    if (!price || !target) return '';
+    const needAbove = sellLadderSide(lv) === 'break';
+    if (needAbove) {
+      if (price >= target) return '상회 도달';
+      const diff = target - price;
+      const pct = (target / price - 1) * 100;
+      return '상회까지 +' + fmt(Math.round(diff)) + ' (' + fmtPct(pct) + ')';
+    }
+    if (price < target) return '하회 도달';
+    const diff = price - target;
+    const pct = (price / target - 1) * 100;
+    return '하회까지 -' + fmt(Math.round(diff)) + ' (' + fmtPct(pct) + ')';
   }
   function sellLadderOn(p) {
     const sl = p && p.sell_ladder;
@@ -351,9 +376,14 @@
     const firing = new Set(((p.exit_preview || {}).sells || []).map((s) => s.rule));
     const chip = (rule, label) => '<span class="ld-chip ' + (flags[rule] ? 'done' : firing.has(rule) ? 'fire' : '') + '">' + label + '</span>';
     if (sellLadderOn(p)) {
-      return '<span class="ld-stage-chips">' + p.sell_ladder.levels.map((lv, i) => {
+      const armPct = Number((p.sell_ladder || {}).arm_pct) || 0;
+      const armChip = armPct > 0
+        ? ('<span class="ld-chip' + ((p.armed || (p.peak_pnl_pct || 0) >= armPct) ? ' ready' : '') + '" title="이탈 차수 익절 무장">무장 ' + fmtPct(p.peak_pnl_pct || 0, 0) + '/' + armPct + '%</span>')
+        : '';
+      return '<span class="ld-stage-chips">' + armChip + p.sell_ladder.levels.map((lv, i) => {
         const r = sellLadderRule(i, lv);
-        return chip(r, lv.type === 'ma' ? 'MA' + lv.ma + ' ' + lv.pct + '%' : fmt(lv.price) + ' ' + lv.pct + '%');
+        const side = sellLadderSide(lv) === 'break' ? '↓' : '↑';
+        return chip(r, (lv.type === 'ma' ? 'MA' + lv.ma : fmt(lv.price)) + side + ' ' + lv.pct + '%');
       }).join('') + '</span>';
     }
     const armPct = prof(p).tp_arm_pct || 15;
@@ -546,16 +576,34 @@
     const armPct = pr.tp_arm_pct || 15;
     let h;
     if (sellLadderOn(p)) {
-      h = '<div class="ld-panel"><div class="ld-panel-head">매도사다리 <span class="hint">가격 차수는 장중 10분 감시 · MA 차수는 15:05 판정</span></div>';
+      const armPct = Number((p.sell_ladder || {}).arm_pct) || 0;
+      const peak = Number(p.peak_pnl_pct) || 0;
+      const armFlags = p.sell_arm_flags || {};
+      h = '<div class="ld-panel"><div class="ld-panel-head">매도사다리 <span class="hint">가격=장중 10분 · MA=15:05 · 도달/이탈 · 상회·하회 확인</span></div>';
+      if (armPct > 0) {
+        const armedOk = !!p.armed || peak >= armPct;
+        h += '<div class="ld-cond ' + (armedOk ? 'ok' : 'no') + '"><span class="mark">' + (armedOk ? '✓' : '·') + '</span>익절 무장 +' + armPct + '% (이탈 차수)<span class="val">최고 ' + fmtPct(peak) + '</span></div>';
+      }
       p.sell_ladder.levels.forEach((lv, i) => {
         const r = sellLadderRule(i, lv);
-        if (lv.type === 'ma') {
-          const v = m['ma' + lv.ma];
-          const t = v ? v * (1 + (Number(lv.offset) || 0) / 100) : 0;
-          h += line(flags[r], fire(r), (i + 1) + '차 MA' + lv.ma + (lv.offset ? ' ' + (lv.offset > 0 ? '+' : '') + lv.offset + '%' : '') + ' 이탈 → ' + lv.pct + '%', flags[r] ? '완료' : gap(t));
-        } else {
-          h += line(flags[r], fire(r), (i + 1) + '차 ' + fmt(lv.price) + ' 도달 → ' + lv.pct + '%', flags[r] ? '완료' : gap(lv.price));
-        }
+        const side = sellLadderSide(lv);
+        const sideTxt = side === 'break' ? '이탈' : '도달';
+        const cross = lv.arm === 'cross';
+        const crossArmed = !cross || !!armFlags[r];
+        const t = lv.type === 'ma'
+          ? ((m['ma' + lv.ma] || 0) * (1 + (Number(lv.offset) || 0) / 100) || 0)
+          : Number(lv.price) || 0;
+        let val;
+        if (flags[r]) val = '완료';
+        else if (cross && !crossArmed) val = sellLadderArmRemain(p, lv, t) || '상회/하회 대기';
+        else if (side === 'break' && armPct > 0 && !(p.armed || peak >= armPct)) val = '익절무장 대기';
+        else val = gap(t);
+        const armTxt = sellLadderArmLabel(lv);
+        const label = (i + 1) + '차 ' + (lv.type === 'ma'
+          ? ('MA' + lv.ma + (lv.offset ? ' ' + (lv.offset > 0 ? '+' : '') + lv.offset + '%' : ''))
+          : fmt(lv.price))
+          + ' ' + sideTxt + (armTxt ? ' ·' + armTxt : '') + ' → ' + lv.pct + '%';
+        h += line(flags[r], fire(r) || (cross && crossArmed && !flags[r]), label, val);
       });
       if (p.base_qty) h += '<div class="ld-cond-op">기준수량 ' + fmt(p.base_qty) + '주 (첫 매도 시점) · 마지막 차수는 잔량 전부</div>';
     } else {
@@ -607,7 +655,16 @@
     });
     const shown = ladder.filter((r) => r.state !== 'manual' && (r.state !== 'pending' || r.step <= autoFills(p).length + 3) && r.price > 0);
     const ap = p.hold && !p.armed ? armPrice(p) : null;
-    const all = prices.concat(shown.map((r) => r.price));
+    const mNow = ma(p);
+    const sellLevels = sellLadderOn(p)
+      ? (p.sell_ladder.levels || []).map((lv, i) => {
+          const price = lv.type === 'ma'
+            ? ((mNow['ma' + lv.ma] || 0) * (1 + (Number(lv.offset) || 0) / 100))
+            : (Number(lv.price) || 0);
+          return { i, lv, price };
+        }).filter((t) => t.price > 0)
+      : [];
+    const all = prices.concat(shown.map((r) => r.price)).concat(sellLevels.map((t) => t.price));
     if (ap) all.push(ap);
     const lo = Math.min.apply(null, all) * 0.98;
     const hi = Math.max.apply(null, all) * 1.02;
@@ -625,6 +682,15 @@
     shown.forEach((r) => {
       const color = r.state === 'filled' ? 'var(--accent-bright)' : r.state === 'next' ? 'var(--amber)' : 'var(--border-light)';
       svg += hline(r.price, color, r.state === 'filled' ? '' : '4 4', r.step + '차 ' + fmt(r.price));
+    });
+    sellLevels.forEach((t) => {
+      const isMa = t.lv.type === 'ma';
+      const color = isMa ? '#06b6d4' : '#ec4899';
+      const side = sellLadderSide(t.lv) === 'break' ? '이탈' : '도달';
+      const label = isMa
+        ? ('매도' + (t.i + 1) + ' MA' + t.lv.ma + (t.lv.offset ? ' ' + (t.lv.offset > 0 ? '+' : '') + t.lv.offset + '%' : '') + ' ' + side)
+        : ('매도' + (t.i + 1) + ' ' + fmt(t.price) + ' ' + side);
+      svg += hline(t.price, color, sellLadderSide(t.lv) === 'break' ? '2 3' : '5 4', label);
     });
     if (p.avg && p.hold) svg += hline(p.avg, 'var(--cyan)', '4 4', '평단 ' + fmt(p.avg), true);
     if (ap) svg += hline(ap, 'var(--up)', '6 3', '무장가 ' + fmt(ap), true);
@@ -721,7 +787,11 @@
       html += '<div class="ld-chart-legend"><span style="color:var(--text)">종가</span>' +
         '<span style="color:' + MA_COLORS[5] + '">5일선</span><span style="color:' + MA_COLORS[10] + '">10일선</span>' +
         '<span class="ld-ma-thick" style="color:' + MA_COLORS[20] + '">20일선</span><span class="ld-ma-thick" style="color:' + MA_COLORS[60] + '">60일선</span>' +
-        '<span style="color:var(--cyan)">평단</span><span style="color:var(--amber)">다음 매수가</span> ▲매수 ▼매도 · 최근 ' + CHART_LEN + '거래일</div>';
+        '<span style="color:var(--cyan)">평단</span><span style="color:var(--amber)">다음 매수가</span>' +
+        (sellLadderOn(p)
+          ? '<span style="color:#ec4899">가격 매도</span><span style="color:#06b6d4">MA 이탈</span>'
+          : '') +
+        ' ▲매수 ▼매도 · 최근 ' + CHART_LEN + '거래일</div>';
     }
 
     html += '<div class="ld-table-scroll"><table class="ld-table ld-steps"><thead><tr><th>차수</th><th>상태</th><th class="r">매수가</th><th class="r">1차 대비</th><th class="r">수량</th><th class="r">금액</th><th class="r">누적 금액</th><th class="r">누적 평단</th><th class="r">평단 대비</th><th>체결일</th></tr></thead><tbody>';

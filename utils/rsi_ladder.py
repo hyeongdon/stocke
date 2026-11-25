@@ -138,7 +138,10 @@ def is_take_profit(rules: Sequence[str]) -> bool:
 
 
 def sell_rule_label(rule: str) -> str:
-    """S0~S3·수동은 고정 라벨, 매도사다리 규칙(L1:P12000 / L2:M20-1.5)은 코드에서 라벨을 만든다."""
+    """S0~S3·수동은 고정 라벨, 매도사다리 규칙(L1:P12000 / L2:M20-1.5 / L3:P11000v / L4:M20^)은 코드에서 라벨을 만든다.
+
+    접미사 없음·P = 도달, P…v = 가격 이탈, M = 이평 이탈, M…^ = 이평 도달.
+    """
     r = str(rule or "")
     if r in SELL_RULE_LABEL:
         return SELL_RULE_LABEL[r]
@@ -147,18 +150,22 @@ def sell_rule_label(rule: str) -> str:
     head, body = r.split(":", 1)
     step = head[1:]
     if body.startswith("P"):
+        break_side = body.endswith("v")
+        num = body[1:-1] if break_side else body[1:]
         try:
-            return f"매도사다리 {step}차 {int(float(body[1:])):,}원 도달"
+            return f"매도사다리 {step}차 {int(float(num)):,}원 {'이탈' if break_side else '도달'}"
         except ValueError:
             return r
     if body.startswith("M"):
-        ma, off = body[1:], ""
-        for i, ch in enumerate(ma):
+        reach = body.endswith("^")
+        core = body[1:-1] if reach else body[1:]
+        ma, off = core, ""
+        for i, ch in enumerate(core):
             if ch in "+-":
-                ma, off = ma[:i], ma[i:]
+                ma, off = core[:i], core[i:]
                 break
         suffix = f" {off}%" if off else ""
-        return f"매도사다리 {step}차 MA{ma}{suffix} 이탈"
+        return f"매도사다리 {step}차 MA{ma}{suffix} {'도달' if reach else '이탈'}"
     return r
 
 
@@ -437,9 +444,29 @@ def moving_averages(closes: Sequence[float]) -> Dict[str, Optional[float]]:
     return out
 
 
+def _sell_ladder_side(lv: Dict[str, Any]) -> str:
+    side = lv.get("side")
+    if side in ("reach", "break"):
+        return side
+    return "break" if lv.get("type") == "ma" else "reach"
+
+
+def _sell_ladder_arm(lv: Dict[str, Any]) -> str:
+    arm = lv.get("arm")
+    return arm if arm in ("none", "cross") else "none"
+
+
 def normalize_sell_ladder(raw: Any) -> Dict[str, Any]:
-    """매도사다리 설정 검증. levels: 가격 도달(type=price) / 이평 이탈(type=ma), pct = 기준수량 대비 %."""
+    """매도사다리 설정 검증.
+
+    levels: type=price|ma, side=reach(도달)|break(이탈), arm=none|cross(상회·하회 확인 후 발화),
+    pct = 기준수량 대비 %. arm_pct>0 이면 이탈(break) 차수는 최고수익률이 그 % 이상일 때만 매도.
+    """
     raw = raw if isinstance(raw, dict) else {}
+    try:
+        arm_pct = round(max(0.0, min(100.0, float(raw.get("arm_pct") or 0))), 2)
+    except (TypeError, ValueError):
+        arm_pct = 0.0
     levels: List[Dict[str, Any]] = []
     for lv in (raw.get("levels") or [])[:SELL_LADDER_MAX_LEVELS]:
         if not isinstance(lv, dict):
@@ -448,28 +475,37 @@ def normalize_sell_ladder(raw: Any) -> Dict[str, Any]:
             pct = round(max(0.0, min(100.0, float(lv.get("pct") or 0))), 2)
             if pct <= 0:
                 continue
+            side = _sell_ladder_side(lv)
+            arm = _sell_ladder_arm(lv)
             if lv.get("type") == "ma":
                 ma = int(lv.get("ma") or 0)
                 if ma not in SELL_LADDER_MAS:
                     continue
                 offset = round(max(-30.0, min(30.0, float(lv.get("offset") or 0))), 2)
-                levels.append({"type": "ma", "ma": ma, "offset": offset, "pct": pct})
+                levels.append({"type": "ma", "ma": ma, "offset": offset, "pct": pct, "side": side, "arm": arm})
             else:
                 price = int(float(lv.get("price") or 0))
                 if price <= 0:
                     continue
-                levels.append({"type": "price", "price": price, "pct": pct})
+                levels.append({"type": "price", "price": price, "pct": pct, "side": side, "arm": arm})
         except (TypeError, ValueError):
             continue
-    return {"enabled": bool(raw.get("enabled")) and bool(levels), "levels": levels}
+    return {
+        "enabled": bool(raw.get("enabled")) and bool(levels),
+        "arm_pct": arm_pct,
+        "levels": levels,
+    }
 
 
 def sell_ladder_rule(idx: int, lv: Dict[str, Any]) -> str:
+    side = _sell_ladder_side(lv)
     if lv.get("type") == "ma":
         off = float(lv.get("offset") or 0)
         suffix = format(off, "+g") if off else ""
-        return f"L{idx + 1}:M{int(lv['ma'])}{suffix}"
-    return f"L{idx + 1}:P{int(lv['price'])}"
+        body = f"M{int(lv['ma'])}{suffix}"
+        return f"L{idx + 1}:{body}" if side == "break" else f"L{idx + 1}:{body}^"
+    body = f"P{int(lv['price'])}"
+    return f"L{idx + 1}:{body}" if side == "reach" else f"L{idx + 1}:{body}v"
 
 
 def sell_ladder_target(lv: Dict[str, Any], ma: Dict[str, Optional[float]]) -> Optional[int]:
@@ -481,18 +517,30 @@ def sell_ladder_target(lv: Dict[str, Any], ma: Dict[str, Optional[float]]) -> Op
 
 
 def evaluate_sell_ladder(plan: Dict[str, Any], *, price: float, hold: int,
-                         ma: Dict[str, Optional[float]], price_only: bool = False) -> Dict[str, Any]:
-    """매도사다리 판정 (무장 없음). 가격 차수: 현재가 ≥ 목표가, 이평 차수: 현재가 < MA×(1+offset%).
+                         ma: Dict[str, Optional[float]], avg: float = 0.0,
+                         price_only: bool = False) -> Dict[str, Any]:
+    """매도사다리 판정.
 
-    price_only=True(장중 감시)면 가격 차수만 본다. 이평 차수는 15:05 판정에서만 본다.
-    수량은 첫 매도 시점 보유수량(base_qty) × pct%, 남은 마지막 차수는 잔량 전부.
+    - side=reach: 현재가 ≥ 목표가(도달), side=break: 현재가 < 목표가(이탈)
+    - arm=cross: 활성 이후 반대편 확인(이탈→상회 후, 도달→하회 후) 뒤 무장
+    - arm_pct>0: 이탈(break) 차수는 최고 수익률이 그 % 이상일 때만 매도
+    - price_only=True(장중)면 가격 차수만 본다. 이평 차수는 15:05 판정
     """
     sl = normalize_sell_ladder(plan.get("sell_ladder"))
     flags = dict(plan.get("sell_flags") or {})
+    arm_flags = dict(plan.get("sell_arm_flags") or {})
     base_qty = int(plan.get("base_qty") or 0)
+    peak = float(plan.get("peak_pnl_pct") or 0.0)
+    if avg and avg > 0 and price > 0:
+        peak = max(peak, (float(price) / float(avg) - 1.0) * 100.0)
+    arm_pct = float(sl.get("arm_pct") or 0.0)
+    profit_ok = arm_pct <= 0 or peak >= arm_pct
+    armed = bool(plan.get("armed")) or profit_ok
     sells: List[Dict[str, Any]] = []
-    out = {"sells": sells, "armed": bool(plan.get("armed")), "peak_pct": float(plan.get("peak_pnl_pct") or 0.0),
-           "base_qty": base_qty, "flags": flags, "ladder": True}
+    out = {
+        "sells": sells, "armed": armed, "peak_pct": peak, "base_qty": base_qty,
+        "flags": flags, "arm_flags": arm_flags, "ladder": True,
+    }
     if not sl["enabled"] or hold <= 0 or price <= 0:
         return out
     rules = [sell_ladder_rule(i, lv) for i, lv in enumerate(sl["levels"])]
@@ -506,8 +554,19 @@ def evaluate_sell_ladder(plan: Dict[str, Any], *, price: float, hold: int,
         target = sell_ladder_target(lv, ma)
         if not target:
             continue
-        hit = price >= target if lv["type"] == "price" else price < target
-        if not hit:
+        side = _sell_ladder_side(lv)
+        hit_reach = price >= target
+        hit_break = price < target
+        if _sell_ladder_arm(lv) == "cross":
+            # 이탈 매도 → 먼저 위(도달)에서 무장, 도달 매도 → 먼저 아래(이탈)에서 무장
+            if (hit_reach if side == "break" else hit_break):
+                arm_flags[rule] = True
+            if not arm_flags.get(rule):
+                continue
+        if side == "break" and not profit_ok:
+            continue
+        on_side = hit_reach if side == "reach" else hit_break
+        if not on_side:
             continue
         if base_qty <= 0:
             base_qty = int(hold)
@@ -517,6 +576,10 @@ def evaluate_sell_ladder(plan: Dict[str, Any], *, price: float, hold: int,
         remaining -= qty
         flags[rule] = True
     out["base_qty"] = base_qty
+    out["arm_flags"] = arm_flags
+    out["flags"] = flags
+    out["armed"] = armed
+    out["peak_pct"] = peak
     return out
 
 
@@ -525,10 +588,10 @@ def evaluate_exit(plan: Dict[str, Any], *, price: float, avg: float, hold: int,
     """익절 판정. 무장 전에는 매도하지 않고, 무장 후 S1~S3 만 판정한다. plan 은 변경하지 않는다.
     매도사다리가 켜져 있으면 S1~S3 대신 매도사다리로 판정한다.
 
-    반환: {"sells": [{"rule", "qty"}], "armed", "peak_pct", "base_qty", "flags"}
+    반환: {"sells": [{"rule", "qty"}], "armed", "peak_pct", "base_qty", "flags", "arm_flags"?}
     """
     if normalize_sell_ladder(plan.get("sell_ladder"))["enabled"]:
-        return evaluate_sell_ladder(plan, price=price, hold=hold, ma=ma)
+        return evaluate_sell_ladder(plan, price=price, hold=hold, ma=ma, avg=avg)
     prof = merge_profile(plan.get("profile"))
     flags = dict(plan.get("sell_flags") or {})
     armed = bool(plan.get("armed"))
