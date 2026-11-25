@@ -111,9 +111,18 @@ class SellPlanner {
   setCode(code) {
     if (code === this.code) return;
     this.code = code;
-    const saved = code ? readSellPlans()[code] : null;
-    this.plan = Object.assign(defaultSellPlan(), saved || {});
     this.currentPrice = 0;
+    if (!code) {
+      this.plan = defaultSellPlan();
+      if (this.open) this.setOpen(false);
+      else {
+        this.render();
+        this.clearLines();
+      }
+      return;
+    }
+    const saved = readSellPlans()[code];
+    this.plan = Object.assign(defaultSellPlan(), saved || {});
     if (!!this.plan.open !== this.open) {
       this.setOpen(!!this.plan.open);
       return;
@@ -445,7 +454,7 @@ class SellPlanner {
   /* ---------- 차트 라인 ---------- */
 
   clearLines() {
-    const s = this.panel.candleSeries;
+    const s = this.panel.priceLineSeries ? this.panel.priceLineSeries() : this.panel.candleSeries;
     this.lines.forEach((l) => {
       try { if (s) s.removePriceLine(l); } catch (_) { /* ignore */ }
     });
@@ -455,7 +464,14 @@ class SellPlanner {
   }
 
   onChartDestroyed() {
-    this.tagLayer = null;
+    if (this.tagRaf) {
+      cancelAnimationFrame(this.tagRaf);
+      this.tagRaf = null;
+    }
+    if (this.tagLayer) {
+      this.tagLayer.remove();
+      this.tagLayer = null;
+    }
     this.tags = [];
     this.lines = [];
     this.boundHost = null;
@@ -468,7 +484,7 @@ class SellPlanner {
 
   drawLines() {
     this.clearLines();
-    const s = this.panel.candleSeries;
+    const s = this.panel.priceLineSeries ? this.panel.priceLineSeries() : this.panel.candleSeries;
     if (!s || !this.open) return;
     const LS = LightweightCharts.LineStyle;
     const r = this.compute();

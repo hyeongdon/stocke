@@ -288,16 +288,22 @@ function barsToSeries(bars, interval) {
     if (prevTime != null && time <= prevTime) continue;
     prevTime = time;
 
-    const open = Number(b.open) || 0;
-    const high = Number(b.high) || 0;
-    const low = Number(b.low) || 0;
-    const close = Number(b.close) || 0;
-    if (close <= 0) continue;
+    const close = Number(b.close);
+    if (!Number.isFinite(close) || close <= 0) continue;
+    // low/high/open 결측·0 이 그대로 들어가면 가격축이 0~고점까지 벌어져 캔들이 위쪽에 납작해짐
+    let open = Number(b.open);
+    let high = Number(b.high);
+    let low = Number(b.low);
+    if (!Number.isFinite(open) || open <= 0) open = close;
+    if (!Number.isFinite(high) || high <= 0) high = Math.max(open, close);
+    if (!Number.isFinite(low) || low <= 0) low = Math.min(open, close);
+    high = Math.max(high, open, close, low);
+    low = Math.min(low, open, close, high);
 
     candles.push({ time, open, high, low, close });
     closes.push(close);
-    highs.push(high > 0 ? high : close);
-    lows.push(low > 0 ? low : close);
+    highs.push(high);
+    lows.push(low);
     times.push(time);
     const vol = Number(b.volume) || 0;
     volumes.push({
@@ -406,6 +412,7 @@ class Panel {
     this.macdChart = null;
     this.wrChart = null;
     this.candleSeries = null;
+    this.overlaySeries = null;
     this.volumeSeries = null;
     this.rsiSeries = null;
     this.macdSeries = null;
@@ -420,6 +427,11 @@ class Panel {
     this.obCentered = false;
     this.split = null;
     this.sell = null;
+  }
+
+  /** 사다리 가격선용 — 오토스케일에 영향 주지 않음 */
+  priceLineSeries() {
+    return this.overlaySeries || this.candleSeries;
   }
 
   el(role) {
@@ -443,6 +455,7 @@ class Panel {
     this.macdChart = null;
     this.wrChart = null;
     this.candleSeries = null;
+    this.overlaySeries = null;
     this.volumeSeries = null;
     this.rsiSeries = null;
     this.macdSeries = null;
@@ -483,22 +496,89 @@ class Panel {
     }
   }
 
+  chartHostFor(chart) {
+    if (!chart) return null;
+    if (chart === this.chart) return this.el('chartHost');
+    if (chart === this.rsiChart) return this.el('rsiHost');
+    if (chart === this.macdChart) return this.el('macdHost');
+    if (chart === this.wrChart) return this.el('wrHost');
+    return null;
+  }
+
+  /** 숨김·0높이 보조차트는 time scale 동기화에서 제외 (MACD 토글 시 메인 구간이 깨지는 원인) */
+  isChartLive(chart) {
+    const host = this.chartHostFor(chart);
+    if (!host) return false;
+    if (chart !== this.chart) {
+      const pane = host.closest('.cob-rsi-pane');
+      if (pane && pane.hidden) return false;
+    }
+    const { width, height } = host.getBoundingClientRect();
+    return width > 2 && height > 2;
+  }
+
   syncVisibleRange(source) {
     if (!source || this.syncingRange) return;
+    if (!this.isChartLive(source)) return;
     this.syncingRange = true;
     try {
       const range = source.timeScale().getVisibleLogicalRange();
-      if (range) {
+      if (
+        range
+        && Number.isFinite(range.from)
+        && Number.isFinite(range.to)
+        && range.to - range.from >= 1
+      ) {
         this.allCharts().forEach((c) => {
-          if (c !== source) c.timeScale().setVisibleLogicalRange(range);
+          if (c === source || !this.isChartLive(c)) return;
+          try { c.timeScale().setVisibleLogicalRange(range); } catch (_) { /* ignore */ }
         });
       }
     } catch (_) { /* ignore */ }
     this.syncingRange = false;
   }
 
+  /** 표시 봉 기준 유효 가격 범위 (0·결측 제외) */
+  barPriceRange() {
+    const bars = this.lastBars || [];
+    let lo = Infinity;
+    let hi = -Infinity;
+    bars.forEach((b) => {
+      const l = Number(b.low);
+      const h = Number(b.high);
+      const c = Number(b.close);
+      if (l > 0 && l < lo) lo = l;
+      if (h > 0 && h > hi) hi = h;
+      if (c > 0) {
+        if (c < lo) lo = c;
+        if (c > hi) hi = c;
+      }
+    });
+    if (!(lo < hi) || !Number.isFinite(lo)) return null;
+    return { lo, hi };
+  }
+
+  /** 메인 차트 기준으로 보조지표 구간을 맞추고, 깨진 줌이면 fitContent */
+  realignTimeScale() {
+    if (!this.chart) return;
+    try {
+      const range = this.chart.timeScale().getVisibleLogicalRange();
+      const n = (this.lastBars && this.lastBars.length) || 0;
+      const broken = !range
+        || !Number.isFinite(range.from)
+        || !Number.isFinite(range.to)
+        || range.to - range.from < Math.min(10, Math.max(1, n * 0.2))
+        || (n > 0 && (range.from > n + 5 || range.from < -n));
+      if (broken && n > 0) this.chart.timeScale().fitContent();
+    } catch (_) { /* ignore */ }
+    try {
+      this.chart.priceScale('right').applyOptions({ autoScale: true });
+    } catch (_) { /* ignore */ }
+    this.syncVisibleRange(this.chart);
+  }
+
   syncPriceScaleWidth() {
-    const charts = this.allCharts();
+    const charts = this.allCharts().filter((c) => this.isChartLive(c));
     if (!charts.length) return;
     charts.forEach((c) => c.applyOptions({ rightPriceScale: { minimumWidth: 0 } }));
     const w = Math.max(...charts.map((c) => {
@@ -571,14 +651,43 @@ class Panel {
       wickUpColor: theme.up,
       wickDownColor: theme.down,
       priceFormat: wonFormat,
+      priceLineVisible: false,
+      // 시간축이 깨져 빈 슬롯(0)이 섞여도 가격축이 0~고점으로 벌어지지 않게 교정
+      autoscaleInfoProvider: (original) => {
+        const dataRange = this.barPriceRange();
+        const res = original();
+        if (!dataRange) return res;
+        if (!res || !res.priceRange) {
+          return { priceRange: { minValue: dataRange.lo, maxValue: dataRange.hi } };
+        }
+        let minV = res.priceRange.minValue;
+        let maxV = res.priceRange.maxValue;
+        // 0·음수·데이터 최저의 절반 미만이면 실제 봉 범위로 치환
+        if (!(minV > 0) || minV < dataRange.lo * 0.5) minV = dataRange.lo;
+        if (!(maxV > minV) || maxV > dataRange.hi * 1.5) maxV = dataRange.hi;
+        return { priceRange: { minValue: minV, maxValue: maxV } };
+      },
     });
+    // 공식 권장: 빈 priceScaleId = overlay (right 스케일에 거래량이 섞이지 않음)
     this.volumeSeries = chart.addHistogramSeries({
       priceFormat: { type: 'volume' },
-      priceScaleId: 'vol',
+      priceScaleId: '',
     });
-    chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } });
-    chart.priceScale('right').applyOptions({ scaleMargins: { top: 0.08, bottom: 0.22 } });
+    this.volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } });
+    chart.priceScale('right').applyOptions({
+      scaleMargins: { top: 0.08, bottom: 0.22 },
+      autoScale: true,
+    });
     this.chart = chart;
+    // 사다리 가격선 전용 — 오토스케일 제외
+    this.overlaySeries = chart.addLineSeries({
+      color: 'rgba(0,0,0,0)',
+      lineWidth: 1,
+      lastValueVisible: false,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+      autoscaleInfoProvider: () => null,
+    });
 
     Object.keys(MA_COLORS).forEach((key) => {
       this.maSeries[key] = chart.addLineSeries({
@@ -588,6 +697,7 @@ class Panel {
         lastValueVisible: false,
         crosshairMarkerVisible: false,
         priceFormat: wonFormat,
+        autoscaleInfoProvider: () => null,
       });
     });
 
@@ -705,12 +815,29 @@ class Panel {
   }
 
   applyRsiVisibility() {
+    let n = 0;
     [['togRsi', 'rsiPane'], ['togMacd', 'macdPane'], ['togWr', 'wrPane']].forEach(([tog, role]) => {
       const on = !$(tog) || $(tog).checked;
       const pane = this.el(role);
       if (pane) pane.hidden = !on;
+      if (on) n += 1;
     });
+    // 보조지표가 늘어도 메인 캔들 영역이 잠식되지 않도록 차트 본문 높이를 보강
+    const body = this.root.querySelector('.cob-chart-body');
+    if (body) {
+      const panels = this.root.closest('.cob-panels');
+      const base = panels?.classList.contains('layout-4') ? 340 : 520;
+      const extra = Math.max(0, n - 1) * 108;
+      body.style.minHeight = `${base + extra}px`;
+    }
     this.resizeCharts();
+    // 숨겨져 있던 MACD/WR 차트가 리사이즈되며 보낸 잘못된 logical range가 메인을 덮지 않게 복구
+    requestAnimationFrame(() => {
+      this.resizeCharts();
+      this.realignTimeScale();
+      if (this.split && this.split.open) this.split.drawLines();
+      if (this.sell && this.sell.open) this.sell.drawLines();
+    });
   }
 
   setLatestText(role, points, digits) {
@@ -765,8 +892,11 @@ class Panel {
     this.applyMaVisibility();
     this.applyRsiVisibility();
     this.chart.timeScale().fitContent();
-    this.syncVisibleRange(this.chart);
-    requestAnimationFrame(() => this.syncPriceScaleWidth());
+    this.realignTimeScale();
+    requestAnimationFrame(() => {
+      this.realignTimeScale();
+      this.syncPriceScaleWidth();
+    });
 
     const latest = rsiSeries.length ? rsiSeries[rsiSeries.length - 1].value : null;
     const rsiEl = this.el('rsiLatest');
@@ -1700,7 +1830,10 @@ function setLayout(n) {
   setActivePanel(state.activeIdx);
   visiblePanels().forEach((p) => {
     if (p.code && p.loadedKey !== `${p.code}|${p.interval}`) p.load(p.code, { quiet: true });
-    requestAnimationFrame(() => p.resizeCharts());
+    requestAnimationFrame(() => {
+      p.resizeCharts();
+      p.realignTimeScale();
+    });
   });
   persistPanels();
   renderFavorites();

@@ -112,3 +112,51 @@ def test_ma1592_realtime_insert_rejects_dead_cross():
             "1592매매", "005950", {"302": "이수화학", "10": "11880"},
         ))
         mocked.assert_awaited_once()
+
+
+def test_snapshot_stocks_get_one_time_alert():
+    api = SimpleNamespace()
+    notifier = SimpleNamespace(send_message=lambda *a, **k: True)
+    alerter = ConditionRealtimeAlerter(api, notifier=notifier, names=["2060돌파임박"])
+    alerter._seq_to_name["16"] = "2060돌파임박"
+    alerter._market_block = lambda: None
+    sent = []
+
+    def capture(msg, notification_key=None):
+        sent.append((msg, notification_key))
+        return True
+
+    alerter.notifier.send_message = capture
+    data = [
+        {"9001": "A017370", "302": "우신시스템", "10": "1234"},
+        {"9001": "0010F0", "302": "테스트"},
+    ]
+
+    async def run():
+        await alerter._ingest_snapshot_stocks("16", data)
+        await alerter._ingest_snapshot_stocks("16", data)  # 재구독 — 중복 금지
+
+    asyncio.run(run())
+    assert len(sent) == 2
+    assert "우신시스템" in sent[0][0]
+    assert "2060돌파임박" in sent[0][0]
+    assert ("2060돌파임박", "017370") in alerter._snapshot_alerted
+    assert ("2060돌파임박", "0010F0") in alerter._snapshot_alerted
+
+
+def test_snapshot_alert_deferred_outside_market_hours():
+    api = SimpleNamespace()
+    alerter = ConditionRealtimeAlerter(api, notifier=SimpleNamespace(send_message=lambda *a, **k: True), names=[])
+    alerter._seq_to_name["16"] = "2060돌파임박"
+    alerter._market_block = lambda: "장 마감 후 (16:00) — 알림 미전송"
+    sent = []
+    alerter.notifier.send_message = lambda msg, notification_key=None: sent.append(msg) or True
+
+    asyncio.run(alerter._ingest_snapshot_stocks("16", [{"9001": "017370", "302": "우신시스템"}]))
+    assert sent == []
+    assert ("2060돌파임박", "017370") not in alerter._snapshot_alerted
+
+    alerter._market_block = lambda: None
+    asyncio.run(alerter._ingest_snapshot_stocks("16", [{"9001": "017370", "302": "우신시스템"}]))
+    assert len(sent) == 1
+    assert "우신시스템" in sent[0]

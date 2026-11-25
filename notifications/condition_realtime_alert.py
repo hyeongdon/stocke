@@ -1,8 +1,9 @@
 """
 조건식 실시간 편입 알림 (CNSRREQ search_type=1).
 
-정시 스냅샷은 돌파 직후 조건식에서 빠지면 놓칩니다.
-WebSocket 실시간 편입(REAL) 시점에 텔레그램을 보냅니다.
+정시 폴링만 쓰면 돌파 직후 조건식에서 빠지면 놓칩니다.
+WebSocket 실시간 편입(REAL) 시점에 텔레그램을 보내고,
+구독 직후 초기 스냅샷에 이미 들어 있는 종목도 프로세스당 1회 알립니다.
 """
 from __future__ import annotations
 
@@ -122,6 +123,8 @@ class ConditionRealtimeAlerter:
         self._seq_to_name: Dict[str, str] = {}
         self._code_names: Dict[str, str] = {}
         self._recent: Dict[Tuple[str, str], float] = {}
+        # 초기 스냅샷 종목 — 재구독마다 다시 오지 않도록 프로세스 생애 1회
+        self._snapshot_alerted: set[Tuple[str, str]] = set()
         self._stop = False
 
     def stop(self) -> None:
@@ -257,7 +260,10 @@ class ConditionRealtimeAlerter:
             return
         if not self._should_send(condition_name, stock_code):
             logger.debug(f"실시간 편입 중복 스킵: {condition_name} {stock_code}")
+            self._snapshot_alerted.add((condition_name, stock_code))
             return
+        # 재구독 스냅샷이 같은 종목을 다시 알리지 않도록 표시
+        self._snapshot_alerted.add((condition_name, stock_code))
         name = await self._resolve_stock_name(stock_code, values)
         msg = build_entry_message(
             condition_name, stock_code, stock_name=name, values=values,
@@ -285,22 +291,44 @@ class ConditionRealtimeAlerter:
             logger.info(f"실시간 조건검색 등록: [{seq}] {name}")
             await asyncio.sleep(0.3)
 
-    def _ingest_snapshot_stocks(self, seq: str, data: Any) -> None:
-        """초기 CNSRREQ 스냅샷 — 종목명 캐시만 (알림은 실시간 편입만)."""
+    async def _ingest_snapshot_stocks(self, seq: str, data: Any) -> None:
+        """초기 CNSRREQ 스냅샷 — 종목명 캐시 + 아직 알리지 않은 편입 종목 1회 알림."""
         if not isinstance(data, list):
             return
         name = self._seq_to_name.get(str(seq), seq)
+        pending: List[Tuple[str, Dict[str, Any]]] = []
         for item in data:
             if not isinstance(item, dict):
                 continue
             code = str(item.get("9001") or item.get("jmcode") or "").replace("A", "").strip()
+            if not code:
+                continue
             sname = str(item.get("302") or "").strip()
-            if code and sname:
+            if sname:
                 self._code_names[code] = sname
+            key = (name, code)
+            if key in self._snapshot_alerted:
+                continue
+            values: Dict[str, Any] = {}
+            if sname:
+                values["302"] = sname
+            price = item.get("10")
+            if price is not None:
+                values["10"] = price
+            pending.append((code, values))
+
         logger.info(
-            f"초기 스냅샷 [{seq}] {name}: {len(data) if isinstance(data, list) else 0}종 "
-            f"(알림은 이후 편입만)"
+            f"초기 스냅샷 [{seq}] {name}: {len(data)}종 "
+            f"(신규 스냅샷 알림 대상 {len(pending)}종)"
         )
+        for code, values in pending:
+            block = self._market_block()
+            if block:
+                # 장외면 표시만 보류 — 다음 장중 재구독 때 다시 시도
+                logger.info(f"스냅샷 편입 알림 보류({code}): {block}")
+                continue
+            await self._notify_entry(name, code, values or None)
+            self._snapshot_alerted.add((name, code))
 
     async def _handle_message(self, raw: str) -> None:
         try:
@@ -318,7 +346,7 @@ class ConditionRealtimeAlerter:
             if msg.get("return_code") not in (0, None):
                 logger.warning(f"실시간 조건검색 등록 실패 seq={seq}: {msg}")
                 return
-            self._ingest_snapshot_stocks(seq, msg.get("data"))
+            await self._ingest_snapshot_stocks(seq, msg.get("data"))
             return
         if trnm == "REAL":
             # 어떤 조건식인지 — seq가 있으면 사용, 없으면 단일 구독 가정
