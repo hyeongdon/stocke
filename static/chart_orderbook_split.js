@@ -1,6 +1,6 @@
 'use strict';
 
-/* 분할매수 예상 시나리오 — 차트/호가 패널별 플래너 */
+/* 매수사다리 예상 시나리오 — 차트/호가 패널별 플래너 */
 
 const SPLIT_PLANS_KEY = 'chartOrderbookSplitPlans';
 const SPLIT_LEVEL_COLOR = '#22c55e';
@@ -357,7 +357,7 @@ class SplitPlanner {
 
     this.card.innerHTML = `
       <div class="cob-split-head">
-        <h3>분할매수 시나리오</h3>
+        <h3>매수사다리 시나리오</h3>
         <span class="hint">차트의 초록 라인을 드래그해 가격 조정 · Shift+클릭으로 차수 추가</span>
       </div>
       <div class="cob-split-form">
@@ -372,7 +372,7 @@ class SplitPlanner {
           <button type="button" class="btn sm" data-split-regen title="설정값으로 다시 생성">재생성</button>
           <button type="button" class="btn sm" data-split-add>+ 차수</button>
           <button type="button" class="btn sm" data-split-reset title="기본값으로">초기화</button>
-          <button type="button" class="btn sm" data-split-ladder title="이 시나리오로 분할매수 감시(사다리) 계획 등록 화면 열기">사다리로 등록 →</button>
+          <button type="button" class="btn sm" data-split-ladder title="이 시나리오로 매수사다리 감시 계획 등록 화면 열기">사다리로 등록 →</button>
         </div>
       </div>
       <div class="cob-split-table-wrap">

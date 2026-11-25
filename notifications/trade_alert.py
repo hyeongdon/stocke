@@ -34,7 +34,7 @@ STRATEGY_LABEL_KO = {
     "fractal": "프랙탈",
     "ma1592": "15/92홀드",
     "rwm_bowl": "RWM밥그릇",
-    "rsi_ladder": "분할매수",
+    "rsi_ladder": "매수사다리",
 }
 
 

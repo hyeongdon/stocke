@@ -1,4 +1,4 @@
-"""RSI 저점 분할매수(-5% 사다리) 스케줄러 (docs/PRD_RSI_LADDER.md).
+"""RSI 저점 매수사다리(-5%) 스케줄러 (docs/PRD_RSI_LADDER.md).
 
 - 장중(09:00~15:20) 10분마다 가격 감시: 현재가 ≤ 다음 트리거면 추가 매수 (하루 1단계)
 - 15:05~15:20 하루 1회 판정: 현재가 + 확정 일봉으로 1차 진입 / 추가 매수 / 무장 후 S1~S3 매도 결정
@@ -23,7 +23,6 @@ from utils.datetime_kst import now_kst
 from utils.rsi_ladder import (
     OPEN_STATUSES,
     SELL_CONFIRM_SEC,
-    SELL_RULE_LABEL,
     STRATEGY_KEY,
     auto_fills,
     buy_block_of,
@@ -35,8 +34,10 @@ from utils.rsi_ladder import (
     evaluate_entry,
     evaluate_exit,
     evaluate_price_entry,
+    evaluate_sell_ladder,
     execution_avg_price,
     get_ladder_store,
+    is_ladder_rule,
     is_no_cash_failure,
     judge_plan,
     is_take_profit,
@@ -44,7 +45,9 @@ from utils.rsi_ladder import (
     merge_profile,
     moving_averages,
     next_trigger,
+    normalize_sell_ladder,
     release_sell_hold,
+    sell_rule_label,
     set_buy_block,
     step_qty,
 )
@@ -165,7 +168,7 @@ class RsiLadderScheduler:
             return
         self.is_running = True
         self._task = asyncio.create_task(self._loop())
-        logger.info("🪜 [LADDER] 분할매수 스케줄러 시작")
+        logger.info("🪜 [LADDER] 매수사다리 스케줄러 시작")
 
     async def stop_scheduler(self) -> None:
         self.is_running = False
@@ -175,7 +178,7 @@ class RsiLadderScheduler:
                 await self._task
             except asyncio.CancelledError:
                 pass
-        logger.info("🪜 [LADDER] 분할매수 스케줄러 중지")
+        logger.info("🪜 [LADDER] 매수사다리 스케줄러 중지")
 
     async def _loop(self) -> None:
         while self.is_running:
@@ -232,7 +235,7 @@ class RsiLadderScheduler:
 
     @staticmethod
     def _holdings() -> Tuple[Dict[str, Dict[str, Any]], Dict[str, str]]:
-        """(code → 분할매수 HOLDING 포지션, code → 타 전략 HOLDING strategy_key)."""
+        """(code → 매수사다리 HOLDING 포지션, code → 타 전략 HOLDING strategy_key)."""
         from core.models import Position, get_db
 
         mode = _account_mode()
@@ -461,9 +464,29 @@ class RsiLadderScheduler:
         async with self._lock:
             today = now_kst().date()
             results: List[Dict[str, Any]] = []
+            mine, _ = self._holdings()
             for plan in self.my_plans(open_only=True):
                 if plan.get("pending_buy") or plan.get("pending_sell"):
                     continue
+                pos = mine.get(plan["code"]) or {}
+                if (pos.get("qty") and plan.get("status") in ("ACTIVE", "FULL", "EXITING")
+                        and normalize_sell_ladder(plan.get("sell_ladder"))["enabled"]):
+                    price = await self._price(plan["code"])
+                    if price:
+                        hold = int(pos["qty"])
+                        ex = evaluate_sell_ladder(plan, price=price, hold=hold, ma={}, price_only=True)
+                        if ex["sells"]:
+                            rules = [s["rule"] for s in ex["sells"]]
+                            plan.update(sell_flags=ex["flags"], base_qty=ex["base_qty"])
+                            before = plan.get("status")
+                            self._queue_sell(plan, rules, sum(s["qty"] for s in ex["sells"]), price, hold,
+                                             grace=True, status_before=before)
+                            plan["status"] = "EXITING"
+                            get_ladder_store().save()
+                            self._snap_cache.pop(plan["id"], None)
+                            results.append({"plan_id": plan["id"], "code": plan["code"], "price": price,
+                                            "sells": ex["sells"]})
+                            continue
                 price_entry = (
                     plan.get("status") == "RSI_WAIT"
                     and merge_profile(plan.get("profile"))["entry_mode"] == "price"
@@ -567,11 +590,11 @@ class RsiLadderScheduler:
         if not settings or not getattr(settings, "is_enabled", False):
             fail = "자동매매 OFF — 주문 불가"
         elif not store.enabled:
-            fail = "분할매수 자동 감시 OFF — 주문 불가"
+            fail = "매수사다리 자동 감시 OFF — 주문 불가"
         elif block and not extra:
             fail = f"매수 차단({block.get('kind')}): {block.get('reason') or '자동매수 중지'}"
         elif code in others:
-            fail = f"다른 전략({others[code]})이 보유 중 — 분할매수 주문 불가"
+            fail = f"다른 전략({others[code]})이 보유 중 — 매수사다리 주문 불가"
         elif plan.get("pending_buy"):
             fail = "이전 매수 체결 대기 중"
         elif qty <= 0:
@@ -579,10 +602,10 @@ class RsiLadderScheduler:
         if fail:
             # 이미 예수금 부족으로 막힌 상태면 이벤트·텔레그램 스팸 방지
             if block and not extra and str(block.get("kind")) == "no_cash":
-                _log(f"분할매수 {name} {step}차 스킵: {fail}", "warn", stock_code=code)
+                _log(f"매수사다리 {name} {step}차 스킵: {fail}", "warn", stock_code=code)
                 return False, fail
             store.add_event(plan["id"], "BUY_FAIL", f"{step}차 매수 실패: {fail}")
-            _log(f"분할매수 {name} {step}차 매수 실패: {fail}", "warn", stock_code=code)
+            _log(f"매수사다리 {name} {step}차 매수 실패: {fail}", "warn", stock_code=code)
             return False, fail
 
         is_add = code in mine
@@ -608,7 +631,7 @@ class RsiLadderScheduler:
         label = "수동 추가" if extra else f"{step}차"
         if not ok:
             store.add_event(plan["id"], "BUY_FAIL", f"{label} 매수 신호 실패: {msg}")
-            _log(f"분할매수 {name} {label} 신호 실패: {msg}", "warn", stock_code=code)
+            _log(f"매수사다리 {name} {label} 신호 실패: {msg}", "warn", stock_code=code)
             return False, msg
         plan["pending_buy"] = {
             "step": int(step), "qty": int(qty), "price": int(price), "extra": bool(extra),
@@ -617,9 +640,9 @@ class RsiLadderScheduler:
         }
         plan["last_buy_date"] = now_kst().date().isoformat()
         store.add_event(plan["id"], "BUY_SIGNAL", f"{label} 매수 신호 {qty}주 @ {_won(price)} — {reason}")
-        _log(f"분할매수 {name} {label} 매수 신호 {qty}주 @ {_won(price)}", stock_code=code)
+        _log(f"매수사다리 {name} {label} 매수 신호 {qty}주 @ {_won(price)}", stock_code=code)
         await _send_telegram(
-            f"<b>[분할매수 · {label} 매수]</b> {html.escape(name)} ({code}) {qty}주 @ {_won(price)}\n{html.escape(reason)}"
+            f"<b>[매수사다리 · {label} 매수]</b> {html.escape(name)} ({code}) {qty}주 @ {_won(price)}\n{html.escape(reason)}"
         )
         return True, msg
 
@@ -636,17 +659,17 @@ class RsiLadderScheduler:
             pending["execute_at"] = (now + timedelta(seconds=SELL_CONFIRM_SEC)).isoformat(timespec="seconds")
             pending["status_before"] = status_before
         plan["pending_sell"] = pending
-        labels = " + ".join(SELL_RULE_LABEL.get(r, r) for r in rules)
+        labels = " + ".join(sell_rule_label(r) for r in rules)
         if grace:
             store.add_event(plan["id"], "SELL_HOLD",
                             f"익절 유예 {SELL_CONFIRM_SEC // 60}분 — {qty}주 / 보유 {hold}주 — {labels}")
-            _log(f"분할매수 {plan.get('name')} 익절 유예 {qty}주 — {labels}", stock_code=plan["code"])
+            _log(f"매수사다리 {plan.get('name')} 익절 유예 {qty}주 — {labels}", stock_code=plan["code"])
             asyncio.create_task(self._notify_sell_hold(plan))
             return
         store.add_event(plan["id"], "SELL_QUEUED", f"매도 대기 {qty}주 / 보유 {hold}주 — {labels}")
-        _log(f"분할매수 {plan.get('name')} 매도 대기 {qty}주 — {labels}", stock_code=plan["code"])
+        _log(f"매수사다리 {plan.get('name')} 매도 대기 {qty}주 — {labels}", stock_code=plan["code"])
         asyncio.create_task(_send_telegram(
-            f"<b>[분할매수 · 매도]</b> {html.escape(plan.get('name') or '')} ({plan['code']}) "
+            f"<b>[매수사다리 · 매도]</b> {html.escape(plan.get('name') or '')} ({plan['code']}) "
             f"{qty}주 / 보유 {hold}주 @ {_won(price)}\n{html.escape(labels)}"
         ))
 
@@ -655,10 +678,10 @@ class RsiLadderScheduler:
         if ps.get("status") != "HOLD":
             return
         rules = list(ps.get("rules") or [])
-        labels = " + ".join(SELL_RULE_LABEL.get(r, r) for r in rules)
+        labels = " + ".join(sell_rule_label(r) for r in rules)
         name = html.escape(plan.get("name") or "")
         text = (
-            f"<b>[분할매수 · 익절 확인]</b> {name} ({plan['code']})\n"
+            f"<b>[매수사다리 · 익절 확인]</b> {name} ({plan['code']})\n"
             f"{html.escape(labels)}\n"
             f"{int(ps.get('qty') or 0)}주 / 보유 {int(ps.get('hold') or 0)}주 @ {_won(ps.get('price'))}\n"
             f"{SELL_CONFIRM_SEC // 60}분 안에 취소하지 않으면 익절합니다."
@@ -700,9 +723,9 @@ class RsiLadderScheduler:
             return
         for plan in released:
             ps = plan.get("pending_sell") or {}
-            labels = " + ".join(SELL_RULE_LABEL.get(r, r) for r in (ps.get("rules") or []))
+            labels = " + ".join(sell_rule_label(r) for r in (ps.get("rules") or []))
             await _send_telegram(
-                f"<b>[분할매수 · 익절 진행]</b> {html.escape(plan.get('name') or '')} ({plan['code']})\n"
+                f"<b>[매수사다리 · 익절 진행]</b> {html.escape(plan.get('name') or '')} ({plan['code']})\n"
                 f"응답 없음 — {int(ps.get('qty') or 0)}주 익절합니다.\n{html.escape(labels)}"
             )
 
@@ -716,10 +739,10 @@ class RsiLadderScheduler:
                 if not release_sell_hold(plan, now):
                     continue
                 ps = plan.get("pending_sell") or {}
-                labels = " + ".join(SELL_RULE_LABEL.get(r, r) for r in (ps.get("rules") or []))
+                labels = " + ".join(sell_rule_label(r) for r in (ps.get("rules") or []))
                 store.add_event(plan["id"], "SELL_QUEUED",
                                 f"유예 종료 — 익절 {int(ps.get('qty') or 0)}주 — {labels}", save=False)
-                _log(f"분할매수 {plan.get('name')} 유예 종료, 익절 진행", stock_code=plan["code"])
+                _log(f"매수사다리 {plan.get('name')} 유예 종료, 익절 진행", stock_code=plan["code"])
                 released.append(plan)
                 changed = True
             if changed:
@@ -736,30 +759,30 @@ class RsiLadderScheduler:
             if act == "cancel":
                 if not cancel_sell_hold(plan):
                     raise LadderError("취소할 익절 유예가 없습니다")
-                labels = " + ".join(SELL_RULE_LABEL.get(r, r) for r in (ps.get("rules") or []))
+                labels = " + ".join(sell_rule_label(r) for r in (ps.get("rules") or []))
                 store.add_event(plan["id"], "SELL_CANCEL", f"익절 취소 — {labels}")
                 result = {"action": "cancel", "plan_id": plan_id}
             elif act == "go":
                 if not confirm_sell_hold(plan):
                     raise LadderError("바로 진행할 익절 유예가 없습니다")
-                labels = " + ".join(SELL_RULE_LABEL.get(r, r) for r in (ps.get("rules") or []))
+                labels = " + ".join(sell_rule_label(r) for r in (ps.get("rules") or []))
                 store.add_event(plan["id"], "SELL_QUEUED", f"바로 익절 {int(ps.get('qty') or 0)}주 — {labels}")
                 result = {"action": "go", "plan_id": plan_id, "qty": int(ps.get("qty") or 0)}
             else:
                 raise LadderError("알 수 없는 익절 결정")
         _log(
-            f"분할매수 {plan.get('name')} " + ("익절 취소" if act == "cancel" else "바로 익절") + f" — {labels}",
+            f"매수사다리 {plan.get('name')} " + ("익절 취소" if act == "cancel" else "바로 익절") + f" — {labels}",
             stock_code=plan["code"],
         )
         self._clear_sell_buttons(ps)
         if act == "cancel":
             asyncio.create_task(_send_telegram(
-                f"<b>[분할매수 · 익절 취소]</b> {html.escape(plan.get('name') or '')} ({plan['code']})\n"
+                f"<b>[매수사다리 · 익절 취소]</b> {html.escape(plan.get('name') or '')} ({plan['code']})\n"
                 f"이번 익절을 건너뜁니다.\n{html.escape(labels)}"
             ))
         else:
             asyncio.create_task(_send_telegram(
-                f"<b>[분할매수 · 바로 익절]</b> {html.escape(plan.get('name') or '')} ({plan['code']})\n"
+                f"<b>[매수사다리 · 바로 익절]</b> {html.escape(plan.get('name') or '')} ({plan['code']})\n"
                 f"{int(ps.get('qty') or 0)}주 익절합니다.\n{html.escape(labels)}"
             ))
         return result
@@ -892,7 +915,7 @@ class RsiLadderScheduler:
                                 notes.append(f"{plan.get('name')} 예수금 부족으로 매수 중지")
                                 if first:
                                     asyncio.create_task(_send_telegram(
-                                        f"<b>[분할매수 · 예수금 부족]</b> "
+                                        f"<b>[매수사다리 · 예수금 부족]</b> "
                                         f"{html.escape(plan.get('name') or '')} ({plan['code']})\n"
                                         f"{step_n or '?'}차 매수 실패 — 자동 재시도 중지\n"
                                         f"{html.escape(str(reason))}\n"
@@ -933,7 +956,7 @@ class RsiLadderScheduler:
                         changed = True
                     elif so.status in ("FAILED", "CANCELLED"):
                         for r in ps.get("rules") or []:
-                            if r in ("S0", "S1", "S2", "S3"):
+                            if r in ("S0", "S1", "S2", "S3") or is_ladder_rule(r):
                                 plan.setdefault("sell_flags", {}).pop(r, None)
                         plan["pending_sell"] = None
                         store.add_event(plan["id"], "SELL_FAIL", f"매도 실패: {so.sell_reason_detail or so.status}",
@@ -962,7 +985,7 @@ class RsiLadderScheduler:
             store.save()
             self._snap_cache.clear()
         for n in notes:
-            _log(f"분할매수 {n}")
+            _log(f"매수사다리 {n}")
         return mine
 
     def _apply_fill(self, plan: Dict[str, Any], pb: Dict[str, Any], fill, notes: List[str]) -> None:
@@ -985,7 +1008,7 @@ class RsiLadderScheduler:
             plan["status"] = "FULL"
             msg += f" — {step}차 완료(FULL), 이후는 수동 판단"
             asyncio.create_task(_send_telegram(
-                f"<b>[분할매수 · {step}차 완료]</b> {html.escape(plan.get('name') or '')} ({plan['code']}) "
+                f"<b>[매수사다리 · {step}차 완료]</b> {html.escape(plan.get('name') or '')} ({plan['code']}) "
                 f"사다리 소진 — 추가 매수는 수동으로 판단하세요."
             ))
         store.add_event(plan["id"], "FILL", msg, save=False)
@@ -1030,7 +1053,7 @@ class RsiLadderScheduler:
             label = "수동 추가" if f.get("extra") else f"{f.get('step')}차"
             store.add_event(plan["id"], "FILL_PX", f"{label} 체결가 보정 {_won(old)} → {_won(px)} (실제 체결가)",
                             save=False)
-            _log(f"분할매수 {plan.get('name')} {label} 체결가 보정 {_won(old)} → {_won(px)}", stock_code=code)
+            _log(f"매수사다리 {plan.get('name')} {label} 체결가 보정 {_won(old)} → {_won(px)}", stock_code=code)
         store.save()
         self._snap_cache.clear()
 
@@ -1060,7 +1083,7 @@ class RsiLadderScheduler:
             "at": now_kst().isoformat(timespec="seconds"), "sell_order_id": int(so.id),
         })
         plan["pending_sell"] = None
-        labels = " + ".join(SELL_RULE_LABEL.get(r, r) for r in ps.get("rules") or [])
+        labels = " + ".join(sell_rule_label(r) for r in ps.get("rules") or [])
         store.add_event(plan["id"], "SELL_FILL", f"매도 체결 {qty}주 @ {_won(so.sell_price)} — {labels}", save=False)
 
     # ───────────────────────── 수동 조작 (API) ─────────────────────────
@@ -1075,7 +1098,7 @@ class RsiLadderScheduler:
     def _assert_state_consistent() -> None:
         if get_ladder_store().verify_disk_state():
             raise LadderError(
-                "분할매수 상태 파일이 실행 중 변경되어 안전을 위해 주문을 중지했습니다. 감사 로그를 확인하세요."
+                "매수사다리 상태 파일이 실행 중 변경되어 안전을 위해 주문을 중지했습니다. 감사 로그를 확인하세요."
             )
 
     async def create_plan(self, *, code: str, name: str, budget: int, profile: Dict[str, Any],
@@ -1128,6 +1151,27 @@ class RsiLadderScheduler:
             _require_entry_price(merged)
             plan["profile"] = merge_profile(merged)
         store.add_event(plan_id, "UPDATE", "설정 변경")
+        self._snap_cache.pop(plan_id, None)
+        return plan
+
+    def set_sell_ladder(self, plan_id: str, sell_ladder: Dict[str, Any]) -> Dict[str, Any]:
+        """매도사다리 등록·변경·해제. 켜져 있으면 S1~S3 익절 대신 이 차수들로 매도한다.
+        이미 매도된 차수(같은 규칙)는 sell_flags 로 다시 매도하지 않는다."""
+        store = get_ladder_store()
+        plan = self._get_plan(plan_id)
+        if plan.get("status") == "DONE":
+            raise LadderError("종료된 계획입니다")
+        if (plan.get("pending_sell") or {}).get("status") in ("HOLD", "QUEUED", "SENT"):
+            raise LadderError("매도 대기 중에는 매도사다리를 바꿀 수 없습니다")
+        sl = normalize_sell_ladder(sell_ladder)
+        if sell_ladder.get("enabled") and not sl["enabled"]:
+            raise LadderError("유효한 매도 차수가 없습니다 (가격 또는 이평선 + 비중% 필요)")
+        if sl["enabled"] and sum(lv["pct"] for lv in sl["levels"]) < 99.5:
+            raise LadderError("매도 비중 합계가 100%가 되어야 합니다")
+        plan["sell_ladder"] = sl
+        msg = (f"매도사다리 등록 — {len(sl['levels'])}개 차수" if sl["enabled"]
+               else "매도사다리 해제 — 기본 익절(S1~S3) 사용")
+        store.add_event(plan_id, "SELL_LADDER", msg)
         self._snap_cache.pop(plan_id, None)
         return plan
 
@@ -1369,7 +1413,7 @@ class RsiLadderScheduler:
         plans = self.my_plans(open_only=True)
         if not plans:
             return
-        lines = ["<b>[분할매수 · 장후 요약]</b>"]
+        lines = ["<b>[매수사다리 · 장후 요약]</b>"]
         for p in plans:
             pos = mine.get(p["code"]) or {}
             hold, avg = pos.get("qty") or 0, pos.get("avg") or 0

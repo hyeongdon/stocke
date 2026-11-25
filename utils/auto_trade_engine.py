@@ -3337,7 +3337,7 @@ def allows_strategy_new_buy(
     if off_day:
         return False, off_day
     if now.weekday() < 5 and getattr(settings, "liquidate_before_close", False):
-        # 종가배팅은 동시호가(3차)까지 매수, 분할매수는 스윙 보유 — 전역 청산시각 게이트 제외
+        # 종가배팅은 동시호가(3차)까지 매수, 매수사다리는 스윙 보유 — 전역 청산시각 게이트 제외
         if strategy_key not in ("jongga", "rsi_ladder"):
             try:
                 liq = getattr(settings, "liquidate_time", None) or "15:10"
@@ -3379,9 +3379,9 @@ def allows_strategy_new_buy(
         from utils.market_hours import RSI_LADDER_BUY_END, RSI_LADDER_BUY_START, rsi_ladder_enabled
 
         if not rsi_ladder_enabled():
-            return False, "분할매수 자동 감시 OFF"
+            return False, "매수사다리 자동 감시 OFF"
         if not dt_time(*RSI_LADDER_BUY_START) <= now.time() <= dt_time(*RSI_LADDER_BUY_END):
-            return False, "분할매수 시간대 외 (09:00~15:20)"
+            return False, "매수사다리 시간대 외 (09:00~15:20)"
         return True, None
     if strategy_key == "jongga":
         if not getattr(settings, "use_jongga", False):

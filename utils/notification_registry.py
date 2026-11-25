@@ -37,7 +37,7 @@ DEFAULT_NOTIFICATIONS = (
     ("chart_ohlcv.done", "차트 OHLCV 배치 완료", "batch", "schedule", "배치 완료 시", "cron/작업 스케줄러: chart-ohlcv"),
     ("chart_ohlcv.error", "차트 OHLCV 배치 오류", "batch", "schedule", "배치 오류 시", "cron/작업 스케줄러: chart-ohlcv"),
     ("rwm_bowl", "RWM 전략 알림", "strategy", "event", "전략 이벤트 발생 시", "RWM 스케줄러"),
-    ("rsi_ladder", "분할매수 전략 알림", "strategy", "event", "전략/사용자 확인 이벤트 시", "분할매수 스케줄러"),
+    ("rsi_ladder", "매수사다리 전략 알림", "strategy", "event", "전략/사용자 확인 이벤트 시", "매수사다리 스케줄러"),
     ("condition.manual", "조건식 즉시 전송", "condition", "manual", "대시보드에서 수동 요청 시", "Stocke 대시보드"),
     ("telegram.unclassified", "분류되지 않은 알림", "other", "event", "발송 코드에서 호출 시", "Stocke"),
 )

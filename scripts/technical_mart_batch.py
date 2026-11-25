@@ -212,7 +212,7 @@ def _calc_mvp_from_bars(bars: Sequence[dict]) -> Optional[Dict]:
 
 
 def _calc_weekly_rsi(raw_bars: Sequence[dict]) -> Dict[str, Optional[float]]:
-    """확정 주봉 RSI(14) — 분할매수(rsi_ladder) 진입 판정과 같은 방식."""
+    """확정 주봉 RSI(14) — 매수사다리(rsi_ladder) 진입 판정과 같은 방식."""
     daily = drop_unconfirmed_daily(normalize_daily_bars(raw_bars or []), now_kst().replace(tzinfo=None))
     out: Dict[str, Optional[float]] = {"weekly_rsi14": None, "weekly_rsi14_min26": None}
     if not daily:

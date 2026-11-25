@@ -503,7 +503,7 @@ class BuyOrderExecutor:
             "fractal": "프랙탈",
             "ma1592": "15/92홀드",
             "rwm_bowl": "RWM밥그릇",
-            "rsi_ladder": "분할매수",
+            "rsi_ladder": "매수사다리",
         }.get(strategy_key, strategy_key)
 
         if not is_add_buy:
@@ -823,7 +823,7 @@ class BuyOrderExecutor:
             # 1c. 최대 동시 보유 (신규 매수만 — 대기 신호 슬롯 포함)
             # 종가배팅은 jongga_max_slots로 별도 관리 — 전역 한도와 분리
             from utils.auto_trade_engine import _normalize_strategy_key
-            # 분할매수는 사용자가 종목·예산을 직접 지정한 사다리 — 전역 동시보유 한도와 분리
+            # 매수사다리는 사용자가 종목·예산을 직접 지정한 사다리 — 전역 동시보유 한도와 분리
             skip_global_slot_cap = _normalize_strategy_key(strategy_key) in ("jongga", "rsi_ladder")
             if self.auto_trade_settings and not is_add_buy and not skip_global_slot_cap:
                 limit = max_concurrent_positions_limit(self.auto_trade_settings)
@@ -984,7 +984,7 @@ class BuyOrderExecutor:
                     if entry_px <= 0:
                         return {
                             "valid": False,
-                            "reason": "현재가 조회 실패(분할매수 수량)",
+                            "reason": "현재가 조회 실패(매수사다리 수량)",
                             "retryable": True,
                         }
                     planned = suggested * entry_px if suggested > 0 else 0
@@ -1147,7 +1147,7 @@ class BuyOrderExecutor:
                     is_fractal = strategy == "fractal"
                     is_ma1592 = strategy == "ma1592"
                     is_rwm = strategy == "rwm_bowl"
-                    # 분할매수: 사용자가 지정한 종목·사다리 — 레거시 등락률·가격상한·진입 게이트 미적용
+                    # 매수사다리: 사용자가 지정한 종목·사다리 — 레거시 등락률·가격상한·진입 게이트 미적용
                     is_ladder = strategy == "rsi_ladder"
                     skip_legacy_momentum = is_fractal or is_ma1592 or is_rwm or is_ladder
                     need_min_change = (
@@ -1734,7 +1734,7 @@ class BuyOrderExecutor:
                 qty = min(int(suggested_qty or 0), investable // px) if px > 0 else 0
                 if detail is not None:
                     detail.update(sizing_price=px)
-                logger.info(f"💰 [BUY_EXECUTOR] 분할매수 수량: {qty}주 (요청 {suggested_qty}, 가능 {investable:,}원)")
+                logger.info(f"💰 [BUY_EXECUTOR] 매수사다리 수량: {qty}주 (요청 {suggested_qty}, 가능 {investable:,}원)")
                 return qty, qty * px
             investable = account_info.get("investable_cash", 0)
             capped = cap_buy_amount_by_cash(amount, investable)
@@ -2106,7 +2106,7 @@ class BuyOrderExecutor:
                 m_type = str(meta.get("m_type") or "")
                 note = f"RWM밥그릇 {'M1' if m_type == 'M1_GC' else 'M2'} · 3분봉 눌림"
             elif strategy == "rsi_ladder":
-                note = "분할매수 수동 추가" if meta.get("ladder_extra") else f"분할매수 {entry_leg}차"
+                note = "매수사다리 수동 추가" if meta.get("ladder_extra") else f"매수사다리 {entry_leg}차"
             elif is_add:
                 trig = settings.add_buy_trigger if settings else None
                 if change_rate is not None and trig is not None:

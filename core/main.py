@@ -410,7 +410,7 @@ async def lifespan(app: FastAPI):
     try:
         asyncio.create_task(rsi_ladder_scheduler.start_scheduler())
     except Exception as e:
-        logger.error(f"🪜 [STARTUP] 분할매수 스케줄러 시작 실패: {e}")
+        logger.error(f"🪜 [STARTUP] 매수사다리 스케줄러 시작 실패: {e}")
 
     condition_alert_scheduler = None
     condition_alert_task = None
@@ -508,7 +508,7 @@ async def lifespan(app: FastAPI):
     try:
         await rsi_ladder_scheduler.stop_scheduler()
     except Exception as e:
-        logger.error(f"🪜 [SHUTDOWN] 분할매수 스케줄러 종료 실패: {e}")
+        logger.error(f"🪜 [SHUTDOWN] 매수사다리 스케줄러 종료 실패: {e}")
     
     await condition_monitor.stop_all_monitoring()
     # WebSocket 우아한 종료
@@ -1357,7 +1357,7 @@ async def exit_replay_page():
 
 @app.get("/ladder")
 async def ladder_page(request: Request):
-    """RSI 저점 분할매수(-5% 사다리) 감시 페이지"""
+    """RSI 저점 매수사다리(-5%) 감시 페이지"""
     qs = request.url.query
     return RedirectResponse(url="/static/ladder.html" + (f"?{qs}" if qs else ""))
 
@@ -7137,7 +7137,7 @@ async def run_rwm_batch():
     return result
 
 
-# ───────────────────────── RSI 저점 분할매수 (-5% 사다리) ─────────────────────────
+# ───────────────────────── RSI 저점 매수사다리 (-5% 사다리) ─────────────────────────
 
 class LadderPlanRequest(BaseModel):
     code: str
@@ -7167,6 +7167,11 @@ class LadderDecideRequest(BaseModel):
     action: str
 
 
+class LadderSellLadderRequest(BaseModel):
+    enabled: bool = True
+    levels: List[Dict[str, Any]] = []
+
+
 def _ladder_call(fn, *args, **kwargs):
     from managers.rsi_ladder_scheduler import LadderError
 
@@ -7187,13 +7192,13 @@ async def _ladder_acall(coro):
 
 @app.get("/api/ladder/state")
 async def ladder_state(force: bool = False, plan_id: Optional[str] = None):
-    """분할매수 전체 상태 (계획 + 지표 스냅샷 + 이벤트)."""
+    """매수사다리 전체 상태 (계획 + 지표 스냅샷 + 이벤트)."""
     from utils.rsi_ladder import get_ladder_store
 
     if get_ladder_store().verify_disk_state():
         raise HTTPException(
             status_code=409,
-            detail="분할매수 상태 파일이 실행 중 변경되어 안전을 위해 화면·자동 감시를 중지했습니다. 감사 로그를 확인하세요.",
+            detail="매수사다리 상태 파일이 실행 중 변경되어 안전을 위해 화면·자동 감시를 중지했습니다. 감사 로그를 확인하세요.",
         )
     holdings = rsi_ladder_scheduler.reconcile()
     return await rsi_ladder_scheduler.state(force=force, plan_id=plan_id, holdings=holdings)
@@ -7202,7 +7207,7 @@ async def ladder_state(force: bool = False, plan_id: Optional[str] = None):
 @app.post("/api/ladder/enabled")
 async def ladder_toggle(req: LadderToggleRequest):
     on = rsi_ladder_scheduler.set_enabled(req.enabled)
-    log_activity("SYSTEM", f"분할매수 자동 감시 {'ON' if on else 'OFF'}", "info")
+    log_activity("SYSTEM", f"매수사다리 자동 감시 {'ON' if on else 'OFF'}", "info")
     return {"enabled": on}
 
 
@@ -7293,7 +7298,7 @@ async def ladder_create(req: LadderPlanRequest):
         code=req.code, name=(req.name or "").strip(), budget=req.budget, profile=req.profile,
         memo=req.memo or "", buy_now=req.buy_now,
     ))
-    log_activity("SYSTEM", f"분할매수 계획 생성 {res['plan']['name']}({res['plan']['code']})", "info",
+    log_activity("SYSTEM", f"매수사다리 계획 생성 {res['plan']['name']}({res['plan']['code']})", "info",
                  stock_code=res["plan"]["code"])
     return res
 
@@ -7302,7 +7307,7 @@ async def ladder_create(req: LadderPlanRequest):
 async def ladder_update(plan_id: str, req: LadderUpdateRequest):
     plan = _ladder_call(rsi_ladder_scheduler.update_plan, plan_id,
                         budget=req.budget, memo=req.memo, profile=req.profile, name=req.name)
-    log_activity("SYSTEM", f"분할매수 설정 변경 {plan['name']}({plan['code']})", "info",
+    log_activity("SYSTEM", f"매수사다리 설정 변경 {plan['name']}({plan['code']})", "info",
                  stock_code=plan["code"])
     return plan
 
@@ -7317,6 +7322,15 @@ async def ladder_delete(plan_id: str):
 async def ladder_sell_decide(plan_id: str, req: LadderDecideRequest):
     """익절 유예 중 바로 익절(go) 또는 이번 익절 취소(cancel)."""
     return _ladder_call(rsi_ladder_scheduler.decide_sell, plan_id, req.action)
+
+
+@app.put("/api/ladder/plans/{plan_id}/sell-ladder")
+async def ladder_set_sell_ladder(plan_id: str, req: LadderSellLadderRequest):
+    """매도사다리(가격 도달 / 이평선 이탈) 등록·해제."""
+    plan = _ladder_call(rsi_ladder_scheduler.set_sell_ladder, plan_id, req.model_dump())
+    log_activity("SYSTEM", f"매도사다리 {'등록' if plan['sell_ladder']['enabled'] else '해제'} "
+                 f"{plan.get('name')}({plan['code']})", "info", stock_code=plan["code"])
+    return {"plan_id": plan_id, "sell_ladder": plan["sell_ladder"]}
 
 
 @app.post("/api/ladder/plans/{plan_id}/{action}")

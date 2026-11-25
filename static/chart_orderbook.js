@@ -359,7 +359,8 @@ function panelTemplate(idx) {
     <div class="cob-quote-meta">
       <span>거래량 <b data-role="volume">-</b></span>
       <span class="hint" data-role="chartHint"></span>
-      <button type="button" class="btn sm cob-split-toggle" data-role="splitToggle" title="분할매수 시나리오" aria-pressed="false">분할매수</button>
+      <button type="button" class="btn sm cob-split-toggle" data-role="splitToggle" title="매수사다리 시나리오" aria-pressed="false">매수사다리</button>
+      <button type="button" class="btn sm cob-sell-toggle" data-role="sellToggle" title="매도사다리 시나리오 (가격·이동평균선)" aria-pressed="false">매도사다리</button>
       <button type="button" class="btn sm cob-panel-clear" data-role="clear" title="이 칸 비우기">×</button>
     </div>
   </section>
@@ -386,7 +387,8 @@ function panelTemplate(idx) {
       </div>
     </section>
   </div>
-  <section class="card cob-split-card" data-role="splitCard" hidden></section>`;
+  <section class="card cob-split-card" data-role="splitCard" hidden></section>
+  <section class="card cob-split-card cob-sell-card" data-role="sellCard" hidden></section>`;
 }
 
 class Panel {
@@ -417,6 +419,7 @@ class Panel {
     this.syncingRange = false;
     this.obCentered = false;
     this.split = null;
+    this.sell = null;
   }
 
   el(role) {
@@ -449,6 +452,7 @@ class Panel {
     this.wrSignalSeries = null;
     this.maSeries = {};
     if (this.split) this.split.onChartDestroyed();
+    if (this.sell) this.sell.onChartDestroyed();
   }
 
   allCharts() {
@@ -779,6 +783,7 @@ class Panel {
       hint.textContent = `${payload.interval || this.interval} · ${candles.length}봉${range}${rsiTxt}`;
     }
     if (this.split) this.split.onChartReady();
+    if (this.sell) this.sell.onChartReady();
   }
 
   renderQuote(snap) {
@@ -815,6 +820,7 @@ class Panel {
 
     this.el('volume').textContent = snap ? fmtQty(snap.volume) : '-';
     if (this.split && snap) this.split.setCurrentPrice(snap.current_price);
+    if (this.sell && snap) this.sell.setCurrentPrice(snap.current_price);
   }
 
   renderOrderbook(snap) {
@@ -922,6 +928,7 @@ class Panel {
     }
     this.code = c;
     if (this.split) this.split.setCode(c);
+    if (this.sell) this.sell.setCode(c);
     this.loading = true;
     this.loadSeq += 1;
     this.loadedKey = `${c}|${this.interval}`;
@@ -975,6 +982,7 @@ class Panel {
     this.code = '';
     this.name = '';
     if (this.split) this.split.setCode('');
+    if (this.sell) this.sell.setCode('');
     this.lastBars = [];
     this.renderQuote(null);
     this.renderOrderbook(null);
@@ -1711,6 +1719,7 @@ function buildPanels() {
     host.appendChild(root);
     const panel = new Panel(i, root);
     if (window.SplitPlanner) panel.split = new window.SplitPlanner(panel);
+    if (window.SellPlanner) panel.sell = new window.SellPlanner(panel);
     state.panels.push(panel);
 
     root.addEventListener('pointerdown', () => {

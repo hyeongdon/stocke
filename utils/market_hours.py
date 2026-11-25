@@ -143,7 +143,7 @@ def _strategy_windows(settings) -> list:
             )
         )
     if rsi_ladder_enabled():
-        windows.append(("분할매수", dt_time(*RSI_LADDER_BUY_START), dt_time(*RSI_LADDER_BUY_END)))
+        windows.append(("매수사다리", dt_time(*RSI_LADDER_BUY_START), dt_time(*RSI_LADDER_BUY_END)))
     return windows
 
 

@@ -16,7 +16,7 @@ _STRATEGY_LABEL = {
     "jongga": "종가배팅",
     "fractal": "프랙탈 스캘핑",
     "rwm_bowl": "RWM밥그릇",
-    "rsi_ladder": "분할매수",
+    "rsi_ladder": "매수사다리",
 }
 
 

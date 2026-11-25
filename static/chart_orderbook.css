@@ -900,7 +900,7 @@
 .cob-fav-star.on { color: #f5b301; }
 
 
-/* ---------- 분할매수 시나리오 ---------- */
+/* ---------- 매수사다리 시나리오 ---------- */
 .cob-split-toggle.on { border-color: #22c55e; color: #22c55e; }
 .cob-split-card { margin: 0; padding: 10px 12px; }
 .cob-split-card[hidden] { display: none !important; }
@@ -942,3 +942,11 @@
 .cob-split-summary { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 8px; font-size: 12px; color: var(--text-secondary, var(--text)); }
 .cob-panels.multi .cob-split-card { padding: 6px 8px; }
 .cob-panels.multi .cob-split-head .hint { display: none; }
+
+/* ---------- 매도사다리 시나리오 ---------- */
+.cob-sell-toggle.on { border-color: #ec4899; color: #ec4899; }
+.cob-sell-card .cob-split-table td.no.sell,
+.cob-sell-card .cob-split-table th:first-child { color: #ec4899; }
+.cob-sell-card td.cond { text-align: left; }
+.cob-sell-card td.cond select.cob-split-in { width: 72px; text-align: left; margin-right: 4px; }
+.cob-sell-card .cob-split-form input[data-field="firstPct"] { width: 70px; }

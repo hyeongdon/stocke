@@ -17,6 +17,25 @@
     MANUAL_HALF: '수동 50%',
     MANUAL_ALL: '수동 전량',
   };
+  /** 매도사다리 규칙: L1:P12000 (가격 도달) / L2:M20-1.5 (이평 이탈) */
+  function ruleLabel(r) {
+    if (RULE_LABEL[r]) return RULE_LABEL[r];
+    const m = /^L(\d+):(P(\d+)|M(\d+)([+-][\d.]+)?)$/.exec(String(r || ''));
+    if (!m) return r;
+    if (m[3]) return '매도' + m[1] + ' ' + Number(m[3]).toLocaleString('ko-KR') + ' 도달';
+    return '매도' + m[1] + ' MA' + m[4] + (m[5] ? ' ' + m[5] + '%' : '') + ' 이탈';
+  }
+  function sellLadderRule(i, lv) {
+    if (lv.type === 'ma') {
+      const off = Number(lv.offset) || 0;
+      return 'L' + (i + 1) + ':M' + lv.ma + (off ? (off > 0 ? '+' : '') + off : '');
+    }
+    return 'L' + (i + 1) + ':P' + lv.price;
+  }
+  function sellLadderOn(p) {
+    const sl = p && p.sell_ladder;
+    return !!(sl && sl.enabled && (sl.levels || []).length);
+  }
   const NEAR_PCT = 3;
   const CHART_LEN = 150;
   const REFRESH_MS = 30000;
@@ -331,6 +350,12 @@
     const flags = p.sell_flags || {};
     const firing = new Set(((p.exit_preview || {}).sells || []).map((s) => s.rule));
     const chip = (rule, label) => '<span class="ld-chip ' + (flags[rule] ? 'done' : firing.has(rule) ? 'fire' : '') + '">' + label + '</span>';
+    if (sellLadderOn(p)) {
+      return '<span class="ld-stage-chips">' + p.sell_ladder.levels.map((lv, i) => {
+        const r = sellLadderRule(i, lv);
+        return chip(r, lv.type === 'ma' ? 'MA' + lv.ma + ' ' + lv.pct + '%' : fmt(lv.price) + ' ' + lv.pct + '%');
+      }).join('') + '</span>';
+    }
     const armPct = prof(p).tp_arm_pct || 15;
     const peak = p.peak_pnl_pct || 0;
     if (!p.armed) {
@@ -519,7 +544,22 @@
     const line = (done, f, label, val) => '<div class="ld-cond ' + (done ? 'ok' : f ? 'near' : 'no') + '"><span class="mark">' + (done ? '✓' : f ? '!' : '·') + '</span>' + label + '<span class="val">' + val + '</span></div>';
     const gap = (v) => v ? fmt(v) + ' (' + fmtPct((p.price / v - 1) * 100) + ')' : '—';
     const armPct = pr.tp_arm_pct || 15;
-    let h = '<div class="ld-panel"><div class="ld-panel-head">매도 단계 <span class="hint">15:05 현재가 기준</span></div>';
+    let h;
+    if (sellLadderOn(p)) {
+      h = '<div class="ld-panel"><div class="ld-panel-head">매도사다리 <span class="hint">가격 차수는 장중 10분 감시 · MA 차수는 15:05 판정</span></div>';
+      p.sell_ladder.levels.forEach((lv, i) => {
+        const r = sellLadderRule(i, lv);
+        if (lv.type === 'ma') {
+          const v = m['ma' + lv.ma];
+          const t = v ? v * (1 + (Number(lv.offset) || 0) / 100) : 0;
+          h += line(flags[r], fire(r), (i + 1) + '차 MA' + lv.ma + (lv.offset ? ' ' + (lv.offset > 0 ? '+' : '') + lv.offset + '%' : '') + ' 이탈 → ' + lv.pct + '%', flags[r] ? '완료' : gap(t));
+        } else {
+          h += line(flags[r], fire(r), (i + 1) + '차 ' + fmt(lv.price) + ' 도달 → ' + lv.pct + '%', flags[r] ? '완료' : gap(lv.price));
+        }
+      });
+      if (p.base_qty) h += '<div class="ld-cond-op">기준수량 ' + fmt(p.base_qty) + '주 (첫 매도 시점) · 마지막 차수는 잔량 전부</div>';
+    } else {
+    h = '<div class="ld-panel"><div class="ld-panel-head">매도 단계 <span class="hint">15:05 현재가 기준</span></div>';
     const ap = armPrice(p);
     h += '<div class="ld-cond ' + (p.armed ? 'ok' : 'no') + '"><span class="mark">' + (p.armed ? '✓' : '·') + '</span>익절 무장 +' + armPct + '%<span class="val">최고 ' + fmtPct(p.peak_pnl_pct || 0) + (ap && !p.armed ? ' · 무장가 ' + fmt(ap) : '') + '</span></div>';
     if (!p.armed) {
@@ -530,12 +570,13 @@
       h += line(flags.S3, fire('S3'), 'S3 20일선 이탈 → 나머지', flags.S3 ? '완료' : gap(m.ma20));
       if (p.base_qty) h += '<div class="ld-cond-op">기준수량 ' + fmt(p.base_qty) + '주 (무장 후 첫 매도 시점)</div>';
     }
-    if (firing.length) h += '<div class="ld-verdict wait">지금 판정하면: ' + firing.map((a) => a.rule + ' ' + fmt(a.qty) + '주').join(', ') + '</div>';
+    }
+    if (firing.length) h += '<div class="ld-verdict wait">지금 판정하면: ' + firing.map((a) => ruleLabel(a.rule) + ' ' + fmt(a.qty) + '주').join(', ') + '</div>';
     const ps = p.pending_sell;
     if (ps && ps.status === 'HOLD') {
-      h += '<div class="ld-verdict wait">익절 확인 중: ' + (ps.rules || []).map((r) => RULE_LABEL[r] || r).join(' + ') + ' ' + fmt(ps.qty) + '주 · ' + holdLeft(ps) + ' 후 자동 익절 (텔레그램에서도 취소·바로 익절)</div>';
+      h += '<div class="ld-verdict wait">익절 확인 중: ' + (ps.rules || []).map((r) => ruleLabel(r)).join(' + ') + ' ' + fmt(ps.qty) + '주 · ' + holdLeft(ps) + ' 후 자동 익절 (텔레그램에서도 취소·바로 익절)</div>';
     } else if (ps && ['QUEUED', 'SENT'].includes(ps.status)) {
-      h += '<div class="ld-verdict manual">매도 ' + (ps.status === 'SENT' ? '주문 접수' : '대기') + ': ' + (ps.rules || []).map((r) => RULE_LABEL[r] || r).join(' + ') + ' ' + fmt(ps.qty) + '주</div>';
+      h += '<div class="ld-verdict manual">매도 ' + (ps.status === 'SENT' ? '주문 접수' : '대기') + ': ' + (ps.rules || []).map((r) => ruleLabel(r)).join(' + ') + ' ' + fmt(ps.qty) + '주</div>';
     }
     if (p.status === 'FULL') h += '<div class="ld-verdict manual">' + maxSteps(p) + '차 소진 — 추가 매수·손절은 수동 판단</div>';
     return h + '</div>';
@@ -711,7 +752,7 @@
 
     if ((p.sells || []).length) {
       html += '<div class="ld-sub-title">매도 내역</div><div class="ld-table-scroll"><table class="ld-table ld-steps"><thead><tr><th>규칙</th><th class="r">가격</th><th class="r">수량</th><th class="r">실현손익</th><th>일시</th></tr></thead><tbody>';
-      html += p.sells.map((s) => '<tr class="sell"><td>' + esc((s.rules || []).map((r) => RULE_LABEL[r] || r).join(' + ')) + '</td><td class="r">' + fmt(s.price) + '</td><td class="r">' + fmt(s.qty) + '</td><td class="r ' + cls(s.pnl) + '">' + (s.pnl != null ? fmt(s.pnl) : '—') + '</td><td>' + hm(s.at) + '</td></tr>').join('');
+      html += p.sells.map((s) => '<tr class="sell"><td>' + esc((s.rules || []).map((r) => ruleLabel(r)).join(' + ')) + '</td><td class="r">' + fmt(s.price) + '</td><td class="r">' + fmt(s.qty) + '</td><td class="r ' + cls(s.pnl) + '">' + (s.pnl != null ? fmt(s.pnl) : '—') + '</td><td>' + hm(s.at) + '</td></tr>').join('');
       html += '</tbody></table></div>';
     }
     if (p.memo) html += '<div class="hint">메모: ' + esc(p.memo) + '</div>';
@@ -1244,7 +1285,7 @@
     const f = document.getElementById('newPlanForm');
     const search = f.querySelector('.ld-stock-search');
     const hint = document.getElementById('editLockHint');
-    document.getElementById('planModalTitle').textContent = editing ? '사다리 수정' : '새 분할매수 사다리';
+    document.getElementById('planModalTitle').textContent = editing ? '사다리 수정' : '새 매수사다리';
     document.getElementById('planSubmit').textContent = editing ? '저장' : '등록';
     if (search) search.hidden = !!editing;
     f.elements.code.readOnly = !!editing;
@@ -1428,7 +1469,7 @@
     document.getElementById('btnRefresh').addEventListener('click', () => load(true));
     document.getElementById('btnWatchToggle').addEventListener('click', () => {
       const on = !(state.data && state.data.enabled);
-      if (on && !confirm('분할매수 자동 감시를 켭니다. 장중 10분마다 추가매수, 매일 15:05 판정에서 진입·매도 주문이 실제로 나갑니다.')) return;
+      if (on && !confirm('매수사다리 자동 감시를 켭니다. 장중 10분마다 추가매수, 매일 15:05 판정에서 진입·매도 주문이 실제로 나갑니다.')) return;
       run(() => api('POST', '/api/ladder/enabled', { enabled: on }), on ? '자동 감시 ON' : '자동 감시 OFF — 판정·주문 중지');
     });
     document.getElementById('btnNewPlan').addEventListener('click', () => openNew());
@@ -1482,7 +1523,7 @@
       code: code,
       name: q.get('name') || '',
       budget: Number(q.get('budget')) || 0,
-      memo: '차트 분할매수 시나리오에서 등록',
+      memo: '차트 매수사다리 시나리오에서 등록',
       profile: {
         entry_mode: 'price',
         entry_price: Number(q.get('entry_price')) || 0,
@@ -1495,7 +1536,7 @@
     syncAllocFields();
     openModal(true);
     onCodeInput();
-    toast('분할매수 시나리오를 불러왔습니다. 확인 후 [등록]을 누르세요', 'ok');
+    toast('매수사다리 시나리오를 불러왔습니다. 확인 후 [등록]을 누르세요', 'ok');
   }
 
   bind();

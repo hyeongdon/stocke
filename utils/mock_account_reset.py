@@ -135,7 +135,7 @@ def _cleanup_files(backup_dir: Path, apply: bool) -> List[str]:
             for pid, plan in list(store.plans().items()):
                 if (plan or {}).get("account_mode") == "mock":
                     store.plans().pop(pid)
-            store.add_event(None, "SYSTEM", "모의계좌 변경으로 기존 모의 분할매수 계획 초기화", save=False)
+            store.add_event(None, "SYSTEM", "모의계좌 변경으로 기존 모의 매수사다리 계획 초기화", save=False)
             store.save()
             reset_ladder_store()
     return touched

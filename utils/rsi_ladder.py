@@ -1,4 +1,4 @@
-"""RSI 저점 분할매수(-5% 사다리) — 순수 계산 + JSON 상태 저장소.
+"""RSI 저점 매수사다리(-5%) — 순수 계산 + JSON 상태 저장소.
 
 docs/PRD_RSI_LADDER.md 기준.
 - 1차 진입: (주봉 RSI 저점 OR 일봉 RSI 저점 에피소드 N회) AND 20/60 GC
@@ -32,7 +32,7 @@ from utils.rwm_bowl import (
 )
 
 STRATEGY_KEY = "rsi_ladder"
-STRATEGY_LABEL = "분할매수"
+STRATEGY_LABEL = "매수사다리"
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _STATE_PATH = _PROJECT_ROOT / "logs" / "_rsi_ladder_state.json"
@@ -88,6 +88,9 @@ SELL_REASON_CODE = {
 TAKE_PROFIT_RULES = ("S1", "S2", "S3")
 SELL_CONFIRM_SEC = 180
 
+SELL_LADDER_MAS = (5, 10, 15, 20, 60, 120)
+SELL_LADDER_MAX_LEVELS = 10
+
 
 # ───────────────────────── 기본 계산 ─────────────────────────
 
@@ -122,8 +125,47 @@ def tick_floor(price: float) -> int:
     return int(v)
 
 
+def is_ladder_rule(rule: str) -> bool:
+    return str(rule or "").startswith("L") and ":" in str(rule)
+
+
+def _is_grace_rule(rule: str) -> bool:
+    return rule in TAKE_PROFIT_RULES or is_ladder_rule(rule)
+
+
 def is_take_profit(rules: Sequence[str]) -> bool:
-    return any(r in TAKE_PROFIT_RULES for r in (rules or []))
+    return any(_is_grace_rule(r) for r in (rules or []))
+
+
+def sell_rule_label(rule: str) -> str:
+    """S0~S3·수동은 고정 라벨, 매도사다리 규칙(L1:P12000 / L2:M20-1.5)은 코드에서 라벨을 만든다."""
+    r = str(rule or "")
+    if r in SELL_RULE_LABEL:
+        return SELL_RULE_LABEL[r]
+    if not is_ladder_rule(r):
+        return r
+    head, body = r.split(":", 1)
+    step = head[1:]
+    if body.startswith("P"):
+        try:
+            return f"매도사다리 {step}차 {int(float(body[1:])):,}원 도달"
+        except ValueError:
+            return r
+    if body.startswith("M"):
+        ma, off = body[1:], ""
+        for i, ch in enumerate(ma):
+            if ch in "+-":
+                ma, off = ma[:i], ma[i:]
+                break
+        suffix = f" {off}%" if off else ""
+        return f"매도사다리 {step}차 MA{ma}{suffix} 이탈"
+    return r
+
+
+def sell_reason_code(rule: str) -> str:
+    if is_ladder_rule(rule):
+        return "LADDER_SELL"
+    return SELL_REASON_CODE.get(rule, "LADDER_MANUAL")
 
 
 def sell_hold_ready(pending: Optional[Dict[str, Any]], now: datetime) -> bool:
@@ -166,7 +208,7 @@ def cancel_sell_hold(plan: Dict[str, Any]) -> bool:
         return False
     flags = plan.setdefault("sell_flags", {})
     for rule in pending.get("rules") or []:
-        if rule in TAKE_PROFIT_RULES:
+        if _is_grace_rule(rule):
             flags.pop(rule, None)
     prev = pending.get("status_before")
     if plan.get("status") == "EXITING" and prev in PLAN_STATUSES:
@@ -389,18 +431,104 @@ def evaluate_entry(bars: Sequence[Dict[str, Any]], profile: Dict[str, Any], *,
 
 def moving_averages(closes: Sequence[float]) -> Dict[str, Optional[float]]:
     out: Dict[str, Optional[float]] = {}
-    for n in (5, 10, 15, 20, 60):
+    for n in (5, 10, 15, 20, 60, 120):
         s = sma_series(closes, n)
         out[f"ma{n}"] = float(s[-1]) if s and s[-1] is not None else None
+    return out
+
+
+def normalize_sell_ladder(raw: Any) -> Dict[str, Any]:
+    """매도사다리 설정 검증. levels: 가격 도달(type=price) / 이평 이탈(type=ma), pct = 기준수량 대비 %."""
+    raw = raw if isinstance(raw, dict) else {}
+    levels: List[Dict[str, Any]] = []
+    for lv in (raw.get("levels") or [])[:SELL_LADDER_MAX_LEVELS]:
+        if not isinstance(lv, dict):
+            continue
+        try:
+            pct = round(max(0.0, min(100.0, float(lv.get("pct") or 0))), 2)
+            if pct <= 0:
+                continue
+            if lv.get("type") == "ma":
+                ma = int(lv.get("ma") or 0)
+                if ma not in SELL_LADDER_MAS:
+                    continue
+                offset = round(max(-30.0, min(30.0, float(lv.get("offset") or 0))), 2)
+                levels.append({"type": "ma", "ma": ma, "offset": offset, "pct": pct})
+            else:
+                price = int(float(lv.get("price") or 0))
+                if price <= 0:
+                    continue
+                levels.append({"type": "price", "price": price, "pct": pct})
+        except (TypeError, ValueError):
+            continue
+    return {"enabled": bool(raw.get("enabled")) and bool(levels), "levels": levels}
+
+
+def sell_ladder_rule(idx: int, lv: Dict[str, Any]) -> str:
+    if lv.get("type") == "ma":
+        off = float(lv.get("offset") or 0)
+        suffix = format(off, "+g") if off else ""
+        return f"L{idx + 1}:M{int(lv['ma'])}{suffix}"
+    return f"L{idx + 1}:P{int(lv['price'])}"
+
+
+def sell_ladder_target(lv: Dict[str, Any], ma: Dict[str, Optional[float]]) -> Optional[int]:
+    """차수의 현재 판정가. 이평 차수는 MA × (1 + offset%)."""
+    if lv.get("type") == "ma":
+        v = ma.get(f"ma{int(lv['ma'])}")
+        return int(round(float(v) * (1.0 + float(lv.get("offset") or 0) / 100.0))) if v else None
+    return int(lv["price"])
+
+
+def evaluate_sell_ladder(plan: Dict[str, Any], *, price: float, hold: int,
+                         ma: Dict[str, Optional[float]], price_only: bool = False) -> Dict[str, Any]:
+    """매도사다리 판정 (무장 없음). 가격 차수: 현재가 ≥ 목표가, 이평 차수: 현재가 < MA×(1+offset%).
+
+    price_only=True(장중 감시)면 가격 차수만 본다. 이평 차수는 15:05 판정에서만 본다.
+    수량은 첫 매도 시점 보유수량(base_qty) × pct%, 남은 마지막 차수는 잔량 전부.
+    """
+    sl = normalize_sell_ladder(plan.get("sell_ladder"))
+    flags = dict(plan.get("sell_flags") or {})
+    base_qty = int(plan.get("base_qty") or 0)
+    sells: List[Dict[str, Any]] = []
+    out = {"sells": sells, "armed": bool(plan.get("armed")), "peak_pct": float(plan.get("peak_pnl_pct") or 0.0),
+           "base_qty": base_qty, "flags": flags, "ladder": True}
+    if not sl["enabled"] or hold <= 0 or price <= 0:
+        return out
+    rules = [sell_ladder_rule(i, lv) for i, lv in enumerate(sl["levels"])]
+    remaining = int(hold)
+    for i, lv in enumerate(sl["levels"]):
+        rule = rules[i]
+        if flags.get(rule) or remaining <= 0:
+            continue
+        if price_only and lv["type"] == "ma":
+            continue
+        target = sell_ladder_target(lv, ma)
+        if not target:
+            continue
+        hit = price >= target if lv["type"] == "price" else price < target
+        if not hit:
+            continue
+        if base_qty <= 0:
+            base_qty = int(hold)
+        last = all(flags.get(r) for j, r in enumerate(rules) if j != i)
+        qty = remaining if last else min(remaining, max(1, int(base_qty * lv["pct"] / 100.0)))
+        sells.append({"rule": rule, "qty": qty})
+        remaining -= qty
+        flags[rule] = True
+    out["base_qty"] = base_qty
     return out
 
 
 def evaluate_exit(plan: Dict[str, Any], *, price: float, avg: float, hold: int,
                   ma: Dict[str, Optional[float]]) -> Dict[str, Any]:
     """익절 판정. 무장 전에는 매도하지 않고, 무장 후 S1~S3 만 판정한다. plan 은 변경하지 않는다.
+    매도사다리가 켜져 있으면 S1~S3 대신 매도사다리로 판정한다.
 
     반환: {"sells": [{"rule", "qty"}], "armed", "peak_pct", "base_qty", "flags"}
     """
+    if normalize_sell_ladder(plan.get("sell_ladder"))["enabled"]:
+        return evaluate_sell_ladder(plan, price=price, hold=hold, ma=ma)
     prof = merge_profile(plan.get("profile"))
     flags = dict(plan.get("sell_flags") or {})
     armed = bool(plan.get("armed"))
@@ -790,7 +918,7 @@ class LadderStore:
                     error=str(exc),
                 )
                 raise RuntimeError(
-                    f"분할매수 상태 파일이 손상되어 빈 상태로 초기화하지 않았습니다: {self.path}"
+                    f"매수사다리 상태 파일이 손상되어 빈 상태로 초기화하지 않았습니다: {self.path}"
                 ) from exc
         self.data = data
         self._persisted_digest = _state_digest(raw_bytes)
@@ -846,7 +974,7 @@ class LadderStore:
                         self.path,
                     )
                     raise LadderStateConflictError(
-                        "분할매수 상태 파일이 다른 프로세스에서 변경되었습니다. "
+                        "매수사다리 상태 파일이 다른 프로세스에서 변경되었습니다. "
                         "덮어쓰기를 막았으며 감사 로그와 충돌 백업을 확인하세요."
                     )
 
