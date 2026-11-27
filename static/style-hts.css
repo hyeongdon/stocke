@@ -44,7 +44,7 @@ body.mode-mock header.bg-primary {
     border-bottom: 2px solid #00a99a;
 }
 body.mode-mock header.bg-primary h1::after {
-    content: ' [SIMULATION · 모의투자]';
+    content: ' [SIMULATION]';
     font-size: 11px;
     font-weight: 900;
     color: #99f6e4;
@@ -61,7 +61,7 @@ body.mode-real header.bg-primary {
     border-bottom: 2px solid #f97316;
 }
 body.mode-real header.bg-primary h1::after {
-    content: ' [REAL MONEY · 실전투자]';
+    content: ' [REAL MONEY]';
     font-size: 11px;
     font-weight: 900;
     color: #fecaca;

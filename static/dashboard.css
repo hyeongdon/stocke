@@ -73,7 +73,7 @@ body.mode-mock .brand h1 {
 }
 
 body.mode-mock .brand::after {
-  content: 'SIMULATION · 모의투자';
+  content: 'SIMULATION';
   font-size: 9px;
   font-weight: 900;
   color: #99f6e4;
@@ -149,7 +149,7 @@ body.mode-real .brand h1 {
 }
 
 body.mode-real .brand::after {
-  content: 'REAL MONEY · 실전투자';
+  content: 'REAL MONEY';
   font-size: 9px;
   font-weight: 900;
   color: #fff;

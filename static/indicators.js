@@ -2,6 +2,8 @@
   const $ = (id) => document.getElementById(id);
   let chart;
   let cache = [];
+  let view = [];
+  let sort = { key: null, dir: 'desc' };
   let grain = 'mti';
 
   const GRAIN_HINT = {
@@ -58,6 +60,22 @@
       el.innerHTML = '<div class="ind-empty">데이터가 없습니다. 배치 재집계 후 새로고침하세요.</div>';
       return;
     }
+    if (sort.key) {
+      const dir = sort.dir === 'asc' ? 1 : -1;
+      items = [...items].sort((a, b) => {
+        const va = a.latest?.[sort.key];
+        const vb = b.latest?.[sort.key];
+        const na = va == null || Number.isNaN(Number(va));
+        const nb = vb == null || Number.isNaN(Number(vb));
+        if (na || nb) return na === nb ? 0 : (na ? 1 : -1);
+        return (Number(va) - Number(vb)) * dir;
+      });
+    }
+    view = items;
+    const th = (key, label) => {
+      const mark = sort.key === key ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : '';
+      return `<th class="num" data-sort="${key}" style="cursor:pointer;" title="클릭하여 정렬">${label}${mark}</th>`;
+    };
     const rows = items.map((it, idx) => {
       const L = it.latest || {};
       return `<tr data-idx="${idx}">
@@ -70,16 +88,25 @@
       </tr>`;
     }).join('');
     el.innerHTML = `<table class="ind-tbl"><thead><tr>
-      <th>${headerCols()}</th><th class="num">수출</th><th class="num">YoY</th><th class="num">MoM</th>
-      <th class="num">수입</th><th class="num">수입YoY</th>
+      <th>${headerCols()}</th>${th('exp_usd', '수출')}${th('exp_yoy', 'YoY')}${th('exp_mom', 'MoM')}
+      ${th('imp_usd', '수입')}${th('imp_yoy', '수입YoY')}
     </tr></thead><tbody>${rows}</tbody></table>
-    <div class="hint" style="margin-top:8px;">기준월 ${esc(latestPeriod || '—')} · 행 클릭 → 우측 시계열</div>`;
+    <div class="hint" style="margin-top:8px;">기준월 ${esc(latestPeriod || '—')} · 행 클릭 → 우측 시계열 · 헤더 클릭 → 정렬</div>`;
+    el.querySelectorAll('th[data-sort]').forEach((h) => {
+      h.addEventListener('click', () => {
+        const key = h.getAttribute('data-sort');
+        if (sort.key !== key) sort = { key, dir: 'desc' };
+        else if (sort.dir === 'desc') sort = { key, dir: 'asc' };
+        else sort = { key: null, dir: 'desc' };
+        renderTable(cache, latestPeriod);
+      });
+    });
     el.querySelectorAll('tr[data-idx]').forEach((tr) => {
       tr.addEventListener('click', () => {
         el.querySelectorAll('tr').forEach((x) => x.classList.remove('active'));
         tr.classList.add('active');
         const i = Number(tr.getAttribute('data-idx'));
-        drawChart(cache[i]);
+        drawChart(view[i]);
       });
     });
     const first = el.querySelector('tr[data-idx="0"]');

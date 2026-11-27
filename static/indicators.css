@@ -103,6 +103,12 @@ body.mode-real {
   text-align: left;
   vertical-align: top;
 }
+.ind-tbl thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--card);
+}
 .ind-tbl th.num, .ind-tbl td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .ind-tbl tr { cursor: pointer; }
 .ind-tbl tr:hover td { background: var(--card-hover); }
