@@ -89,6 +89,7 @@ body.mode-mock .brand::after {
 
 body.mode-mock .topbar .tab.active {
   background: #0f766e;
+  color: #fff;
   box-shadow: 0 1px 8px rgba(45, 212, 191, 0.28);
 }
 
@@ -175,6 +176,7 @@ body.mode-real .brand::after {
 
 body.mode-real .topbar .tab.active {
   background: #9a3412;
+  color: #fff;
   box-shadow: 0 1px 6px rgba(154, 52, 18, 0.25);
 }
 
@@ -630,6 +632,7 @@ a:hover { color: var(--accent-bright); }
 }
 .topbar .tab-link:hover { color: var(--accent-bright); background: var(--accent-soft); border-color: var(--accent); }
 .topbar .tab-link.active { color: var(--accent-bright); background: var(--accent-soft); border-color: var(--accent); }
+.topbar .tab.tab-link.active { color: #fff; background: var(--accent); }
 .tabs { display: flex; gap: 2px; background: var(--card); padding: 3px; border-radius: 8px; border: 1px solid var(--border); }
 .tab {
   font-size: 12px; font-weight: 700; color: var(--muted);

@@ -3013,11 +3013,11 @@ async def _load_ohlcv_rows(
             upsert_series(stock_code, interval, rows, source="kiwoom")
         except Exception as e:
             logger.debug(f"차트 OHLCV 마트 저장 실패 ({stock_code}/{interval}): {e}")
-    if rows:
+    if rows and len(rows) >= len(mart_rows):
         return rows, "kiwoom"
     if mart_rows:
         return mart_rows, "mart"
-    return [], "kiwoom"
+    return rows, "kiwoom"
 
 
 async def _append_live_daily_bars(

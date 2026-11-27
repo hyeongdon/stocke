@@ -19,7 +19,7 @@ from utils.rwm_bowl import (
 )
 
 MA_PERIODS: Tuple[int, ...] = (5, 10, 20, 60, 120)
-WEEKLY_MA_PERIODS: Tuple[int, ...] = (*MA_PERIODS, 240)
+WEEKLY_MA_PERIODS: Tuple[int, ...] = MA_PERIODS
 SESSION_CLOSE_MIN = 15 * 60 + 30
 
 SIGNAL_RSI_OS = "RSI_OS"

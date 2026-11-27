@@ -324,6 +324,12 @@ function barsToSeries(bars, interval) {
     }
   }
 
+  // API에 이평이 없으면(분봉 등) 클라이언트에서 계산
+  Object.keys(maMaps).forEach((key) => {
+    if (maMaps[key].length >= Math.floor(candles.length * 0.5)) return;
+    maMaps[key] = toPoints(smaSeries(closes, Number(key.slice(2))), times);
+  });
+
   // API에 rsi가 없으면(분봉 등) 클라이언트에서 계산
   let rsiSeries = rsiPoints;
   if (rsiSeries.length < Math.max(8, Math.floor(candles.length * 0.5))) {

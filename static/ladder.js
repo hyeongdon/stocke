@@ -1544,8 +1544,12 @@
     });
     document.getElementById('btnNewPlan').addEventListener('click', () => openNew());
     document.getElementById('btnCloseModal').addEventListener('click', () => openModal(false));
-    document.getElementById('newPlanModal').addEventListener('click', (e) => {
-      if (e.target.id === 'newPlanModal') openModal(false);
+    const modalEl = document.getElementById('newPlanModal');
+    let downOnBackdrop = false;
+    modalEl.addEventListener('mousedown', (e) => { downOnBackdrop = e.target === modalEl; });
+    modalEl.addEventListener('click', (e) => {
+      if (downOnBackdrop && e.target === modalEl) openModal(false);
+      downOnBackdrop = false;
     });
     const form = document.getElementById('newPlanForm');
     form.elements.budget.addEventListener('input', () => formatMoneyInput(form.elements.budget));

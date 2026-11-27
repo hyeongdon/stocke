@@ -65,7 +65,7 @@ class _MarketDataMixin:
         cached = self._chart_cache.get(cache_key)
         if cached:
             data, ts = cached
-            if time.time() - ts < ttl:
+            if time.time() - ts < ttl and not (max_bars and not is_minute_chart and len(data) < max_bars):
                 logger.debug(f"💾 [CHART_CACHE_HIT] {cache_key}")
                 return data[-max_bars:] if max_bars and data else data
 
@@ -165,6 +165,11 @@ class _MarketDataMixin:
                             data = await response.json()
                             if data.get('return_code') == 0:
                                 parsed = self._parse_kiwoom_chart_data(data, stock_code)
+                                if max_bars and not is_minute_chart and parsed and len(parsed) < max_bars:
+                                    parsed = await self._fetch_more_chart_pages(
+                                        session, url, headers, request_data, stock_code,
+                                        response, data, parsed, max_bars,
+                                    )
                                 # 캐시는 자르지 않은 전체 봉 — max_bars 가 다른 호출끼리 공유
                                 if parsed:
                                     self._chart_cache[cache_key] = (parsed, time.time())
@@ -196,6 +201,40 @@ class _MarketDataMixin:
         except Exception as e:
             logger.error(f"실제 차트 데이터 조회 중 오류: {e}")
             return cached[0] if cached else []
+
+    async def _fetch_more_chart_pages(
+        self, session, url, headers, request_data, stock_code, response, data, parsed, max_bars,
+        max_pages: int = 4,
+    ):
+        """일·주·월봉 연속조회(cont-yn/next-key) — max_bars 를 채울 때까지 과거 페이지를 붙인다."""
+        rows = list(parsed)
+        resp_headers = response.headers
+        for _ in range(max_pages):
+            cont_yn = data.get("cont_yn") or resp_headers.get("cont-yn") or "N"
+            next_key = data.get("next_key") or resp_headers.get("next-key") or ""
+            if str(cont_yn).upper() != "Y" or not next_key or len(rows) >= max_bars:
+                break
+            if not await self._acquire_api_slot("chart_data", max_wait=45.0, priority=APIPriority.HIGH):
+                break
+            try:
+                async with session.post(
+                    url, headers={**headers, "cont-yn": "Y", "next-key": next_key}, json=request_data,
+                ) as resp:
+                    if resp.status != 200:
+                        break
+                    data = await resp.json()
+                    resp_headers = resp.headers
+            except Exception as e:
+                logger.debug(f"차트 연속조회 실패 ({stock_code}): {e}")
+                break
+            if data.get("return_code") != 0:
+                break
+            more = self._parse_kiwoom_chart_data(data, stock_code)
+            if not more:
+                break
+            rows.extend(more)
+        by_ts = {str(r.get("timestamp") or ""): r for r in rows}
+        return [by_ts[k] for k in sorted(by_ts)]
 
     async def get_intraday_chart_for_date(
         self,

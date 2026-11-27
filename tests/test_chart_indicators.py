@@ -179,19 +179,15 @@ class IndicatorTests(unittest.TestCase):
         self.assertNotIn("ma120", rows[118])
         self.assertIn("ma120", rows[119])
 
-    def test_weekly_ma240(self):
+    def test_weekly_no_ma240(self):
         periods = ma_periods_for_interval("1W")
-        self.assertIn(240, periods)
-        self.assertNotIn(240, ma_periods_for_interval("1D"))
-        rows = annotate_indicators(
-            self._rows(343), CP, ma_periods=periods,
-        )
-        self.assertNotIn("ma240", rows[238])
-        self.assertEqual(rows[239]["ma240"], round(sum(r["close"] for r in rows[:240]) / 240))
-        self.assertNotIn("ma240", annotate_indicators(self._rows(343), CP)[-1])
+        self.assertNotIn(240, periods)
+        self.assertEqual(max(periods), 120)
+        rows = annotate_indicators(self._rows(223), CP, ma_periods=periods)
+        self.assertNotIn("ma240", rows[-1])
         self.assertEqual(warmup_warning(rows[-104:], "주", periods), "")
         short = annotate_indicators(self._rows(200), CP, ma_periods=periods)
-        self.assertIn("MA240주", warmup_warning(short[-104:], "주", periods))
+        self.assertIn("MA120주", warmup_warning(short[-104:], "주", periods))
 
     def test_warmup_warning(self):
         short = annotate_indicators(self._rows(100), CP)

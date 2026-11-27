@@ -1169,7 +1169,7 @@ async function loadAnalysisThemes(stockCode) {
 }
 
 const MA_PERIODS = [5, 10, 20, 60, 120];
-const WEEKLY_MA_PERIODS = [...MA_PERIODS, 240];
+const WEEKLY_MA_PERIODS = MA_PERIODS;
 const ALL_MA_PERIODS = WEEKLY_MA_PERIODS;
 const MA_COLORS = {
   5: '#ff1a1a',
@@ -1188,7 +1188,7 @@ const MA_WIDTHS = {
   240: 2.4,
 };
 const MA_VISIBLE_KEY = 'analysis.maVisible';
-const MA_VISIBLE_DEFAULT = [20, 60, 240];
+const MA_VISIBLE_DEFAULT = [20, 60, 120];
 
 function loadMaVisible() {
   try {
@@ -1293,7 +1293,7 @@ function drawVolumeProfile(ctx, geo, payload, yOf, theme) {
 const CHART_ORDER = ['1D', '1W', '1MO'];
 const CHART_SPECS = {
   '1MO': { title: '월봉 차트', hint: '최근 2년(24개월) · MA5/10/20개월', bars: 24, unit: '월' },
-  '1W': { title: '주봉 차트', hint: '최근 104주 · MA5/10/20/60/120/240주', bars: 104, unit: '주' },
+  '1W': { title: '주봉 차트', hint: '최근 104주 · MA5/10/20/60/120주', bars: 104, unit: '주' },
   '1D': { title: '일봉 차트', hint: '최근 9개월(약 189거래일) · MA5/10/20/60/120일', bars: 189, unit: '일' },
 };
 const CHART_HEIGHT = 340;
@@ -1386,6 +1386,43 @@ function resetChartState() {
     chartTrendLines[k] = [];
     chartTrendDrafts[k] = null;
   });
+  chartHistory = {};
+  chartFocusKey = null;
+}
+
+let chartHistory = {};
+let chartFocusKey = null;
+const CHART_UNDO_LIMIT = 50;
+function chartHistoryOf(key) {
+  return chartHistory[key] || (chartHistory[key] = { undo: [], redo: [] });
+}
+
+function chartSnapshot(key) {
+  return {
+    price: [...(chartPriceLines[key] || [])],
+    trend: (chartTrendLines[key] || []).map((line) => ({ ...line })),
+  };
+}
+
+function pushChartUndo(key) {
+  const h = chartHistoryOf(key);
+  h.undo.push(chartSnapshot(key));
+  if (h.undo.length > CHART_UNDO_LIMIT) h.undo.shift();
+  h.redo.length = 0;
+  chartFocusKey = key;
+}
+
+function stepChartHistory(key, redo) {
+  const h = chartHistory[key];
+  const from = h && (redo ? h.redo : h.undo);
+  if (!from || !from.length) return false;
+  (redo ? h.undo : h.redo).push(chartSnapshot(key));
+  const snap = from.pop();
+  chartPriceLines[key] = snap.price;
+  chartTrendLines[key] = snap.trend;
+  saveChartDrawings(key);
+  if (chartPayloads[key]) renderChart(key);
+  return true;
 }
 
 function saveChartDrawings(key, stockCode) {
@@ -1983,6 +2020,7 @@ function removeTrendAt(key, geo, mx, my) {
   const trends = chartTrendLines[key] || [];
   const near = trends.findIndex((t) => segmentDistance(mx, my, trendLinePx(geo, t)) <= chartLineHitPx());
   if (near < 0) return false;
+  pushChartUndo(key);
   trends.splice(near, 1);
   saveChartDrawings(key);
   renderChart(key);
@@ -1993,6 +2031,7 @@ function togglePriceLineAt(key, geo, my) {
   const pane = geo.price;
   const lines = chartPriceLines[key] || (chartPriceLines[key] = []);
   const near = lines.findIndex((p) => Math.abs(pane.yOf(p) - my) <= chartLineHitPx());
+  pushChartUndo(key);
   if (near >= 0) lines.splice(near, 1);
   else lines.push(pane.priceOf(my));
   saveChartDrawings(key);
@@ -2103,6 +2142,7 @@ function bindChartTooltip(key) {
     return { i: geo.idxOf(x), p: pane.priceOf(y) };
   };
   canvas.addEventListener('pointerdown', (e) => {
+    chartFocusKey = key;
     if (e.button !== 0) return;
     const { mx, my } = localPoint(e);
     pointerMoved = false;
@@ -2136,6 +2176,7 @@ function bindChartTooltip(key) {
     if (dragged) {
       suppressClick = true;
       if (commit && draft) {
+        pushChartUndo(key);
         (chartTrendLines[key] || (chartTrendLines[key] = [])).push(draft);
         saveChartDrawings(key);
       }
@@ -2277,6 +2318,7 @@ function renderChart(key) {
   setChartStatus(key, '');
   renderChartSummary(key, payload);
 
+  observeChartWrap(wrap);
   const W = Math.max((wrap && wrap.clientWidth) || 360, 280);
   const H = chartPixelHeight();
   const dpr = window.devicePixelRatio || 1;
@@ -2367,6 +2409,26 @@ async function loadAnalysisCharts(stockCode) {
     loadOneChart('1MO', stockCode, seq),
     drawings,
   ]);
+}
+
+let chartWrapObserver = null;
+function observeChartWrap(wrap) {
+  if (!wrap || wrap._chartObserved || typeof ResizeObserver === 'undefined') return;
+  if (!chartWrapObserver) {
+    chartWrapObserver = new ResizeObserver((entries) => {
+      let changed = false;
+      entries.forEach((e) => {
+        const w = Math.round(e.contentRect.width);
+        if (w > 0 && w !== e.target._chartLastW) {
+          e.target._chartLastW = w;
+          changed = true;
+        }
+      });
+      if (changed) onChartResize();
+    });
+  }
+  wrap._chartObserved = true;
+  chartWrapObserver.observe(wrap);
 }
 
 function onChartResize() {
@@ -2696,6 +2758,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     toast('분석 메모를 삭제했습니다.', false);
   });
   window.addEventListener('resize', onChartResize);
+  document.addEventListener('keydown', (e) => {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+    const k = e.key.toLowerCase();
+    const redo = k === 'y' || (k === 'z' && e.shiftKey);
+    if (k !== 'z' && k !== 'y') return;
+    const t = e.target;
+    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+    if (!chartFocusKey || !$(`chartCanvas${chartFocusKey}`)) return;
+    if (stepChartHistory(chartFocusKey, redo)) e.preventDefault();
+  });
   if (PHONE_MQ.addEventListener) PHONE_MQ.addEventListener('change', onPhoneLayoutChange);
   else if (PHONE_MQ.addListener) PHONE_MQ.addListener(onPhoneLayoutChange);
 });
