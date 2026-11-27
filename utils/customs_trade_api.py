@@ -63,6 +63,11 @@ def _num(v: Any) -> float:
         return 0.0
 
 
+def _item_name(it: Dict[str, str]) -> str:
+    name = str(it.get("statKor") or "").strip()
+    return "" if name == "-" else name
+
+
 def fetch_nitemtrade(
     *,
     strt_yymm: str,
@@ -109,6 +114,7 @@ def fetch_nitemtrade(
                 "exp_wgt": _num(it.get("expWgt")),
                 "imp_wgt": _num(it.get("impWgt")),
                 "cnty_cd": cnty_cd,
+                "name": _item_name(it),
             }
         )
     return out
@@ -161,6 +167,7 @@ def fetch_itemtrade(
                 "exp_wgt": _num(it.get("expWgt")),
                 "imp_wgt": _num(it.get("impWgt")),
                 "cnty_cd": "ALL",
+                "name": _item_name(it),
             }
         )
     return out
@@ -196,6 +203,7 @@ def fetch_hs_monthly_world(
 
     # 주요국 합산
     bucket: Dict[Tuple[str, str], Dict[str, float]] = {}
+    names: Dict[str, str] = {}
     for cnty in countries:
         try:
             rows = fetch_nitemtrade(
@@ -218,6 +226,8 @@ def fetch_hs_monthly_world(
             agg["imp_usd"] += float(r["imp_usd"])
             agg["exp_wgt"] += float(r.get("exp_wgt") or 0)
             agg["imp_wgt"] += float(r.get("imp_wgt") or 0)
+            if r.get("name"):
+                names.setdefault(str(r["hs_code"]), r["name"])
         time.sleep(sleep_sec)
 
     out = [
@@ -229,6 +239,7 @@ def fetch_hs_monthly_world(
             "exp_wgt": vals["exp_wgt"],
             "imp_wgt": vals["imp_wgt"],
             "cnty_cd": "PARTNERS",
+            "name": names.get(hs, ""),
         }
         for (period, hs), vals in sorted(bucket.items())
     ]

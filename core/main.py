@@ -2968,6 +2968,13 @@ def _indicator_chart_payload(
     }
 
 
+def _with_warmup(interval: str, display_bars: int) -> int:
+    """표시 봉 + 최장 MA 계산에 필요한 앞쪽 봉."""
+    from utils.chart_indicators import ma_periods_for_interval
+
+    return int(display_bars) + max(ma_periods_for_interval(interval)) - 1
+
+
 def _clamp_display_bars(bars: Any, default: int, lo: int, hi: int) -> int:
     try:
         return min(max(int(bars or default), lo), hi)
@@ -3066,7 +3073,7 @@ async def get_fundamental_chart(
                 # 기본적분석 기본 24개월 · 분석>차트는 최대 10년(120)
                 display = _clamp_display_bars(bars, 24, 24, 140)
                 monthly_rows, src = await _load_ohlcv_rows(
-                    stock_code, "1MO", prefer_mart=prefer_mart, min_bars=display,
+                    stock_code, "1MO", prefer_mart=prefer_mart, min_bars=_with_warmup("1MO", display),
                 )
                 if not monthly_rows:
                     raise HTTPException(
@@ -3084,7 +3091,7 @@ async def get_fundamental_chart(
             daily_display = _clamp_display_bars(bars, 189, 30, 620) if norm_interval == "1D" else None
             daily_rows, daily_src = await _load_ohlcv_rows(
                 stock_code, "1D", prefer_mart=prefer_mart,
-                min_bars=daily_display,
+                min_bars=_with_warmup("1D", daily_display) if daily_display else None,
             )
             if daily_src == "mart" and daily_rows:
                 daily_rows, appended = await _append_live_daily_bars(stock_code, daily_rows)
@@ -3107,7 +3114,7 @@ async def get_fundamental_chart(
             # 기본적분석 기본 104주 · 분석>차트는 최대 5년(260)
             display = _clamp_display_bars(bars, 104, 26, 300)
             api_weeks, week_src = await _load_ohlcv_rows(
-                stock_code, "1W", prefer_mart=prefer_mart, min_bars=display,
+                stock_code, "1W", prefer_mart=prefer_mart, min_bars=_with_warmup("1W", display),
             )
             # 일봉 마트만 있어도 주봉 리샘플로 표시 가능
             weekly_rows = merge_weekly_rows(
@@ -3527,13 +3534,13 @@ async def theme_map_source_cross(biz_date: Optional[str] = None):
 
 @app.get("/indicators/trade/latest")
 async def indicators_trade_latest(grain: str = "tag", limit_tags: int = 50):
-    """최신 월 수출입 + 시계열. grain=tag|mti|hs."""
+    """최신 월 수출입 + 시계열. grain=tag|mti|hs|hs6|hs10."""
     try:
-        from utils.trade_industry_store import list_latest_by_grain
+        from utils.trade_industry_store import GRAINS, list_latest_by_grain
 
         g = (grain or "tag").strip().lower()
-        if g not in ("tag", "mti", "hs"):
-            raise HTTPException(status_code=400, detail="grain must be tag|mti|hs")
+        if g not in GRAINS:
+            raise HTTPException(status_code=400, detail="grain must be tag|mti|hs|hs6|hs10")
 
         def _fetch():
             for db in get_db():
@@ -3559,13 +3566,13 @@ async def indicators_trade_monthly(
     period_to: Optional[str] = None,
     limit: int = 500,
 ):
-    """수출입 월간 시계열 (grain=tag|mti|hs)."""
+    """수출입 월간 시계열 (grain=tag|mti|hs|hs6|hs10)."""
     try:
-        from utils.trade_industry_store import list_trade_monthly
+        from utils.trade_industry_store import GRAINS, list_trade_monthly
 
         g = (grain or "tag").strip().lower()
-        if g not in ("tag", "mti", "hs"):
-            raise HTTPException(status_code=400, detail="grain must be tag|mti|hs")
+        if g not in GRAINS:
+            raise HTTPException(status_code=400, detail="grain must be tag|mti|hs|hs6|hs10")
 
         def _fetch():
             for db in get_db():

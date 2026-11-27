@@ -36,6 +36,7 @@ from utils.customs_trade_api import fetch_hs_monthly_world  # noqa: E402
 from utils.trade_industry_store import (  # noqa: E402
     list_latest_by_tag,
     load_baskets_config,
+    merge_hs_names,
     recompute_industry_monthly,
     seed_maps_from_baskets,
     upsert_hs_monthly,
@@ -127,6 +128,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed-only", action="store_true", help="매핑 시드만")
     p.add_argument("--recompute-only", action="store_true", help="원시 HS로 재집계만")
     p.add_argument(
+        "--hs-depth",
+        type=int,
+        choices=(6, 10),
+        default=6,
+        help="수집 깊이: 6=4단위 조회로 6단위까지(기본), 10=6단위별 추가 조회로 10단위까지(호출 수 증가)",
+    )
+    p.add_argument(
         "--no-telegram",
         action="store_true",
         help="시작/종료/오류 텔레그램 알림 비활성화",
@@ -202,8 +210,12 @@ def main() -> int:
         total_rows = 0
         errors = 0
         t0 = time.monotonic()
-        try:
-            for hs in hs_set:
+
+        def collect(codes: List[str]) -> List[str]:
+            """codes를 창별로 수집해 저장하고, 응답에 나온 하위 코드를 돌려준다."""
+            nonlocal source_used, total_rows, errors
+            children: set = set()
+            for hs in codes:
                 for w_start, w_end in windows:
                     try:
                         rows, src = fetch_hs_monthly_world(
@@ -216,7 +228,11 @@ def main() -> int:
                         )
                         source_used = src
                         n = upsert_hs_monthly(db, rows, source=src)
+                        merge_hs_names(rows)
                         total_rows += n
+                        children.update(
+                            str(r["hs_code"]) for r in rows if len(str(r["hs_code"])) > len(hs)
+                        )
                         log.info(
                             "HS %s %s~%s → %d행 (source=%s)",
                             hs,
@@ -229,6 +245,13 @@ def main() -> int:
                         errors += 1
                         log.exception("HS %s 창 %s~%s 실패: %s", hs, w_start, w_end, e)
                     time.sleep(float(args.sleep))
+            return sorted(children)
+
+        try:
+            hs6_codes = [c for c in collect(hs_set) if len(c) == 6]
+            if args.hs_depth == 10 and hs6_codes:
+                log.info("10단위 수집: 6단위 코드 %d개", len(hs6_codes))
+                collect(hs6_codes)
 
             stats = recompute_industry_monthly(db, cfg, source=source_used)
             elapsed = time.monotonic() - t0

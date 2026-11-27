@@ -692,6 +692,13 @@
   position: relative;
 }
 
+.cob-vp-canvas {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+
 .cob-chart-host,
 .cob-rsi-host {
   min-width: 0;

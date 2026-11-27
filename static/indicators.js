@@ -7,8 +7,11 @@
   const GRAIN_HINT = {
     mti: '산업코드(세분) · 동일 테마를 HS 단위로 나눔',
     tag: '테마 태그 · 하위 산업코드 합산',
-    hs: 'HS 4자리 품목 · 바스켓에 등록된 코드',
+    hs: 'HS 4단위(호) · 바스켓에 등록된 코드',
+    hs6: 'HS 6단위(소호) · 4단위 하위 품목',
+    hs10: 'HS 10단위(HSK) · 배치 --hs-depth 10 수집분',
   };
+  const isHs = (g) => g === 'hs' || g === 'hs6' || g === 'hs10';
 
   function wonUsd(n) {
     if (n == null || Number.isNaN(Number(n))) return '—';
@@ -33,7 +36,7 @@
       return `<div class="ind-name">${esc(it.mti_name || it.label || it.grain_key)}</div>
         <div class="ind-sub"><code>${esc(it.mti_code || it.grain_key)}</code> · ${esc(it.tag || '—')}</div>`;
     }
-    if (grain === 'hs') {
+    if (isHs(grain)) {
       const tags = (it.tags || it.meta?.tags || []).join(', ') || '—';
       return `<div class="ind-name">HS ${esc(it.hs_code || it.grain_key)}</div>
         <div class="ind-sub">${esc(it.label || '')} · ${esc(tags)}</div>`;
@@ -45,7 +48,7 @@
 
   function headerCols() {
     if (grain === 'mti') return '산업코드 / 명';
-    if (grain === 'hs') return 'HS 품목';
+    if (isHs(grain)) return 'HS 품목';
     return '테마 태그';
   }
 
@@ -130,7 +133,7 @@
   async function load() {
     $('tradeHint').textContent = '조회 중…';
     try {
-      const r = await fetch(`/indicators/trade/latest?grain=${encodeURIComponent(grain)}&limit_tags=80`);
+      const r = await fetch(`/indicators/trade/latest?grain=${encodeURIComponent(grain)}&limit_tags=${grain === 'hs6' || grain === 'hs10' ? 300 : 80}`);
       const d = await r.json();
       if (!d.success) throw new Error(d.detail || 'fail');
       cache = d.items || [];

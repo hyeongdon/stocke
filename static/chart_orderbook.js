@@ -450,6 +450,8 @@ class Panel {
     this.allCharts().forEach((c) => {
       try { c.remove(); } catch (_) { /* ignore */ }
     });
+    if (this.vpCanvas) this.vpCanvas.remove();
+    this.vpCanvas = null;
     this.chart = null;
     this.rsiChart = null;
     this.macdChart = null;
@@ -483,6 +485,7 @@ class Panel {
     ].forEach((s) => {
       if (s) s.setData([]);
     });
+    this.scheduleVolumeProfile();
     ['rsiLatest', 'macdLatest', 'macdSignalLatest', 'wrLatest', 'wrSignalLatest'].forEach((r) => {
       const el = this.el(r);
       if (el) el.textContent = '-';
@@ -600,6 +603,98 @@ class Panel {
       if (width > 0 && height > 0) c.applyOptions({ width: Math.floor(width), height: Math.floor(height) });
     });
     this.syncPriceScaleWidth();
+    this.scheduleVolumeProfile();
+  }
+
+  scheduleVolumeProfile() {
+    if (this.vpRaf) return;
+    this.vpRaf = requestAnimationFrame(() => {
+      this.vpRaf = null;
+      this.drawVolumeProfile();
+    });
+  }
+
+  /** 매물대: 보이는 구간의 봉 거래량을 고가~저가에 균등 분배해 가격대별로 누적 */
+  drawVolumeProfile() {
+    const canvas = this.vpCanvas;
+    const host = this.el('chartHost');
+    if (!canvas || !host || !this.chart || !this.candleSeries) return;
+    const { width, height } = host.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.max(1, Math.floor(width * dpr));
+    canvas.height = Math.max(1, Math.floor(height * dpr));
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+
+    const on = !$('togVp') || $('togVp').checked;
+    const bars = this.lastBars || [];
+    if (!on || !bars.length) return;
+
+    let from = 0;
+    let to = bars.length - 1;
+    const range = this.chart.timeScale().getVisibleLogicalRange();
+    if (range) {
+      from = Math.max(0, Math.floor(range.from));
+      to = Math.min(bars.length - 1, Math.ceil(range.to));
+    }
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let i = from; i <= to; i += 1) {
+      const l = Number(bars[i].low) || Number(bars[i].close);
+      const h = Number(bars[i].high) || Number(bars[i].close);
+      if (l > 0 && l < lo) lo = l;
+      if (h > hi) hi = h;
+    }
+    if (!(hi > lo)) return;
+
+    const n = 24;
+    const step = (hi - lo) / n;
+    const up = new Array(n).fill(0);
+    const down = new Array(n).fill(0);
+    for (let i = from; i <= to; i += 1) {
+      const b = bars[i];
+      const vol = Number(b.volume) || 0;
+      if (vol <= 0) continue;
+      const close = Number(b.close);
+      const l = Number(b.low) || close;
+      const h = Number(b.high) || close;
+      const target = close >= Number(b.open) ? up : down;
+      const i0 = Math.min(n - 1, Math.max(0, Math.floor((l - lo) / step)));
+      const i1 = Math.min(n - 1, Math.max(0, Math.floor((h - lo) / step)));
+      const share = vol / (i1 - i0 + 1);
+      for (let k = i0; k <= i1; k += 1) target[k] += share;
+    }
+    const totals = up.map((v, k) => v + down[k]);
+    const max = Math.max(...totals);
+    if (!(max > 0)) return;
+    const poc = totals.indexOf(max);
+
+    let plotW = width;
+    try { plotW = width - this.chart.priceScale('right').width(); } catch (_) { /* ignore */ }
+    const maxW = plotW * 0.28;
+    for (let k = 0; k < n; k += 1) {
+      if (!totals[k]) continue;
+      const yTop = this.candleSeries.priceToCoordinate(lo + step * (k + 1));
+      const yBot = this.candleSeries.priceToCoordinate(lo + step * k);
+      if (yTop == null || yBot == null) continue;
+      const y = Math.min(yTop, yBot) + 1;
+      const h = Math.max(1, Math.abs(yBot - yTop) - 2);
+      const wUp = (up[k] / max) * maxW;
+      const wDown = (down[k] / max) * maxW;
+      const alpha = k === poc ? 0.55 : 0.28;
+      ctx.fillStyle = `rgba(239, 68, 68, ${alpha})`;
+      ctx.fillRect(0, y, wUp, h);
+      ctx.fillStyle = `rgba(59, 130, 246, ${alpha})`;
+      ctx.fillRect(wUp, y, wDown, h);
+      if (k === poc) {
+        ctx.strokeStyle = 'rgba(250, 204, 21, 0.8)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(0.5, y + 0.5, wUp + wDown, h - 1);
+      }
+    }
   }
 
   ensureChart() {
@@ -785,6 +880,12 @@ class Panel {
       c.timeScale().subscribeVisibleLogicalRangeChange(() => this.syncVisibleRange(c));
     });
 
+    const vp = document.createElement('canvas');
+    vp.className = 'cob-vp-canvas';
+    host.appendChild(vp);
+    this.vpCanvas = vp;
+    chart.timeScale().subscribeVisibleLogicalRangeChange(() => this.scheduleVolumeProfile());
+
     const stack = host.closest('.cob-chart-stack') || host;
     this.resizeObs = new ResizeObserver(() => this.resizeCharts());
     [stack, host, rsiHost, macdHost, wrHost].forEach((el) => this.resizeObs.observe(el));
@@ -896,6 +997,7 @@ class Panel {
     requestAnimationFrame(() => {
       this.realignTimeScale();
       this.syncPriceScaleWidth();
+      this.scheduleVolumeProfile();
     });
 
     const latest = rsiSeries.length ? rsiSeries[rsiSeries.length - 1].value : null;
@@ -2107,6 +2209,7 @@ function bindEvents() {
   document.querySelectorAll('.cob-ma input[data-ma]').forEach((input) => {
     input.addEventListener('change', () => state.panels.forEach((p) => p.applyMaVisibility()));
   });
+  $('togVp')?.addEventListener('change', () => state.panels.forEach((p) => p.scheduleVolumeProfile()));
   ['togRsi', 'togMacd', 'togWr'].forEach((id) => {
     $(id)?.addEventListener('change', () => state.panels.forEach((p) => p.applyRsiVisibility()));
   });

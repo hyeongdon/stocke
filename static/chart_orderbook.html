@@ -19,7 +19,7 @@
     }
   </script>
   <link rel="stylesheet" href="/static/dashboard.css?v=153">
-  <link rel="stylesheet" href="/static/chart_orderbook.css?v=14">
+  <link rel="stylesheet" href="/static/chart_orderbook.css?v=15">
   <script src="/static/theme-sync.js?v=3"></script>
   <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
 </head>
@@ -72,6 +72,7 @@
         <label class="cob-ma"><input type="checkbox" data-ma="ma20" checked> MA20</label>
         <label class="cob-ma"><input type="checkbox" data-ma="ma60" checked> MA60</label>
         <label class="cob-ma"><input type="checkbox" data-ma="ma120"> MA120</label>
+        <label class="cob-ma"><input type="checkbox" id="togVp" checked> 매물대</label>
         <label class="cob-ma"><input type="checkbox" id="togRsi" checked> RSI(14)</label>
         <label class="cob-ma"><input type="checkbox" id="togMacd"> MACD</label>
         <label class="cob-ma"><input type="checkbox" id="togWr"> Williams %R</label>
@@ -105,6 +106,6 @@
   <div class="toast" id="toast"></div>
   <script src="/static/chart_orderbook_split.js?v=7"></script>
   <script src="/static/chart_orderbook_sell.js?v=8"></script>
-  <script src="/static/chart_orderbook.js?v=22"></script>
+  <script src="/static/chart_orderbook.js?v=23"></script>
 </body>
 </html>

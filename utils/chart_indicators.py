@@ -258,4 +258,4 @@ def warmup_warning(display_rows: Sequence[Dict[str, Any]], unit: str, ma_periods
         missing.append("RSI")
     if not missing:
         return ""
-    return f"봉 부족 — 상장 기간이 짧아 {'·'.join(missing)} 앞부분 미표시"
+    return f"봉 부족 — 확보된 과거 봉이 적어 {'·'.join(missing)} 앞부분 미표시"

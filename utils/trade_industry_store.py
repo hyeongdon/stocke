@@ -16,6 +16,39 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASKETS_PATH = os.path.join(PROJECT_ROOT, "config", "trade_industry_baskets.json")
+HS_NAMES_PATH = os.path.join(PROJECT_ROOT, "data", "trade_hs_names.json")
+HS_GRAINS = ("hs", "hs6", "hs10")
+GRAINS = ("tag", "mti") + HS_GRAINS
+
+
+def load_hs_names(path: Optional[str] = None) -> Dict[str, str]:
+    p = path or HS_NAMES_PATH
+    if not os.path.exists(p):
+        return {}
+    try:
+        with open(p, encoding="utf-8") as f:
+            return dict(json.load(f))
+    except Exception as e:
+        logger.warning("HS 품목명 파일 읽기 실패(%s): %s", p, e)
+        return {}
+
+
+def merge_hs_names(rows: Sequence[Dict[str, Any]], path: Optional[str] = None) -> int:
+    """API 응답의 품목명(statKor)을 코드별로 누적 저장."""
+    p = path or HS_NAMES_PATH
+    names = load_hs_names(p)
+    added = 0
+    for r in rows:
+        code = str(r.get("hs_code") or "").strip()
+        name = str(r.get("name") or "").strip()
+        if code and name and names.get(code) != name:
+            names[code] = name
+            added += 1
+    if added:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(dict(sorted(names.items())), f, ensure_ascii=False, indent=1)
+    return added
 
 
 def load_baskets_config(path: Optional[str] = None) -> Dict[str, Any]:
@@ -172,35 +205,31 @@ def recompute_industry_monthly(
     now = utc_now_naive()
 
     all_hs = session.query(TradeHsMonthly).filter(TradeHsMonthly.source == source).all()
-    detailed: Dict[Tuple[str, str], Dict[str, float]] = {}
-    has_child: Dict[Tuple[str, str], bool] = {}
+    # period → 코드 길이(4/6/10) → code → [exp, imp]
+    by_level: Dict[str, Dict[int, Dict[str, List[float]]]] = {}
     for row in all_hs:
-        hs = row.hs_code or ""
-        period = row.period_yyyymm
-        prefix = hs[:4]
-        if len(hs) > 4:
-            has_child[(period, prefix)] = True
-        key = (period, hs)
-        d = detailed.setdefault(key, {"exp": 0.0, "imp": 0.0})
-        d["exp"] += float(row.exp_usd or 0)
-        d["imp"] += float(row.imp_usd or 0)
+        hs = (row.hs_code or "").strip()
+        if not hs:
+            continue
+        lv = by_level.setdefault(row.period_yyyymm, {}).setdefault(len(hs), {})
+        d = lv.setdefault(hs, [0.0, 0.0])
+        d[0] += float(row.exp_usd or 0)
+        d[1] += float(row.imp_usd or 0)
+    periods_all = sorted(by_level.keys())
 
     def prefix_sum(period: str, prefix: str) -> Tuple[float, float]:
-        exp = imp = 0.0
-        if has_child.get((period, prefix)):
-            for (p, hs), vals in detailed.items():
-                if p == period and hs.startswith(prefix) and len(hs) > 4:
-                    exp += vals["exp"]
-                    imp += vals["imp"]
-        else:
-            for (p, hs), vals in detailed.items():
-                if p == period and (hs == prefix or hs.startswith(prefix)):
-                    exp += vals["exp"]
-                    imp += vals["imp"]
-        return exp, imp
+        """prefix 하위 합계. 단위 간 이중 합산을 피하려고 가장 얕은 하위 단위 하나만 쓴다."""
+        levels = by_level.get(period) or {}
+        for length in sorted(levels.keys()):
+            if length < len(prefix):
+                continue
+            hits = [v for code, v in levels[length].items() if code.startswith(prefix)]
+            if hits:
+                return sum(v[0] for v in hits), sum(v[1] for v in hits)
+        return 0.0, 0.0
 
     def series_for_prefixes(prefixes: List[str]) -> Dict[str, Tuple[float, float]]:
-        periods = sorted({p for (p, _) in detailed.keys()})
+        periods = periods_all
         out: Dict[str, Tuple[float, float]] = {}
         for period in periods:
             exp = imp = 0.0
@@ -310,6 +339,33 @@ def recompute_industry_monthly(
         series = series_for_prefixes([pref])
         written += write_grain("hs", pref, series, meta)
 
+    names = load_hs_names()
+    for length, grain in ((6, "hs6"), (10, "hs10")):
+        codes = sorted(
+            {
+                code
+                for levels in by_level.values()
+                for code in (levels.get(length) or {})
+                if code[:4] in hs_meta
+            }
+        )
+        for code in codes:
+            parent = hs_meta[code[:4]]
+            written += write_grain(
+                grain,
+                code,
+                series_for_prefixes([code]),
+                {
+                    "hs_name": names.get(code) or "",
+                    "hs4": code[:4],
+                    "hs6": code[:6],
+                    "tags": parent["tags"],
+                    "mti_codes": parent["mti_codes"],
+                    "mti_names": parent["mti_names"],
+                    "mti_version": version,
+                },
+            )
+
     session.commit()
     return {"industry_rows": written}
 
@@ -414,9 +470,9 @@ def list_latest_by_grain(
     grain: str = "tag",
     limit_keys: int = 50,
 ) -> Dict[str, Any]:
-    """grain(tag|mti|hs)별 최신 월 스냅샷 + 시계열."""
+    """grain(tag|mti|hs|hs6|hs10)별 최신 월 스냅샷 + 시계열."""
     grain = (grain or "tag").strip().lower()
-    if grain not in ("tag", "mti", "hs"):
+    if grain not in GRAINS:
         grain = "tag"
     keys = [
         r[0]
@@ -445,6 +501,8 @@ def list_latest_by_grain(
         elif grain == "hs":
             names = meta.get("mti_names") or []
             label = names[0] if names else f"HS {key}"
+        elif grain in ("hs6", "hs10"):
+            label = str(meta.get("hs_name") or f"HS {key}")
         elif grain == "tag":
             label = key
         items.append(
@@ -456,7 +514,7 @@ def list_latest_by_grain(
                 "tags": meta.get("tags"),
                 "mti_code": key if grain == "mti" else None,
                 "mti_name": meta.get("mti_name") if grain == "mti" else None,
-                "hs_code": key if grain == "hs" else None,
+                "hs_code": key if grain in HS_GRAINS else None,
                 "latest": cur,
                 "series": series_asc,
                 "meta": meta,
