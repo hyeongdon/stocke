@@ -1484,8 +1484,8 @@ function favItemHtml(f) {
       <span class="cob-fav-item-code">${esc(f.code)}</span>
     </button>
     <div class="cob-fav-item-actions">
-      <button type="button" class="cob-fav-item-rename" data-rename="${esc(f.code)}" title="표시명 변경">✎</button>
       <button type="button" class="cob-fav-item-move" data-move="${esc(f.code)}" title="폴더 이동">이동</button>
+      <button type="button" class="cob-fav-item-remove" data-remove="${esc(f.code)}" title="즐겨찾기에서 빼기">빼기</button>
     </div>
   </div>`;
 }
@@ -1742,35 +1742,24 @@ async function deleteFavoriteFolder(folderId) {
   }
 }
 
-async function renameFavorite(code) {
+async function removeFavorite(code) {
   const fav = state.favorites.find((f) => f.code === code);
   if (!fav) {
     toast('즐겨찾기에 없는 종목입니다', true);
     return;
   }
-  const name = window.prompt('즐겨찾기 표시명 변경', fav.name || fav.code);
-  if (name == null) return;
-  const trimmed = name.trim();
-  if (!trimmed) {
-    toast('표시명을 입력하세요', true);
+  const label = fav.name || code;
+  if (!window.confirm(`${label} 을(를) 즐겨찾기에서 뺄까요?`)) return;
+  try {
+    await fetchJSON(`/api/analysis/favorites/${encodeURIComponent(code)}`, { method: 'DELETE' });
+  } catch (e) {
+    toast((e && (e.detail || e.message)) || '즐겨찾기 빼기 실패', true);
     return;
   }
-  try {
-    const row = await fetchJSON(`/api/analysis/favorites/${encodeURIComponent(code)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ stock_name: trimmed }),
-    });
-    fav.name = row.name || trimmed;
-    persistLocalFavorites();
-    renderFavorites();
-    state.panels.forEach((p) => {
-      if (p.code === code) p.setName(fav.name);
-    });
-    toast(`표시명 → ${fav.name}`);
-  } catch (e) {
-    toast((e && (e.detail || e.message)) || '표시명 변경 실패', true);
-  }
+  state.favorites = state.favorites.filter((f) => f.code !== code);
+  persistLocalFavorites();
+  renderFavorites();
+  toast(`${label} 즐겨찾기에서 뺌`);
 }
 
 async function moveFavoriteToFolder(code) {
@@ -2292,10 +2281,10 @@ function bindEvents() {
       await deleteFavoriteFolder(Number(delBtn.dataset.delFolder));
       return;
     }
-    const renameItemBtn = e.target.closest('[data-rename]');
-    if (renameItemBtn) {
+    const removeItemBtn = e.target.closest('[data-remove]');
+    if (removeItemBtn) {
       e.stopPropagation();
-      await renameFavorite(renameItemBtn.dataset.rename);
+      await removeFavorite(removeItemBtn.dataset.remove);
       return;
     }
     const moveBtn = e.target.closest('[data-move]');

@@ -3074,6 +3074,12 @@ async def _append_live_daily_bars(
 ) -> Tuple[List[Dict[str, Any]], bool]:
     """마트 일봉 뒤에 키움 ka10081 최신 봉(마트 이후 일자 · 장중 오늘 봉)을 붙인다. 마트에는 저장하지 않는다."""
     from utils.chart_indicators import row_date
+    from utils.market_hours import daily_bar_settled_date
+
+    last_d = row_date(rows[-1]) if rows else None
+    settled = daily_bar_settled_date()
+    if last_d is not None and settled is not None and last_d >= settled:
+        return rows, False
 
     try:
         raw = await kiwoom_api.get_stock_chart_data(
@@ -3083,7 +3089,6 @@ async def _append_live_daily_bars(
         logger.debug(f"오늘 일봉 조회 실패 ({stock_code}): {e}")
         return rows, False
     live = _parse_chart_rows(raw)
-    last_d = row_date(rows[-1]) if rows else None
     newer = [r for r in live if last_d is None or ((d := row_date(r)) is not None and d > last_d)]
     if not newer:
         return rows, False

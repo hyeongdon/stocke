@@ -24,6 +24,28 @@ def is_krx_trading_day(now: Optional[datetime] = None) -> bool:
     return not is_krx_holiday(kst.date())
 
 
+_DAILY_BAR_SESSION_START = dt_time(8, 0)
+_DAILY_BAR_FINAL_AT = dt_time(15, 40)
+
+
+def daily_bar_settled_date(now: Optional[datetime] = None) -> Optional[date]:
+    """장 밖이면 마지막으로 확정된 일봉 거래일, 장중(08:00~15:40 거래일)이면 None."""
+    kst = as_kst(now)
+    today = kst.date()
+    if is_krx_trading_day(kst):
+        t = kst.time()
+        if _DAILY_BAR_SESSION_START <= t < _DAILY_BAR_FINAL_AT:
+            return None
+        if t >= _DAILY_BAR_FINAL_AT:
+            return today
+    d = today - timedelta(days=1)
+    for _ in range(30):
+        if d.weekday() < 5 and not is_krx_holiday(d):
+            return d
+        d -= timedelta(days=1)
+    return None
+
+
 def trading_day_block_reason(now: Optional[datetime] = None) -> Optional[str]:
     """거래 불가일이면 사유 문자열, 거래일이면 None."""
     kst = as_kst(now)

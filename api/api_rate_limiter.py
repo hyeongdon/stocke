@@ -44,6 +44,15 @@ class APIRateLimiter:
             if call["timestamp"] >= window_start
         ]
 
+    def recent_usage_summary(self) -> str:
+        """최근 1분 호출을 api_name별로 집계한 문자열 (예: 'chart_data×5, ka10030×3')."""
+        counts: Dict[str, int] = {}
+        for call in self._recent_calls(datetime.now()):
+            counts[call["api_name"]] = counts.get(call["api_name"], 0) + 1
+        if not counts:
+            return "없음"
+        return ", ".join(f"{k}×{v}" for k, v in sorted(counts.items(), key=lambda kv: -kv[1]))
+
     def seconds_until_available(self) -> float:
         """다음 API 호출 가능까지 대기 시간(초). 0이면 즉시 가능."""
         current_time = datetime.now()

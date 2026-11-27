@@ -47,9 +47,10 @@ LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
 LOG_FILE = os.path.join(LOG_DIR, "chart_ohlcv_mart_batch.log")
 
 INTERVAL_BARS = {
-    "1D": 400,
-    "1W": 260,
-    "1MO": 36,
+    # 차트 요청 봉 수 = 표시 봉 + MA120 워밍업(119). 기본 표시(일 504 · 주 260 · 월 120)를 DB만으로 채우도록 맞춤.
+    "1D": 650,   # 504 + 119 = 623
+    "1W": 400,   # 260 + 119 = 379
+    "1MO": 240,  # 120 + 119 = 239
 }
 RETRY_ROUNDS = 2
 RETRY_DELAY_SEC = 30.0

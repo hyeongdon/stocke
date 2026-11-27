@@ -125,7 +125,8 @@ class KiwoomAPI(
         pri = priority if priority is not None else APIPriority.NORMAL
         if max_wait is None:
             max_wait = effective_max_wait(pri)
-        deadline = time.time() + max_wait
+        started = time.time()
+        deadline = started + max_wait
         while time.time() < deadline:
             # LOW는 스캔 버스트 중 양보하되, max_wait 안에서는 대기 후 재시도
             if pri == APIPriority.LOW and should_yield_low_priority():
@@ -145,6 +146,12 @@ class KiwoomAPI(
                     continue
                 # LIMITED가 방금 풀렸을 수 있음
             if api_rate_limiter.record_api_call(api_name):
+                waited = time.time() - started
+                if waited >= 1.0:
+                    logger.info(
+                        f"⏱️ [SLOT] {api_name} 슬롯 대기 {waited:.1f}초 "
+                        f"(최근1분: {api_rate_limiter.recent_usage_summary()})"
+                    )
                 return True
             wait_sec = min(
                 max(
@@ -157,6 +164,10 @@ class KiwoomAPI(
             )
             if wait_sec > 0:
                 await asyncio.sleep(wait_sec)
+        logger.warning(
+            f"⏱️ [SLOT] {api_name} 슬롯 실패 ({time.time() - started:.1f}초 대기, "
+            f"최근1분: {api_rate_limiter.recent_usage_summary()})"
+        )
         return False
 
     @staticmethod
