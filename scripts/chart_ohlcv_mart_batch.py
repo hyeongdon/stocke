@@ -39,7 +39,8 @@ from notifications.chart_ohlcv_batch_notify import (  # noqa: E402
     notify_chart_ohlcv_error,
     notify_chart_ohlcv_start,
 )
-from utils.chart_ohlcv_mart_store import upsert_many  # noqa: E402
+from utils.chart_ohlcv_mart_store import get_bars, get_meta, list_codes, upsert_many  # noqa: E402
+from utils.volume_profile_store import PROFILE_INTERVALS, upsert_from_rows  # noqa: E402
 from utils.datetime_kst import kst_today, now_kst  # noqa: E402
 
 LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
@@ -104,6 +105,12 @@ def parse_args() -> argparse.Namespace:
         "--no-telegram",
         action="store_true",
         help="시작/완료/실패 텔레그램 알림 비활성화",
+    )
+    p.add_argument("--skip-profile", action="store_true", help="매물대 계산 생략")
+    p.add_argument(
+        "--profile-only",
+        action="store_true",
+        help="API 조회 없이 저장된 일/주봉 마트로 매물대만 재계산",
     )
     return p.parse_args()
 
@@ -254,6 +261,45 @@ async def _fetch_one(
         return out
 
 
+def _save_profiles(
+    args: argparse.Namespace, rows: List[Dict], as_of_date: date, logger: logging.Logger
+) -> int:
+    if getattr(args, "skip_profile", False):
+        return 0
+    try:
+        return upsert_from_rows(rows, as_of_date=as_of_date)
+    except Exception as e:
+        logger.exception("매물대 계산 실패(봉 적재는 유지): %s", e)
+        return 0
+
+
+def run_profile_only(args: argparse.Namespace, logger: logging.Logger) -> int:
+    as_of = kst_today()
+    explicit = _parse_codes(args.codes)
+    total = 0
+    for interval in PROFILE_INTERVALS:
+        codes = explicit or list_codes(interval)
+        if args.limit and args.limit > 0:
+            codes = codes[: int(args.limit)]
+        rows = []
+        for code in codes:
+            bars = get_bars(code, interval)
+            if bars:
+                meta = get_meta(code, interval) or {}
+                rows.append(
+                    {
+                        "stock_code": code,
+                        "stock_name": meta.get("stock_name") or "",
+                        "interval": interval,
+                        "bars": bars,
+                    }
+                )
+        saved = upsert_from_rows(rows, as_of_date=as_of)
+        total += saved
+        logger.info("매물대 재계산 %s — codes=%d profiles=%d", interval, len(rows), saved)
+    return 0 if total > 0 else 1
+
+
 def _telegram_on(args: argparse.Namespace) -> bool:
     return not bool(getattr(args, "no_telegram", False))
 
@@ -352,14 +398,16 @@ async def _run_async(args: argparse.Namespace, logger: logging.Logger) -> Tuple[
             continue
 
         saved = upsert_many(rows, as_of_date=as_of_date)
+        profiles = _save_profiles(args, rows, as_of_date, logger)
         codes = {r["stock_code"] for r in rows}
         ok_codes.update(codes)
         saved_total += int(saved)
         logger.info(
-            "청크 %d/%d 저장 — upsert=%d series  codes=%d  누적 upsert=%d success_codes=%d/%d",
+            "청크 %d/%d 저장 — upsert=%d series  매물대=%d  codes=%d  누적 upsert=%d success_codes=%d/%d",
             chunk_no,
             total_chunks,
             saved,
+            profiles,
             len(codes),
             saved_total,
             len(ok_codes),
@@ -385,6 +433,7 @@ async def _run_async(args: argparse.Namespace, logger: logging.Logger) -> Tuple[
         if not rows:
             continue
         saved = upsert_many(rows, as_of_date=as_of_date)
+        _save_profiles(args, rows, as_of_date, logger)
         ok_codes.update(r["stock_code"] for r in rows)
         saved_total += int(saved)
         logger.info(
@@ -427,6 +476,10 @@ def main() -> int:
     started = now_kst()
     telegram_on = _telegram_on(args)
     intervals = _parse_intervals(args.intervals)
+    if args.profile_only:
+        rc = run_profile_only(args, logger)
+        logger.info("매물대 재계산 종료 코드=%d, 소요=%.1fs", rc, (now_kst() - started).total_seconds())
+        return rc
     try:
         rc, meta = asyncio.run(_run_async(args, logger))
     except Exception as e:

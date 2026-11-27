@@ -598,6 +598,15 @@ function badgeHtml(row) {
   if (row.bowl_hit) badge += ' <span class="bowl-cond-badge" title="키움 조건식 밥그릇 검색 결과">밥그릇</span>';
   if (row.ma2060_hit) badge += ' <span class="gc-cond-badge" title="키움 조건식 2060돌파 검색 결과 — 20일·60일 이평 골든크로스">2060</span>';
   if (row.ma2060_soon_hit) badge += ' <span class="gc-cond-badge" title="키움 조건식 2060돌파임박 검색 결과 — 20일·60일 이평 골든크로스 임박">2060임박</span>';
+  if ($('fltVpNear').checked && $('fltVpTarget').value === 'poc') {
+    if (row.vp_poc_gap_pct != null) {
+      const title = `POC ${fmtWon(row.vp_poc_price)} (현재가 아래)`;
+      badge += ` <span class="bowl-cond-badge" title="${esc(title)}">POC${fmtFloat(row.vp_poc_gap_pct, 1)}%</span>`;
+    }
+  } else if ($('fltVpNear').checked && row.vp_resist_gap_pct != null) {
+    const title = `위 매물대 하단 ${fmtWon(row.vp_resist_low)} · 거래량 비중 ${fmtPct(row.vp_resist_share)}`;
+    badge += ` <span class="bowl-cond-badge" title="${esc(title)}">매물대+${fmtFloat(row.vp_resist_gap_pct, 1)}%</span>`;
+  }
   return badge;
 }
 
@@ -659,6 +668,7 @@ function hasActiveFilters() {
     || $('fltMa2060Only').checked
     || $('fltMa2060SoonOnly').checked
     || $('fltExcludeBelowMa60').checked
+    || $('fltVpNear').checked
     || $('fltFavoritesOnly').checked
     || ($('fltSortBy').value || 'market_cap') !== 'market_cap'
     || ($('fltLimit').value || DEFAULT_LIMIT) !== DEFAULT_LIMIT
@@ -686,6 +696,11 @@ function updateFilterSummary() {
   if ($('fltMa2060Only').checked) parts.push('2060');
   if ($('fltMa2060SoonOnly').checked) parts.push('2060임박');
   if ($('fltExcludeBelowMa60').checked) parts.push('추세이탈제외');
+  if ($('fltVpNear').checked) {
+    const basis = $('fltVpBasis').selectedOptions[0]?.textContent || '';
+    const label = $('fltVpTarget').value === 'poc' ? 'POC' : '매물대';
+    parts.push(`${label}≤${$('fltVpMaxGap').value || 3}%(${basis}${$('fltVpDowntrend').checked ? '·하락' : ''})`);
+  }
   if ($('fltFavoritesOnly').checked) {
     const scopeCodes = favoriteCodesInScope();
     const sel = $('fltFavoriteFolder');
@@ -776,6 +791,12 @@ function buildQuery() {
   if ($('fltMa2060Only').checked) p.set('ma2060_only', 'true');
   if ($('fltMa2060SoonOnly').checked) p.set('ma2060_soon_only', 'true');
   if ($('fltExcludeBelowMa60').checked) p.set('exclude_below_ma60', 'true');
+  if ($('fltVpNear').checked) {
+    p.set('vp_near', $('fltVpBasis').value);
+    p.set('vp_target', $('fltVpTarget').value);
+    p.set('vp_max_gap', $('fltVpMaxGap').value.trim() || '3');
+    p.set('vp_downtrend', $('fltVpDowntrend').checked ? 'true' : 'false');
+  }
   return p.toString();
 }
 
@@ -2552,6 +2573,11 @@ function resetFilters() {
   $('fltMa2060Only').checked = false;
   $('fltMa2060SoonOnly').checked = false;
   $('fltExcludeBelowMa60').checked = false;
+  $('fltVpNear').checked = false;
+  $('fltVpBasis').value = '1D:120';
+  $('fltVpTarget').value = 'resist';
+  $('fltVpMaxGap').value = '3';
+  $('fltVpDowntrend').checked = true;
   $('fltFavoritesOnly').checked = false;
   if ($('fltFavoriteFolder')) $('fltFavoriteFolder').value = '';
   state.sortBy = 'market_cap';

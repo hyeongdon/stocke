@@ -2653,8 +2653,17 @@ async def get_fundamentals(
     ma2060_soon_only: bool = False,
     exclude_below_ma60: bool = False,
     stock_codes: Optional[str] = None,
+    vp_near: Optional[str] = None,
+    vp_target: str = "resist",
+    vp_max_gap: float = 3.0,
+    vp_min_share: float = 5.0,
+    vp_downtrend: bool = True,
 ):
-    """기본적분석 최신 스냅샷 목록. stock_codes로 지정한 종목 및 기술적·키움 조건식 필터를 지원한다."""
+    """기본적분석 최신 스냅샷 목록. stock_codes로 지정한 종목 및 기술적·키움 조건식 필터를 지원한다.
+
+    vp_near=1D:120 처럼 지정하면 위 매물대 하단까지 vp_max_gap% 이내 종목만 남긴다.
+    vp_target=poc 이면 대신 현재가 아래 POC 까지 vp_max_gap% 이내 종목만 남긴다.
+    """
     try:
         from utils.fundamental_mart_store import list_latest
         from utils.technical_mart_store import get_latest_map_by_codes
@@ -2705,6 +2714,36 @@ async def get_fundamentals(
                 condition_stock_codes = (
                     codes if condition_stock_codes is None else condition_stock_codes & codes
                 )
+        vp_interval, vp_lookback = "1D", 120
+        if vp_near:
+            from utils.volume_profile_store import find_poc_approach, find_resistance_near
+
+            try:
+                tf, lb = vp_near.upper().split(":")
+                vp_interval, vp_lookback = tf, int(lb)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="vp_near 형식은 1D:120 / 1W:52")
+            if vp_target == "poc":
+                vp_rows = find_poc_approach(
+                    vp_interval,
+                    vp_lookback,
+                    max_gap_pct=vp_max_gap,
+                    downtrend_only=vp_downtrend,
+                    limit=10000,
+                )
+            else:
+                vp_rows = find_resistance_near(
+                    vp_interval,
+                    vp_lookback,
+                    max_gap_pct=vp_max_gap,
+                    min_share=vp_min_share,
+                    downtrend_only=vp_downtrend,
+                    limit=10000,
+                )
+            vp_codes = {r["stock_code"] for r in vp_rows}
+            condition_stock_codes = (
+                vp_codes if condition_stock_codes is None else condition_stock_codes & vp_codes
+            )
         if condition_stock_codes is not None:
             condition_stock_codes = sorted(condition_stock_codes)
         if requested_stock_codes is not None:
@@ -2733,7 +2772,17 @@ async def get_fundamentals(
         )
         items = result.get("items") or []
         tech = get_latest_map_by_codes([it["stock_code"] for it in items])
+        from utils.volume_profile_store import get_map_by_codes as get_vp_map
+
+        vp_map = get_vp_map([it["stock_code"] for it in items], vp_interval, vp_lookback)
         for it in items:
+            vp = vp_map.get(it["stock_code"]) or {}
+            it["vp_resist_low"] = vp.get("resist_low")
+            it["vp_resist_gap_pct"] = vp.get("resist_gap_pct")
+            it["vp_resist_share"] = vp.get("resist_share")
+            it["vp_poc_price"] = vp.get("poc_price")
+            it["vp_poc_gap_pct"] = vp.get("poc_gap_pct")
+            it["vp_downtrend"] = vp.get("downtrend")
             t = tech.get(it["stock_code"]) or {}
             it["weekly_rsi14"] = t.get("weekly_rsi14")
             it["weekly_rsi14_min26"] = t.get("weekly_rsi14_min26")

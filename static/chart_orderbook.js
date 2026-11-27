@@ -36,6 +36,10 @@ const WR_PERIOD = 14;
 const WR_SIGNAL = 9;
 const WR_COLOR = '#a78bfa';
 const WR_SIGNAL_COLOR = '#f59e0b';
+const SIGNAL_MARKERS = {
+  RSI_OS: { text: 'RSI', color: '#ef4444' },
+  WR_BUY: { text: 'W', color: '#e5e7eb' },
+};
 
 const PANELS_KEY = 'chartOrderbookPanels';
 const MAX_PANELS = 4;
@@ -823,7 +827,7 @@ class Panel {
       priceFormat: { type: 'custom', formatter: (v) => Number(v).toFixed(1) },
     });
     rsiSeries.createPriceLine({ price: 70, color: 'rgba(239, 68, 68, 0.45)', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: '70' });
-    rsiSeries.createPriceLine({ price: 30, color: 'rgba(59, 130, 246, 0.45)', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: '30' });
+    rsiSeries.createPriceLine({ price: 30, color: '#ef4444', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Solid, axisLabelVisible: true, title: '30' });
     rsiSeries.createPriceLine({ price: 50, color: 'rgba(148, 163, 184, 0.35)', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, axisLabelVisible: false });
     this.rsiChart = rsiChart;
     this.rsiSeries = rsiSeries;
@@ -996,6 +1000,7 @@ class Panel {
     this.setLatestText('macdSignalLatest', macd.signal, 2);
     this.setLatestText('wrLatest', wr.wr, 1);
     this.setLatestText('wrSignalLatest', wr.signal, 1);
+    this.applySignalMarkers(payload, bars);
     this.applyMaVisibility();
     this.applyRsiVisibility();
     this.chart.timeScale().fitContent();
@@ -1022,6 +1027,26 @@ class Panel {
     }
     if (this.split) this.split.onChartReady();
     if (this.sell) this.sell.onChartReady();
+  }
+
+  applySignalMarkers(payload, bars) {
+    if (!this.candleSeries || typeof this.candleSeries.setMarkers !== 'function') return;
+    const markers = [];
+    if (this.interval === '1D' || this.interval === '1W') {
+      const seen = new Set();
+      ((payload && payload.signals) || []).forEach((s) => {
+        const meta = SIGNAL_MARKERS[s.type];
+        const bar = bars[s.idx];
+        if (!meta || !bar) return;
+        const time = toChartTime(bar.timestamp, this.interval);
+        const key = `${s.type}|${time}`;
+        if (time == null || seen.has(key)) return;
+        seen.add(key);
+        markers.push({ time, position: 'belowBar', shape: 'arrowUp', color: meta.color, text: meta.text });
+      });
+      markers.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
+    }
+    this.candleSeries.setMarkers(markers);
   }
 
   renderQuote(snap) {

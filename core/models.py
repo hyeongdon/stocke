@@ -894,6 +894,45 @@ class ChartOhlcvSeries(Base):
     )
 
 
+class VolumeProfileSnapshot(Base):
+    """매물대 마트 — 종목×타임프레임×lookback 별 가격대 거래량 요약."""
+    __tablename__ = "volume_profile_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    stock_code = Column(String(20), nullable=False, index=True)
+    stock_name = Column(String(100), nullable=False, default="")
+    interval = Column(String(10), nullable=False, index=True)  # 1D | 1W
+    lookback = Column(Integer, nullable=False)  # 사용 봉 수
+    as_of_date = Column(Date, nullable=False, index=True)
+    last_bar_date = Column(String(10), nullable=True)
+
+    close_price = Column(Integer, nullable=True)
+    range_low = Column(Integer, nullable=True)
+    range_high = Column(Integer, nullable=True)
+    poc_price = Column(Integer, nullable=True)  # 최대 거래량 가격대 중심가
+    poc_gap_pct = Column(Float, nullable=True)  # (poc - close) / close * 100
+
+    resist_low = Column(Integer, nullable=True)  # 현재가 위 가장 가까운 매물대 하단
+    resist_high = Column(Integer, nullable=True)
+    resist_share = Column(Float, nullable=True)  # 해당 매물대 거래량 비중(%)
+    resist_gap_pct = Column(Float, nullable=True, index=True)  # (resist_low - close) / close * 100
+
+    support_low = Column(Integer, nullable=True)  # 현재가 아래 가장 가까운 매물대
+    support_high = Column(Integer, nullable=True)
+    support_share = Column(Float, nullable=True)
+    support_gap_pct = Column(Float, nullable=True, index=True)  # (close - support_high) / close * 100
+
+    in_zone = Column(Boolean, nullable=False, default=False)  # 현재가가 매물대 내부
+    downtrend = Column(Boolean, nullable=False, default=False, index=True)  # MA5<MA20<MA60 & MA20 하락
+    zones_json = Column(JSON, nullable=False, default=list)  # 상위 매물대 목록
+    computed_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("stock_code", "interval", "lookback", name="uq_volume_profile_code_tf_lb"),
+        Index("idx_volume_profile_tf_resist", "interval", "lookback", "resist_gap_pct"),
+    )
+
+
 class ConditionWatchlistSync(Base):
     """조건식 관심종목 동기화 테이블"""
     __tablename__ = "condition_watchlist_sync"
@@ -1230,6 +1269,11 @@ def ensure_technical_snapshot_columns() -> None:
 def ensure_chart_ohlcv_series_table() -> None:
     """chart_ohlcv_series 테이블 생성 (배치·서버 기동 시)."""
     ChartOhlcvSeries.__table__.create(bind=engine, checkfirst=True)
+
+
+def ensure_volume_profile_table() -> None:
+    """volume_profile_snapshots 테이블 생성 (배치·서버 기동 시)."""
+    VolumeProfileSnapshot.__table__.create(bind=engine, checkfirst=True)
 
 
 def init_db() -> None:

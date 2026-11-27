@@ -127,8 +127,8 @@ class Config:
     
     # ===== 키움 REST API 레이트 리미터 (내부 전역 제한) =====
     # 키움 공식: 분당 20회. 기본값은 18회/3초 간격 — 여유는 두되 과도하게 조이지 않음.
-    API_MIN_CALL_INTERVAL = _env_float("API_MIN_CALL_INTERVAL", 3.0)
-    API_MAX_CALLS_PER_MIN = _env_int("API_MAX_CALLS_PER_MIN", 18)
+    API_MIN_CALL_INTERVAL = _env_float("API_MIN_CALL_INTERVAL", 4.5)
+    API_MAX_CALLS_PER_MIN = _env_int("API_MAX_CALLS_PER_MIN", 12)
     API_LIMIT_DURATION_MIN = _env_int("API_LIMIT_DURATION_MIN", 3)
     # 스캔 종목 간 추가 대기(초). API 여유 있으면 이보다 짧게(적응형). 게이트 OFF면 절반.
     SCAN_GATE_PAUSE_SEC = _env_float("SCAN_GATE_PAUSE_SEC", 3.0)

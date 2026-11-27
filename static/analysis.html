@@ -122,6 +122,24 @@
         <label class="analysis-check" title="키움 조건식(2060돌파) 결과 종목만 — 20일·60일 이평 골든크로스 (해제 시 마지막 조회 결과를 '2060' 배지로 표시)"><input type="checkbox" id="fltMa2060Only">2060돌파</label>
         <label class="analysis-check" title="키움 조건식(2060돌파임박) 결과 종목만 — 20일·60일 이평 골든크로스 임박 (해제 시 마지막 조회 결과를 '2060임박' 배지로 표시)"><input type="checkbox" id="fltMa2060SoonOnly">2060돌파임박</label>
         <label class="analysis-check" title="키움 조건식(코스피추세이탈·코스닥추세이탈) 결과 종목 제외 (해제 시 마지막 조회 결과를 '추세이탈' 배지로 표시)"><input type="checkbox" id="fltExcludeBelowMa60">추세이탈 제외</label>
+        <label class="analysis-check" title="현재가 바로 위 매물대(가격대별 거래량 밀집 구간) 하단까지 지정 % 이내인 종목만 (일봉마트 배치에서 계산)"><input type="checkbox" id="fltVpNear">매물대근접</label>
+        <label title="매물대 계산 기준 (봉 주기·봉 수)">기준
+          <select id="fltVpBasis">
+            <option value="1D:60">일봉 60</option>
+            <option value="1D:120" selected>일봉 120</option>
+            <option value="1D:240">일봉 240</option>
+            <option value="1W:52">주봉 52</option>
+            <option value="1W:156">주봉 156</option>
+          </select>
+        </label>
+        <label title="위 매물대: 현재가 바로 위 매물대 하단까지 / POC 하락접근: 현재가 아래 최대 거래량 가격(POC)까지">대상
+          <select id="fltVpTarget">
+            <option value="resist" selected>위 매물대</option>
+            <option value="poc">POC 하락접근</option>
+          </select>
+        </label>
+        <label title="대상 가격까지 남은 거리(%) 상한">거리% ≤<input type="number" id="fltVpMaxGap" value="3" step="0.5" min="0"></label>
+        <label class="analysis-check" title="같은 봉 주기에서 5 &lt; 20 &lt; 60 이평 역배열이고 20 이평이 하락 중인 종목만"><input type="checkbox" id="fltVpDowntrend" checked>하락추세</label>
         <label class="analysis-check" title="즐겨찾기에 등록한 종목만 표시"><input type="checkbox" id="fltFavoritesOnly">즐겨찾기만</label>
         <label id="fltFavoriteFolderWrap" class="analysis-fav-folder-wrap" hidden title="즐겨찾기 폴더 선택">폴더
           <select id="fltFavoriteFolder" aria-label="즐겨찾기 폴더">
@@ -169,7 +187,7 @@
 
   <div class="toast" id="toast"></div>
   <script src="/static/investor-history.js?v=8"></script>
-  <script src="/static/analysis.js?v=46"></script>
+  <script src="/static/analysis.js?v=47"></script>
   <script src="/static/telegram-price-alert.js?v=2"></script>
   <script>
     (function () {
