@@ -65,7 +65,14 @@ class _MarketDataMixin:
         cached = self._chart_cache.get(cache_key)
         if cached:
             data, ts = cached
-            if time.time() - ts < ttl and not (max_bars and not is_minute_chart and len(data) < max_bars):
+            too_short = bool(max_bars and not is_minute_chart and len(data) < max_bars)
+            if too_short:
+                # 이전 조회가 같은(또는 더 큰) max_bars 로 페이지네이션까지 했는데도 이만큼뿐이면
+                # 키움이 더 줄 봉이 없는 것 — 매번 API 를 다시 치지 않고 캐시를 쓴다.
+                exhausted = self._chart_exhausted.get(cache_key)
+                if exhausted and exhausted[1] == ts and max_bars <= exhausted[0]:
+                    too_short = False
+            if time.time() - ts < ttl and not too_short:
                 logger.debug(f"💾 [CHART_CACHE_HIT] {cache_key}")
                 return data[-max_bars:] if max_bars and data else data
 
@@ -165,14 +172,25 @@ class _MarketDataMixin:
                             data = await response.json()
                             if data.get('return_code') == 0:
                                 parsed = self._parse_kiwoom_chart_data(data, stock_code)
+                                paging_complete = True
                                 if max_bars and not is_minute_chart and parsed and len(parsed) < max_bars:
-                                    parsed = await self._fetch_more_chart_pages(
+                                    parsed, paging_complete = await self._fetch_more_chart_pages(
                                         session, url, headers, request_data, stock_code,
                                         response, data, parsed, max_bars,
                                     )
                                 # 캐시는 자르지 않은 전체 봉 — max_bars 가 다른 호출끼리 공유
                                 if parsed:
-                                    self._chart_cache[cache_key] = (parsed, time.time())
+                                    cache_ts = time.time()
+                                    self._chart_cache[cache_key] = (parsed, cache_ts)
+                                    if max_bars and not is_minute_chart and len(parsed) < max_bars:
+                                        if paging_complete:
+                                            # 연속조회를 끝까지 했는데도 모자람 → 키움이 줄 수 있는 전부
+                                            self._chart_exhausted[cache_key] = (max_bars, cache_ts)
+                                        else:
+                                            # 슬롯 대기·오류로 중단 — 일시적이므로 다음 호출에서 재시도
+                                            self._chart_exhausted.pop(cache_key, None)
+                                    else:
+                                        self._chart_exhausted.pop(cache_key, None)
                                 return parsed[-max_bars:] if max_bars and parsed else parsed
                             msg = (data.get('return_msg') or "").lower()
                             if any(k in msg for k in ["rate limit", "too many", "요청 한도", "429", "제한", "초과"]):
@@ -202,12 +220,35 @@ class _MarketDataMixin:
             logger.error(f"실제 차트 데이터 조회 중 오류: {e}")
             return cached[0] if cached else []
 
+    def chart_history_exhausted(self, stock_code: str, period: str, max_bars: int) -> bool:
+        """직전 일·주·월봉 조회가 max_bars 를 못 채우고 '키움이 줄 수 있는 이력 전부'로 끝났는지.
+
+        연속조회까지 정상 종료했는데 모자란 경우만 True (슬롯 대기·오류로 중단된 경우는 False).
+        """
+        code = self.normalize_stock_code(stock_code)
+        raw = (period or "1D").strip().upper()
+        if raw in {"1W", "W", "WEEK", "WEEKLY"}:
+            norm = "1W"
+        elif raw in {"1MO", "MO", "MONTH", "MONTHLY"}:
+            norm = "1MO"
+        else:
+            norm = "1D"
+        key = f"{code}:{norm}"
+        cached = self._chart_cache.get(key)
+        marker = self._chart_exhausted.get(key)
+        return bool(cached and marker and marker[1] == cached[1] and int(max_bars) <= marker[0])
+
     async def _fetch_more_chart_pages(
         self, session, url, headers, request_data, stock_code, response, data, parsed, max_bars,
         max_pages: int = 4,
     ):
-        """일·주·월봉 연속조회(cont-yn/next-key) — max_bars 를 채울 때까지 과거 페이지를 붙인다."""
+        """일·주·월봉 연속조회(cont-yn/next-key) — max_bars 를 채울 때까지 과거 페이지를 붙인다.
+
+        반환: (rows, complete). complete=False 면 슬롯 대기 실패·HTTP/API 오류로 중간에 끊긴 것(일시적),
+        True 면 더 줄 페이지가 없거나 max_pages/max_bars 에 도달해 정상 종료한 것.
+        """
         rows = list(parsed)
+        complete = True
         resp_headers = response.headers
         for _ in range(max_pages):
             cont_yn = data.get("cont_yn") or resp_headers.get("cont-yn") or "N"
@@ -215,26 +256,30 @@ class _MarketDataMixin:
             if str(cont_yn).upper() != "Y" or not next_key or len(rows) >= max_bars:
                 break
             if not await self._acquire_api_slot("chart_data", max_wait=45.0, priority=APIPriority.HIGH):
+                complete = False
                 break
             try:
                 async with session.post(
                     url, headers={**headers, "cont-yn": "Y", "next-key": next_key}, json=request_data,
                 ) as resp:
                     if resp.status != 200:
+                        complete = False
                         break
                     data = await resp.json()
                     resp_headers = resp.headers
             except Exception as e:
                 logger.debug(f"차트 연속조회 실패 ({stock_code}): {e}")
+                complete = False
                 break
             if data.get("return_code") != 0:
+                complete = False
                 break
             more = self._parse_kiwoom_chart_data(data, stock_code)
             if not more:
                 break
             rows.extend(more)
         by_ts = {str(r.get("timestamp") or ""): r for r in rows}
-        return [by_ts[k] for k in sorted(by_ts)]
+        return [by_ts[k] for k in sorted(by_ts)], complete
 
     async def get_intraday_chart_for_date(
         self,

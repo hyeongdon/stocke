@@ -33,7 +33,7 @@ DEFAULT_NOTIFICATIONS = (
     ("theme.report", "테마 배치 리포트", "batch", "schedule", "매일 22:00", "Windows 작업 스케줄러: stocke-theme-mart-batch"),
     ("theme_mart.start", "테마/키워드 배치 시작", "batch", "schedule", "매일 22:00", "Windows 작업 스케줄러: stocke-theme-mart-batch"),
     ("theme_mart.error", "테마/키워드 배치 오류", "batch", "schedule", "배치 오류 시", "Windows 작업 스케줄러"),
-    ("chart_ohlcv.start", "차트 OHLCV 배치 시작", "batch", "schedule", "평일 20:30 일봉 / 토 20:30 주·월봉", "cron/작업 스케줄러: chart-ohlcv"),
+    ("chart_ohlcv.start", "차트 OHLCV 배치 시작", "batch", "schedule", "평일 20:30 일봉 / 토 22:00 주·월봉", "cron/작업 스케줄러: chart-ohlcv"),
     ("chart_ohlcv.done", "차트 OHLCV 배치 완료", "batch", "schedule", "배치 완료 시", "cron/작업 스케줄러: chart-ohlcv"),
     ("chart_ohlcv.error", "차트 OHLCV 배치 오류", "batch", "schedule", "배치 오류 시", "cron/작업 스케줄러: chart-ohlcv"),
     ("rwm_bowl", "RWM 전략 알림", "strategy", "event", "전략 이벤트 발생 시", "RWM 스케줄러"),

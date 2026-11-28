@@ -1,16 +1,16 @@
 ﻿# Windows 작업 스케줄러 — 차트 OHLCV 마트 배치
 # 사용:
 #   powershell -ExecutionPolicy Bypass -File scripts\install_chart_ohlcv_batch_task.ps1
-#   powershell ... -DailyTime "20:30" -SaturdayTime "20:30"
+#   powershell ... -DailyTime "20:30" -SaturdayTime "22:00"
 #   powershell ... -Uninstall
 #
 # 평일 장후(기본 20:30): 일봉만
-# 토요일(기본 20:30): 주봉 → 월봉 순차
-# (실전 Ubuntu cron UTC 11:30 = KST 20:30 과 동일 시각)
+# 토요일(기본 22:00): 주봉 → 월봉 순차
+# (일봉 cron UTC 11:30 = KST 20:30, 주·월봉 cron UTC 13:00 = KST 22:00)
 
 param(
     [string]$DailyTime = "20:30",
-    [string]$SaturdayTime = "20:30",
+    [string]$SaturdayTime = "22:00",
     [string]$DailyTaskName = "Stocke-ChartOhlcvBatch",
     [string]$WeeklyMonthlyTaskName = "Stocke-ChartOhlcvWeeklyMonthly",
     [switch]$Uninstall

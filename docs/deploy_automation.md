@@ -14,7 +14,7 @@ chmod +x shell/run_batch.sh shell/setup_batch_cron.sh
 ./shell/setup_batch_cron.sh
 ```
 
-기본 배치는 **서버 TZ=UTC** 기준으로 등록합니다(의도 시각은 KST). 평일 06:42 UTC(15:42 KST) 매수 실패 신호, 10:50 UTC(19:50 KST) 키움 손익 동기화, 10:52 UTC(19:52 KST) 매매 일지, 평일 11:30 UTC(20:30 KST) 차트 OHLCV 일봉, 토요일 11:30 UTC(20:30 KST) 차트 OHLCV 주봉→월봉 순차, 매일 09:00 UTC(18:00 KST) 기본적분석 마트, 09:30 UTC(18:30 KST) 테마 마트(동시 실행 OOM 방지), 매월 16일 01:00 UTC(10:00 KST) 업종 배치입니다. `crontab -l`과 `timedatectl`로 확인하세요.
+기본 배치는 **서버 TZ=UTC** 기준으로 등록합니다(의도 시각은 KST). 평일 06:42 UTC(15:42 KST) 매수 실패 신호, 10:50 UTC(19:50 KST) 키움 손익 동기화, 10:52 UTC(19:52 KST) 매매 일지, 평일 11:30 UTC(20:30 KST) 차트 OHLCV 일봉, 토요일 13:00 UTC(22:00 KST) 차트 OHLCV 주봉→월봉 순차, 매일 09:00 UTC(18:00 KST) 기본적분석 마트, 09:30 UTC(18:30 KST) 테마 마트(동시 실행 OOM 방지), 매월 16일 01:00 UTC(10:00 KST) 업종 배치입니다. `crontab -l`과 `timedatectl`로 확인하세요.
 
 `condition-alert-realtime`은 장중 계속 실행되는 프로세스이므로 cron보다 systemd 서비스로 관리해야 합니다. 또한 조건식과 키움 API 배치는 서버에서 사용하는 API 인증·네트워크 조건을 확인한 뒤 수동으로 먼저 실행하세요.
 

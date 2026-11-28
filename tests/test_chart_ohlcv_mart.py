@@ -34,6 +34,15 @@ def _bars(n=5, start="2026-01-02"):
     return out
 
 
+def _delete_series(code: str) -> None:
+    from core.models import ChartOhlcvSeries, get_db
+
+    for db in get_db():
+        db.query(ChartOhlcvSeries).filter(ChartOhlcvSeries.stock_code == code).delete()
+        db.commit()
+        break
+
+
 class ChartOhlcvMartTests(unittest.TestCase):
     def test_normalize_bars_sorts_and_dedupes(self):
         raw = [
@@ -47,7 +56,9 @@ class ChartOhlcvMartTests(unittest.TestCase):
         self.assertEqual(cleaned[0]["close"], 1)
 
     def test_upsert_and_get_roundtrip(self):
-        code = "000150"
+        # 실제 종목코드(예: 000150)를 쓰면 운영 DB 마트의 실데이터를 덮어쓰므로 더미 코드 사용 + 정리
+        code = "999998"
+        self.addCleanup(_delete_series, code)
         bars = _bars(6)
         self.assertTrue(len(bars) >= 3)
         row = upsert_series(code, "1D", bars, stock_name="두산", as_of_date=date(2026, 11, 19))

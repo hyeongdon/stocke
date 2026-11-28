@@ -3031,6 +3031,52 @@ def _clamp_display_bars(bars: Any, default: int, lo: int, hi: int) -> int:
         return default
 
 
+# 마트가 표시 구간은 채우지만 MA 워밍업(min_bars)에는 모자랄 때, 응답은 마트로 즉시 내보내고
+# 키움 보강은 백그라운드에서 (종목×간격당) 쿨다운마다 한 번만 · 전역 직렬로 수행한다.
+_MART_UPGRADE_COOLDOWN_SEC = 6 * 3600
+_mart_upgrade_last: Dict[Tuple[str, str], float] = {}
+_mart_upgrade_inflight: set = set()
+_mart_upgrade_tasks: set = set()
+_mart_upgrade_lock = asyncio.Lock()
+
+
+async def _upgrade_mart_series(stock_code: str, interval: str, fetch_cap: int, mart_len: int) -> None:
+    """마트가 짧은 시리즈를 키움으로 한 번 보강해 write-through (요청 경로 밖)."""
+    from utils.chart_ohlcv_mart_store import upsert_series
+
+    try:
+        async with _mart_upgrade_lock:
+            raw = await kiwoom_api.get_stock_chart_data(
+                stock_code, interval, max_bars=fetch_cap, allow_off_hours=True,
+            )
+            rows = _parse_chart_rows(raw)
+            if rows and len(rows) > mart_len:
+                upsert_series(stock_code, interval, rows, source="kiwoom", merge=True)
+                logger.info(
+                    f"📈 [CHART_MART] 백그라운드 보강 {stock_code}/{interval}: {mart_len}→{len(rows)}봉"
+                )
+    except Exception as e:
+        logger.debug(f"차트 OHLCV 마트 백그라운드 보강 실패 ({stock_code}/{interval}): {e}")
+    finally:
+        _mart_upgrade_inflight.discard((stock_code, interval))
+
+
+def _schedule_mart_upgrade(stock_code: str, interval: str, fetch_cap: int, mart_len: int) -> bool:
+    """쿨다운·중복 확인 후 백그라운드 보강 예약. 예약했으면 True."""
+    key = (stock_code, interval)
+    now_ts = time.time()
+    if key in _mart_upgrade_inflight:
+        return False
+    if now_ts - _mart_upgrade_last.get(key, 0.0) < _MART_UPGRADE_COOLDOWN_SEC:
+        return False
+    _mart_upgrade_last[key] = now_ts
+    _mart_upgrade_inflight.add(key)
+    task = asyncio.create_task(_upgrade_mart_series(stock_code, interval, fetch_cap, mart_len))
+    _mart_upgrade_tasks.add(task)  # 참조 유지 (GC 방지)
+    task.add_done_callback(_mart_upgrade_tasks.discard)
+    return True
+
+
 async def _load_ohlcv_rows(
     stock_code: str,
     interval: str,
@@ -3038,10 +3084,14 @@ async def _load_ohlcv_rows(
     prefer_mart: bool = True,
     persist: bool = True,
     min_bars: Optional[int] = None,
+    accept_bars: Optional[int] = None,
 ) -> Tuple[List[Dict[str, Any]], str]:
     """분석 차트용 OHLCV — 마트 우선, 없으면 키움 API 폴백(+선택적 write-through).
 
-    min_bars: 요청 표시 봉 수. 마트가 이보다 짧으면 키움으로 보강(마트 배치 한도는 그대로).
+    min_bars: 이상적인 봉 수(표시 봉 + MA 워밍업). 마트가 이보다 짧으면 키움으로 보강한다.
+    accept_bars: 최소 허용 봉 수(보통 표시 봉 수). 마트가 min_bars 에는 모자라도 이만큼은 채우면
+        요청을 막지 않고 마트로 즉시 응답하고, 보강은 백그라운드(`_schedule_mart_upgrade`)로 돌린다.
+        (앞쪽 MA 는 일시적으로 비지만 보강 후 다음 조회부터 마트에서 완전한 워밍업으로 나간다.)
     반환: (rows, source)  source = mart | kiwoom | mixed
     """
     from utils.chart_ohlcv_mart_store import get_bars, upsert_series
@@ -3050,8 +3100,12 @@ async def _load_ohlcv_rows(
     mart_rows: List[Dict[str, Any]] = []
     if prefer_mart:
         mart_rows = _parse_chart_rows(get_bars(stock_code, interval))
-        if mart_rows and (fetch_cap is None or len(mart_rows) >= fetch_cap):
-            return mart_rows, "mart"
+        if mart_rows:
+            if fetch_cap is None or len(mart_rows) >= fetch_cap:
+                return mart_rows, "mart"
+            if accept_bars and len(mart_rows) >= int(accept_bars):
+                _schedule_mart_upgrade(stock_code, interval, fetch_cap, len(mart_rows))
+                return mart_rows, "mart"
 
     raw = await kiwoom_api.get_stock_chart_data(
         stock_code, interval, max_bars=fetch_cap, allow_off_hours=True,
@@ -3059,7 +3113,7 @@ async def _load_ohlcv_rows(
     rows = _parse_chart_rows(raw)
     if rows and persist:
         try:
-            upsert_series(stock_code, interval, rows, source="kiwoom")
+            upsert_series(stock_code, interval, rows, source="kiwoom", merge=True)
         except Exception as e:
             logger.debug(f"차트 OHLCV 마트 저장 실패 ({stock_code}/{interval}): {e}")
     if rows and len(rows) >= len(mart_rows):
@@ -3127,7 +3181,8 @@ async def get_fundamental_chart(
                 # 기본적분석 기본 24개월 · 분석>차트는 최대 10년(120)
                 display = _clamp_display_bars(bars, 24, 24, 140)
                 monthly_rows, src = await _load_ohlcv_rows(
-                    stock_code, "1MO", prefer_mart=prefer_mart, min_bars=_with_warmup("1MO", display),
+                    stock_code, "1MO", prefer_mart=prefer_mart,
+                    min_bars=_with_warmup("1MO", display), accept_bars=display,
                 )
                 if not monthly_rows:
                     raise HTTPException(
@@ -3146,6 +3201,7 @@ async def get_fundamental_chart(
             daily_rows, daily_src = await _load_ohlcv_rows(
                 stock_code, "1D", prefer_mart=prefer_mart,
                 min_bars=_with_warmup("1D", daily_display) if daily_display else None,
+                accept_bars=daily_display,
             )
             if daily_src == "mart" and daily_rows:
                 daily_rows, appended = await _append_live_daily_bars(stock_code, daily_rows)
@@ -3168,7 +3224,8 @@ async def get_fundamental_chart(
             # 기본적분석 기본 104주 · 분석>차트는 최대 5년(260)
             display = _clamp_display_bars(bars, 104, 26, 300)
             api_weeks, week_src = await _load_ohlcv_rows(
-                stock_code, "1W", prefer_mart=prefer_mart, min_bars=_with_warmup("1W", display),
+                stock_code, "1W", prefer_mart=prefer_mart,
+                min_bars=_with_warmup("1W", display), accept_bars=display,
             )
             # 일봉 마트만 있어도 주봉 리샘플로 표시 가능
             weekly_rows = merge_weekly_rows(

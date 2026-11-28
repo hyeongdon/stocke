@@ -73,6 +73,9 @@ class KiwoomAPI(
         self._price_cache_ttl = 30  # 30초 캐시 (API 제한 고려)
         # 차트 캐시 (종목+주기 -> (bars, timestamp))
         self._chart_cache: Dict[str, tuple] = {}
+        # 일·주·월봉: 키움이 max_bars 를 못 채우고 끝난 경우 {cache_key: (요청 max_bars, 캐시 ts)}
+        # → 같은 캐시 항목에서는 "더 줄 봉이 없다"고 보고 재호출하지 않는다.
+        self._chart_exhausted: Dict[str, tuple] = {}
         self._chart_cache_ttl = 300  # 분봉 등: 5분
         self._daily_chart_cache_ttl = 43200  # 일봉: 12시간 (ATR은 stop_loss에서 일 1회 캐시)
 
@@ -148,7 +151,9 @@ class KiwoomAPI(
             if api_rate_limiter.record_api_call(api_name):
                 waited = time.time() - started
                 if waited >= 1.0:
-                    logger.info(
+                    # 최소 호출 간격(API_MIN_CALL_INTERVAL) 때문의 정상 페이싱 — 부족 신호가 아니므로 debug.
+                    # 실제 부족은 '슬롯 실패'(warning) · '분당 호출 한도 도달'(limiter, 주기적 warning)로 남는다.
+                    logger.debug(
                         f"⏱️ [SLOT] {api_name} 슬롯 대기 {waited:.1f}초 "
                         f"(최근1분: {api_rate_limiter.recent_usage_summary()})"
                     )

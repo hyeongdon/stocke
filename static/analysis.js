@@ -2471,9 +2471,37 @@ async function renderDetailFallback(code, name) {
   loadStockInvestorHistoryForDetail(c);
 }
 
+function chartSelectedCode() {
+  const frame = document.querySelector('#analysis-view-chart iframe');
+  try {
+    const win = frame && frame.contentWindow;
+    if (win && typeof win.chartActiveCode === 'function') {
+      const code = normalizeStockCode(win.chartActiveCode());
+      if (code) return code;
+    }
+  } catch (_) { /* iframe not ready */ }
+  try {
+    const saved = JSON.parse(localStorage.getItem('chartOrderbookPanels') || 'null');
+    const panels = saved && saved.panels;
+    if (!Array.isArray(panels) || !panels.length) return '';
+    const idx = Math.min(Math.max(Number(saved.active) || 0, 0), panels.length - 1);
+    return normalizeStockCode(panels[idx] && panels[idx].code);
+  } catch (_) {
+    return '';
+  }
+}
+
+function handoffChartStockToAnalysis() {
+  const code = chartSelectedCode();
+  if (!code) return;
+  window.__chartHandoffCode = code;
+  selectStock(code, { scrollDetail: true, onlyIfDifferent: true });
+}
+
 async function selectStock(code, options) {
   const c = String(code || '').trim().replace(/^A/i, '').replace(/\D/g, '').padStart(6, '0');
   if (!c || c === '000000') return;
+  if (options && options.onlyIfDifferent && state.selectedCode === c) return;
   state.selectedCode = c;
   const selectedRow = (state.lastItems || []).find((row) => normalizeStockCode(row.stock_code) === c);
   state.selectedName = selectedRow ? selectedRow.stock_name : '';
@@ -2613,7 +2641,7 @@ function initFromUrl() {
     state.sortBy = sortBy;
     $('fltSortBy').value = state.sortBy;
   }
-  const code = codeFromUrl() || DEFAULT_STOCK_CODE;
+  const code = normalizeStockCode(window.__chartHandoffCode) || codeFromUrl() || DEFAULT_STOCK_CODE;
   state.selectedCode = code;
   const search = $('codeSearch');
   if (search) search.value = code;
@@ -2796,4 +2824,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   if (PHONE_MQ.addEventListener) PHONE_MQ.addEventListener('change', onPhoneLayoutChange);
   else if (PHONE_MQ.addListener) PHONE_MQ.addListener(onPhoneLayoutChange);
+});
+
+document.querySelectorAll('.analysis-view-tab').forEach((tab) => {
+  tab.addEventListener('click', () => {
+    const from = document.querySelector('.analysis-view-tab.active');
+    if (from && from.dataset.view === 'chart' && tab.dataset.view === 'fundamental') {
+      handoffChartStockToAnalysis();
+    }
+  }, true);
 });

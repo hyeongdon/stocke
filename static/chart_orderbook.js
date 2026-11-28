@@ -1859,6 +1859,12 @@ function activePanel() {
   return state.panels[state.activeIdx] || state.panels[0];
 }
 
+function chartActiveCode() {
+  const panel = activePanel();
+  return normalizeStockCode(panel && panel.code);
+}
+window.chartActiveCode = chartActiveCode;
+
 function visiblePanels() {
   return state.panels.slice(0, state.layout);
 }

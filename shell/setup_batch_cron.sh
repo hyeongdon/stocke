@@ -47,8 +47,8 @@ $ANALYSIS_CRON_BEGIN
 0 14 * * 6,0 $RUNNER theme-mart
 # chart OHLCV 일봉: 평일 장후 20:30 KST (UTC 11:30) — NXT 20:00 이후
 30 11 * * 1-5 $RUNNER chart-ohlcv-daily
-# chart OHLCV 주봉→월봉: 토요일 20:30 KST (UTC 11:30) 순차 실행
-30 11 * * 6 $RUNNER chart-ohlcv-weekly; weekly_status=\$?; $RUNNER chart-ohlcv-monthly; monthly_status=\$?; test "\$weekly_status" -eq 0 && test "\$monthly_status" -eq 0
+# chart OHLCV 주봉→월봉: 토요일 22:00 KST (UTC 13:00) 순차 실행
+0 13 * * 6 $RUNNER chart-ohlcv-weekly; weekly_status=\$?; $RUNNER chart-ohlcv-monthly; monthly_status=\$?; test "\$weekly_status" -eq 0 && test "\$monthly_status" -eq 0
 $ANALYSIS_CRON_END
 EOF
 )

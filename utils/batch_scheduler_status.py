@@ -128,7 +128,7 @@ KNOWN_BATCHES: List[Dict[str, Any]] = [
             "chart-ohlcv-monthly",
         ],
         "log_file": os.path.join(LOG_DIR, "chart_ohlcv_mart_batch.log"),
-        "default_schedule": "토요일 20:30 순차",
+        "default_schedule": "토요일 22:00 순차",
         "description": "분석화면용 주봉→월봉 OHLCV 마트 순차 적재 (fundamental)",
     },
     {

@@ -36,6 +36,7 @@ class APIRateLimiter:
         # 제한 복구 설정
         self.limit_duration_minutes = Config.API_LIMIT_DURATION_MIN
         self.recovery_check_interval = 300  # 복구 확인 간격 (초)
+        self._cap_warned_at = float("-inf")  # 분당 한도 경고 스로틀(60초)
 
     def _recent_calls(self, current_time: datetime) -> List[Dict[str, Any]]:
         window_start = current_time - timedelta(seconds=self.rate_limit_window)
@@ -127,10 +128,17 @@ class APIRateLimiter:
             if len(recent_calls) > self.max_calls_per_window:
                 # 로컬 분당 한도 — Kiwoom 실제 제한이 아님. LIMITED(수분 정지)로 올리지 않고
                 # 슬롯만 거부해 호출측이 윈도우가 밀릴 때까지 대기하도록 한다.
-                logger.warning(
+                # 한도에 걸린 호출마다 찍으면 배치에서 로그가 폭증하므로 60초에 한 번만 warning, 나머지는 debug.
+                msg = (
                     f"⏳ [API_LIMITER] 분당 호출 한도 도달 "
                     f"({len(recent_calls)}/{self.max_calls_per_window}) — 대기 필요"
                 )
+                now_mono = time.monotonic()
+                if now_mono - self._cap_warned_at >= 60.0:
+                    self._cap_warned_at = now_mono
+                    logger.warning(msg)
+                else:
+                    logger.debug(msg)
                 # 방금 append한 기록은 실제 호출이 아니므로 롤백
                 if self.call_history and self.call_history[-1]["api_name"] == api_name:
                     self.call_history.pop()

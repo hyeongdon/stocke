@@ -39,7 +39,16 @@ from notifications.chart_ohlcv_batch_notify import (  # noqa: E402
     notify_chart_ohlcv_error,
     notify_chart_ohlcv_start,
 )
-from utils.chart_ohlcv_mart_store import get_bars, get_meta, list_codes, upsert_many  # noqa: E402
+from utils.chart_ohlcv_mart_store import (  # noqa: E402
+    FULL_SOURCE,
+    MIN_DEPTH,
+    get_bars,
+    get_depth_map,
+    get_meta,
+    list_codes,
+    needs_deep_fetch,
+    upsert_many,
+)
 from utils.volume_profile_store import PROFILE_INTERVALS, upsert_from_rows  # noqa: E402
 from utils.datetime_kst import kst_today, now_kst  # noqa: E402
 
@@ -54,6 +63,11 @@ INTERVAL_BARS = {
 }
 RETRY_ROUNDS = 2
 RETRY_DELAY_SEC = 30.0
+
+# 깊게(연속조회로 INTERVAL_BARS 까지) 받는 종목 수 상한 — 실행(run)·간격당.
+# 이력이 MIN_DEPTH 미만인 종목만 대상이며, 그 외에는 최신 1페이지만 받아 기존 이력과 병합한다.
+# 일봉은 매 평일, 주·월봉은 주 1회 실행되므로 주·월봉 예산을 더 크게 둔다. 0 = 무제한.
+DEEP_BUDGET_DEFAULT = {"1D": 400, "1W": 1500, "1MO": 1500}
 
 
 def setup_logging() -> None:
@@ -93,6 +107,13 @@ def parse_args() -> argparse.Namespace:
         nargs="+",
         default=["1D", "1W", "1MO"],
         help="적재 인터벌 (기본: 1D 1W 1MO). PowerShell에서는 공백 구분 권장",
+    )
+    p.add_argument(
+        "--deep-budget",
+        type=int,
+        default=None,
+        help="간격당 '깊게 받기'(연속조회) 종목 수 상한. 미지정=간격별 기본(일400·주1500·월1500), 0=무제한. "
+        "이력이 얕은 종목만 대상, 나머지는 최신 1페이지만 받아 기존 이력과 병합",
     )
     p.add_argument("--workers", type=int, default=2, help="동시 워커 수(기본: 2)")
     p.add_argument("--sleep", type=float, default=0.25, help="종목·인터벌 간 대기(초)")
@@ -225,19 +246,64 @@ def load_universe(args: argparse.Namespace) -> Tuple[date, List[Dict[str, str]]]
     return as_of, items
 
 
+class FetchPlan:
+    """종목×간격별 '깊게 받기 / 최신 1페이지만' 결정 + 간격당 깊게 받기 예산.
+
+    깊게 받기: 이력이 MIN_DEPTH 미만(그리고 키움 이력을 끝까지 받은 종목이 아님)일 때, 예산이 남아 있으면
+    연속조회로 INTERVAL_BARS 까지. 그 외: 최신 1페이지(max_bars=None)만 받아 기존 이력과 병합.
+    """
+
+    def __init__(
+        self,
+        depth: Dict[str, Dict[str, Tuple[int, str]]],
+        budget: Dict[str, Optional[int]],
+    ) -> None:
+        self.depth = depth
+        self.budget = dict(budget)
+        self.deep_taken: Dict[str, int] = {iv: 0 for iv in budget}
+        self.deep_exhausted_full: Dict[str, int] = {iv: 0 for iv in budget}
+
+    def take(self, interval: str, code: str) -> bool:
+        n, src = self.depth.get(interval, {}).get(code, (0, ""))
+        left = self.budget.get(interval)
+        if not needs_deep_fetch(interval, n, src, left):
+            return False
+        if left is not None:
+            self.budget[interval] = left - 1
+        self.deep_taken[interval] = self.deep_taken.get(interval, 0) + 1
+        return True
+
+
+def resolve_budget(args: argparse.Namespace, intervals: Sequence[str]) -> Dict[str, Optional[int]]:
+    """--deep-budget(전 간격 공통) 또는 간격별 기본값. 0 이하(명시)는 무제한(None)."""
+    explicit = getattr(args, "deep_budget", None)
+    out: Dict[str, Optional[int]] = {}
+    for iv in intervals:
+        value = DEEP_BUDGET_DEFAULT.get(iv, 0) if explicit is None else int(explicit)
+        out[iv] = value if value > 0 else None
+    return out
+
+
+def prioritize_universe(items: List[Dict[str, str]], favorites: set) -> List[Dict[str, str]]:
+    """분석 즐겨찾기를 먼저 (깊게 받기 예산과 최신화가 즐겨찾기부터 소진·적용되도록), 나머지는 코드순."""
+    return sorted(items, key=lambda x: (0 if x["stock_code"] in favorites else 1, x["stock_code"]))
+
+
 async def _fetch_one(
     api: KiwoomAPI,
     sem: asyncio.Semaphore,
     item: Dict[str, str],
     intervals: Sequence[str],
     sleep_sec: float,
+    plan: Optional[FetchPlan] = None,
 ) -> List[Dict]:
     async with sem:
         code = item["stock_code"]
         name = item.get("stock_name") or ""
         out: List[Dict] = []
         for interval in intervals:
-            max_bars = INTERVAL_BARS.get(interval, 400)
+            deep = plan.take(interval, code) if plan is not None else True
+            max_bars = INTERVAL_BARS.get(interval, 400) if deep else None
             try:
                 raw = await api.get_stock_chart_data(
                     code,
@@ -248,13 +314,25 @@ async def _fetch_one(
             except Exception:
                 raw = None
             if raw:
+                # None = 기존 source 유지(병합 성공 시). 깊게 받았는데도 MIN_DEPTH 에 못 미치고
+                # 키움이 줄 수 있는 이력 전부였다면 FULL_SOURCE 로 표시해 다음부터 재시도하지 않는다.
+                source: Optional[str] = None
+                if deep:
+                    full = (
+                        len(raw) < MIN_DEPTH.get(interval, 0)
+                        and api.chart_history_exhausted(code, interval, max_bars)
+                    )
+                    source = FULL_SOURCE if full else "kiwoom"
+                    if full and plan is not None:
+                        plan.deep_exhausted_full[interval] = plan.deep_exhausted_full.get(interval, 0) + 1
                 out.append(
                     {
                         "stock_code": code,
                         "stock_name": name,
                         "interval": interval,
                         "bars": raw,
-                        "source": "kiwoom",
+                        "source": source,
+                        "merge": True,
                     }
                 )
             if sleep_sec > 0:
@@ -319,6 +397,12 @@ async def _run_async(args: argparse.Namespace, logger: logging.Logger) -> Tuple[
     ensure_chart_ohlcv_series_table()
     as_of, universe = load_universe(args)
     intervals = _parse_intervals(args.intervals)
+    if universe:
+        universe = prioritize_universe(universe, {it["stock_code"] for it in _load_favorites()})
+    plan = FetchPlan(
+        {iv: get_depth_map(iv) for iv in intervals},
+        resolve_budget(args, intervals),
+    )
     chunk_size = max(1, int(getattr(args, "chunk_size", 100) or 100))
     as_of_date = as_of if isinstance(as_of, date) else kst_today()
     meta: Dict = {
@@ -356,6 +440,20 @@ async def _run_async(args: argparse.Namespace, logger: logging.Logger) -> Tuple[
         chunk_size,
         total_chunks,
     )
+    for iv in intervals:
+        shallow = sum(
+            1
+            for code, (n, src) in plan.depth.get(iv, {}).items()
+            if n < MIN_DEPTH.get(iv, 0) and src != FULL_SOURCE
+        )
+        logger.info(
+            "깊게 받기 계획 %s — 이력 얕은 종목=%d 예산=%s (최소 %d봉, 목표 %d봉)",
+            iv,
+            shallow,
+            plan.budget.get(iv) if plan.budget.get(iv) is not None else "무제한",
+            MIN_DEPTH.get(iv, 0),
+            INTERVAL_BARS.get(iv, 0),
+        )
     _notify(
         _telegram_on(args),
         notify_chart_ohlcv_start,
@@ -383,7 +481,7 @@ async def _run_async(args: argparse.Namespace, logger: logging.Logger) -> Tuple[
             chunk[-1]["stock_code"],
         )
         tasks = [
-            _fetch_one(api, sem, it, intervals, sleep_sec) for it in chunk
+            _fetch_one(api, sem, it, intervals, sleep_sec, plan) for it in chunk
         ]
         done = await asyncio.gather(*tasks, return_exceptions=False)
         rows: List[Dict] = []
@@ -428,7 +526,7 @@ async def _run_async(args: argparse.Namespace, logger: logging.Logger) -> Tuple[
         )
         await asyncio.sleep(RETRY_DELAY_SEC)
         done = await asyncio.gather(
-            *[_fetch_one(api, sem, it, intervals, sleep_sec) for it in failed]
+            *[_fetch_one(api, sem, it, intervals, sleep_sec, plan) for it in failed]
         )
         rows = [r for part in done for r in (part or [])]
         if not rows:
@@ -450,6 +548,15 @@ async def _run_async(args: argparse.Namespace, logger: logging.Logger) -> Tuple[
     if failed_codes:
         logger.warning("최종 누락 종목 %d건: %s", len(failed_codes), ",".join(failed_codes))
 
+    for iv in intervals:
+        logger.info(
+            "깊게 받기 결과 %s — 시도=%d (이력 전부 확인=%d) 남은 예산=%s",
+            iv,
+            plan.deep_taken.get(iv, 0),
+            plan.deep_exhausted_full.get(iv, 0),
+            plan.budget.get(iv) if plan.budget.get(iv) is not None else "무제한",
+        )
+    meta["deep_fetched"] = dict(plan.deep_taken)
     meta["saved"] = int(saved_total)
     meta["success_codes"] = len(ok_codes)
     meta["failed_codes"] = failed_codes
